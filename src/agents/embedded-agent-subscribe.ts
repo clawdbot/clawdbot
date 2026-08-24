@@ -435,7 +435,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
-    state.successfulCronAdds = 0;
     state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
@@ -621,6 +620,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         args: toolParams.args,
         replaySafe: toolParams.replaySafe,
         hideFromChannelProgress: toolParams.hideFromChannelProgress,
+        lifecycleProvenance: "nested",
       } as never);
       let executionStarted = false;
       const onImplementationStart = () => {

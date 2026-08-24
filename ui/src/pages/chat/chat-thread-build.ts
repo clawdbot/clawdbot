@@ -52,6 +52,7 @@ import {
   transcriptPositionTimestamp,
   turnHasMatchingAssistant,
   type TurnInsertionBounds,
+  userTurnSendIdentity,
 } from "./chat-thread-items.ts";
 import {
   findCurrentTurnBounds,
@@ -192,6 +193,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ? t(noticeKind.summaryKey)
         : extractTextCached(msg)?.replace(/^\[System\] /u, "");
       if (text?.trim()) {
+        const boundaryId = userTurnSendIdentity(msg);
         items.push({
           kind: "notice",
           key: itemKey,
@@ -200,6 +202,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           startsTurn: true,
           text,
           timestamp: normalized.timestamp,
+          ...(boundaryId ? { boundaryId } : {}),
         });
       }
       continue;

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -9,7 +8,6 @@ import {
 import {
   addSessionMember,
   listSessionMembers,
-  removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -107,7 +105,11 @@ function context(
 }
 
 async function call(
-  method: "session.visibility.set" | "session.members.list" | "session.members.add",
+  method:
+    | "session.visibility.set"
+    | "session.members.list"
+    | "session.members.add"
+    | "session.members.remove",
   params: Record<string, unknown>,
   requestContext: GatewayRequestContext,
   requestClient: GatewayClient = soloClient(),
@@ -709,7 +711,7 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("persists visibility and membership changes as transcript system notes", async () => {
+  it("publishes canonical visibility and membership changes without changing the transcript", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:main";
       await upsertSessionEntryCore(
@@ -718,6 +720,11 @@ describe("session sharing handlers", () => {
       );
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
+      const transcriptBefore = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "session-main",
+        sessionKey,
+      });
 
       expect(
         await call(
@@ -739,32 +746,51 @@ describe("session sharing handlers", () => {
         expect.objectContaining({ identityId: "local-operator", addedBy: "local-operator" }),
       ]);
 
-      const events = await loadTranscriptEvents({
-        agentId: "main",
-        sessionId: "session-main",
-        sessionKey,
-      });
-      expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            message: expect.objectContaining({
-              customType: "openclaw.system-note",
-              content: expect.stringContaining("changed session visibility"),
-            }),
+      expect(
+        await call(
+          "session.members.remove",
+          { sessionKey, identityId: "local-operator" },
+          requestContext,
+        ),
+      ).toEqual([[true, { ok: true, sessionKey, identityId: "local-operator" }, undefined]]);
+      expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
+
+      expect(
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionId: "session-main",
+          sessionKey,
+        }),
+      ).toEqual(transcriptBefore);
+      const sharingEvents = broadcast.mock.calls
+        .filter(([event]) => event === "session.sharing")
+        .map(([, payload, options]) => ({ payload, options }));
+      expect(sharingEvents).toEqual([
+        {
+          payload: expect.objectContaining({
+            action: "visibility",
+            sessionKey,
+            visibility: "read-only",
           }),
-          expect.objectContaining({
-            message: expect.objectContaining({
-              customType: "openclaw.system-note",
-              content: expect.stringContaining("added local-operator"),
-            }),
+          options: { sessionKeys: [sessionKey] },
+        },
+        {
+          payload: expect.objectContaining({
+            action: "member-added",
+            sessionKey,
+            identityId: "local-operator",
           }),
-        ]),
-      );
-      expect(broadcast).toHaveBeenCalledWith(
-        "session.sharing",
-        expect.objectContaining({ sessionKey }),
-        { sessionKeys: [sessionKey] },
-      );
+          options: { sessionKeys: [sessionKey] },
+        },
+        {
+          payload: expect.objectContaining({
+            action: "member-removed",
+            sessionKey,
+            identityId: "local-operator",
+          }),
+          options: { sessionKeys: [sessionKey] },
+        },
+      ]);
 
       const restrictedKey = "agent:main:restricted";
       await upsertSessionEntryCore(
@@ -821,38 +847,6 @@ describe("session sharing handlers", () => {
           agentId: "main",
         }),
       ).toBe(false);
-
-      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-        visibility: "shared",
-      }));
-      const append = vi
-        .spyOn(SessionManager, "appendMessageToTranscript")
-        .mockImplementationOnce(() => {
-          throw new Error("audit unavailable");
-        });
-      const concurrent = await Promise.allSettled([
-        call("session.visibility.set", { sessionKey, visibility: "read-only" }, requestContext),
-        call("session.visibility.set", { sessionKey, visibility: "draft" }, requestContext),
-      ]);
-      append.mockRestore();
-      expect(concurrent.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
-      expect(loadSessionEntry({ agentId: "main", sessionKey })?.visibility).toBe("draft");
-
-      removeSessionMember({ agentId: "main", sessionKey }, "local-operator");
-      const memberAppend = vi
-        .spyOn(SessionManager, "appendMessageToTranscript")
-        .mockImplementationOnce(() => {
-          throw new Error("audit unavailable");
-        });
-      const concurrentAdds = await Promise.allSettled([
-        call("session.members.add", { sessionKey, identityId: "local-operator" }, requestContext),
-        call("session.members.add", { sessionKey, identityId: "local-operator" }, requestContext),
-      ]);
-      memberAppend.mockRestore();
-      expect(concurrentAdds.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
-      expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([
-        expect.objectContaining({ identityId: "local-operator" }),
-      ]);
     });
   });
 });

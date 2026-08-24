@@ -2,17 +2,20 @@
 // Tracks transcript sequence windows for paginated chat-history SSE updates.
 import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
+import { readIncrementalChatHistoryTail } from "./session-history-tail.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
-  readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesWithSourceAsync,
+  type ReadRecentSessionMessagesResult,
 } from "./session-transcript-readers.js";
 
 // Session history state owns the SSE-friendly projection of transcript JSONL:
@@ -50,7 +53,7 @@ type InlineSessionHistoryAppend = {
 
 type SessionHistoryTranscriptTarget = {
   agentId?: string;
-  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionEntry?: SessionEntry;
   sessionId: string;
   sessionKey: string;
   storePath?: string;
@@ -71,17 +74,21 @@ function readMessageIdempotencyKey(message: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-/** Computes an oversized raw transcript tail window for projected chat history. */
-export function resolveSessionHistoryTailReadOptions(limit: number): {
-  maxMessages: number;
-  maxLines: number;
-} {
-  const requested = Math.max(1, Math.floor(limit));
-  const rawWindow = requested * 20 + 20;
-  return {
-    maxMessages: rawWindow,
-    maxLines: rawWindow,
-  };
+/** Shares the bounded visible-message scanner across HTTP snapshots and SSE refreshes. */
+export async function readBoundedSessionHistorySnapshotAsync(params: {
+  target: SessionHistoryTranscriptTarget;
+  limit: number;
+  maxChars: number;
+}): Promise<ReadRecentSessionMessagesResult> {
+  const tail = await readIncrementalChatHistoryTail({
+    entry: params.target.sessionEntry,
+    readScope: params.target,
+    effectiveMaxChars: params.maxChars,
+    max: params.limit,
+    maxBytes: getMaxChatHistoryMessagesBytes(),
+    preserveProjectionContext: true,
+  });
+  return { ...tail.readPage, messages: tail.rawMessages };
 }
 
 export function resolveCursorSeq(cursor: string | undefined): number | undefined {
@@ -184,6 +191,7 @@ export function buildSessionHistorySnapshot(params: {
   totalRawMessages?: number;
 }): SessionHistorySnapshot {
   const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
+    includeCommentaryFallbacks: true,
     maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
     resolveCurrentUserProfileDisplay,
   });
@@ -320,6 +328,7 @@ export class SessionHistorySseState {
     });
     const hadPendingTurnBoundary = this.turnBoundaryPending;
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
+      includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
       streamErrorFallbackPending: this.streamErrorFallbackPending,
@@ -337,6 +346,7 @@ export class SessionHistorySseState {
     // emitting a misleading single SSE item.
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+        includeCommentaryFallbacks: true,
         maxChars: this.maxChars,
         resolveCurrentUserProfileDisplay,
       }),
@@ -454,19 +464,11 @@ export class SessionHistorySseState {
 
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
     if (this.cursor === undefined && typeof this.limit === "number") {
-      const snapshot = await readRecentSessionMessagesWithStatsAsync(
-        {
-          agentId: this.target.agentId,
-          sessionEntry: this.target.sessionEntry,
-          sessionId: this.target.sessionId,
-          sessionKey: this.target.sessionKey,
-          storePath: this.target.storePath,
-        },
-        {
-          ...resolveSessionHistoryTailReadOptions(this.limit),
-          allowResetArchiveFallback: true,
-        },
-      );
+      const snapshot = await readBoundedSessionHistorySnapshotAsync({
+        target: this.target,
+        limit: this.limit,
+        maxChars: this.maxChars,
+      });
       return {
         rawMessages: snapshot.messages,
         rawTranscriptSeq: snapshot.totalMessages,

@@ -13,6 +13,51 @@ import {
 } from "./failover-classification.corpus.test-support.js";
 export const overflowServerMiscCases = [
   // Transient transport and provider failures.
+  {
+    id: "bedrock-incomplete-terminal-stream",
+    source: "extensions/amazon-bedrock/stream.runtime.ts",
+    signal: { provider: "amazon-bedrock", message: "Bedrock stream ended before messageStop" },
+    expected: reason("timeout"),
+  },
+  {
+    id: "anthropic-incomplete-terminal-stream",
+    source: "packages/ai/src/transports/anthropic-transport-stream.ts",
+    signal: { provider: "anthropic", message: "Anthropic stream ended before message_stop" },
+    expected: reason("timeout"),
+  },
+  {
+    id: "google-incomplete-terminal-stream",
+    source: "packages/ai/src/providers/google-shared.ts",
+    signal: {
+      provider: "google",
+      message: "Google stream ended before a terminal finish reason",
+    },
+    expected: reason("timeout"),
+  },
+  {
+    id: "mistral-incomplete-terminal-stream",
+    source: "packages/ai/src/providers/mistral.ts",
+    signal: {
+      provider: "mistral",
+      message: "Mistral stream ended without a terminal finish reason",
+    },
+    expected: reason("timeout"),
+  },
+  {
+    id: "openai-responses-incomplete-terminal-stream",
+    source: "packages/ai/src/transports/openai-responses-stream-internal.ts",
+    signal: {
+      provider: "openai",
+      message: "OpenAI Responses stream ended before a terminal response event",
+    },
+    expected: reason("timeout"),
+  },
+  {
+    id: "proxy-incomplete-terminal-stream",
+    source: "src/agents/runtime/proxy.ts",
+    signal: { message: "Proxy stream ended before terminal event" },
+    expected: reason("timeout"),
+  },
   ...failoverSignalRows(billingSource, reason("timeout"), [
     ["billing-deadline-exceeded", { message: "deadline exceeded" }],
     ["billing-no-stream-chunks", { message: "request ended without sending any chunks" }],

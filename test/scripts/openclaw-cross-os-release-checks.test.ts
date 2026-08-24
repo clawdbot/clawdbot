@@ -71,6 +71,7 @@ import {
   parseArgs,
   parseManagedGatewayServiceInstalled,
   packageHasScript,
+  prepareCandidate,
   readInstalledVersion,
   readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
@@ -115,6 +116,12 @@ import {
   writePackageDistInventoryForCandidate,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
+
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -1330,6 +1337,49 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(installSource).toMatch(
       /function assertNoLegacyPluginDependencyStagingDebris\(packageRoot: string\)/u,
     );
+  });
+
+  it("preflights standalone source candidates before cross-OS dependency installation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-cross-os-source-preflight-"));
+    const sourceDir = join(root, "source");
+    const logsDir = join(root, "logs");
+    const outputDir = join(root, "output");
+    mkdirSync(join(sourceDir, "packages", "ai"), { recursive: true });
+    mkdirSync(logsDir, { recursive: true });
+    writeFileSync(
+      join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.8.1",
+        dependencies: {
+          "@openclaw/ai": "workspace:*",
+          "partial-json": "0.1.8",
+        },
+      }),
+    );
+    writeFileSync(
+      join(sourceDir, "packages", "ai", "package.json"),
+      JSON.stringify({
+        name: "@openclaw/ai",
+        version: "2026.8.1",
+        dependencies: {
+          "partial-json": "0.1.7",
+        },
+      }),
+    );
+    writeFileSync(
+      join(sourceDir, "CHANGELOG.md"),
+      "# Changelog\n\n## Unreleased\n\n- Validate source metadata before installing dependencies.\n",
+    );
+
+    try {
+      await expect(prepareCandidate({ logsDir, outputDir, sourceDir })).rejects.toThrow(
+        "package.json must declare partial-json@0.1.7",
+      );
+      expect(existsSync(join(logsDir, "pnpm-install.log"))).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("filters the cross-OS runner matrix to a focused OS suite", () => {
@@ -2597,7 +2647,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+        JSON.stringify({
+          files: ["dist/"],
+          name: "openclaw-fixture",
+          packageManager: rootPackageManager,
+          version: "0.0.0",
+        }),
         "utf8",
       );
       writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");

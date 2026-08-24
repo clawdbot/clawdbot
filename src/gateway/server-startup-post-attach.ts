@@ -40,7 +40,6 @@ import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js"
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
-import type { GatewayResidentRegistry } from "./server-resident-registry.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
@@ -52,7 +51,10 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
-import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
+import {
+  beginMacOSSystemCaWarmupOnce,
+  type warmMacOSSystemCaOffMainThread,
+} from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
@@ -1003,7 +1005,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
-  warmSystemCa: warmMacOSSystemCaOffMainThread,
+  warmSystemCa: beginMacOSSystemCaWarmupOnce,
   loadSubagentRegistryActivation: async () =>
     (await import("../agents/subagents/registry/subagent-registry.js")).activateSubagentRegistry,
 };
@@ -1203,36 +1205,26 @@ export async function startGatewayPostAttachRuntime(
     };
     waitForPostReadyWork?: () => Promise<void>;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-    residentRegistry: GatewayResidentRegistry;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
-  let controlUiAssetsSidecar: GatewayPostReadySidecarHandle | undefined;
-  const controlUiAssetsResident = params.residentRegistry.register({
-    name: "control-ui-assets",
-    start: () => {
-      controlUiAssetsSidecar =
-        !params.minimalTestGateway && controlUiRootLifecycle?.state?.kind === "preparing"
-          ? schedulePostReadySidecarTask({
-              name: "sidecars.control-ui-assets",
-              startupTrace: params.startupTrace,
-              log: params.log,
-              run: controlUiRootLifecycle.start,
-              stop: controlUiRootLifecycle.stop,
-            })
-          : undefined;
-      if (controlUiAssetsSidecar) {
-        // Publish before the first await: slow CA/plugin startup must not strand
-        // the dashboard or hide its running builder from Gateway shutdown.
-        params.onGatewayLifetimeSidecars?.([controlUiAssetsSidecar]);
-      }
-      return controlUiAssetsSidecar;
-    },
-    stop: async () => await controlUiAssetsSidecar?.stop(),
-  });
-  controlUiAssetsResident.start();
+  const controlUiAssetsSidecar =
+    !params.minimalTestGateway && controlUiRootLifecycle?.state?.kind === "preparing"
+      ? schedulePostReadySidecarTask({
+          name: "sidecars.control-ui-assets",
+          startupTrace: params.startupTrace,
+          log: params.log,
+          run: controlUiRootLifecycle.start,
+          stop: controlUiRootLifecycle.stop,
+        })
+      : undefined;
+  if (controlUiAssetsSidecar) {
+    // Publish before the first await: slow CA/plugin startup must not strand
+    // the dashboard or hide its running builder from Gateway shutdown.
+    params.onGatewayLifetimeSidecars?.([controlUiAssetsSidecar]);
+  }
 
   if (!params.minimalTestGateway) {
     // The HTTP server is already attached, so keep health probes responsive while the worker
@@ -1284,12 +1276,6 @@ export async function startGatewayPostAttachRuntime(
     })();
     return await startupPluginsLoadPromise;
   };
-  const startupPluginsResident = params.residentRegistry.register({
-    name: "startup-plugin-load",
-    start: loadStartupPluginsIfNeeded,
-    stop: () => {},
-  });
-
   let startupLogPromise: Promise<void> | undefined;
   const startupLogSettled = createDeferredCore();
   // Tailscale and sidecar work can delay the public readiness handle past log failure.
@@ -1345,11 +1331,6 @@ export async function startGatewayPostAttachRuntime(
         activeWorkInspectors: params.activeWorkInspectors,
       });
 
-  const updateCheckResident = params.residentRegistry.register({
-    name: "update-check",
-    start: updateCheck.start,
-    stop: updateCheck.stop,
-  });
   let pluginServicesReported = false;
   let reportedPluginServices: PluginServicesHandle | null = null;
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
@@ -1391,7 +1372,7 @@ export async function startGatewayPostAttachRuntime(
             skipStartupLog();
             return emptySidecarResult();
           }
-          await startupPluginsResident.start();
+          await loadStartupPluginsIfNeeded();
           if (params.isClosing?.()) {
             skipStartupLog();
             return emptySidecarResult();
@@ -1603,31 +1584,7 @@ export async function startGatewayPostAttachRuntime(
           params.log.info("gateway ready");
           return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
         });
-  let startedSidecars: ReturnType<typeof startSidecars> | undefined;
-  const sidecarSequenceResident = params.residentRegistry.register({
-    name: "sidecar-sequence",
-    start: () => {
-      startedSidecars ??= startSidecars();
-      return startedSidecars;
-    },
-    stop: async () => {
-      const result = await startedSidecars;
-      for (const sidecar of result?.postReadySidecars ?? []) {
-        await sidecar.stop();
-      }
-    },
-  });
-  const perConfigSidecarsResident = params.residentRegistry.register({
-    name: "per-config-sidecars",
-    start: sidecarSequenceResident.start,
-    stop: async () => {
-      const result = await startedSidecars;
-      for (const sidecar of result?.gatewayLifetimeSidecars ?? []) {
-        await sidecar.stop();
-      }
-    },
-  });
-  const sidecarsPromise = perConfigSidecarsResident.start();
+  const sidecarsPromise = startSidecars();
 
   void sidecarsPromise
     .then(async (sidecarsResult) => {
@@ -1681,15 +1638,15 @@ export async function startGatewayPostAttachRuntime(
 
   if (params.sidecarStartup !== "defer") {
     const sidecarsResult = await sidecarsPromise;
-    updateCheckResident.start();
+    updateCheck.start();
     return {
-      stopGatewayUpdateCheck: updateCheckResident.stop,
+      stopGatewayUpdateCheck: updateCheck.stop,
       pluginServices: sidecarsResult.pluginServices,
       startupSettled: Promise.resolve(),
     };
   }
 
-  updateCheckResident.start();
+  updateCheck.start();
   const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
     () => undefined,
   );
@@ -1698,7 +1655,7 @@ export async function startGatewayPostAttachRuntime(
   void startupSettled.catch(() => {});
 
   return {
-    stopGatewayUpdateCheck: updateCheckResident.stop,
+    stopGatewayUpdateCheck: updateCheck.stop,
     pluginServices: reportedPluginServices,
     startupSettled,
   };

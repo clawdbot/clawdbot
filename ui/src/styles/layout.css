@@ -10,19 +10,11 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
-  --shell-chrome-controls-access-width: 0px;
-  /* Four controls: the admin-gated Ask OpenClaw fallback joins the strip only
-     while the nav is collapsed, which is exactly when this width applies. */
-  --shell-chrome-controls-collapsed-width: calc(
-    var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-gap) +
-      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-access-width)
-  );
-  --shell-chrome-safe-area-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
-      var(--shell-chrome-control-size) - var(--shell-chrome-controls-gap) + 8px
-  );
+  --shell-access-width: 0px;
+  /* Collapsed navigation adds new-thread to the two persistent controls.
+     Optional controls contribute only while they are actually mounted. */
+  --shell-controls-width: calc(104px + var(--shell-access-width));
+  --shell-chrome-safe-area-left: calc(var(--shell-controls-width) - 18px);
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
   --shell-topbar-height: 0px;
@@ -100,9 +92,9 @@
 .shell--nav-collapsed {
   grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
-  --shell-chrome-safe-area-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
-  );
+  /* The collapsed strip shows all three base controls, so unlike the expanded
+     safe edge this keeps the complete collapsed width. */
+  --shell-chrome-safe-area-left: calc(var(--shell-controls-width) + 18px);
 }
 
 /* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
@@ -181,9 +173,11 @@
 }
 
 .shell:has(.scope-upgrade-shell-status) {
-  --shell-chrome-controls-access-width: calc(
-    var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap)
-  );
+  --shell-access-width: 36px;
+}
+
+.shell:has(.shell-chrome-controls__custodian) {
+  --shell-controls-width: calc(140px + var(--shell-access-width));
 }
 
 .scope-upgrade-shell-status {
@@ -1851,6 +1845,9 @@ openclaw-settings-save-indicator:empty {
    here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
   --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
+  /* Title line box, shared by the label's line-height and the overlaid actions:
+     both must resolve the same value or the buttons drift off the title. */
+  --sidebar-title-line-height: calc(18px * var(--control-ui-text-scale));
 
   display: flex;
   align-items: center;
@@ -2085,6 +2082,7 @@ openclaw-settings-save-indicator:empty {
 .sidebar-recent-session__name {
   display: block;
   width: 100%;
+  line-height: var(--sidebar-title-line-height);
   flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
@@ -2153,13 +2151,26 @@ openclaw-settings-save-indicator:empty {
   padding-right: 2px;
 }
 
-/* Actions overlay the row center. The buttons re-enable their own
-   pointer-events on hover/focus. */
+/* Actions ride the title line: on a single-line row that is the row centre, and
+   on a two-line row it keeps them off the subtitle. The buttons re-enable their
+   own pointer-events on hover/focus. */
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
   inset: 50% 2px auto auto;
   transform: translateY(-50%);
   pointer-events: none;
+}
+
+/* Title line midpoint = the link's top padding plus half the title's line box.
+   Deriving it keeps the buttons on the title when either value changes. */
+.sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
+  > .sidebar-recent-session__link {
+  padding-block: 1px;
+}
+
+.sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
+  > .sidebar-recent-session__aside {
+  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 2px auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2179,49 +2190,21 @@ openclaw-settings-save-indicator:empty {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* Centered actions overlap both lines, so the full text column yields their width. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+/* Only the title yields width to the actions. The second line keeps subtitle,
+   badges, state and time visible, which is the point of moving the buttons up. */
+.sidebar-recent-session:not(
+    .sidebar-recent-session--child,
+    .sidebar-recent-session--single-line
+  ):is(:hover, :focus-within)
+  .sidebar-recent-session__title-row {
+  padding-right: var(--row-actions-reserve);
+}
+
+/* Single-line rows put the endcap beside the title, so the reservation has to
+   cover the whole line there rather than the title alone. */
+.sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   .sidebar-recent-session__text {
-  padding-right: 52px;
-}
-
-.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
-  .sidebar-recent-session__details-endcap {
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* Touch keeps the actions permanently visible beside the persistent endcap. */
-@media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
-    padding-right: 52px;
-  }
-}
-
-.nav-collapse-toggle {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: var(--radius-md);
-  transition:
-    background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-  margin-bottom: 0;
-  color: var(--muted);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-}
-
-.nav-collapse-toggle:hover {
-  background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
-  border-color: color-mix(in srgb, var(--border-strong) 88%, transparent);
-  color: var(--text);
-  transform: translateY(-1px);
+  padding-right: var(--row-actions-reserve);
 }
 
 .nav-collapse-toggle__icon {
@@ -3052,6 +3035,37 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   padding: 3px 0;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session,
+  .sidebar-recent-session__link,
+  .sidebar-zone-entry :is(.sidebar-recent-session, .sidebar-recent-session__link) {
+    min-height: 44px;
+  }
+
+  .sidebar-recent-session {
+    --sidebar-child-session-toggle-width: max(44px, calc(36px * var(--control-ui-text-scale)));
+  }
+
+  .sidebar-child-session-toggle {
+    height: 44px;
+  }
+
+  .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
+    > .sidebar-recent-session__aside {
+    inset: 50% 2px auto auto;
+  }
+
+  /* Always-visible 44px controls span a two-line row, so reserve their width
+     from the whole text column rather than letting them cover the endcap. */
+  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
+    padding-right: var(--row-actions-reserve);
+  }
+
+  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__title-row {
+    padding-right: 0;
+  }
+}
+
 .sidebar-zone-entry .sidebar-recent-session:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
@@ -3295,6 +3309,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: flex;
   height: 32px;
   align-items: center;
+  gap: 8px;
   transform: translateY(-50%);
 }
 
@@ -3937,29 +3952,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   height: 16px;
 }
 
-.sidebar-agent-menu__filter {
-  padding: 2px 8px 6px;
-}
-
-.sidebar-agent-menu__filter input {
-  --control-ui-touch-input-size: var(--control-ui-text-sm);
-
-  width: 100%;
-  padding: 5px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: inherit;
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.sidebar-agent-menu__empty {
-  padding: 6px 8px;
-  font-size: var(--control-ui-text-sm);
-  color: var(--muted);
-}
-
 /* Identity-menu strip: build identity left, theme switch right. */
 .sidebar-identity-menu__footer {
   display: flex;
@@ -3973,7 +3965,9 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 /* Host elements are display:contents, so the anchor itself is the flex item;
    min-width 0 lets it yield to the footer icons and ellipsize. */
 .sidebar-footer-build {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -4433,7 +4427,28 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
-  transition: padding-right var(--duration-fast) ease;
+}
+
+/* Action reservations on this viewport and the single-line text column are
+   deliberately not transitioned: the marquee measures their clipping width
+   on the next frame, so an animated width would make it scroll short. */
+.sidebar-recent-session__title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Desktop action hitboxes belong entirely to the title line. Grow that line to
+   the 24px target and reclaim the space from the link padding above. */
+.sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
+  .sidebar-recent-session__title-row {
+  height: max(24px, var(--sidebar-title-line-height));
+}
+
+/* Single-line rows lay the text column out in a row, so the title box has to
+   absorb the shrink there the way the bare label used to. */
+.sidebar-recent-session--single-line .sidebar-recent-session__title-row {
+  flex: 1 1 0;
 }
 
 .sidebar-recent-session__details {
@@ -4476,17 +4491,20 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   color: var(--muted);
 }
 
+/* The endcap shares the trailing column with the action icons on the line
+   above, and those sit inset inside their hover targets, so it borrows the same
+   inset rather than running flush to the row edge. */
 .sidebar-recent-session__details-endcap {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--row-glyph-gap, 6px);
   max-width: 100%;
   height: 18px;
   min-width: 0;
+  padding-right: calc((var(--row-action-size) - 14px) / 2);
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;
-  transition: opacity var(--duration-fast) ease;
 }
 
 .sidebar-recent-session__details-endcap .session-row-state {
@@ -4503,10 +4521,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .sidebar-session-attention__icon--question,
-.sidebar-session-attention__icon--approval {
-  color: var(--warn);
-}
-
+.sidebar-session-attention__icon--approval,
 .sidebar-session-attention__icon--agent {
   color: var(--warn);
 }

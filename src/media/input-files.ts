@@ -303,7 +303,10 @@ async function normalizeInputImage(params: {
   if (declaredMime.startsWith("image/") && detectedMime && !detectedMime.startsWith("image/")) {
     throw new Error(`Unsupported image MIME type: ${detectedMime}`);
   }
-  const sourceMime = detectedMime?.startsWith("image/") ? detectedMime : declaredMime;
+  const sourceMime = (detectedMime?.startsWith("image/") ? detectedMime : declaredMime).replace(
+    /^(image\/hei[cf])-sequence$/,
+    "$1",
+  );
   if (!params.limits.allowedMimes.has(sourceMime)) {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }

@@ -20,6 +20,7 @@ export const PresenceEntrySchema = closedObject({
   platform: Type.Optional(NonEmptyString),
   deviceFamily: Type.Optional(NonEmptyString),
   modelIdentifier: Type.Optional(NonEmptyString),
+  timeZone: Type.Optional(NonEmptyString),
   mode: Type.Optional(NonEmptyString),
   lastInputSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   reason: Type.Optional(NonEmptyString),

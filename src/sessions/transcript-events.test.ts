@@ -1,6 +1,7 @@
 // Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  attachSessionTranscriptRunId,
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -16,6 +17,22 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
+  it.each(["assistant", "toolResult"])("persists normalized run ownership on %s rows", (role) => {
+    const message = { role, content: [], __openclaw: { seq: 2 } };
+
+    expect(attachSessionTranscriptRunId(message, "  run-owned  ")).toEqual({
+      ...message,
+      __openclaw: { seq: 2, runId: "run-owned" },
+    });
+    expect(attachSessionTranscriptRunId(message, "  ")).toBe(message);
+  });
+
+  it("does not assign output run ownership to user rows", () => {
+    const message = { role: "user", content: "prompt" };
+
+    expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
+  });
+
   it("emits trimmed archive file updates only to internal listeners", () => {
     const listener = vi.fn();
     cleanup.push(onInternalSessionTranscriptUpdate(listener));

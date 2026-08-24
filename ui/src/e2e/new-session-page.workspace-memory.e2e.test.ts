@@ -101,7 +101,7 @@ async function withNewSessionPage(
 }
 
 suite.define(() => {
-  it("keeps rail privacy visible and reveals the mobile footer mode on hover or focus", async () => {
+  it("keeps rail privacy visible and exposes Draft from Plus on mobile", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
         models: [
@@ -124,37 +124,14 @@ suite.define(() => {
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
       const attach = page.getByRole("button", { name: "Add attachment" });
       const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
-      const draft = page.getByRole("switch", { name: "Draft" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
-      const message = page.locator(".new-session-page__message");
-      await Promise.all([
-        footer.waitFor(),
-        attach.waitFor(),
-        draft.waitFor({ state: "attached" }),
-        incognito.waitFor(),
-        model.waitFor(),
-      ]);
+      await Promise.all([footer.waitFor(), attach.waitFor(), incognito.waitFor(), model.waitFor()]);
 
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       await page.mouse.move(0, 0);
       await expect
         .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("0");
-      await footer.hover();
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await page.mouse.move(0, 0);
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("0");
-      await message.focus();
-      await expect
-        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       expect(
         await incognito.evaluate(
@@ -162,25 +139,21 @@ suite.define(() => {
         ),
       ).toBe(true);
 
-      const [footerBox, attachBox, draftBox, modelBox] = await Promise.all([
+      const [footerBox, attachBox, modelBox] = await Promise.all([
         footer.boundingBox(),
         attach.boundingBox(),
-        draft.boundingBox(),
         model.boundingBox(),
       ]);
       expect(footerBox).not.toBeNull();
       expect(attachBox).not.toBeNull();
-      expect(draftBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
-      expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
-      for (const control of [attachBox, draftBox, modelBox]) {
+      expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(modelBox?.x ?? 0);
+      for (const control of [attachBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
           (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
         );
       }
-      // The new-session footer keeps flex (not the shared chat mobile grid), so
-      // its transient mode switches can wrap before the model picker overflows.
       const controlsOverflow = await footer.evaluate(
         (element) => element.scrollWidth - element.clientWidth,
       );
@@ -188,6 +161,7 @@ suite.define(() => {
 
       await attach.click();
       await expect.poll(() => takePhoto.isVisible()).toBe(true);
+      await expect.poll(() => page.getByRole("menuitem", { name: "Draft" }).isVisible()).toBe(true);
       await page.keyboard.press("Escape");
       await incognito.click();
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());

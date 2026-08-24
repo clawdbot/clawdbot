@@ -124,6 +124,10 @@ export class GatewayPlugin extends Plugin {
     return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
   }
 
+  async fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T> {
+    return this.client ? await this.client.fetchGuildEmojis(guildId, fetcher) : await fetcher();
+  }
+
   takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
     return this.voiceStateCache.takeTransition(state);
   }

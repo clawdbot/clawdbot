@@ -241,7 +241,7 @@ suite.define(() => {
       const listCountBeforeBatch = (await gateway.getRequests("sessions.list")).length;
 
       for (const key of batchKeys) {
-        await rowFor(key).click({ modifiers: ["Meta"] });
+        await rowFor(key).click({ modifiers: ["Alt"] });
       }
       await rowFor(batchKeys[0]).click({ button: "right" });
       const batchMenu = page.locator("openclaw-session-menu");
@@ -433,7 +433,7 @@ suite.define(() => {
       }, selected.key);
 
       for (const row of batchRows) {
-        await rowFor(row.key).click({ modifiers: ["Meta"] });
+        await rowFor(row.key).click({ modifiers: ["Alt"] });
       }
       await rowFor(batchRows[0]!.key).click({ button: "right" });
       const batchMenu = page.locator("openclaw-session-menu");

@@ -59,6 +59,21 @@ export class SidebarCatalogMenuController {
     this.hooks.requestUpdate();
   }
 
+  retargetTrigger(key: CatalogSessionKey, element: Element | undefined): void {
+    if (!(element instanceof HTMLElement) || !this.isOpenFor(key)) {
+      return;
+    }
+    // A catalog refresh can replace the owning row while popup focus is elsewhere.
+    // Retarget only after the old trigger disconnects so dismissal has a live focus anchor.
+    queueMicrotask(() => {
+      if (!element.isConnected || this.trigger?.isConnected || !this.isOpenFor(key)) {
+        return;
+      }
+      this.trigger = element;
+      this.hooks.requestUpdate();
+    });
+  }
+
   private handleAction(
     menu: SidebarCatalogSessionMenuState,
     action: CatalogSessionMenuAction,

@@ -240,6 +240,49 @@ describe("tui session actions", () => {
     expect(updateFooter).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["success", "failure"])(
+    "does not publish a superseded picker roster %s",
+    async (outcome) => {
+      const pendingRoster = createDeferred<Awaited<ReturnType<TuiBackend["listAgents"]>>>();
+      const cachedAgents = [{ id: "research", name: "Research" }];
+      const state = createBaseState({
+        agentDefaultId: "research",
+        agents: cachedAgents,
+        currentAgentId: "research",
+        currentSessionKey: "agent:research:incident",
+      });
+      const addSystem = vi.fn();
+      const agentNames = new Map([["research", "Research"]]);
+      const { refreshAgents } = createTestSessionActions({
+        client: makeTuiBackend({ listAgents: vi.fn(() => pendingRoster.promise) }),
+        chatLog: makeChatLog({ addSystem }),
+        state,
+        agentNames,
+      });
+      let ownsRefresh = true;
+
+      const refresh = refreshAgents(() => ownsRefresh);
+      ownsRefresh = false;
+      if (outcome === "success") {
+        pendingRoster.resolve({
+          defaultId: "ops",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "ops", name: "Operations" }],
+        });
+      } else {
+        pendingRoster.reject(new Error("obsolete roster request failed"));
+      }
+      await refresh;
+
+      expect(state.currentAgentId).toBe("research");
+      expect(state.currentSessionKey).toBe("agent:research:incident");
+      expect(state.agents).toBe(cachedAgents);
+      expect([...agentNames]).toEqual([["research", "Research"]]);
+      expect(addSystem).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       scope: "per-sender" as const,
@@ -1662,6 +1705,36 @@ describe("tui session actions", () => {
     const renderedUsers = addUser.mock.calls.map((call) => call[0]);
     expect(renderedUsers).toContain("message from B");
   });
+
+  it.each([
+    {
+      scenario: "shutdown cancellation",
+      error: new DOMException("history loading stopped", "AbortError"),
+      expectedMessages: [],
+      expectedRenders: [],
+    },
+    {
+      scenario: "backend failure",
+      error: new Error("gateway unavailable"),
+      expectedMessages: [["history failed: gateway unavailable"]],
+      expectedRenders: [[true]],
+    },
+  ])(
+    "renders only genuine history errors for $scenario",
+    async ({ error, expectedMessages, expectedRenders }) => {
+      const addSystem = vi.fn();
+      const requestRender = vi.fn();
+      const { loadHistory } = createTestSessionActions({
+        client: makeTuiBackend({ loadHistory: vi.fn().mockRejectedValue(error) }),
+        chatLog: makeChatLog({ addSystem }),
+        tui: makeTui({ requestRender }),
+      });
+
+      await expect(loadHistory()).resolves.toEqual({ loaded: false });
+      expect(addSystem.mock.calls).toEqual(expectedMessages);
+      expect(requestRender.mock.calls).toEqual(expectedRenders);
+    },
+  );
 
   it("keeps the newer session when an earlier history load awaits session info", async () => {
     const historyA = createDeferred<unknown>();

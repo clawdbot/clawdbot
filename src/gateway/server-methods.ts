@@ -55,7 +55,10 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
-import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
+import {
+  resolveDirectIncognitoTargets,
+  sessionMutationTargetFields,
+} from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -298,12 +301,18 @@ async function authorizeAuthenticatedProfileForMethod(params: {
   method: string;
   requestParams: unknown;
   methodRegistry: GatewayMethodRegistry;
+  context: GatewayRequestContext;
 }): Promise<ErrorShape | null> {
   const sync = params.client?.authenticatedGitHubIdentitySync;
+  if (!sync || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    return null;
+  }
   const requiresProfile =
     params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
-    resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0;
-  if (!sync || !requiresProfile || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
+    (sessionMutationTargetFields(params.method).length > 0 &&
+      params.context.getRuntimeConfig().gateway?.roles !== undefined);
+  if (!requiresProfile) {
     return null;
   }
   try {
@@ -402,6 +411,21 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   if (profileError) {
     return { error: profileError };
   }
+  // Startup gating precedes session authorization: session stores are not loaded yet,
+  // so an authorization read here would deny with a misleading non-retryable error.
+  if (params.context.unavailableGatewayMethods?.has(params.method)) {
+    return {
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${params.method} unavailable during gateway startup`,
+        {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        },
+      ),
+    };
+  }
   const sessionMutation = resolveSessionMutationAuthorization({
     client: params.client ?? null,
     method: params.method,
@@ -421,19 +445,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         retryable: true,
         details: { code: "PAIRING_CHANGED" },
       }),
-    };
-  }
-  if (params.context.unavailableGatewayMethods?.has(params.method)) {
-    return {
-      error: errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${params.method} unavailable during gateway startup`,
-        {
-          retryable: true,
-          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-        },
-      ),
     };
   }
   return {

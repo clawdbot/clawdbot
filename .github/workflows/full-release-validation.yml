@@ -164,7 +164,7 @@ env:
   GH_REPO: ${{ github.repository }}
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
 
 jobs:
@@ -179,7 +179,7 @@ jobs:
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -242,7 +242,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout target package manifest
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           path: target
@@ -446,7 +446,7 @@ jobs:
       changed_paths: ${{ steps.find.outputs.changed_paths }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -455,7 +455,7 @@ jobs:
           submodules: false
 
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           path: target
@@ -570,7 +570,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           fetch-depth: 1
@@ -1085,7 +1085,7 @@ jobs:
       source_parent_attempt: ${{ steps.plan.outputs.source_parent_attempt }}
     steps:
       - name: Checkout release execution plan tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
@@ -1245,7 +1245,7 @@ jobs:
       state: ${{ steps.state.outputs.state }}
     steps:
       - name: Checkout release decision tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
@@ -1311,7 +1311,7 @@ jobs:
       performance_conclusion: ${{ steps.state.outputs.productPerformance_conclusion }}
     steps:
       - name: Checkout diagnostic drain tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
@@ -1388,7 +1388,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout release state verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |

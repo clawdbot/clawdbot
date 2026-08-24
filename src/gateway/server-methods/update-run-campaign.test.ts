@@ -48,6 +48,7 @@ const startManagedServiceUpdateHandoffMock = vi.fn<
   command: "openclaw update --yes --timeout 1800",
   logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
   handoffId: "handoff-1",
+  installRoot: "/tmp/openclaw",
 }));
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 const logGatewayInfoMock = vi.fn();
@@ -87,8 +88,8 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../../infra/restart.js", () => ({
-  resolveGatewayRestartDeferralTimeoutMs: () => 300_000,
+vi.mock("../../infra/restart.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js")),
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 

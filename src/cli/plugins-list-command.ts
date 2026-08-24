@@ -108,12 +108,12 @@ export async function runPluginsListCommand(
     });
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
-      const desc = plugin.description ? theme.muted(plugin.description) : "";
+      const error = plugin.status === "error" && plugin.error;
+      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
-      const sourceLine = desc ? `${formattedSource.value}\n${desc}` : formattedSource.value;
       return {
         Name: plugin.name || plugin.id,
         ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
@@ -124,7 +124,7 @@ export async function runPluginsListCommand(
             : plugin.enabled
               ? theme.success("enabled")
               : theme.warn("disabled"),
-        Source: sourceLine,
+        Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
       };
     });

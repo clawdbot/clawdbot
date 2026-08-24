@@ -589,25 +589,25 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/ios-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
         ".github/workflows/macos-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
         ".github/workflows/shared-openclawkit-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/periphery-intersection.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
     ]);

@@ -230,6 +230,7 @@ export async function deliverDiscordReply(params: {
   allowedMentions?: DiscordAllowedMentions;
   kind: "tool" | "block" | "final";
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  onPlatformSendDispatch?: () => Promise<void>;
 }) {
   void params.runtime;
 
@@ -257,6 +258,7 @@ export async function deliverDiscordReply(params: {
     formatting: delivery.formatting,
     threadId: delivery.threadId,
     identity: delivery.identity,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
     deps: createDiscordDeliveryDeps({
       cfg: params.cfg,
       token: params.token,

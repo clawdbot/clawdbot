@@ -171,7 +171,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
           if (created) {
             try {
               await sendMessageMattermost(
-                `user:${senderId}`,
+                `channel:${channelId}`,
                 core.channel.pairing.buildPairingReply({
                   channel: "mattermost",
                   idLine: `Your Mattermost user id: ${senderId}`,

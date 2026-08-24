@@ -364,6 +364,7 @@ async function createSessionEntry(
         } else {
           const result = await createGatewaySession({
             cfg: params.cfg,
+            operatorRoleActor: { kind: "system" },
             key: params.key,
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),

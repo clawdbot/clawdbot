@@ -43,7 +43,7 @@ export function resolveNodeService(): GatewayService {
     hasInstalledDefinition: hasInstalledDefinition
       ? (args) => hasInstalledDefinition({ ...args, env: withNodeServiceEnv(args.env ?? {}) })
       : undefined,
-    readCommand: (env) => base.readCommand(withNodeServiceEnv(env)),
+    readCommand: (env, opts) => base.readCommand(withNodeServiceEnv(env), opts),
     readRuntime: (env, opts) => base.readRuntime(withNodeServiceEnv(env), opts),
   };
 }

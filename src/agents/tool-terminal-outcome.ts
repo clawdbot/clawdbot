@@ -41,6 +41,7 @@ export function createToolTerminalObserver(
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
+        executionStarted,
         mutatingAction,
       };
       lastToolError = errors.recordFailure(failure).lastToolError;

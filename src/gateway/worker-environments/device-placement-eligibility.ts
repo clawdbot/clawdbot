@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { deviceUnavailableText, resolveDeviceWorkerAvailability } from "./device-provider.js";
 
-type DevicePlacementEligibility = { ok: true } | { ok: false; error: string };
+type DevicePlacementEligibility =
+  | { ok: true; availableSlots: number }
+  | { ok: false; error: string };
 
 export async function resolveDevicePlacementEligibility(params: {
   environmentService: object | undefined;
@@ -70,5 +72,5 @@ export async function resolveDevicePlacementEligibility(params: {
       }),
     };
   }
-  return { ok: true };
+  return { ok: true, availableSlots: node.workerHost.capacity.available };
 }

@@ -88,7 +88,7 @@ describe("worker placement projection", () => {
     });
 
     expect(projectWorkerSessionPlacement(active, undefined, reader.read(active))).toMatchObject({
-      runner: { kind: "device", status: "offline" },
+      runner: { kind: "device", deviceId: "device-1", status: "offline" },
     });
     expect(reader.version()).toBe(0);
     connected = true;
@@ -96,7 +96,7 @@ describe("worker placement projection", () => {
     reader.markChanged();
     reader.markChanged();
     expect(projectWorkerSessionPlacement(active, undefined, reader.read(active))).toMatchObject({
-      runner: { kind: "device", status: "available" },
+      runner: { kind: "device", deviceId: "device-1", status: "available" },
     });
     expect(reader.version()).toBe(3);
   });

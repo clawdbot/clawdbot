@@ -326,17 +326,15 @@ export function deleteSessionNodeArtifacts(
       db.deleteFrom("board_tabs").where("session_key", "=", sessionKey),
     );
   }
-  if (presentTables.has("heartbeat_outcomes")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("heartbeat_outcomes").where("session_key", "=", sessionKey),
-    );
-  }
-  if (presentTables.has("session_participants")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("session_participants").where("session_key", "=", sessionKey),
-    );
+  for (const table of [
+    "heartbeat_outcomes",
+    "session_participants",
+    "session_progress_cards",
+  ] as const) {
+    if (!presentTables.has(table)) {
+      continue;
+    }
+    executeSqliteQuerySync(database.db, db.deleteFrom(table).where("session_key", "=", sessionKey));
   }
   clearSessionCollaborationForKey(database, sessionKey);
 }

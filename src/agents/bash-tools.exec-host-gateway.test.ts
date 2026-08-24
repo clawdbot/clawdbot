@@ -645,6 +645,7 @@ describe("processGatewayAllowlist", () => {
     allowlistSatisfied?: boolean;
     requiresApproval?: boolean;
     satisfiedBy?: ExecSegmentSatisfiedBy;
+    segmentSatisfiedBy?: ExecSegmentSatisfiedBy[];
     segmentAllowlistEntries?: unknown[];
     hostAsk?: "off" | "on-miss" | "always";
     askFallback?: "deny" | "allowlist" | "full";
@@ -667,7 +668,8 @@ describe("processGatewayAllowlist", () => {
       allowlistSatisfied: params.allowlistSatisfied ?? false,
       segments,
       segmentAllowlistEntries: params.segmentAllowlistEntries ?? [],
-      segmentSatisfiedBy: segments.map(() => params.satisfiedBy ?? null),
+      segmentSatisfiedBy:
+        params.segmentSatisfiedBy ?? segments.map(() => params.satisfiedBy ?? null),
       authorizationPlan,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
@@ -1018,7 +1020,7 @@ describe("processGatewayAllowlist", () => {
 
     expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        command,
+        command: `${resolvedPath} ok`,
         argv: ["echo", "ok"],
         resolvedPath,
         host: "gateway",
@@ -1036,6 +1038,107 @@ describe("processGatewayAllowlist", () => {
       attributes: { decision: "auto-review" },
     });
     expect(JSON.stringify(captured.events)).not.toContain("allowed");
+  });
+
+  it("emits the Guardian review lifecycle on the reviewed exec call", async () => {
+    const command = "echo ok";
+    await configurePlanBackedCommand({ command });
+    let resolveReview!: (decision: Awaited<ReturnType<ExecAutoReviewer>>) => void;
+    const autoReviewer = vi.fn<ExecAutoReviewer>(
+      () =>
+        new Promise((resolve) => {
+          resolveReview = resolve;
+        }),
+    );
+    const reviews: Array<Record<string, unknown>> = [];
+    const publicationOrder: string[] = [];
+    const onApprovalReview = vi.fn((review: { status: string }) => {
+      publicationOrder.push(`stored:${review.status}`);
+    });
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        event.runId === "run-review" &&
+        event.stream === "tool" &&
+        event.data.phase === "review"
+      ) {
+        publicationOrder.push(`emitted:${String(event.data.approvalReviewOutcome)}`);
+        reviews.push(event.data);
+      }
+    });
+
+    try {
+      const pending = runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+        autoReviewer,
+        runId: "run-review",
+        toolCallId: "tool-review",
+        onApprovalReview,
+      });
+      await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
+      expect(reviews).toEqual([
+        expect.objectContaining({
+          phase: "review",
+          toolCallId: "tool-review",
+          approvalReviewOutcome: "reviewing",
+          review: expect.objectContaining({ label: "Guardian", status: "in_progress" }),
+        }),
+      ]);
+      resolveReview({ decision: "allow-once", risk: "low", rationale: "read-only" });
+      await pending;
+
+      expect(reviews).toEqual([
+        expect.objectContaining({
+          approvalReviewOutcome: "reviewing",
+          review: expect.objectContaining({ status: "in_progress" }),
+        }),
+        expect.objectContaining({
+          phase: "review",
+          toolCallId: "tool-review",
+          approvalReviewOutcome: "approved",
+          review: expect.objectContaining({
+            label: "Guardian",
+            status: "approved",
+            riskLevel: "low",
+            rationale: "read-only",
+          }),
+        }),
+      ]);
+      expect(publicationOrder).toEqual([
+        "emitted:reviewing",
+        "stored:approved",
+        "emitted:approved",
+      ]);
+      expect(onApprovalReview).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not invent Guardian review identity without a tool call ID", async () => {
+    await configurePlanBackedCommand({ command: "echo ok" });
+    const onApprovalReview = vi.fn();
+    const reviewEvents: unknown[] = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === "run-without-tool-call" && event.data.phase === "review") {
+        reviewEvents.push(event.data);
+      }
+    });
+    try {
+      await runGatewayAllowlist({
+        command: "echo ok",
+        ask: "on-miss",
+        autoReview: true,
+        runId: "run-without-tool-call",
+        onApprovalReview,
+      });
+      expect(defaultExecAutoReviewerMock).toHaveBeenCalledTimes(1);
+      expect(onApprovalReview).not.toHaveBeenCalled();
+      expect(reviewEvents).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it.runIf(process.platform !== "win32").each(["bash", "sh", "/bin/sh"])(
@@ -1062,18 +1165,39 @@ describe("processGatewayAllowlist", () => {
     await configurePlanBackedCommand({ command });
     const autoReviewer = vi.fn<ExecAutoReviewer>(() => new Promise(() => {}));
     const abortController = new AbortController();
-    const result = runGatewayAllowlist({
-      command,
-      ask: "on-miss",
-      autoReview: true,
-      autoReviewer,
-      signal: abortController.signal,
+    const reviewStatuses: string[] = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        event.runId === "run-cancelled-review" &&
+        event.stream === "tool" &&
+        event.data.phase === "review"
+      ) {
+        const review = event.data.review as { status?: unknown } | undefined;
+        if (typeof review?.status === "string") {
+          reviewStatuses.push(review.status);
+        }
+      }
     });
-    await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
 
-    abortController.abort(new Error("cancelled during review"));
+    try {
+      const result = runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+        autoReviewer,
+        signal: abortController.signal,
+        runId: "run-cancelled-review",
+        toolCallId: "tool-cancelled-review",
+      });
+      await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
 
-    await expect(result).rejects.toThrow("cancelled during review");
+      abortController.abort(new Error("cancelled during review"));
+
+      await expect(result).rejects.toThrow("cancelled during review");
+    } finally {
+      unsubscribe();
+    }
+    expect(reviewStatuses).toEqual(["in_progress", "aborted"]);
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
   });
 
@@ -1253,7 +1377,7 @@ describe("processGatewayAllowlist", () => {
 
     expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        command,
+        command: `${resolvedPath} -c 'print(1)'`,
         argv: ["python3", "-c", "print(1)"],
         host: "gateway",
         reason: "strict-inline-eval",
@@ -1722,48 +1846,131 @@ describe("processGatewayAllowlist", () => {
       rationale: "needs a person",
     });
     const warnings: string[] = [];
-    const result = await runGatewayAllowlist({
-      command: "echo ok",
-      ask: "on-miss",
-      autoReview: true,
-      warnings,
+    const reviewStatuses: string[] = [];
+    const onApprovalReview = vi.fn();
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === "run-denied-review" && event.data.phase === "review") {
+        reviewStatuses.push(String(event.data.approvalReviewOutcome));
+      }
     });
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({
+        command: "echo ok",
+        ask: "on-miss",
+        autoReview: true,
+        runId: "run-denied-review",
+        toolCallId: "tool-denied-review",
+        onApprovalReview,
+        warnings,
+      });
+    } finally {
+      unsubscribe();
+    }
 
     expect(defaultExecAutoReviewerMock).toHaveBeenCalledTimes(1);
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(warnings.join("\n")).toContain("needs a person");
     expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(reviewStatuses).toEqual(["reviewing", "denied"]);
+    expect(onApprovalReview).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "guardian:tool-denied-review", status: "denied" }),
+    );
   });
 
-  it("requests human approval when auto-review cannot bind a single parsed command", async () => {
-    requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: false,
-      segments: [
-        { raw: "echo ok", resolution: null, argv: ["echo", "ok"] },
-        { raw: "pwd", resolution: null, argv: ["pwd"] },
-      ],
-      segmentAllowlistEntries: [],
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
+  it.runIf(process.platform !== "win32").each([
+    { name: "command chain", command: "node --version && node --version" },
+    { name: "pipeline", command: "node --version | node --version" },
+    {
+      name: "safe builtin and external executable",
+      command: "true && node --version",
+      segmentSatisfiedBy: ["safeBuiltins", null] as ExecSegmentSatisfiedBy[],
+    },
+  ])(
+    "auto-reviews the exact enforced $name without prompting",
+    async ({ command, segmentSatisfiedBy }) => {
+      const { authorizationPlan } = await configurePlanBackedCommand({
+        command,
+        segmentSatisfiedBy,
+      });
+      const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
+      const enforced = buildAuthorizedShellCommandFromPlan({
+        plan: authorizationPlan,
+        mode: "enforced",
+        segmentSatisfiedBy: segmentSatisfiedBy ?? candidates.map(() => null),
+      });
+      expect(enforced.ok).toBe(true);
+      if (!enforced.ok) {
+        throw new Error(enforced.reason);
+      }
 
-    const result = await runGatewayAllowlist({
-      command: "echo ok; pwd",
-      ask: "on-miss",
-      autoReview: true,
-    });
+      const result = await runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+      });
 
-    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
-  });
+      expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: enforced.command,
+          argv: undefined,
+          resolvedPath: undefined,
+        }),
+      );
+      expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+      expect(result.execCommandOverride).toBe(enforced.command);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "defers compound plans with more than 64 candidates before Guardian review",
+    async () => {
+      const command = Array.from({ length: 65 }, () => "node --version").join(" && ");
+      await configurePlanBackedCommand({ command });
+
+      const result = await runGatewayAllowlist({ command, ask: "on-miss", autoReview: true });
+
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps shell expansion inside a safe-builtin compound plan off auto-review",
+    async () => {
+      const command = "true *.txt && node --version";
+      await configurePlanBackedCommand({
+        command,
+        segmentSatisfiedBy: ["safeBuiltins", null],
+      });
+
+      const result = await runGatewayAllowlist({ command, ask: "on-miss", autoReview: true });
+
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps dispatch-wrapper compound plans on the human approval path",
+    async () => {
+      const command = "timeout 5 node --version && node --version";
+      const { authorizationPlan } = await configurePlanBackedCommand({ command });
+      const wrapperChain =
+        authorizationPlan.groups[0]?.candidates[0]?.sourceSegment.resolution?.wrapperChain;
+      expect(wrapperChain).toContain("timeout");
+
+      const result = await runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+      });
+
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+    },
+  );
 
   it("fails closed before approval when the executable cannot be resolved", async () => {
     const command = "openclaw-definitely-missing-executable --version";

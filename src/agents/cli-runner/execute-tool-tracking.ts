@@ -17,6 +17,7 @@ import {
 import {
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "../embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
@@ -33,7 +34,7 @@ import {
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
 import { readToolResultDetails } from "../tool-result-error.js";
-import { closeClaudeSession } from "./claude-live-registry.js";
+import { closeCliLiveSession } from "./cli-live-session-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
@@ -246,6 +247,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     const toolArgs = params.args ?? {};
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
+    const confirmedTarget =
+      params.target && extractMessagingToolSendResult(params.target, params.result);
     const deliveredCurrentSourceReply =
       isMessagingSend &&
       isDeliveredMessageToolOnlySourceReplyResult({
@@ -254,6 +257,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         args: params.args,
         result: params.result,
         isError: params.isError,
+        allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+          send: confirmedTarget,
+          config: context.params.config,
+          currentProvider: context.params.messageChannel ?? context.params.messageProvider,
+          currentAccountId: context.params.agentAccountId,
+          currentChannelId: context.params.currentChannelId,
+          currentThreadId: context.params.currentThreadTs,
+          sessionKey: context.params.sessionKey,
+          deliveredPayload: params.result,
+        }),
         deliveryConfirmed: true,
       });
     const sourceReplyFinal = deliveredCurrentSourceReply
@@ -286,11 +299,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
       }
     }
-    if (!params.target) {
+    if (!confirmedTarget) {
       return;
     }
     const targetWithContent = {
-      ...extractMessagingToolSendResult(params.target, params.result),
+      ...confirmedTarget,
       ...content,
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
@@ -575,7 +588,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       if (params.useManagedClaudeLiveSession) {
         // The child still holds the process-env capture key. If drain cannot
         // prove idle, kill it so a stale key cannot admit later sends.
-        await closeClaudeSession(context, "mcp-capture-rotation");
+        await closeCliLiveSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
         Array.from(inFlightPreparedMessagingCalls).map(isPreparedInternalSourceReply),

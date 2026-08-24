@@ -28,6 +28,7 @@ import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -2104,6 +2105,88 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("blocks a view-capped operator from mutating another operator's response session", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const port = await getGatewayTestPort();
+        const { startGatewayServer } = await import("./server.js");
+        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        const previousGatewayAuth = testState.gatewayAuth;
+        const trustedProxyAuth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = trustedProxyAuth;
+        try {
+          await writeGatewayConfig({
+            gateway: {
+              auth: trustedProxyAuth,
+              trustedProxies: ["127.0.0.1"],
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    agents: "*",
+                    scopes: ["operator.write"],
+                    sessions: { others: "view" },
+                  },
+                },
+              },
+            },
+          });
+          resetConfigRuntimeState();
+          server = await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth: trustedProxyAuth,
+            controlUiEnabled: false,
+            openResponsesEnabled: true,
+          });
+
+          const owner = ensureProfileForEmail("response-owner@example.test");
+          const sessionKey = "agent:main:foreign-openresponses-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "foreign-openresponses-http",
+              updatedAt: 1,
+              visibility: "shared",
+              createdActor: { type: "human", id: owner.id },
+            },
+          );
+
+          agentCommandMock.mockClear();
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const response = await postResponses(
+            port,
+            { model: "openclaw", input: "mutate foreign response session" },
+            {
+              "x-forwarded-for": "198.51.100.42",
+              "x-forwarded-proto": "https",
+              "x-forwarded-user": "guest@example.test",
+              "x-openclaw-session-key": sessionKey,
+            },
+          );
+
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({
+            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+          });
+          expect(agentCommandMock).not.toHaveBeenCalled();
+        } finally {
+          await server?.close({ reason: "openresponses operator role session sharing test done" });
+          testState.gatewayAuth = previousGatewayAuth;
+          await writeGatewayConfig({});
+          resetConfigRuntimeState();
+        }
+      },
+    );
+  });
+
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
@@ -2831,6 +2914,24 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
+    const commentaryDeltas = events.filter((event) => event.event === "response.output_text.delta");
+    expect(
+      commentaryDeltas.map((event) => (parseSseData(event) as { delta?: string }).delta),
+    ).toEqual(["Let me check that."]);
+    expect(
+      collectSseEventTypes(events).filter((event) =>
+        [
+          "response.output_text.delta",
+          "response.output_text.done",
+          "response.output_item.done",
+        ].includes(event),
+      ),
+    ).toEqual([
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.output_item.done",
+      "response.output_item.done",
+    ]);
     const outputTextDone = findSseEvent(events, "response.output_text.done");
     expect((parseSseData(outputTextDone) as { text?: string }).text).toBe("Let me check that.");
 
@@ -2993,6 +3094,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       "activate_graph",
       "get_status",
     ]);
+    expect(response?.output?.slice(1)).toEqual(doneFunctionCalls.map(({ item }) => item));
     expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 

@@ -1,6 +1,7 @@
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
 import qrcode from "qrcode";
 import { expect, it } from "vitest";
@@ -389,6 +390,19 @@ suite.define(() => {
           "device.pair.setupCode",
           setupResult("setup-recovered", "full"),
         );
+        await page.getByRole("button", { name: "Reload" }).click();
+        await qr.waitFor();
+
+        await page.clock.install();
+        await gateway.deferNext("device.pair.setupCode");
+        await page.getByRole("button", { name: "New code" }).click();
+        await page.clock.fastForward(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS + 1);
+        await page.clock.runFor(100);
+        expect(
+          await error
+            .getByText("gateway request timed out after 30000ms: device.pair.setupCode")
+            .isVisible(),
+        ).toBe(true);
         await page.getByRole("button", { name: "Reload" }).click();
         await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();

@@ -10,9 +10,9 @@ describe("buildWidgetDocument", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(14664);
+    expect(Buffer.byteLength(html)).toBe(15592);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "2ba50a2b43f51e46644b27201bed47a02ba84023e37f01763e94baf998f32386",
+      "30ea7be77ec728493e29996b32e1dd7c31322814087352459c0849d45fb4663e",
     );
     expect(html).toContain("openclaw:widget-host-init-ack");
     expect(html).toContain('request("host.open",{url})');
@@ -31,5 +31,31 @@ describe("buildWidgetDocument", () => {
     expect(html).toContain("widget prompt host unavailable");
     expect(html).toContain("openclaw:widget-chat-host");
     expect(html).not.toContain("widget is not hosted on a board");
+    const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
+    expect(bridgeKeys).toEqual([
+      "surface",
+      "card",
+      "elevated",
+      "text",
+      "text-strong",
+      "muted",
+      "border",
+      "border-strong",
+      "accent",
+      "accent-fill",
+      "accent-fg",
+      "ok",
+      "warn",
+      "danger",
+      "info",
+      "radius",
+      "radius-full",
+      "scrollbar-size",
+      "scrollbar-thumb-inset",
+      "scrollbar-thumb",
+      "scrollbar-thumb-hover",
+      "font-body",
+      "font-mono",
+    ]);
   });
 });

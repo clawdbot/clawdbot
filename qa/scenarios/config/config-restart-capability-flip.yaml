@@ -53,6 +53,16 @@ flow:
         - set: originalImageGenerationModelPrimary
           value:
             expr: "original.config.agents?.defaults?.mediaModels?.image?.primary ?? null"
+        - set: originalTerminal
+          value:
+            expr: "original.config.gateway && Object.prototype.hasOwnProperty.call(original.config.gateway, 'terminal') ? structuredClone(original.config.gateway.terminal) : undefined"
+        - set: restartTerminalEnabled
+          value:
+            # Terminal is enabled unless explicitly false. This expression flips both effective states.
+            expr: "originalTerminal?.enabled === false ? true : false"
+        - set: originalTerminalEnabledPresent
+          value:
+            expr: "originalTerminal !== undefined && Object.prototype.hasOwnProperty.call(originalTerminal, 'enabled')"
         - set: denied
           value:
             expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
@@ -109,6 +119,10 @@ flow:
                             image:
                               primary:
                                 ref: originalImageGenerationModelPrimary
+                      gateway:
+                        terminal:
+                          enabled:
+                            ref: restartTerminalEnabled
                     sessionKey:
                       ref: sessionKey
                     deliveryContext:
@@ -118,6 +132,7 @@ flow:
                       ref: wakeMarker
                     replacePaths:
                       - tools.deny
+                      - gateway.terminal.enabled
               - call: waitForGatewayHealthy
                 args:
                   - ref: env
@@ -236,6 +251,9 @@ flow:
                       tools:
                         deny:
                           expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
+                      gateway:
+                        terminal:
+                          expr: "originalTerminal === undefined ? null : (originalTerminalEnabledPresent ? originalTerminal : { ...originalTerminal, enabled: null })"
                     replacePaths:
                       - tools.deny
               - call: waitForGatewayHealthy

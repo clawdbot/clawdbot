@@ -219,6 +219,54 @@ describe("new-session model runtime", () => {
     expect(control.thinkingLevel).toBe("high");
   });
 
+  it("selects a context window for the draft model", async () => {
+    const { context } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+      {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic",
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="anthropic/claude-fable-5"]',
+        ),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-fable-5"]')
+      ?.click();
+
+    const container = renderControl(control, context);
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[data-chat-context-window-toggle="200k"]',
+    );
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    toggle?.click();
+
+    expect(control.contextWindow).toBe("200k");
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-luna"]')
+      ?.click();
+    expect(control.contextWindow).toBe("");
+    expect(
+      renderControl(control, context).querySelector("[data-chat-context-window-toggle]"),
+    ).toBeNull();
+  });
+
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },

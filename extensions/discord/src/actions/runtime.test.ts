@@ -1,11 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
-import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
+import {
+  ChannelType,
+  PermissionFlagsBits,
+  type RESTGetAPIGuildEmojisResult,
+} from "discord-api-types/v10";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayPlugin } from "../internal/gateway.js";
+import { createInternalTestClient } from "../internal/test-builders.test-support.js";
+import { registerGateway, unregisterGateway } from "../monitor/gateway-registry.js";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
+import { handleDiscordMessageAction } from "./handle-action.js";
 import { discordGuildActionRuntime, discordModerationActionRuntime } from "./runtime-deps.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
@@ -67,7 +75,7 @@ const discordSendMocks = {
   fetchVoiceStatusDiscord: vi.fn(async () => ({})),
   kickMemberDiscord: vi.fn(async () => ({})),
   listGuildChannelsDiscord: vi.fn(async (): Promise<DiscordChannelInfoTest[]> => []),
-  listGuildEmojisDiscord: vi.fn(async () => []),
+  listGuildEmojisDiscord: vi.fn(async (): Promise<RESTGetAPIGuildEmojisResult> => []),
   listPinsDiscord: vi.fn(async () => ({})),
   listScheduledEventsDiscord: vi.fn(async () => []),
   listThreadsDiscord: vi.fn(async () => ({})),
@@ -2689,6 +2697,120 @@ describe("handleDiscordGuildAction", () => {
     expect(details.ok).toBe(true);
     expect(details.status).toBe("online");
     expect(details.activities).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "resolves the guild from the current channel",
+      params: {},
+      expectedGuildId: "current-guild",
+      resolvesChannel: true,
+    },
+    {
+      label: "prefers an explicit guild over the current channel",
+      params: { guildId: "explicit-guild" },
+      expectedGuildId: "explicit-guild",
+      resolvesChannel: false,
+    },
+  ])("$label for emoji-list", async ({ params, expectedGuildId, resolvesChannel }) => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "123",
+      type: ChannelType.GuildText,
+      guild_id: "current-guild",
+    });
+
+    const result = await handleDiscordMessageAction({
+      action: "emoji-list",
+      params,
+      cfg: DISCORD_TEST_CFG,
+      toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+    });
+
+    expect(result.details).toEqual({ ok: true, emojis: [] });
+    expect(listGuildEmojisDiscord).toHaveBeenCalledWith(expectedGuildId, { cfg: DISCORD_TEST_CFG });
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(resolvesChannel ? 1 : 0);
+  });
+
+  it("returns sorted, limited reaction-ready custom emoji without REST metadata", async () => {
+    listGuildEmojisDiscord.mockResolvedValueOnce([
+      { id: "3", name: "zeta", animated: false, roles: ["role-1"] },
+      { id: "1", name: "alpha", animated: true, managed: true },
+      { id: "2", name: "beta", available: true },
+      { id: null, name: "missing-id" },
+      { id: "4", name: null },
+    ]);
+
+    const result = await handleGuildAction(
+      "emojiList",
+      { guildId: "G1", limit: 2 },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      emojis: [
+        { name: "alpha", identifier: "alpha:1", animated: true },
+        { name: "beta", identifier: "beta:2" },
+      ],
+    });
+  });
+
+  it("reuses the gateway-owned normalized emoji list across requests with different limits", async () => {
+    const client = createInternalTestClient();
+    registerGateway("default", {
+      fetchGuildEmojis: client.fetchGuildEmojis.bind(client),
+    } as GatewayPlugin);
+    listGuildEmojisDiscord.mockResolvedValueOnce([
+      { id: "2", name: "beta" },
+      { id: "1", name: "alpha" },
+    ]);
+
+    try {
+      const first = await handleGuildAction(
+        "emojiList",
+        { guildId: "G1", limit: 1 },
+        enableAllActions,
+      );
+      const second = await handleGuildAction(
+        "emojiList",
+        { guildId: "G1", limit: 2 },
+        enableAllActions,
+      );
+
+      expect(first.details).toEqual({
+        ok: true,
+        emojis: [{ name: "alpha", identifier: "alpha:1" }],
+      });
+      expect(second.details).toEqual({
+        ok: true,
+        emojis: [
+          { name: "alpha", identifier: "alpha:1" },
+          { name: "beta", identifier: "beta:2" },
+        ],
+      });
+      expect(listGuildEmojisDiscord).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterGateway("default");
+    }
+  });
+
+  it("bounds emoji-list output even when a larger limit is requested", async () => {
+    listGuildEmojisDiscord.mockResolvedValueOnce(
+      Array.from({ length: 101 }, (_, index) => ({
+        id: String(index + 1),
+        name: `emoji-${String(index).padStart(3, "0")}`,
+      })),
+    );
+
+    const result = await handleGuildAction(
+      "emojiList",
+      { guildId: "G1", limit: 500 },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({ ok: true, emojis: expect.any(Array) });
+    const details = result.details as { emojis: unknown[] };
+    expect(details.emojis).toHaveLength(100);
   });
 
   it.each([

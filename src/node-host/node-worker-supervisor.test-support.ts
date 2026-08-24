@@ -147,7 +147,11 @@ if (mode === "connection-failure") {
 }
 `;
 
-export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): WorkerLaunchPlan {
+export function testWorkerDescriptor(
+  workspaceDir: string,
+  prompt = "success",
+  turnId = "turn-1",
+): WorkerLaunchPlan {
   return {
     version: 4,
     admission: {
@@ -167,7 +171,7 @@ export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): 
       operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
       agentRuntimeIdentityToken: "signed-runtime-token",
       runId: "run-1",
-      turnId: "turn-1",
+      turnId,
       prompt,
       suppressPromptTranscript: false,
       workspaceDir,
@@ -216,6 +220,6 @@ export function testWorkerLaunchInput(
     gatewayNamespace: "gateway-1",
     expectedBundleHash: TEST_BUNDLE_HASH,
     placementGeneration: 4,
-    descriptor: testWorkerDescriptor(workspaceDir, prompt),
+    descriptor: testWorkerDescriptor(workspaceDir, prompt, launchId),
   };
 }

@@ -3845,17 +3845,30 @@ describe("gateway session utils", () => {
         defaults: {
           model: { primary: "local/custom-reasoner" },
         },
-        list: [{ id: "main", default: true }],
+        list: [{ id: "main", default: true }, { id: "work" }, { id: "missing" }],
       },
     } as OpenClawConfig;
+    const catalogEntry = {
+      provider: "local",
+      id: "custom-reasoner",
+      name: "Custom Reasoner",
+    };
+    const disabledCatalog = [{ ...catalogEntry, reasoning: false }];
+    const enabledCatalog = [{ ...catalogEntry, reasoning: true }];
 
-    const result = listAgentsForGateway(cfg, [
-      { provider: "local", id: "custom-reasoner", name: "Custom Reasoner", reasoning: true },
-    ]);
-    const agent = result.agents.find((row) => row.id === "main");
+    const result = listAgentsForGateway(cfg, disabledCatalog, {
+      modelCatalogByAgentId: new Map([
+        ["main", disabledCatalog],
+        ["work", enabledCatalog],
+        ["missing", undefined],
+      ]),
+    });
+    const agentsById = new Map(result.agents.map((agent) => [agent.id, agent]));
 
-    expect(agent?.thinkingDefault).toBe("medium");
-    expect(agent?.thinkingLevels?.map((level) => level.id)).toContain("medium");
+    expect(agentsById.get("main")?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(agentsById.get("work")?.thinkingDefault).toBe("medium");
+    expect(agentsById.get("work")?.thinkingLevels?.map((level) => level.id)).toContain("medium");
+    expect(agentsById.get("missing")?.thinkingLevels?.map((level) => level.id)).toContain("high");
   });
 
   describe("listAgentsForGateway resolved model projection", () => {

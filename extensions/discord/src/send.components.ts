@@ -7,7 +7,6 @@ import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
   buildDiscordComponentMessage,
@@ -219,8 +218,8 @@ async function buildDiscordComponentPayload(params: {
     const explicitAttachmentName = extractComponentAttachmentNames(spec)[0];
     resolvedFileName =
       filenameOverride ||
-      media.fileName ||
       explicitAttachmentName ||
+      media.fileName ||
       `upload${extensionForMime(media.contentType) ?? ""}`;
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
     files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
@@ -300,9 +299,8 @@ export async function sendDiscordComponentMessage(
   }
 
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
-  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+  const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   const channel = await resolveDiscordChannel(rest, channelId);
@@ -325,12 +323,13 @@ export async function sendDiscordComponentMessage(
 
   let result: { id: string; channel_id: string };
   try {
-    await opts.onPlatformSendDispatch?.();
     result = (await request(
-      () =>
-        createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
+      async () => {
+        await opts.onPlatformSendDispatch?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
           body,
-        }),
+        });
+      },
       "components",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
@@ -374,9 +373,8 @@ export async function editDiscordComponentMessage(
   opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
-  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+  const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const { body, buildResult } = await buildDiscordComponentPayload({
     spec,

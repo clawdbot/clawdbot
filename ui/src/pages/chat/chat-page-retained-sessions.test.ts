@@ -13,9 +13,11 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { SESSION_NAVIGATION_INTENT_EVENT } from "../../lib/sessions/navigation-handoff.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
+import { routeDraft } from "./route-draft.ts";
 
 type RenderedPane = HTMLElement & {
   active: boolean;
+  draft?: string;
   focusComposer: boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   onPaneSessionChange?: (
@@ -139,6 +141,72 @@ describe("chat page retained sessions", () => {
         .toSorted(),
     ).toEqual(["agent:main:a", "agent:main:c", "agent:main:d"]);
     expect(paneB?.isConnected).toBe(false);
+  });
+
+  it.each([
+    { retainedSessionKey: "main", routeSessionKey: "agent:main:main" },
+    { retainedSessionKey: "agent:main:main", routeSessionKey: "main" },
+  ])(
+    "delivers a one-shot route draft and composer focus across the $retainedSessionKey alias",
+    async ({ retainedSessionKey, routeSessionKey }) => {
+      const { navigation, page, paneFor } = await mountRetainedPage(retainedSessionKey);
+      const pane = expectDefined(paneFor(retainedSessionKey), "retained main chat pane");
+      const receivedDrafts: Array<string | undefined> = [];
+      const focusRequests: boolean[] = [];
+
+      Object.defineProperties(pane, {
+        draft: {
+          configurable: true,
+          get: () => receivedDrafts.at(-1),
+          set: (value: string | undefined) => receivedDrafts.push(value),
+        },
+        focusComposer: {
+          configurable: true,
+          get: () => focusRequests.at(-1) ?? false,
+          set: (value: boolean) => focusRequests.push(value),
+        },
+      });
+
+      page.data = {
+        sessionKey: routeSessionKey,
+        draft: "What can you do?",
+        focusComposer: true,
+      };
+      await page.updateComplete;
+      await Promise.resolve();
+      await page.updateComplete;
+
+      expect(paneFor(retainedSessionKey)).toBe(pane);
+      expect(receivedDrafts.filter((draft) => draft !== undefined)).toEqual(["What can you do?"]);
+      expect(focusRequests).toContain(true);
+      expect(navigation.replace).toHaveBeenCalledOnce();
+
+      page.data = { sessionKey: routeSessionKey };
+      await page.updateComplete;
+    },
+  );
+
+  it.each([
+    { routeSessionKey: "agent:main:main", paneSessionKey: "" },
+    { routeSessionKey: "agent:main:main", paneSessionKey: "global" },
+    { routeSessionKey: "agent:main:main", paneSessionKey: "agent:research:main" },
+    {
+      routeSessionKey: "agent:ops:matrix:channel:!Room:Example.Org",
+      paneSessionKey: "agent:ops:matrix:channel:!room:example.org",
+    },
+    {
+      routeSessionKey: "agent:ops:signal:group:AbC123=",
+      paneSessionKey: "agent:ops:signal:group:abc123=",
+    },
+  ])("never sends a route draft to a different session", ({ routeSessionKey, paneSessionKey }) => {
+    expect(
+      routeDraft({ sessionKey: routeSessionKey, draft: "private draft" }, null, paneSessionKey),
+    ).toBeUndefined();
+  });
+
+  it("never replays a consumed route draft through an equivalent main alias", () => {
+    const data = { sessionKey: "agent:main:main", draft: "already delivered" };
+    expect(routeDraft(data, data, "main")).toBeUndefined();
   });
 
   it("hands route-owned focus to the final page across pane replacement", async () => {

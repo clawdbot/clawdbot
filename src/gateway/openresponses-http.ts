@@ -17,6 +17,7 @@ import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -89,6 +90,7 @@ import {
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenResponsesHttpOptions = {
@@ -502,6 +504,19 @@ export async function handleOpenResponsesHttpRequest(
     }
     throw err;
   }
+  const creationAuth = authorizeGatewaySessionCreation({
+    cfg: getRuntimeConfig(),
+    ...(senderIsOwner && !handled.requestAuth.authenticatedUserProfile
+      ? { actor: { kind: "system" as const } }
+      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    agentId,
+  });
+  if (creationAuth) {
+    sendJson(res, 403, {
+      error: { message: creationAuth.message, type: "forbidden" },
+    });
+    return true;
+  }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -670,10 +685,11 @@ export async function handleOpenResponsesHttpRequest(
   const sessionAuth = authorizeOpenAiCompatibleHttpSession({
     agentId: resolved.agentId,
     sessionKey,
+    requestAuth: handled.requestAuth,
     senderIsOwner,
   });
   if (!sessionAuth.allowed) {
-    sendMissingScopeForbidden(res, sessionAuth.missingScope);
+    sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
     return true;
   }
 
@@ -1266,7 +1282,7 @@ export async function handleOpenResponsesHttpRequest(
         const finalText =
           accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
 
-        if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
+        if (finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
           writeSseEvent(res, {
             type: "response.output_text.delta",
@@ -1337,7 +1353,7 @@ export async function handleOpenResponsesHttpRequest(
             output_index: nextStreamOutputIndex,
             item: completedFunctionCallItem,
           });
-          functionCallItems.push(functionCallItem);
+          functionCallItems.push(completedFunctionCallItem);
           nextStreamOutputIndex += 1;
         }
 

@@ -286,11 +286,12 @@ async function listObservedProjects(
   context: Parameters<GatewayRequestHandlers["projects.list"]>[0]["context"],
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
 ): Promise<ProjectSummary[]> {
-  const { store } = loadCombinedSessionStoreForGatewayCore(context.getRuntimeConfig(), {
+  const cfg = context.getRuntimeConfig();
+  const { store } = loadCombinedSessionStoreForGatewayCore(cfg, {
     projection: "list",
   });
   const rawCandidates: RawProjectCandidate[] = [];
-  const visibilityFilter = createSessionListEntryFilter({ client });
+  const visibilityFilter = createSessionListEntryFilter({ client, cfg });
   const canSeeAll = !visibilityFilter;
   for (const [sessionKey, entry] of Object.entries(store)) {
     if (visibilityFilter && !visibilityFilter(sessionKey, entry)) {

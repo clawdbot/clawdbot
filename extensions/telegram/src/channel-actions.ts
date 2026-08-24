@@ -42,6 +42,7 @@ const telegramMessageActionRuntime = {
 const TELEGRAM_MESSAGE_ACTION_MAP = {
   delete: "deleteMessage",
   edit: "editMessage",
+  "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
   send: "sendMessage",
@@ -178,6 +179,7 @@ function describeTelegramMessageTool({
   }
   if (discovery.isEnabled("reactions")) {
     actions.add("react");
+    actions.add("emoji-list");
   }
   if (discovery.isEnabled("deleteMessage")) {
     actions.add("delete");
@@ -217,7 +219,7 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
-  providerOwnedReadGates: ["react", "edit", "delete"],
+  providerOwnedReadGates: ["react", "edit", "delete", "emoji-list"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },

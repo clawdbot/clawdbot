@@ -14,6 +14,14 @@ const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createIsomBrandBuffer(brand: "hevc" | "msf1"): Buffer {
+  const buffer = Buffer.alloc(24);
+  buffer.writeUInt32BE(buffer.length, 0);
+  buffer.write("ftyp", 4, "ascii");
+  buffer.write(brand, 8, "ascii");
+  return buffer;
+}
+
 async function runCap(...argv: string[]): Promise<void> {
   const program = new Command();
   await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
@@ -867,6 +875,16 @@ describe("capability cli", () => {
     });
   });
 
+  it("renders an explicit empty model list without changing JSON output", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([]);
+
+    await runCapability("model", "list", "--json");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([]);
+
+    await runCapability("model", "list");
+    expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
+  });
+
   it("reports model providers configured through their environment key", async () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
 
@@ -1284,6 +1302,54 @@ describe("capability cli", () => {
     expect(inputs[0]?.mimeType).toBe("image/jpeg");
   });
 
+  it("normalizes sniffed HEIC sequences to JPEG before local model probes", async () => {
+    const source = createIsomBrandBuffer("hevc");
+    const tempInput = path.join(tempDirs.make("openclaw-model-run-heic-sequence-"), "opaque.bin");
+    await fs.writeFile(tempInput, source);
+
+    await runCapability("model", "run", "--prompt", "describe this", "--file", tempInput, "--json");
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(source);
+    const call = firstCompletionCall();
+    expect(call?.context?.messages?.[0]?.content).toEqual([
+      { type: "text", text: "describe this" },
+      {
+        type: "image",
+        data: Buffer.from("jpeg-normalized").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    ]);
+    expect(firstJsonOutput()?.inputs).toEqual([{ path: tempInput, mimeType: "image/jpeg" }]);
+  });
+
+  it("normalizes sniffed HEIF sequences to JPEG before gateway model probes", async () => {
+    const source = createIsomBrandBuffer("msf1");
+    const tempInput = path.join(tempDirs.make("openclaw-model-run-heif-sequence-"), "opaque.bin");
+    await fs.writeFile(tempInput, source);
+
+    await runCapability(
+      "model",
+      "run",
+      "--prompt",
+      "describe this",
+      "--file",
+      tempInput,
+      "--gateway",
+      "--json",
+    );
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(source);
+    expect(firstGatewayCall()?.params?.attachments).toEqual([
+      {
+        type: "image",
+        fileName: "opaque.bin",
+        mimeType: "image/jpeg",
+        content: Buffer.from("jpeg-normalized").toString("base64"),
+      },
+    ]);
+    expect(firstJsonOutput()?.inputs).toEqual([{ path: tempInput, mimeType: "image/jpeg" }]);
+  });
+
   it("rejects non-image files for model probes", async () => {
     const tempInput = path.join(os.tmpdir(), `openclaw-model-run-audio-${Date.now()}.mp3`);
     await fs.writeFile(tempInput, Buffer.from("not really audio"));
@@ -1584,6 +1650,22 @@ describe("capability cli", () => {
     expect(outputs).toHaveLength(1);
     expect(outputs[0]?.kind).toBe("image.description");
   });
+
+  it.each([
+    { domain: "audio", action: "transcribe", file: "memo.m4a", result: "meeting notes" },
+    { domain: "image", action: "describe", file: "photo.jpg", result: "friendly lobster" },
+    { domain: "image", action: "describe-many", file: "photo.jpg", result: "friendly lobster" },
+    { domain: "video", action: "describe", file: "clip.mp4", result: "friendly lobster" },
+  ])(
+    "prints both the input path and result for $domain $action by default",
+    async ({ domain, action, file, result }) => {
+      await runCapability(domain, action, "--file", file);
+
+      const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
+      expect(output).toContain(path.resolve(file));
+      expect(output).toContain(result);
+    },
+  );
 
   it("keeps encoded image describe HTTP URLs intact", async () => {
     const mediaUrl = "https://cdn.example.com/clip%2Emp4?download=1#preview";
