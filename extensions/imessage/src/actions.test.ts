@@ -1729,6 +1729,52 @@ describe("imessage message actions", () => {
     },
   );
 
+  it.each([
+    ["upload-file", "-_8="],
+    ["upload-file", "-_8"],
+    ["setGroupIcon", "-_8="],
+    ["setGroupIcon", "-_8"],
+    ["reply", "-_8="],
+    ["reply", "-_8"],
+  ])("preserves URL-safe base64 for %s (%s)", async (action, buffer) => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.sendAttachment.mockResolvedValue({ messageId: "sent-guid" });
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action,
+      cfg: cfg(),
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        text: "attachment",
+        filename: "photo.jpg",
+        buffer,
+      },
+      senderIsOwner: true,
+    } as never);
+
+    const expectedBuffer = Uint8Array.from([0xfb, 0xff]);
+    if (action === "reply") {
+      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachment: expect.objectContaining({ buffer: expectedBuffer }),
+        }),
+      );
+    } else {
+      const nativeAction =
+        action === "setGroupIcon" ? runtimeMock.setGroupIcon : runtimeMock.sendAttachment;
+      expect(nativeAction).toHaveBeenCalledWith(
+        expect.objectContaining({ buffer: expectedBuffer }),
+      );
+    }
+  });
+
   it("rejects a malformed base64 buffer for upload-file instead of sending garbage bytes", async () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,

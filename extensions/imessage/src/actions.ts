@@ -288,7 +288,7 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   if (!base64Buffer) {
     throw new Error(`iMessage ${action} requires buffer (base64) parameter.`);
   }
-  const canonical = canonicalizeBase64(base64Buffer);
+  const canonical = canonicalizeBase64(base64Buffer.replaceAll("-", "+").replaceAll("_", "/"));
   if (!canonical) {
     throw new Error(`iMessage ${action} buffer must be valid base64.`);
   }
