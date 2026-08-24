@@ -2,6 +2,7 @@
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { formatPrimitiveString } from "./tui-formatters.js";
+import { matchesSelectedTuiSession } from "./tui-session-events.js";
 import type { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -240,6 +241,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     const authoritativeIdle =
       Array.isArray(event?.activeRunIds) &&
       event.activeRunIds.length === 0 &&
+      matchesSelectedTuiSession(state, event, { requireAliasOwnership: true }) &&
       (typeof event.sessionId !== "string" ||
         !state.currentSessionId ||
         event.sessionId === state.currentSessionId);

@@ -2360,6 +2360,37 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it.each([
+    { selectedAgentId: "work", eventAgentId: "main", shouldClear: false },
+    { selectedAgentId: "work", eventAgentId: undefined, shouldClear: false },
+    { selectedAgentId: "work", eventAgentId: "work", shouldClear: true },
+    { selectedAgentId: "main", eventAgentId: undefined, shouldClear: true },
+  ])(
+    "settles an unscoped alias only for its selected or default owner ($selectedAgentId/$eventAgentId)",
+    ({ selectedAgentId, eventAgentId, shouldClear }) => {
+      const { state, setActivityStatus, handleSessionsChangedEvent } = createHandlersHarness({
+        state: {
+          currentAgentId: selectedAgentId,
+          currentSessionKey: `agent:${selectedAgentId}:main`,
+          currentSessionId: null,
+          activeChatRunId: "run-current",
+          activityStatus: "streaming",
+        },
+      });
+
+      handleSessionsChangedEvent({
+        sessionKey: "main",
+        ...(eventAgentId ? { agentId: eventAgentId } : {}),
+        reason: "chat.run.settled",
+        activeRunIds: [],
+      });
+
+      expect(state.activeChatRunId).toBe(shouldClear ? null : "run-current");
+      expect(state.activityStatus).toBe(shouldClear ? "idle" : "streaming");
+      expect(setActivityStatus.mock.calls.some(([status]) => status === "idle")).toBe(shouldClear);
+    },
+  );
+
+  it.each([
     { pendingSubmit: sendingSubmit("run-pending"), activityStatus: "sending" },
     { pendingSubmit: acceptedSubmit("run-pending"), activityStatus: "waiting" },
   ])("preserves $activityStatus submit activity while retiring a stale owner", (pending) => {
