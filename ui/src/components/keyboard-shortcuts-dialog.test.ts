@@ -25,7 +25,7 @@ describe("keyboard shortcuts dialog", () => {
     expect(dialog.shadowRoot?.querySelector("h2")?.textContent).toBe("Keyboard shortcuts");
     expect(
       Array.from(dialog.shadowRoot?.querySelectorAll("h3") ?? [], (heading) => heading.textContent),
-    ).toEqual(["General", "Chat", "Panels", "Approvals"]);
+    ).toEqual(["General", "Chat", "Panels", "Sidebar", "Image viewer", "Approvals"]);
     const sendRow = () =>
       Array.from(dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? []).find((row) =>
         row.textContent?.includes("Send message"),

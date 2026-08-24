@@ -89,6 +89,12 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
       font-size: 13px;
     }
 
+    .combos {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
     .combo {
       display: flex;
       align-items: center;
@@ -141,15 +147,17 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
                     (entry) => html`
                       <div class="shortcut-row">
                         <span>${t(entry.label)}</span>
-                        ${entry.combos.map(
-                          (combo) => html`
-                            <span class="combo">
-                              ${formatKeyboardShortcutParts(combo).map(
-                                (part) => html`<kbd>${part}</kbd>`,
-                              )}
-                            </span>
-                          `,
-                        )}
+                        <span class="combos">
+                          ${entry.combos.map(
+                            (combo) => html`
+                              <span class="combo">
+                                ${formatKeyboardShortcutParts(combo).map(
+                                  (part) => html`<kbd>${part}</kbd>`,
+                                )}
+                              </span>
+                            `,
+                          )}
+                        </span>
                       </div>
                     `,
                   )}

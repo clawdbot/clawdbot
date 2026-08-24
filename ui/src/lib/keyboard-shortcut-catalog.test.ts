@@ -98,6 +98,27 @@ describe("keyboard shortcut catalog presentation", () => {
       "Ctrl+Shift+Enter",
     );
     expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.escape, true)).toEqual(["esc"]);
+    expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.historyPrevious, true)).toEqual([
+      "↑",
+    ]);
+    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect, true)).toBe(
+      "⌘Click",
+    );
+    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.extendSessionSelect, false)).toBe(
+      "Shift+Click",
+    );
+    expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.zoomIn, false)).toEqual(["+"]);
+    expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.zoomReset, true)).toEqual(["0"]);
+  });
+
+  it("swaps both send-preference chords when the composer preference is modifier-enter", () => {
+    const entryCombos = (id: string) =>
+      resolveKeyboardShortcutSections("modifier-enter")
+        .flatMap((section) => section.entries)
+        .find((entry) => entry.id === id)?.combos;
+
+    expect(entryCombos("startNewSession")).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
+    expect(entryCombos("sendMessage")).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
   });
 
   it("derives the displayed send chord from the composer's active preference", () => {

@@ -44,20 +44,36 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("toggleSidebar", KEYBOARD_SHORTCUT_COMBOS.toggleSidebar),
     keyboardShortcutEntry("debugOverlay", KEYBOARD_SHORTCUT_COMBOS.debugOverlay),
     keyboardShortcutEntry("appearanceSettings", KEYBOARD_SHORTCUT_COMBOS.appearanceSettings),
+    keyboardShortcutEntry("startNewSession", KEYBOARD_SHORTCUT_COMBOS.sendMessage),
     keyboardShortcutEntry("closeDialog", KEYBOARD_SHORTCUT_COMBOS.escape),
   ]),
   keyboardShortcutSection("chat", [
     keyboardShortcutEntry("sendMessage", KEYBOARD_SHORTCUT_COMBOS.sendMessage),
     keyboardShortcutEntry("newline", KEYBOARD_SHORTCUT_COMBOS.newline),
     keyboardShortcutEntry("steerImmediately", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
+    keyboardShortcutEntry(
+      "historyRecall",
+      KEYBOARD_SHORTCUT_COMBOS.historyPrevious,
+      KEYBOARD_SHORTCUT_COMBOS.historyNext,
+    ),
     keyboardShortcutEntry("transcriptSearch", KEYBOARD_SHORTCUT_COMBOS.transcriptSearch),
     keyboardShortcutEntry("clearReply", KEYBOARD_SHORTCUT_COMBOS.escape),
     keyboardShortcutEntry("stopResponse", KEYBOARD_SHORTCUT_COMBOS.escape),
+    keyboardShortcutEntry("cancelDictation", KEYBOARD_SHORTCUT_COMBOS.escape),
     keyboardShortcutEntry("saveQueuedMessage", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
   ]),
   keyboardShortcutSection("panels", [
     keyboardShortcutEntry("terminalPanel", KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
     keyboardShortcutEntry("workspaceFiles", KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
+  ]),
+  keyboardShortcutSection("sidebar", [
+    keyboardShortcutEntry("toggleSessionSelect", KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect),
+    keyboardShortcutEntry("extendSessionSelect", KEYBOARD_SHORTCUT_COMBOS.extendSessionSelect),
+  ]),
+  keyboardShortcutSection("imageViewer", [
+    keyboardShortcutEntry("zoomIn", KEYBOARD_SHORTCUT_COMBOS.zoomIn),
+    keyboardShortcutEntry("zoomOut", KEYBOARD_SHORTCUT_COMBOS.zoomOut),
+    keyboardShortcutEntry("zoomReset", KEYBOARD_SHORTCUT_COMBOS.zoomReset),
   ]),
   keyboardShortcutSection("approvals", [
     keyboardShortcutEntry("approveOnce", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
@@ -66,6 +82,10 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
   ]),
 ] as const satisfies readonly KeyboardShortcutSection[];
 
+// Both the chat composer and the new-session page submit on the same
+// chatSendShortcut preference, so their displayed chords swap together.
+const SEND_PREFERENCE_ENTRY_IDS = new Set(["sendMessage", "startNewSession"]);
+
 export function resolveKeyboardShortcutSections(
   sendShortcut: "enter" | "modifier-enter" = "enter",
 ): readonly KeyboardShortcutSection[] {
@@ -73,15 +93,15 @@ export function resolveKeyboardShortcutSections(
     return KEYBOARD_SHORTCUT_SECTIONS;
   }
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
-    section.id !== "chat"
-      ? section
-      : keyboardShortcutSection(
-          "chat",
+    section.entries.some((entry) => SEND_PREFERENCE_ENTRY_IDS.has(entry.id))
+      ? keyboardShortcutSection(
+          section.id,
           section.entries.map((entry) =>
-            entry.id === "sendMessage"
-              ? keyboardShortcutEntry("sendMessage", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
+            SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
+              ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
               : entry,
           ),
-        ),
+        )
+      : section,
   );
 }

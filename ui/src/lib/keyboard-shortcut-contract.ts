@@ -1,7 +1,23 @@
 import { resolveAsciiShortcutKey } from "./keyboard-shortcuts.ts";
 
 type KeyboardShortcutModifier = "mod" | "ctrl" | "shift" | "alt";
-type KeyboardShortcutKey = "k" | "b" | "d" | "f" | "/" | "Backquote" | "Comma" | "Enter" | "Escape";
+type KeyboardShortcutKey =
+  | "k"
+  | "b"
+  | "d"
+  | "f"
+  | "/"
+  | "+"
+  | "-"
+  | "0"
+  | "Backquote"
+  | "Comma"
+  | "Enter"
+  | "Escape"
+  | "ArrowUp"
+  | "ArrowDown"
+  // Display-only mouse chord for the overview dialog; never keyboard-matched.
+  | "Click";
 
 export type KeyboardShortcutCombo = {
   readonly modifiers: readonly KeyboardShortcutModifier[];
@@ -23,6 +39,13 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   workspaceFiles: { modifiers: ["mod", "shift"], key: "b" },
   approveAlways: { modifiers: ["mod", "shift"], key: "Enter" },
   denyApproval: { modifiers: ["mod"], key: "d" },
+  historyPrevious: { modifiers: [], key: "ArrowUp" },
+  historyNext: { modifiers: [], key: "ArrowDown" },
+  zoomIn: { modifiers: [], key: "+" },
+  zoomOut: { modifiers: [], key: "-" },
+  zoomReset: { modifiers: [], key: "0" },
+  toggleSessionSelect: { modifiers: ["mod"], key: "Click" },
+  extendSessionSelect: { modifiers: ["shift"], key: "Click" },
 } as const satisfies Record<string, KeyboardShortcutCombo>;
 
 export function isApplePlatform(platform = globalThis.navigator?.platform ?? ""): boolean {
@@ -41,6 +64,9 @@ export function formatKeyboardShortcutParts(
     Comma: ",",
     Enter: applePlatform ? "⏎" : "Enter",
     Escape: applePlatform ? "esc" : "Esc",
+    ArrowUp: "↑",
+    ArrowDown: "↓",
+    Click: "Click",
   };
   return [
     ...combo.modifiers.map((modifier) => modifiers[modifier]),
@@ -86,7 +112,12 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   if (combo.key === "Backquote" || combo.key === "Comma") {
     return event.code === combo.key;
   }
-  if (combo.key === "Enter" || combo.key === "Escape") {
+  if (
+    combo.key === "Enter" ||
+    combo.key === "Escape" ||
+    combo.key === "ArrowUp" ||
+    combo.key === "ArrowDown"
+  ) {
     return event.key === combo.key;
   }
   return resolveAsciiShortcutKey(event) === combo.key;
