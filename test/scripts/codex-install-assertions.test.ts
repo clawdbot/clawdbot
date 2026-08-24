@@ -1,7 +1,7 @@
 // Codex Install Assertions tests cover Codex plugin install E2E helpers.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -688,14 +688,26 @@ describe("Codex install helpers", () => {
   it("accepts a complete on-demand Codex npm install fixture", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-");
     createCodexInstallFixture(root);
+    const agentDatabasePath = path.join(
+      root,
+      "state",
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    mkdirSync(path.dirname(agentDatabasePath), { recursive: true });
+    const agentDatabase = new DatabaseSync(agentDatabasePath);
+    try {
+      agentDatabase.exec("CREATE TABLE unrelated_state (key TEXT PRIMARY KEY)");
+    } finally {
+      agentDatabase.close();
+    }
 
     const result = runCodexOnDemandAssertions(root);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(
-      existsSync(path.join(root, "state", "agents", "main", "agent", "openclaw-agent.sqlite")),
-    ).toBe(false);
   });
 
   it("rejects on-demand fixtures without the canonical SQLite install record", () => {

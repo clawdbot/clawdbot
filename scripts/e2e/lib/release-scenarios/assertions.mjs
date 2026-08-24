@@ -6,6 +6,7 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import {
+  assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
   readSharedAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
@@ -75,6 +76,7 @@ function configureMockOpenAi() {
 function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
   assert(fs.existsSync(configPath()), "openclaw.json missing");
+  assertNoLegacyPrimaryAuthRows(stateDir());
   assertOpenAiEnvAuthProfileStore(readSharedAuthProfileStoreText(stateDir()), {
     missingMessage: "OpenAI env ref was not persisted",
     envRefMessage: "OpenAI env ref was not persisted",

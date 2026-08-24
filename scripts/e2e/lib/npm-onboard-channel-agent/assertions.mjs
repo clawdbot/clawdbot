@@ -6,6 +6,7 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import {
+  assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
   readSharedAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
@@ -83,20 +84,11 @@ function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const legacyAuthDatabase = path.join(
-    stateDir,
-    "agents",
-    "main",
-    "agent",
-    "openclaw-agent.sqlite",
-  );
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
   }
-  if (fs.existsSync(legacyAuthDatabase)) {
-    throw new Error("onboard created the retired main-agent auth database");
-  }
+  assertNoLegacyPrimaryAuthRows(stateDir);
   const authStoreText = readSharedAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");

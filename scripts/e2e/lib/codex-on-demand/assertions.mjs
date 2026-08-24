@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
   readSharedAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
@@ -127,7 +128,9 @@ if (providerRuntime && providerRuntime !== "codex") {
   throw new Error(`unexpected OpenAI provider runtime: ${providerRuntime}`);
 }
 
-const authRaw = readSharedAuthProfileStoreText(stateDir());
+const openClawStateDir = stateDir();
+assertNoLegacyPrimaryAuthRows(openClawStateDir);
+const authRaw = readSharedAuthProfileStoreText(openClawStateDir);
 if (!authRaw) {
   throw new Error("auth profile SQLite store row was not persisted");
 }
