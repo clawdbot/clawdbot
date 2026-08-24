@@ -574,7 +574,10 @@ async function appendDirectCronDeliveryTranscriptMirror(params: {
   }
   try {
     const { appendAssistantMessageToSessionTranscript } = await transcriptRuntimeLoader.load();
-    const result = await appendAssistantMessageToSessionTranscript(params.mirror);
+    const result = await appendAssistantMessageToSessionTranscript({
+      ...params.mirror,
+      touchLastInteractionAt: true,
+    });
     if (!result.ok) {
       await logCronDeliveryWarn(
         `[cron:${params.job.id}] failed to mirror direct delivery into session transcript: ${result.reason}`,
