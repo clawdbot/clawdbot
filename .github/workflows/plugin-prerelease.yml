@@ -155,8 +155,9 @@ jobs:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
         run: |
           node --import tsx --input-type=module <<'EOF'
-          import { appendFileSync, existsSync } from "node:fs";
+          import { appendFileSync, existsSync, globSync } from "node:fs";
           import { execFileSync } from "node:child_process";
+          import path from "node:path";
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
@@ -243,15 +244,26 @@ jobs:
               task: "extensions-batch",
             }));
             const telegramShardCount = 2;
-            const telegramTestFiles = telegramPlanGroup
-              ? execFileSync("git", ["ls-files", "--", ...telegramPlanGroup.roots], {
-                  encoding: "utf8",
-                })
-                  .trim()
-                  .split("\n")
-                  .filter((file) => /\.test\.tsx?$/u.test(file))
-                  .sort()
-              : [];
+            const telegramVitestConfig = telegramPlanGroup
+              ? (await import(`./${telegramPlanGroup.config}`)).default
+              : null;
+            const telegramTestConfig = telegramVitestConfig?.test ?? {};
+            const telegramTestDir = telegramTestConfig.dir ?? process.cwd();
+            const telegramTestExclude = (telegramTestConfig.exclude ?? []).map((pattern) =>
+              path.isAbsolute(pattern)
+                ? path.relative(telegramTestDir, pattern).replaceAll("\\", "/")
+                : pattern,
+            );
+            const telegramTestFiles = globSync(telegramTestConfig.include ?? [], {
+              cwd: telegramTestDir,
+              exclude: telegramTestExclude,
+            })
+              .map((file) =>
+                path
+                  .relative(process.cwd(), path.resolve(telegramTestDir, file))
+                  .replaceAll("\\", "/"),
+              )
+              .sort();
             const telegramPartitionSize = Math.ceil(telegramTestFiles.length / telegramShardCount);
             const telegramShards =
               telegramPlanGroup && telegramTestFiles.length > 0

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -10,6 +10,7 @@ import {
   listTrackedTestFilesForRoots,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
+import { createExtensionTelegramVitestConfig } from "../vitest/vitest.extension-telegram.config.ts";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -19,6 +20,17 @@ type WorkflowStep = {
 
 function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
+}
+
+function listTelegramRunnableTestFiles() {
+  const testConfig = createExtensionTelegramVitestConfig({}).test ?? {};
+  const dir = testConfig.dir ?? process.cwd();
+  const exclude = (testConfig.exclude ?? []).map((pattern) =>
+    path.isAbsolute(pattern) ? path.relative(dir, pattern).replaceAll("\\", "/") : pattern,
+  );
+  return globSync(testConfig.include ?? [], { cwd: dir, exclude })
+    .map((file) => path.relative(process.cwd(), path.resolve(dir, file)).replaceAll("\\", "/"))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function runPluginPrereleaseManifest() {
@@ -39,15 +51,17 @@ function runPluginPrereleaseManifest() {
   const root = mkdtempSync(join(tmpdir(), "openclaw-plugin-prerelease-telegram-shards-"));
   const outputPath = join(root, "github-output");
   try {
+    const env = {
+      ...process.env,
+      EXPECTED_SHA: "",
+      FULL_RELEASE_VALIDATION: "false",
+      GITHUB_OUTPUT: outputPath,
+    };
+    delete env.OPENCLAW_VITEST_INCLUDE_FILE;
     const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module"], {
       cwd: process.cwd(),
       encoding: "utf8",
-      env: {
-        ...process.env,
-        EXPECTED_SHA: "",
-        FULL_RELEASE_VALIDATION: "false",
-        GITHUB_OUTPUT: outputPath,
-      },
+      env,
       input: source,
     });
     expect(result.status, result.stderr).toBe(0);
@@ -122,7 +136,8 @@ describe("plugin prerelease Telegram extension shards", () => {
     const telegramRows = matrix.include.filter(
       (row: Record<string, unknown>) => row.task === "extension-file-shard",
     );
-    const telegramTestFiles = listTrackedTestFilesForRoots(["extensions/telegram"]);
+    const trackedTelegramTestFiles = listTrackedTestFilesForRoots(["extensions/telegram"]);
+    const runnableTelegramTestFiles = listTelegramRunnableTestFiles();
 
     expect(genericRows).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(
@@ -150,12 +165,16 @@ describe("plugin prerelease Telegram extension shards", () => {
     });
     expect(telegramPartitions.every((partition) => partition.length > 0)).toBe(true);
     expect(telegramPartitions.flat().toSorted((left, right) => left.localeCompare(right))).toEqual(
-      telegramTestFiles,
+      runnableTelegramTestFiles,
     );
-    expect(new Set(telegramPartitions.flat()).size).toBe(telegramTestFiles.length);
+    expect(new Set(telegramPartitions.flat()).size).toBe(runnableTelegramTestFiles.length);
+    expect(telegramPartitions.map((partition) => partition.length)).toEqual([
+      Math.ceil(runnableTelegramTestFiles.length / 2),
+      Math.floor(runnableTelegramTestFiles.length / 2),
+    ]);
     expect(
-      Math.abs(telegramPartitions[0].length - telegramPartitions[1].length),
-    ).toBeLessThanOrEqual(1);
+      trackedTelegramTestFiles.filter((file) => !runnableTelegramTestFiles.includes(file)).length,
+    ).toBeGreaterThan(0);
 
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-prerelease-telegram-specs-"));
     try {
