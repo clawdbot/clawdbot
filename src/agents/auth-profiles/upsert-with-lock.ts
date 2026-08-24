@@ -13,6 +13,13 @@ import {
 import { buildPersistedAuthProfileState } from "./state.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import { resetAuthProfileFailureState } from "./usage-state.js";
+
+function throwAuthProfileUpdateError(): never {
+  throw new Error(
+    "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+  );
+}
 
 type PersistAuthProfileBatchParams = {
   profiles: readonly {
@@ -157,13 +164,17 @@ export async function persistAuthProfileBatch(
   };
 }
 
-/** Upserts an auth profile under the store lock, returning null on store write failure. */
-export async function upsertAuthProfileWithLock(params: {
+type AuthProfileUpsertParams = {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
   stateDir?: string;
-}): Promise<AuthProfileStore | null> {
+};
+
+async function upsertAuthProfileWithLockCore(
+  params: AuthProfileUpsertParams,
+  resetFailureState: boolean,
+): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
@@ -175,9 +186,20 @@ export async function upsertAuthProfileWithLock(params: {
     },
     updater: (store) => {
       store.profiles[params.profileId] = credential;
+      const existingStats = store.usageStats?.[params.profileId];
+      if (resetFailureState && existingStats) {
+        store.usageStats![params.profileId] = resetAuthProfileFailureState(existingStats);
+      }
       return true;
     },
   });
+}
+
+/** Upserts an auth profile under the store lock, returning null on store write failure. */
+export async function upsertAuthProfileWithLock(
+  params: AuthProfileUpsertParams,
+): Promise<AuthProfileStore | null> {
+  return await upsertAuthProfileWithLockCore(params, false);
 }
 
 /** Upserts an auth profile under the store lock, failing when the store cannot be written. */
@@ -186,8 +208,16 @@ export async function upsertAuthProfileWithLockOrThrow(
 ): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
   if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
+    throwAuthProfileUpdateError();
+  }
+}
+
+/** Replaces one completed-login credential and clears only its existing failure state. */
+export async function upsertAuthProfileAfterLoginWithLockOrThrow(
+  params: AuthProfileUpsertParams,
+): Promise<void> {
+  const updated = await upsertAuthProfileWithLockCore(params, true);
+  if (!updated) {
+    throwAuthProfileUpdateError();
   }
 }

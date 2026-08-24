@@ -15,13 +15,18 @@ import {
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import { resetAuthProfileFailureState } from "./usage-state.js";
 export {
   dedupeProfileIds,
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
-export { upsertAuthProfileWithLock, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
+export {
+  upsertAuthProfileAfterLoginWithLockOrThrow,
+  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
+} from "./upsert-with-lock.js";
 
 const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 
@@ -63,37 +68,15 @@ function replaceProviderAuthState<T>(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-// Successful auth clears transient failure/cooldown/disable state while keeping
-// unrelated metadata and updating lastUsed for round-robin ordering.
-function resetSuccessfulUsageStats(
-  existing: ProfileUsageStats | undefined,
-  lastUsed: number,
-): ProfileUsageStats {
-  return {
-    ...existing,
-    errorCount: 0,
-    blockedUntil: undefined,
-    blockedReason: undefined,
-    blockedSource: undefined,
-    blockedModel: undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-    disabledUntil: undefined,
-    disabledReason: undefined,
-    failureCounts: undefined,
-    lastUsed,
-  };
-}
-
 function updateSuccessfulUsageStatsEntry(
   store: AuthProfileStore,
   profileId: string,
   lastUsed: number,
 ): void {
   store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = resetSuccessfulUsageStats(store.usageStats[profileId], lastUsed);
+  store.usageStats[profileId] = resetAuthProfileFailureState(store.usageStats[profileId] ?? {}, {
+    lastUsed,
+  });
 }
 
 /** Sets or clears explicit auth profile order for a provider. */
