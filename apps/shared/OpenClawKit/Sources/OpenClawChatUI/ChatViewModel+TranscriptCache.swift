@@ -11,6 +11,7 @@ extension OpenClawChatViewModel {
         var agentID: String?
         var deliveryAgentID: String?
         var sessionRoutingContract: String?
+        var agentSelectionRequired: Bool
     }
 
     func replaceMessages(_ messages: [OpenClawChatMessage]) {

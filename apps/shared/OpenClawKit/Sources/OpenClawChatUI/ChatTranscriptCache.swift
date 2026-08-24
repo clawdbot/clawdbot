@@ -326,17 +326,23 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public func storeSessionRoutingIdentity(_ identity: OpenClawChatSessionRoutingIdentity) async {
         guard !self.isRetired else { return }
         let gatewayID = self.gatewayID
+        let updatedAt = Date().timeIntervalSince1970
         do {
             try await self.databases.stateQueue.write { db in
+                try OpenClawClientDatabases.ensureSessionRoutingIdentityColumns(in: db)
                 try db.execute(
                     sql: """
                     INSERT INTO gateway_routing_identity(
-                        gateway_id, scope, main_session_key, default_agent_id, updated_at
-                    ) VALUES (?, ?, ?, ?, ?)
+                        gateway_id, scope, main_session_key, default_agent_id,
+                        routing_contract, selection_required, routing_identity_updated_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(gateway_id) DO UPDATE SET
                         scope = excluded.scope,
                         main_session_key = excluded.main_session_key,
                         default_agent_id = excluded.default_agent_id,
+                        routing_contract = excluded.routing_contract,
+                        selection_required = excluded.selection_required,
+                        routing_identity_updated_at = excluded.routing_identity_updated_at,
                         updated_at = excluded.updated_at
                     """,
                     arguments: [
@@ -344,7 +350,10 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
                         identity.scope,
                         identity.mainSessionKey,
                         identity.defaultAgentID,
-                        Date().timeIntervalSince1970,
+                        identity.contract,
+                        identity.selectionRequired ? 1 : 0,
+                        updatedAt,
+                        updatedAt,
                     ])
             }
         } catch {

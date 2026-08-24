@@ -57,7 +57,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
             at: directoryURL.appendingPathComponent(Self.gatewayCacheFilename, isDirectory: false))
         let exactRegisteredGatewayIDs = registeredGatewayIDs.map(RegisteredGatewayIDs.init)
         self.resolvePendingGatewayRemovals(registeredGatewayIDs: exactRegisteredGatewayIDs)
-        self.importLegacyDatabases(registeredGatewayIDs: exactRegisteredGatewayIDs)
+        importLegacyDatabases(registeredGatewayIDs: exactRegisteredGatewayIDs)
     }
 
     public func store(gatewayID: String) -> OpenClawChatSQLiteTranscriptCache {
@@ -68,7 +68,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// again on foreground because old complete-protection files may have been
     /// unreadable during a locked background launch.
     public func retryLegacyImport(registeredGatewayIDs: [String]? = nil) {
-        self.importLegacyDatabases(
+        importLegacyDatabases(
             registeredGatewayIDs: registeredGatewayIDs.map(RegisteredGatewayIDs.init))
     }
 
@@ -76,19 +76,30 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
         gatewayID: String) -> OpenClawChatSessionRoutingIdentity?
     {
         do {
-            return try self.stateQueue.read { db in
+            return try self.stateQueue.write { db in
+                try Self.ensureSessionRoutingIdentityColumns(in: db)
                 guard let row = try Row.fetchOne(
                     db,
                     sql: """
-                    SELECT scope, main_session_key, default_agent_id
+                    SELECT scope, main_session_key, default_agent_id,
+                           selection_required, routing_contract,
+                           updated_at, routing_identity_updated_at
                     FROM gateway_routing_identity WHERE gateway_id = ?
                     """,
                     arguments: [gatewayID])
                 else { return nil }
+                guard let updatedAt: Double = row["updated_at"],
+                      let routingIdentityUpdatedAt: Double = row["routing_identity_updated_at"],
+                      updatedAt == routingIdentityUpdatedAt,
+                      (row["selection_required"] as Int?) != nil,
+                      (row["routing_contract"] as String?) != nil
+                else { return nil }
                 return OpenClawChatSessionRoutingIdentity(
                     scope: row["scope"],
                     mainSessionKey: row["main_session_key"],
-                    defaultAgentID: row["default_agent_id"])
+                    defaultAgentID: row["default_agent_id"],
+                    selectionRequired: (row["selection_required"] as Int?) == 1,
+                    sessionRoutingContract: row["routing_contract"])
             }
         } catch {
             databaseLogger.error("client state routing read failed: \(error.localizedDescription, privacy: .public)")
@@ -447,6 +458,9 @@ extension OpenClawClientDatabases {
                 scope TEXT NOT NULL,
                 main_session_key TEXT NOT NULL,
                 default_agent_id TEXT NOT NULL,
+                routing_contract TEXT,
+                selection_required INTEGER,
+                routing_identity_updated_at REAL,
                 updated_at REAL NOT NULL
             );
                 CREATE TABLE outbox_commands(
@@ -565,6 +579,57 @@ extension OpenClawClientDatabases {
         return queue
     }
 
+    static func ensureSessionRoutingIdentityColumns(in db: Database) throws {
+        let columns = try Set(db.columns(in: "gateway_routing_identity").map(\.name))
+        if !columns.contains("routing_contract") {
+            try db.execute(sql: "ALTER TABLE gateway_routing_identity ADD COLUMN routing_contract TEXT")
+        }
+        if !columns.contains("selection_required") {
+            try db.execute(sql: "ALTER TABLE gateway_routing_identity ADD COLUMN selection_required INTEGER")
+        }
+        if !columns.contains("routing_identity_updated_at") {
+            try db.execute(sql: "ALTER TABLE gateway_routing_identity ADD COLUMN routing_identity_updated_at REAL")
+            // The previous client could persist a legacy `unowned` contract
+            // with selection_required = 0. Repair those rows before granting
+            // them a freshness marker or the upgraded reader would treat the
+            // stale boolean as authoritative.
+            let legacyRows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT gateway_id, routing_contract, selection_required
+                FROM gateway_routing_identity
+                WHERE routing_contract IS NOT NULL
+                  AND selection_required IS NOT NULL
+                """)
+            for row in legacyRows {
+                let contract: String? = row["routing_contract"]
+                guard OpenClawChatSessionRoutingContract.parse(contract)?.defaultAgentID == "unowned",
+                      (row["selection_required"] as Int?) != 1,
+                      let gatewayID: String = row["gateway_id"]
+                else { continue }
+                try db.execute(
+                    sql: """
+                    UPDATE gateway_routing_identity
+                    SET selection_required = 1
+                    WHERE gateway_id = ?
+                    """,
+                    arguments: [gatewayID])
+            }
+            // Rows written by the immediately preceding schema already carry
+            // the complete routing identity. Mark those rows once during the
+            // upgrade so they remain readable. Future downgraded writers will
+            // change `updated_at` without advancing this marker and are still
+            // rejected by the equality check in the read path.
+            try db.execute(sql: """
+            UPDATE gateway_routing_identity
+            SET routing_identity_updated_at = updated_at
+            WHERE routing_identity_updated_at IS NULL
+              AND routing_contract IS NOT NULL
+              AND selection_required IS NOT NULL
+            """)
+        }
+    }
+
     private static func openRepairableCacheDatabase(at url: URL) throws -> DatabaseQueue {
         do {
             let queue = try DatabaseQueue(
@@ -674,11 +739,13 @@ extension OpenClawClientDatabases {
         var scope: String
         var mainSessionKey: String
         var defaultAgentID: String
+        var routingContract: String?
+        var selectionRequired: Bool
         var updatedAt: Double
     }
 
     private func importLegacyDatabases(registeredGatewayIDs: RegisteredGatewayIDs?) {
-        let directories = [self.directoryURL] + self.legacyDirectoryURLs
+        let directories = [directoryURL] + self.legacyDirectoryURLs
         let legacyURLs = Set(directories.flatMap(Self.legacyDatabaseURLs(in:)))
         for legacyURL in legacyURLs.sorted(by: { $0.path < $1.path }) {
             do {
@@ -806,16 +873,26 @@ extension OpenClawClientDatabases {
                 }
             }
             if try db.tableExists("gateway_routing_identity") {
+                let columns = try Set(db.columns(in: "gateway_routing_identity").map(\.name))
+                guard columns.isSuperset(of: ["routing_contract", "selection_required"])
+                else { return snapshot }
                 let rows = try Row.fetchAll(db, sql: """
-                SELECT gateway_id, scope, main_session_key, default_agent_id, updated_at
+                SELECT gateway_id, scope, main_session_key, default_agent_id,
+                       routing_contract, selection_required,
+                       updated_at
                 FROM gateway_routing_identity
                 """)
-                snapshot.routingIdentities = rows.map { row in
-                    LegacyRoutingIdentity(
+                snapshot.routingIdentities = rows.compactMap { row in
+                    guard let routingContract = row["routing_contract"] as String?,
+                          let selectionRequired = row["selection_required"] as Int?
+                    else { return nil }
+                    return LegacyRoutingIdentity(
                         gatewayID: row["gateway_id"],
                         scope: row["scope"],
                         mainSessionKey: row["main_session_key"],
                         defaultAgentID: row["default_agent_id"],
+                        routingContract: routingContract,
+                        selectionRequired: selectionRequired == 1,
                         updatedAt: row["updated_at"])
                 }
             }
@@ -825,6 +902,7 @@ extension OpenClawClientDatabases {
 
     private func writeLegacySnapshot(_ snapshot: LegacySnapshot) throws {
         try self.stateQueue.write { db in
+            try Self.ensureSessionRoutingIdentityColumns(in: db)
             let forgottenGatewayHashes = try Set(String.fetchAll(
                 db,
                 sql: """
@@ -834,23 +912,39 @@ extension OpenClawClientDatabases {
             for identity in snapshot.routingIdentities
                 where !forgottenGatewayHashes.contains(Self.gatewayIdentityHash(identity.gatewayID))
             {
+                let repairedSelectionRequired = identity.selectionRequired ||
+                    OpenClawChatSessionRoutingContract.parse(identity.routingContract)?.defaultAgentID == "unowned"
+                guard let canonicalIdentity = OpenClawChatSessionRoutingIdentity(
+                    scope: identity.scope,
+                    mainSessionKey: identity.mainSessionKey,
+                    defaultAgentID: identity.defaultAgentID,
+                    selectionRequired: repairedSelectionRequired,
+                    sessionRoutingContract: identity.routingContract)
+                else { continue }
                 try db.execute(
                     sql: """
                     INSERT INTO gateway_routing_identity(
-                        gateway_id, scope, main_session_key, default_agent_id, updated_at
-                    ) VALUES (?, ?, ?, ?, ?)
+                        gateway_id, scope, main_session_key, default_agent_id,
+                        routing_contract, selection_required, routing_identity_updated_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(gateway_id) DO UPDATE SET
                         scope = excluded.scope,
                         main_session_key = excluded.main_session_key,
                         default_agent_id = excluded.default_agent_id,
+                        routing_contract = excluded.routing_contract,
+                        selection_required = excluded.selection_required,
+                        routing_identity_updated_at = excluded.routing_identity_updated_at,
                         updated_at = excluded.updated_at
                     WHERE excluded.updated_at > gateway_routing_identity.updated_at
                     """,
                     arguments: [
                         identity.gatewayID,
-                        identity.scope,
-                        identity.mainSessionKey,
-                        identity.defaultAgentID,
+                        canonicalIdentity.scope,
+                        canonicalIdentity.mainSessionKey,
+                        canonicalIdentity.defaultAgentID,
+                        canonicalIdentity.contract,
+                        canonicalIdentity.selectionRequired ? 1 : 0,
+                        identity.updatedAt,
                         identity.updatedAt,
                     ])
             }

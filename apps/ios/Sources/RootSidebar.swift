@@ -283,9 +283,21 @@ struct RootSidebar: View {
     }
 
     private var currentAgentID: String {
-        let selected = self.appModel.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        Self.currentAgentID(
+            selectedAgentID: self.appModel.selectedAgentId,
+            defaultAgentID: self.appModel.gatewayDefaultAgentId,
+            selectionRequired: self.appModel.gatewayAgentSelectionRequired)
+    }
+
+    static func currentAgentID(
+        selectedAgentID: String?,
+        defaultAgentID: String?,
+        selectionRequired: Bool) -> String
+    {
+        let selected = selectedAgentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !selected.isEmpty { return selected }
-        return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !selectionRequired else { return "" }
+        return defaultAgentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     static func agentDisplayName(_ agent: AgentSummary) -> String {

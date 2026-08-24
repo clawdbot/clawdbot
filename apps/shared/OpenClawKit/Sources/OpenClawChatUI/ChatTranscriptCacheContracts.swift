@@ -406,26 +406,62 @@ extension OpenClawChatCommandOutbox {
     }
 }
 
-public struct OpenClawChatSessionRoutingIdentity: Equatable, Sendable {
+public struct OpenClawChatSessionRoutingIdentity: Codable, Equatable, Sendable {
     public let scope: String
     public let mainSessionKey: String
     public let defaultAgentID: String
+    public let selectionRequired: Bool
     public let contract: String
 
+    // periphery:ignore - Shipped public initializer retained for OpenClawKit source compatibility.
     public init?(contract: String?) {
         guard let components = OpenClawChatSessionRoutingContract.parse(contract) else { return nil }
         self.scope = components.scope
         self.mainSessionKey = components.mainKey
         self.defaultAgentID = components.defaultAgentID
+        self.selectionRequired = components.defaultAgentID == "unowned"
         self.contract = "\(components.scope)|\(components.mainKey)|\(components.defaultAgentID)"
     }
 
     public init?(scope: String?, mainSessionKey: String?, defaultAgentID: String?) {
-        guard let contract = OpenClawChatSessionRoutingContract.make(
+        self.init(
+            scope: scope,
+            mainSessionKey: mainSessionKey,
+            defaultAgentID: defaultAgentID,
+            selectionRequired: false,
+            sessionRoutingContract: nil)
+    }
+
+    public init?(
+        scope: String?,
+        mainSessionKey: String?,
+        defaultAgentID: String?,
+        selectionRequired: Bool,
+        sessionRoutingContract: String?)
+    {
+        guard let displayContract = OpenClawChatSessionRoutingContract.make(
             scope: scope,
             mainKey: mainSessionKey,
-            defaultAgentID: defaultAgentID)
+            defaultAgentID: defaultAgentID),
+            let display = OpenClawChatSessionRoutingContract.parse(displayContract)
         else { return nil }
-        self.init(contract: contract)
+        let authoritativeContract = sessionRoutingContract?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.scope = display.scope
+        self.mainSessionKey = display.mainKey
+        self.defaultAgentID = display.defaultAgentID
+        self.selectionRequired = selectionRequired
+        if let authoritativeContract, !authoritativeContract.isEmpty {
+            self.contract = authoritativeContract
+        } else if selectionRequired,
+                  let unownedContract = OpenClawChatSessionRoutingContract.make(
+                      scope: display.scope,
+                      mainKey: display.mainKey,
+                      defaultAgentID: "unowned")
+        {
+            self.contract = unownedContract
+        } else {
+            self.contract = displayContract
+        }
     }
 }

@@ -636,7 +636,7 @@ extension RootTabsSourceGuardTests {
         #expect(activitySource.contains("struct IPadActivityScreen: View"))
         #expect(activitySource.contains("self.appModel.makeChatTransport()"))
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
-        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
+        #expect(appModelSource.contains("globalAgentId: chatDeliveryAgentId"))
         #expect(!appModelSource.contains("defaultAgentId: self.gatewayDefaultAgentId"))
         #expect(activitySource.contains("IPadSidebarScreenChrome("))
         #expect(!taskSource.contains("struct IPadActivityScreen"))
@@ -1196,9 +1196,10 @@ extension RootTabsSourceGuardTests {
             "self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID)"))
         #expect(chatSource.contains("activeAgentId: self.appModel.chatDeliveryAgentId"))
         #expect(chatSource.contains("Self.requiresViewModelRebuild("))
-        #expect(chatSource.contains("viewModel.syncSessionRoutingContract"))
+        #expect(chatSource.contains("viewModel.syncDeliveryIdentity"))
+        #expect(chatSource.contains("sessionRoutingContract: self.appModel.chatSessionRoutingContract"))
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
-        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
+        #expect(appModelSource.contains("globalAgentId: chatDeliveryAgentId"))
         #expect(appModelSource.contains("ifCurrentRoute: operatorRoute"))
         #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 4)
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))
@@ -1229,7 +1230,7 @@ extension RootTabsSourceGuardTests {
         #expect(pendingActions.contains("pendingForegroundActionDrainInFlight = false"))
         #expect(pendingActions.contains("completedPendingForegroundActionIDsByGateway"))
         #expect(pendingActions.contains("presentIn: decoded.actions"))
-        #expect(pendingActions.contains("let currentRoute = await self.nodeGateway.currentRoute()"))
+        #expect(pendingActions.contains("let currentRoute = await nodeGateway.currentRoute()"))
         #expect(pendingActions.contains("ifCurrentRoute: expectedRoute"))
         #expect(resolvedState.matches(of: /canApplyExecApprovalResolvedState/).count >= 4)
         #expect(resolvedState.contains("routeContext: routeContext"))
@@ -1286,7 +1287,7 @@ extension RootTabsSourceGuardTests {
             to: "} catch is CancellationError")
         let legacySuccess = try Self.extract(
             legacy,
-            from: "let response = try await self.operatorGateway.request(",
+            from: "let response = try await operatorGateway.request(",
             to: "} catch is CancellationError")
         let unifiedCatch = try #require(unified.range(of: "} catch {"))
         let legacyCatch = try #require(legacy.range(of: "} catch {"))
@@ -1324,11 +1325,11 @@ extension RootTabsSourceGuardTests {
             to: "private func reconcileUnknownExecApprovalResolution(")
         let unifiedSuccess = try Self.extract(
             unified,
-            from: "let response = try await self.operatorGateway.request(",
+            from: "let response = try await operatorGateway.request(",
             to: "} catch {")
         let legacySuccess = try Self.extract(
             legacy,
-            from: "let response = try await self.operatorGateway.request(",
+            from: "let response = try await operatorGateway.request(",
             to: "} catch {")
         let unifiedCatch = try #require(unified.range(of: "} catch {"))
         let legacyCatch = try #require(legacy.range(of: "} catch {"))

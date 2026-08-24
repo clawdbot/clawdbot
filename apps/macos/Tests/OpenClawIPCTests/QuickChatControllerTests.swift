@@ -15,9 +15,11 @@ struct QuickChatControllerTests {
             enableUI: false,
             model: model,
             monitoringEnabled: false,
-            replyViewModelFactory: { route in
-                createdRoutes.append(route)
-                return OpenClawChatViewModel(sessionKey: route.sessionKey, transport: QuickChatTestTransport())
+            replyViewModelFactory: { identity in
+                createdRoutes.append(identity.target)
+                return OpenClawChatViewModel(
+                    sessionKey: identity.target.sessionKey,
+                    transport: QuickChatTestTransport())
             })
         controller.present()
         let presentationID = try #require(model.activePresentationID)
@@ -35,22 +37,39 @@ struct QuickChatControllerTests {
 
     @Test func `reply binding retains same target and rebuilds for a changed target`() throws {
         var createdRoutes: [QuickChatRoutingTarget] = []
-        let binding = QuickChatReplyBinding { route in
-            createdRoutes.append(route)
-            return OpenClawChatViewModel(sessionKey: route.sessionKey, transport: QuickChatTestTransport())
+        let binding = QuickChatReplyBinding { identity in
+            createdRoutes.append(identity.target)
+            return OpenClawChatViewModel(
+                sessionKey: identity.target.sessionKey,
+                transport: QuickChatTestTransport())
         }
         let firstRoute = QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil)
         let secondRoute = QuickChatRoutingTarget(sessionKey: "global", agentID: "work")
+        let firstIdentity = QuickChatRoutingIdentity(target: firstRoute, sessionRoutingContract: nil)
+        let secondIdentity = QuickChatRoutingIdentity(target: secondRoute, sessionRoutingContract: nil)
 
-        binding.show(route: firstRoute)
+        binding.show(identity: firstIdentity)
         let firstViewModel = try #require(binding.viewModel)
-        binding.rebindIfActive(route: firstRoute)
+        binding.rebindIfActive(identity: firstIdentity)
         #expect(binding.viewModel === firstViewModel)
 
-        binding.rebindIfActive(route: secondRoute)
+        binding.rebindIfActive(identity: secondIdentity)
         let secondViewModel = try #require(binding.viewModel)
         #expect(secondViewModel !== firstViewModel)
         #expect(createdRoutes == [firstRoute, secondRoute])
+    }
+
+    @Test func `reply binding carries the authoritative routing contract`() throws {
+        let identity = QuickChatRoutingIdentity(
+            target: QuickChatRoutingTarget(sessionKey: "agent:research:main", agentID: nil),
+            sessionRoutingContract: "per-sender|main|unowned")
+        let binding = QuickChatReplyBinding()
+
+        binding.show(identity: identity)
+
+        let viewModel = try #require(binding.viewModel)
+        #expect(binding.route == identity.target)
+        #expect(viewModel.sessionRoutingContract == identity.sessionRoutingContract)
     }
 
     @Test func `accepted global route opens chat with its agent`() async {
@@ -68,7 +87,7 @@ struct QuickChatControllerTests {
                     ])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { _ in [:] },
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },
@@ -155,7 +174,7 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, $0 != .notifications) })
             },
@@ -201,7 +220,7 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
@@ -254,7 +273,7 @@ struct QuickChatControllerTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { _ in [:] },
             permissionGrantProvider: { _ in [:] },
             connectionGateProvider: { .available },

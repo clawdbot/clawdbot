@@ -113,9 +113,16 @@ final class WebChatManager {
         }
         controller.onSessionKeyChanged = { [weak self, weak controller] key in
             guard let self, let controller, self.windowController === controller else { return }
-            // Retaining the agent is safe: this surface has no in-window agent switcher,
-            // and the controller pins explicit agents against gateway-default changes.
+            // Retain the explicit or in-window selected agent while the shell
+            // switches sessions so route reuse cannot fall back to presentation defaults.
             let updatedRoute = (self.windowRoute ?? route).replacingSessionKey(key)
+            self.windowRoute = updatedRoute
+            self.currentChatRoute = updatedRoute
+        }
+        controller.onAgentIDChanged = { [weak self, weak controller] agentID in
+            guard let self, let controller, self.windowController === controller else { return }
+            let key = self.windowRoute?.sessionKey ?? route.sessionKey
+            let updatedRoute = WebChatRoute(sessionKey: key, agentID: agentID)
             self.windowRoute = updatedRoute
             self.currentChatRoute = updatedRoute
         }

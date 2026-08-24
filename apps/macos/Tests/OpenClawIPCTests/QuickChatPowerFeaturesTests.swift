@@ -199,7 +199,7 @@ struct QuickChatPowerFeaturesTests {
                     agents: [AgentSummary(id: "main", name: "Main")])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, thinking, _, _ in
+            sendProvider: { _, _, thinking, _, _ in
                 sentThinking = thinking
                 return "ok"
             },
@@ -239,7 +239,7 @@ struct QuickChatPowerFeaturesTests {
         var controlsCallCount = 0
         let choice = Self.solModelChoice
         let model = Self.model(
-            sendProvider: { _, _, _, _, _, _ in
+            sendProvider: { _, _, _, _, _ in
                 sendCount += 1
                 return "ok"
             },
@@ -306,7 +306,7 @@ struct QuickChatPowerFeaturesTests {
         var controlsCallCount = 0
         var sendCount = 0
         let model = Self.model(
-            sendProvider: { _, _, _, _, _, _ in
+            sendProvider: { _, _, _, _, _ in
                 sendCount += 1
                 return "ok"
             },
@@ -380,7 +380,7 @@ struct QuickChatPowerFeaturesTests {
                     agents: [AgentSummary(id: agentID, name: agentID.uppercased())])
             },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
@@ -454,7 +454,7 @@ struct QuickChatPowerFeaturesTests {
     }
 
     private static func model(
-        sendProvider: @escaping QuickChatModel.SendProvider = { _, _, _, _, _, _ in "ok" },
+        sendProvider: @escaping QuickChatModel.SendProvider = { _, _, _, _, _ in "ok" },
         controlsProvider: @escaping QuickChatModel.ModelControlsProvider,
         patchProvider: @escaping QuickChatModel.ModelPatchProvider) -> QuickChatModel
     {

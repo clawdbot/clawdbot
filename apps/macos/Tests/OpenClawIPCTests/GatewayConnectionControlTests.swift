@@ -996,11 +996,12 @@ private func assertConfigLookupCannotRecreateRoute(
     }
 
     @Test func `routing identity decodes agent and contract from one response`() throws {
-        let data = Data(#"{"defaultId":"Work","mainKey":"Primary","scope":"global","agents":[]}"#.utf8)
+        let data = Data(#"{"defaultId":"Work","mainKey":"Primary","scope":"per-sender","selectionRequired":true,"sessionRoutingContract":"per-sender|Primary|unowned","agents":[]}"#.utf8)
         let identity = try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(data)
 
         #expect(identity.defaultAgentID == "work")
-        #expect(identity.contract == "global|primary|work")
+        #expect(identity.selectionRequired)
+        #expect(identity.contract == "per-sender|Primary|unowned")
     }
 
     @Test(arguments: [

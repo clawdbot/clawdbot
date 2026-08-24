@@ -23744,6 +23744,21 @@
       ]
     },
     {
+      "id": "native.apple.5d5cbf983fe29113",
+      "source": "Choose Agent",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/ios/Sources/Design/SettingsProTabSections.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.8db30e8284ea13fe",
       "source": "Choose Media File",
       "surface": "apple",
@@ -23773,6 +23788,17 @@
         {
           "kind": "ui-call",
           "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.1901e0c94ce27688",
+      "source": "Choose an agent before sending this message.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift"
         }
       ]
     },
@@ -26732,7 +26758,7 @@
           "path": "apps/ios/Sources/Design/ChatModelControlsMenu.swift"
         },
         {
-          "kind": "ui-call",
+          "kind": "conditional-branch",
           "path": "apps/ios/Sources/Design/SettingsProTabSections.swift"
         },
         {
@@ -34428,6 +34454,10 @@
       "sites": [
         {
           "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift"
+        },
+        {
+          "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionManagementViews.swift"
         }
       ]
@@ -41359,6 +41389,10 @@
         },
         {
           "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift"
+        },
+        {
+          "kind": "ui-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift"
         },
         {
@@ -42918,6 +42952,32 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/CronSettings+Layout.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.34c174877cbc03bc",
+      "source": "Select an agent",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/ChatProTab.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/QuickChatView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.b9e840c0822d1aa1",
+      "source": "Select an agent before starting a new chat.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift"
         }
       ]
     },

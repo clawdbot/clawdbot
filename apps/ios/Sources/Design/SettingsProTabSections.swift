@@ -1087,11 +1087,15 @@ extension SettingsProTab {
     var agentSelectionCard: some View {
         Section {
             Picker("Default Agent", selection: self.$selectedAgentPickerId) {
-                Text("Default").font(OpenClawType.body).tag("")
+                Text(self.appModel.gatewayAgentSelectionRequired ? "Choose Agent" : "Default")
+                    .font(OpenClawType.body)
+                    .tag("")
                 let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 ForEach(
-                    self.appModel.gatewayAgents.filter(\.isSelectableAgent).filter { $0.id != defaultId },
+                    self.appModel.gatewayAgents.filter(\.isSelectableAgent).filter {
+                        self.appModel.gatewayAgentSelectionRequired || $0.id != defaultId
+                    },
                     id: \.id)
                 { agent in
                     let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

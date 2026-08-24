@@ -478,9 +478,27 @@ extension OpenClawChatViewModel {
         return false
     }
 
-    private static func normalizedAgentId(_ agentId: String?) -> String? {
+    static func normalizedAgentId(_ agentId: String?) -> String? {
         let normalized = agentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized?.isEmpty == false ? normalized : nil
+    }
+
+    static func resolvedAgentSelectionRequired(
+        explicit: Bool?,
+        sessionRoutingContract: String?,
+        fallback: Bool = false) -> Bool
+    {
+        if let explicit {
+            return explicit
+        }
+        // Compatibility only: old callers supplied the display-form contract
+        // before the boolean was added. New opaque authority tokens must
+        // arrive with the explicit boolean. During an update, preserve the
+        // current gate when opaque or temporarily unavailable metadata omits it.
+        guard let parsed = OpenClawChatSessionRoutingContract.parse(sessionRoutingContract) else {
+            return fallback
+        }
+        return parsed.defaultAgentID == "unowned"
     }
 
     private static func matchesAliasAgent(

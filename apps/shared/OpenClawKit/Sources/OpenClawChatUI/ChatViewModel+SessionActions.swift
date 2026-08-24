@@ -43,6 +43,10 @@ extension OpenClawChatViewModel {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        guard requestedAgentID != nil || !self.requiresExplicitAgentSelection else {
+            self.errorText = String(localized: "Select an agent before starting a new chat.")
+            return false
+        }
         let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
         // Only authoritative identities decide agent ownership; scanning the roster
         // could adopt an unrelated agent and hand sessions.create a cross-agent parent.

@@ -78,6 +78,8 @@ struct QuickChatView: View {
     @ViewBuilder private var placeholder: some View {
         if let override = self.model.targetSessionOverride {
             Text("Reply in \(override.displayName)")
+        } else if self.model.agentSelectionRequired, self.model.selectedAgentID == nil {
+            Text("Select an agent")
         } else {
             Text("Message \(self.model.agentDisplay.name)")
         }

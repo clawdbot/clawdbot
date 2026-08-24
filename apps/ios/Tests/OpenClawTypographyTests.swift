@@ -335,7 +335,7 @@ struct OpenClawTypographyTests {
         #expect(gatewaySecureField.contains(".textInputAutocapitalization(.never)"))
         #expect(gatewaySecureField.contains(".autocorrectionDisabled()"))
         #expect(settingsSections.contains("Picker(\"Default Agent\", selection: self.$selectedAgentPickerId)"))
-        #expect(settingsSections.contains("Text(\"Default\")"))
+        #expect(settingsSections.contains("gatewayAgentSelectionRequired ? \"Choose Agent\" : \"Default\""))
         let settingsSecurityPicker = try Self.extract(
             settingsSections,
             from: "Picker(selection: self.manualGatewayTLSBinding)",

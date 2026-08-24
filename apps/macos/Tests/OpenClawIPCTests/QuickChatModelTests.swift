@@ -31,6 +31,108 @@ struct QuickChatModelTests {
         #expect(model.sendState == .idle)
     }
 
+    @Test func `explicit ownership keeps quick chat unsendable until an agent is selected`() async {
+        let model = self.makeModel(agentsProvider: {
+            Self.agentsResult(
+                defaultID: "main",
+                agentIDs: ["main", "research"],
+                selectionRequired: true)
+        })
+        let presentationID = model.beginPresentation()
+        await model.refreshForPresentation(id: presentationID)
+        model.text = "route this explicitly"
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+        #expect(model.messagePlaceholder == "Select an agent")
+
+        model.selectAgent("research")
+
+        #expect(model.selectedAgentID == "research")
+        #expect(model.canSend)
+        #expect(model.routingTarget == QuickChatRoutingTarget(
+            sessionKey: "agent:research:main",
+            agentID: nil))
+    }
+
+    @Test func `explicit ownership clears an implicit display default from a prior refresh`() async {
+        let results = AgentsResultsBox(results: [
+            Self.agentsResult(defaultID: "main", agentIDs: ["main", "research"]),
+            Self.agentsResult(
+                defaultID: "main",
+                agentIDs: ["main", "research"],
+                selectionRequired: true),
+        ])
+        let model = self.makeModel(agentsProvider: { results.next() })
+        await self.prepare(model)
+        #expect(model.selectedAgentID == "main")
+
+        model.endPresentation()
+        await self.prepare(model)
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+    }
+
+    @Test func `explicit ownership survives a transient agents refresh failure`() async {
+        let failure = GrantFlag()
+        let model = self.makeModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: {
+                if failure.value {
+                    throw FakeSendError.rejected
+                }
+                return Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "research"],
+                    selectionRequired: true)
+            })
+        await self.prepare(model)
+        failure.value = true
+
+        model.endPresentation()
+        await self.prepare(model)
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(model.sessionKey == "main")
+        #expect(!model.canSend)
+    }
+
+    @Test func `first metadata failure keeps an ownerless fallback unsendable`() async {
+        let model = self.makeModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: { throw FakeSendError.rejected },
+            agentIdentityProvider: { _ in throw FakeSendError.rejected })
+
+        await self.prepare(model)
+        model.text = "do not infer an owner"
+
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(model.messagePlaceholder == "Select an agent")
+        #expect(!model.canSend)
+    }
+
+    @Test func `fallback display identity does not claim an ownerless session`() async {
+        let model = self.makeModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: { throw FakeSendError.rejected },
+            agentIdentityProvider: { _ in
+                QuickChatAgentDisplay(id: "main", name: "Molty", emoji: "🦞")
+            })
+
+        await self.prepare(model)
+        model.text = "do not infer the display owner"
+
+        #expect(model.agentDisplay.id == "main")
+        #expect(model.agentSelectionRequired)
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+    }
+
     @Test(arguments: ["error", "timeout"])
     func `terminal failure preserves text`(_ status: String) async {
         let model = self.makeModel(sendStatus: status)
@@ -58,9 +160,11 @@ struct QuickChatModelTests {
 
     @Test func `unchanged draft reuses idempotency key after transport failure`() async {
         var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
-            if keys.count == 1 { throw FakeSendError.rejected }
+            if keys.count == 1 {
+                throw FakeSendError.rejected
+            }
             return "started"
         })
         await self.prepare(model)
@@ -72,11 +176,50 @@ struct QuickChatModelTests {
         #expect(keys[0] == keys[1])
     }
 
+    @Test func `routing contract refresh rotates an unchanged draft retry`() async {
+        let contracts = ["per-sender|main|main-v1", "per-sender|main|main-v2"]
+        let results = AgentsResultsBox(results: contracts.map {
+            Self.agentsResult(
+                defaultID: "main",
+                agentIDs: ["main"],
+                sessionRoutingContract: $0)
+        })
+        var sentIdentities: [QuickChatRoutingIdentity] = []
+        var keys: [String] = []
+        let model = self.makeModel(
+            agentsProvider: { results.next() },
+            sendHandler: { identity, _, _, idempotencyKey, _ in
+                sentIdentities.append(identity)
+                keys.append(idempotencyKey)
+                if keys.count == 1 {
+                    throw FakeSendError.rejected
+                }
+                return "started"
+            })
+        await self.prepare(model)
+        model.text = "keep this draft"
+
+        #expect(await !(model.send()))
+        model.endPresentation()
+        await self.prepare(model)
+        #expect(await model.send())
+
+        #expect(sentIdentities.map(\.target) == [
+            QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil),
+            QuickChatRoutingTarget(sessionKey: "agent:main:main", agentID: nil),
+        ])
+        #expect(sentIdentities.map(\.sessionRoutingContract) == contracts)
+        #expect(keys.count == 2)
+        #expect(keys[0] != keys[1])
+    }
+
     @Test func `no-op reasoning selection preserves idempotent retry`() async {
         var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
-            if keys.count == 1 { throw FakeSendError.rejected }
+            if keys.count == 1 {
+                throw FakeSendError.rejected
+            }
             return "started"
         })
         await self.prepare(model)
@@ -92,8 +235,10 @@ struct QuickChatModelTests {
 
     @Test func `new dispatch clears the previous accepted reply key`() async {
         var shouldFail = false
-        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
-            if shouldFail { throw FakeSendError.rejected }
+        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
+            if shouldFail {
+                throw FakeSendError.rejected
+            }
             return "started"
         })
         await self.prepare(model)
@@ -109,7 +254,7 @@ struct QuickChatModelTests {
 
     @Test func `edited draft gets new idempotency key`() async {
         var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
             throw FakeSendError.rejected
         })
@@ -126,7 +271,7 @@ struct QuickChatModelTests {
 
     @Test func `empty text does not call gateway`() async {
         var sendCount = 0
-        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
             sendCount += 1
             return "ok"
         })
@@ -142,7 +287,7 @@ struct QuickChatModelTests {
         var sendCount = 0
         let model = self.makeModel(
             gate: .disconnected,
-            sendHandler: { _, _, _, _, _, _ in
+            sendHandler: { _, _, _, _, _ in
                 sendCount += 1
                 return "ok"
             })
@@ -168,9 +313,42 @@ struct QuickChatModelTests {
         #expect(!model.canSend)
     }
 
+    @Test func `new presentation cannot send through a stale implicit route while metadata is pending`() async {
+        var sendCount = 0
+        let results = AgentsRefreshLatch(
+            first: Self.agentsResult(defaultID: "main", agentIDs: ["main", "work"]))
+        let model = self.makeModel(
+            agentsProvider: { await results.next() },
+            sendHandler: { _, _, _, _, _ in
+                sendCount += 1
+                return "started"
+            })
+        await self.prepare(model)
+        model.text = "do not use stale ownership"
+        #expect(model.canSend)
+
+        model.endPresentation()
+        let presentationID = model.beginPresentation()
+        let refresh = Task { await model.refreshForPresentation(id: presentationID) }
+        while !results.waitingForSecondResult {
+            await Task.yield()
+        }
+
+        #expect(model.sessionKey.isEmpty)
+        #expect(!model.canSend)
+        #expect(!(await model.send()))
+        #expect(sendCount == 0)
+
+        results.finish(with: Self.agentsResult(
+            defaultID: "main",
+            agentIDs: ["main", "work"],
+            selectionRequired: true))
+        await refresh.value
+    }
+
     @Test func `dismissal lets dispatched send settle without retry`() async {
         let latch = SendLatch()
-        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
             try await latch.wait()
         })
         await self.prepare(model)
@@ -236,7 +414,7 @@ struct QuickChatModelTests {
             sessionKeyProvider: { "main" },
             agentsProvider: { Self.agentsResult(defaultID: "main", agentIDs: ["main"]) },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map {
                     ($0, granted.value || $0 != .screenRecording)
@@ -249,7 +427,7 @@ struct QuickChatModelTests {
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
             modelPatchProvider: { _, _ in nil })
-        await self.prepare(model)
+        await prepare(model)
         #expect(model.missingPermissions == [.screenRecording])
 
         model.grantMissingPermissions()
@@ -267,7 +445,7 @@ struct QuickChatModelTests {
             sessionKeyProvider: { "main" },
             agentsProvider: { Self.agentsResult(defaultID: "main", agentIDs: ["main"]) },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, $0 != .accessibility) })
             },
@@ -278,7 +456,7 @@ struct QuickChatModelTests {
             connectionGateProvider: { .available },
             modelControlsProvider: { _ in .testFixture },
             modelPatchProvider: { _, _ in nil })
-        await self.prepare(model)
+        await prepare(model)
 
         model.grantMissingPermissions()
 
@@ -362,8 +540,8 @@ struct QuickChatModelTests {
 
     @Test func `override send uses canonical session key verbatim`() async {
         var sentRoute: QuickChatRoutingTarget?
-        let model = self.makeModel(sendHandler: { sessionKey, agentID, _, _, _, _ in
-            sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+        let model = self.makeModel(sendHandler: { identity, _, _, _, _ in
+            sentRoute = identity.target
             return "started"
         })
         await self.prepare(model)
@@ -375,6 +553,99 @@ struct QuickChatModelTests {
         #expect(sentRoute == QuickChatRoutingTarget(sessionKey: key, agentID: nil))
     }
 
+    @Test func `explicit recent session override satisfies the ownership gate`() async {
+        var sentRoute: QuickChatRoutingTarget?
+        let model = self.makeModel(
+            agentsProvider: {
+                Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "work"],
+                    selectionRequired: true)
+            },
+            sendHandler: { identity, _, _, _, _ in
+                sentRoute = identity.target
+                return "started"
+            })
+        await self.prepare(model)
+        let key = "agent:ops:discord:channel:release"
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: key, displayName: "Release"))
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == nil)
+        #expect(model.canSend)
+        #expect(await model.send())
+        #expect(sentRoute == QuickChatRoutingTarget(sessionKey: key, agentID: nil))
+    }
+
+    @Test func `ownerless recent session override does not satisfy the ownership gate`() async {
+        var sendCount = 0
+        let model = self.makeModel(
+            agentsProvider: {
+                Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "work"],
+                    selectionRequired: true)
+            },
+            sendHandler: { _, _, _, _, _ in
+                sendCount += 1
+                return "started"
+            })
+        await self.prepare(model)
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: "main", displayName: "Main"))
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == nil)
+        #expect(!model.canSend)
+        #expect(!(await model.send()))
+        #expect(sendCount == 0)
+    }
+
+    @Test func `ownerless recent session override revokes a prior agent selection`() async {
+        var sendCount = 0
+        let model = self.makeModel(
+            agentsProvider: {
+                Self.agentsResult(
+                    defaultID: "main",
+                    agentIDs: ["main", "work"],
+                    selectionRequired: true)
+            },
+            sendHandler: { _, _, _, _, _ in
+                sendCount += 1
+                return "started"
+            })
+        await self.prepare(model)
+        model.selectAgent("work")
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: "main", displayName: "Main"))
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == "work")
+        #expect(!model.canSend)
+        #expect(!(await model.send()))
+        #expect(sendCount == 0)
+    }
+
+    @Test func `owned recent session selected during refresh survives explicit ownership metadata`() async {
+        let latch = AgentsResultLatch()
+        let model = self.makeModel(agentsProvider: { await latch.wait() })
+        let presentationID = model.beginPresentation()
+        let refresh = Task { await model.refreshForPresentation(id: presentationID) }
+        while !latch.started {
+            await Task.yield()
+        }
+        let key = "agent:ops:discord:channel:release"
+        model.selectSessionOverride(QuickChatSessionTargetOverride(key: key, displayName: "Release"))
+        latch.finish(with: Self.agentsResult(
+            defaultID: "main",
+            agentIDs: ["main", "work"],
+            selectionRequired: true))
+        await refresh.value
+        model.text = "hello"
+
+        #expect(model.selectedAgentID == nil)
+        #expect(model.sessionKey == key)
+        #expect(model.canSend)
+    }
+
     @Test func `global override preserves selected global agent`() async {
         var sentRoute: QuickChatRoutingTarget?
         let model = self.makeModel(
@@ -384,8 +655,8 @@ struct QuickChatModelTests {
                     agentIDs: ["main", "work"],
                     scope: "global")
             },
-            sendHandler: { sessionKey, agentID, _, _, _, _ in
-                sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
+            sendHandler: { identity, _, _, _, _ in
+                sentRoute = identity.target
                 return "started"
             })
         await self.prepare(model)
@@ -461,7 +732,7 @@ struct QuickChatModelTests {
     @Test func `edits during a screenshot send survive and keep their draft`() async throws {
         let latch = SendLatch()
         var receivedMessage: String?
-        let model = self.makeModel(sendHandler: { _, _, message, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, message, _, _, _ in
             receivedMessage = message
             return try await latch.wait()
         })
@@ -491,7 +762,7 @@ struct QuickChatModelTests {
 
     @Test func `capture pipeline blocks concurrent sends and unwinds`() async {
         var sendCount = 0
-        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
             sendCount += 1
             return "ok"
         })
@@ -530,7 +801,7 @@ struct QuickChatModelTests {
     @Test func `window screenshot sends attachment and default caption`() async throws {
         var receivedMessage: String?
         var receivedAttachments: [OpenClawChatAttachmentPayload] = []
-        let model = self.makeModel(sendHandler: { _, _, message, _, _, attachments in
+        let model = self.makeModel(sendHandler: { _, message, _, _, attachments in
             receivedMessage = message
             receivedAttachments = attachments
             return "started"
@@ -575,7 +846,7 @@ struct QuickChatModelTests {
 
     @Test func `accepted send clears attached context`() async {
         var receivedMessage: String?
-        let model = self.makeModel(sendHandler: { _, _, message, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, message, _, _, _ in
             receivedMessage = message
             return "ok"
         })
@@ -632,19 +903,23 @@ struct QuickChatModelTests {
         sendStatus: String = "ok",
         sendError: Error? = nil,
         permissionStatus: [Capability: Bool]? = nil,
+        sessionKeyProvider: QuickChatModel.SessionKeyProvider? = nil,
         agentsProvider: QuickChatModel.AgentsProvider? = nil,
+        agentIdentityProvider: QuickChatModel.AgentIdentityProvider? = nil,
         sendHandler: QuickChatModel.SendProvider? = nil) -> QuickChatModel
     {
         QuickChatModel(
-            sessionKeyProvider: { "agent:main:main" },
+            sessionKeyProvider: sessionKeyProvider ?? { "agent:main:main" },
             agentsProvider: agentsProvider ?? {
                 Self.agentsResult(defaultID: "main", agentIDs: ["main"], names: ["Molty"])
             },
-            agentIdentityProvider: { _ in
+            agentIdentityProvider: agentIdentityProvider ?? { _ in
                 QuickChatAgentDisplay(id: "main", name: "Molty", emoji: "🦞")
             },
-            sendProvider: sendHandler ?? { _, _, _, _, _, _ in
-                if let sendError { throw sendError }
+            sendProvider: sendHandler ?? { _, _, _, _, _ in
+                if let sendError {
+                    throw sendError
+                }
                 return sendStatus
             },
             permissionStatusProvider: { capabilities in
@@ -663,10 +938,14 @@ struct QuickChatModelTests {
         agentIDs: [String],
         names: [String] = [],
         kinds: [AgentKind?] = [],
-        scope: String = "per-agent") -> AgentsListResult
+        scope: String = "per-agent",
+        selectionRequired: Bool? = nil,
+        sessionRoutingContract: String? = nil) -> AgentsListResult
     {
         AgentsListResult(
             defaultid: defaultID,
+            selectionrequired: selectionRequired,
+            sessionroutingcontract: sessionRoutingContract,
             mainkey: "main",
             scope: AnyCodable(scope),
             agents: agentIDs.enumerated().map { index, id in
@@ -698,7 +977,9 @@ private final class PermissionGrantLatch {
     private var finished = false
 
     func wait() async {
-        if self.finished { return }
+        if self.finished {
+            return
+        }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
@@ -721,6 +1002,52 @@ private final class AgentsResultsBox {
 
     func next() -> AgentsListResult {
         self.results.removeFirst()
+    }
+}
+
+@MainActor
+private final class AgentsResultLatch {
+    private var continuation: CheckedContinuation<AgentsListResult, Never>?
+    private(set) var started = false
+
+    func wait() async -> AgentsListResult {
+        self.started = true
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func finish(with result: AgentsListResult) {
+        self.continuation?.resume(returning: result)
+        self.continuation = nil
+    }
+}
+
+@MainActor
+private final class AgentsRefreshLatch {
+    private let first: AgentsListResult
+    private var callCount = 0
+    private var continuation: CheckedContinuation<AgentsListResult, Never>?
+    private(set) var waitingForSecondResult = false
+
+    init(first: AgentsListResult) {
+        self.first = first
+    }
+
+    func next() async -> AgentsListResult {
+        self.callCount += 1
+        if self.callCount == 1 {
+            return self.first
+        }
+        self.waitingForSecondResult = true
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func finish(with result: AgentsListResult) {
+        self.continuation?.resume(returning: result)
+        self.continuation = nil
     }
 }
 

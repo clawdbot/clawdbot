@@ -219,6 +219,103 @@ struct WebChatSwiftUISmokeTests {
         fallback.close()
     }
 
+    @Test func `controller refuses cached display default when gateway requires selection`() throws {
+        let cachedIdentity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "opaque-routing-contract-v2"))
+        let unresolved = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: nil,
+            initialDraft: "keep this draft",
+            cachedRoutingIdentity: cachedIdentity,
+            store: nil)
+        let explicit = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: " Work ",
+            cachedRoutingIdentity: cachedIdentity,
+            store: nil)
+        var publishedSessionKeys: [String] = []
+        unresolved.onSessionKeyChanged = { publishedSessionKeys.append($0) }
+
+        #expect(unresolved._testActiveAgentID == nil)
+        #expect(unresolved._testRequiresExplicitAgentSelection)
+        unresolved._testSelectAgent(" Work ")
+        #expect(!unresolved._testRequiresExplicitAgentSelection)
+        #expect(unresolved._testSessionKey == "agent:work:main")
+        #expect(unresolved._testDraft == "keep this draft")
+        unresolved._testSelectAgent("Research")
+        #expect(unresolved._testSessionKey == "agent:research:main")
+        #expect(unresolved._testSelectedAgentID == "research")
+        #expect(unresolved._testDraft == "keep this draft")
+        #expect(publishedSessionKeys == ["agent:work:main", "agent:research:main"])
+        #expect(explicit._testActiveAgentID == "work")
+        unresolved.close()
+        explicit.close()
+    }
+
+    @Test func `controller gates an uncached bare session until routing metadata arrives`() {
+        let unresolved = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: nil,
+            cachedRoutingIdentity: nil,
+            store: nil)
+        let scoped = WebChatSwiftUIWindowController(
+            sessionKey: "agent:work:main",
+            agentID: nil,
+            cachedRoutingIdentity: nil,
+            store: nil)
+        let explicit = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: "work",
+            cachedRoutingIdentity: nil,
+            store: nil)
+
+        #expect(unresolved._testRequiresExplicitAgentSelection)
+        #expect(!scoped._testRequiresExplicitAgentSelection)
+        #expect(!explicit._testRequiresExplicitAgentSelection)
+        unresolved.close()
+        scoped.close()
+        explicit.close()
+    }
+
+    @Test func `uncached selection waits for authoritative routing metadata`() throws {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            agentID: nil,
+            initialDraft: "keep this draft",
+            cachedRoutingIdentity: nil,
+            store: nil)
+        controller._testSelectAgent("work")
+
+        #expect(controller._testSelectedAgentID == nil)
+        #expect(controller._testSessionKey == "main")
+        #expect(controller._testRequiresExplicitAgentSelection)
+
+        let routingIdentity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "per-sender|main|unowned"))
+
+        controller._testApplyRoutingIdentity(routingIdentity)
+
+        #expect(controller._testSelectedAgentID == nil)
+        #expect(controller._testSessionKey == "main")
+        #expect(controller._testRequiresExplicitAgentSelection)
+
+        controller._testSelectAgent("work")
+
+        #expect(controller._testSelectedAgentID == "work")
+        #expect(controller._testSessionKey == "agent:work:main")
+        #expect(!controller._testRequiresExplicitAgentSelection)
+        #expect(controller._testDraft == "keep this draft")
+        controller.close()
+    }
+
     @Test func `max and Ultra thinking preferences survive reopen`() throws {
         let suiteName = "WebChatSwiftUISmokeTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

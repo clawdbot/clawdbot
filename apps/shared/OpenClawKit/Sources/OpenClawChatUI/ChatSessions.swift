@@ -341,10 +341,16 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
 public struct OpenClawChatAgentsListResponse: Codable, Sendable, Equatable {
     public let defaultId: String
     public let agents: [OpenClawChatAgentChoice]
+    public let routingIdentity: OpenClawChatSessionRoutingIdentity?
 
-    public init(defaultId: String, agents: [OpenClawChatAgentChoice]) {
+    public init(
+        defaultId: String,
+        agents: [OpenClawChatAgentChoice],
+        routingIdentity: OpenClawChatSessionRoutingIdentity? = nil)
+    {
         self.defaultId = defaultId
         self.agents = agents
+        self.routingIdentity = routingIdentity
     }
 }
 

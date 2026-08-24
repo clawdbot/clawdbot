@@ -435,7 +435,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
                 preview: nil)
             contractViewModel.attachments = [contractAttachment]
 
-            contractViewModel.syncSessionRoutingContract(newContract)
+            contractViewModel.syncDeliveryIdentity(
+                activeAgentId: "main",
+                sessionRoutingContract: newContract)
             contractViewModel.syncActiveAgentId("main")
             contractViewModel.removeAttachment(contractAttachment.id)
 
@@ -453,7 +455,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             agentViewModel.attachments = [agentAttachment]
 
             agentViewModel.syncActiveAgentId("work")
-            agentViewModel.syncSessionRoutingContract(oldContract)
+            agentViewModel.syncDeliveryIdentity(
+                activeAgentId: "work",
+                sessionRoutingContract: oldContract)
             agentViewModel.removeAttachment(agentAttachment.id)
 
             return (
