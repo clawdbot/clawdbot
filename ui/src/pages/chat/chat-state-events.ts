@@ -48,7 +48,7 @@ import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./h
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
-  reconcileStaleChatRunAfterSessionStatePublication,
+  reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
@@ -94,7 +94,7 @@ function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionCh
     state.sessionsResult = state.sessions.state.result;
     state.sessionsResultAgentId = state.sessions.state.agentId;
     state.sessionsError = state.sessions.state.error;
-    reconcileStaleChatRunAfterSessionStatePublication(state);
+    reconcileChatRunAfterSessionStatePublication(state);
   }
   return reconciled;
 }

@@ -1,11 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import "../styles/sidebar-issues.css";
+import { renderHubTabs } from "./hub-tabs.ts";
 import { icons } from "./icons.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-items.ts";
 import {
@@ -15,8 +15,12 @@ import {
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
-import { syncTabGroupLabel } from "./web-awesome-tabs.ts";
 import "./menu-surface.ts";
+
+export type SidebarAttentionPanelPosition = { left: number } & (
+  | { anchor: "top"; top: number }
+  | { anchor: "bottom"; bottom: number }
+);
 
 type SidebarAttentionPanelParams = {
   approvalQueue: readonly ExecApprovalRequest[];
@@ -25,7 +29,7 @@ type SidebarAttentionPanelParams = {
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: (restoreFocus: boolean) => void;
   onDismiss: (item: SidebarAttentionItem) => void;
-  onDismissUpdate: () => void;
+  onDismissUpdate?: () => void;
   onKeydown: (event: KeyboardEvent) => void;
   onNavigate: (routeId: NavigationRouteId) => void;
   onOpen: (item: SidebarAttentionItem) => void;
@@ -33,35 +37,17 @@ type SidebarAttentionPanelParams = {
   onSelectTab: (tab: IssueTab) => void;
   overflowAbove: boolean;
   overflowBelow: boolean;
-  panelPosition: { left: number; bottom: number };
+  panelPosition: SidebarAttentionPanelPosition;
   selectedTab: IssueTab;
   updateSurface: boolean;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
 
-function isIssueTab(value: string): value is IssueTab {
-  return ISSUE_TABS.some((tab) => tab === value);
-}
-
-function renderTab(tab: IssueTab, count: number, selected: boolean) {
-  const countLabel = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
-    count: String(count),
-  });
-  return html`<wa-tab
-    slot="nav"
-    id=${`sidebar-issues-tab-${tab}`}
-    class="sidebar-issues-panel__tab"
-    panel=${tab}
-    aria-label=${`${issueTabLabel(tab)}, ${countLabel}`}
-    aria-controls="sidebar-issues-tabpanel"
-    ?active=${selected}
-  >
-    <span>${issueTabLabel(tab)}</span>
-    <span class="sidebar-issues-panel__tab-count" aria-hidden="true">${count}</span>
-  </wa-tab>`;
-}
-
 export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams): TemplateResult {
+  const { anchor } = params.panelPosition;
+  const panelOffset =
+    params.panelPosition.anchor === "top" ? params.panelPosition.top : params.panelPosition.bottom;
+  const panelStyle = `left:${params.panelPosition.left}px;${anchor}:${panelOffset}px;--sidebar-issues-panel-${anchor}:${panelOffset}px`;
   const automationItems = params.items.filter(
     (item) => item.kind === "cronFailed" || item.kind === "cronOverdue",
   );
@@ -129,7 +115,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
         class="sidebar-issues-panel"
         role="dialog"
         aria-labelledby="sidebar-issues-panel-heading"
-        style=${`left:${params.panelPosition.left}px;bottom:${params.panelPosition.bottom}px;--sidebar-issues-panel-bottom:${params.panelPosition.bottom}px`}
+        style=${panelStyle}
         @keydown=${params.onKeydown}
       >
         <div class="sidebar-issues-panel__grabber" aria-hidden="true"></div>
@@ -154,21 +140,22 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             ${icons.x}
           </button>
         </header>
-        <wa-tab-group
-          class="sidebar-issues-panel__tabs"
-          aria-label=${t("attention.tabs.label")}
-          .active=${params.selectedTab}
-          activation="auto"
-          without-scroll-controls
-          ${ref((element) => syncTabGroupLabel(element, t("attention.tabs.label")))}
-          @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
-            if (isIssueTab(event.detail.name)) {
-              params.onSelectTab(event.detail.name);
-            }
-          }}
-        >
-          ${ISSUE_TABS.map((tab) => renderTab(tab, tabCounts[tab], tab === params.selectedTab))}
-        </wa-tab-group>
+        ${renderHubTabs<IssueTab>({
+          id: "sidebar-issues",
+          active: params.selectedTab,
+          tabs: ISSUE_TABS.map((tab) => ({
+            value: tab,
+            label: issueTabLabel(tab),
+            // A zero count is the tab's resting state, not information — show
+            // the badge only when the tab actually holds items.
+            count: tabCounts[tab] > 0 ? tabCounts[tab] : null,
+          })),
+          ariaLabel: t("attention.tabs.label"),
+          panelId: "sidebar-issues-tabpanel",
+          className: "sidebar-issues-panel__tabs",
+          variant: "sub",
+          onSelect: params.onSelectTab,
+        })}
         <div class="sidebar-issues-panel__list-wrap">
           <div
             id="sidebar-issues-tabpanel"

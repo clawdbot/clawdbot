@@ -33,6 +33,7 @@ import {
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
 // OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
 // The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
@@ -142,6 +143,7 @@ export const OpenClawSchemaShape = {
         .optional(),
     })
     .optional(),
+  telemetry: TelemetryConfigSchema,
   browser: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -229,6 +231,7 @@ export const OpenClawSchemaShape = {
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
+          accent: HexColorSchema.startsWith("#").optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),

@@ -11,6 +11,7 @@ import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js
 import { summarizeStringEntries } from "../shared/string-sample.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 
 export type HooksListOptions = {
   agent?: string;
@@ -181,7 +182,8 @@ export function formatHookInfo(
 
   if (!hook) {
     if (opts.json) {
-      return JSON.stringify({ error: "not found", hook: hookName }, null, 2);
+      const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);
+      return JSON.stringify({ ...failure, hook: hookName }, null, 2);
     }
     return `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
   }

@@ -2,9 +2,10 @@
  * Integration coverage for workspace bootstrap cache reads.
  * Uses temp workspaces to verify real file loading through the cache layer.
  */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
@@ -164,12 +165,36 @@ describe("workspace bootstrap file caching", () => {
     const agentsFile1 = await loadAgentsFile(workspaceDir);
     expectAgentsContent(agentsFile1, content1);
 
-    // In-place edit: same path, same size, restore mtime — only ctime changes.
-    await fs.writeFile(filePath, content2, "utf-8");
-    await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+    // A loaded runner can complete both writes within one ctime tick. Wait for the
+    // fixture's cache identity to change before asserting the production reload.
+    await vi.waitFor(
+      async () => {
+        await fs.writeFile(filePath, content2, "utf-8");
+        await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+        expect((await fs.stat(filePath)).ctimeMs).not.toBe(originalStat.ctimeMs);
+      },
+      { interval: 1, timeout: 1_000 },
+    );
 
-    const agentsFile2 = await loadAgentsFile(workspaceDir);
-    expectAgentsContent(agentsFile2, content2);
+    const editedStat = await fs.stat(filePath);
+    expect(editedStat.dev).toBe(originalStat.dev);
+    expect(editedStat.ino).toBe(originalStat.ino);
+    expect(editedStat.size).toBe(originalStat.size);
+    expect(editedStat.mtimeMs).toBe(originalStat.mtimeMs);
+
+    const originalFstatSync = fsSync.fstatSync;
+    const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+      const stat = originalFstatSync(fd);
+      // Filesystems may coalesce rapid ctime updates; isolate the identity contract.
+      stat.ctimeMs = originalStat.ctimeMs + 1;
+      return stat;
+    });
+    try {
+      const agentsFile2 = await loadAgentsFile(workspaceDir);
+      expectAgentsContent(agentsFile2, content2);
+    } finally {
+      fstatSync.mockRestore();
+    }
   });
 
   it("replaces a session snapshot when inode changes with identical bytes", async () => {

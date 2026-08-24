@@ -727,6 +727,21 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("does not prepare channel migration surfaces without a legacy store", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const prepareLegacySessionSurfaces = vi.fn(() => EMPTY_LEGACY_SESSION_SURFACES);
+
+      const result = await migrateOrphanedSessionKeys({
+        cfg: OPS_WORK_CONFIG,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        legacySessionSurfaces: prepareLegacySessionSurfaces,
+      });
+
+      expect(result).toEqual({ changes: [], warnings: [] });
+      expect(prepareLegacySessionSurfaces).not.toHaveBeenCalled();
+    });
+  });
+
   it("is idempotent — running twice produces same result", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);

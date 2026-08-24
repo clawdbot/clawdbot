@@ -86,7 +86,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         data: this.data,
         isConnected: this.isConnected,
         isAdmin: this.place?.isAdmin() ?? false,
-        canStartAsDraft: this.submission?.canStartAsDraft() ?? false,
+        canStartAsDraft: this.submission?.capabilities.canStartAsDraft(this.context) ?? false,
         visibility: this.submission?.visibility ?? "normal",
         cloudProfileId: this.place?.cloudProfileId ?? "",
         pendingPlacement: this.submission?.pendingPlacement ?? {
@@ -290,6 +290,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     }
     this.place.restorePreferenceSelections();
     activateDraft(this.submission, openKey);
+    this.submission.resumeInterruptedSubmission();
   }
 
   private invalidateGatewayDiscovery(
@@ -375,6 +376,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
+      autoDevice: this.place.autoDevice,
       devicePlacement: this.place.devicePlacementRequirement(),
       deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
     });
@@ -388,7 +390,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       projectQuery: this.browser.projectQuery,
     });
     const detailState = resolveDetailChip({
-      destination: this.place.deviceId || this.place.cloudProfileId ? "remote" : "local",
+      destination: this.place.remotePlacement ? "remote" : "local",
       worktree: this.place.worktree,
       worktreeAvailable: this.place.worktreeAvailable(),
     });
@@ -403,6 +405,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
+      autoDevice: this.place.autoDevice,
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
       cloudProfileDisabledReason: (profile) =>
@@ -412,6 +415,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       isAdmin: this.place.isAdmin(),
       ...this.browser.popoverCallbacks("where"),
       onSelectDevice: (deviceId) => this.place.selectDevice(deviceId),
+      onSelectAutoDevice: () => this.place.selectDevice("", true),
       onSelectCloudProfile: (profileId) => this.place.selectCloudProfile(profileId),
       onSelectCloudMachine: (machineId) =>
         this.place.cloudMachines.select(
@@ -448,7 +452,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       projectSearchError: this.browser.projectSearchError,
       projectId: this.browser.projectId,
       gatewayLabel,
-      remotePlacement: Boolean(this.place.deviceId || this.place.cloudProfileId),
+      remotePlacement: this.place.remotePlacement,
       branches,
       branchesLoading: this.place.repository.kind === "checking",
       baseRef: this.place.baseRef,
@@ -573,6 +577,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private renderDraftBlock() {
     const worktreeNameInvalid =
       this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
+    const capabilities = this.submission.capabilities;
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
@@ -591,14 +596,15 @@ export class NewSessionPage extends OpenClawLightDomElement {
           agent: this.place.selectedAgent(),
           agentId: this.place.agentId,
           attachmentDraft: this.submission.attachmentDraft,
-          canSubmit: this.submission.canSubmit(),
+          canSubmit: !this.submission.submitting && this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
           blockedSubmitNotice: this.submission.blockedSubmitNotice(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.submission.message,
           visibility: this.submission.visibility,
-          draftAvailable: this.submission.canStartAsDraft(),
+          draftAvailable: capabilities.canStartAsDraft(this.context),
+          ...capabilities.composerProps(this.context, this.gateway, this.place.agentId),
           modelControl: this.place.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           requestUpdate: () => this.requestUpdate(),
@@ -607,8 +613,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
           messageLocked: Boolean(this.submission.pendingPlacement.sessionKey),
           terminalAction: this.submission.showStartInTerminal()
             ? {
-                canStart: this.submission.canSubmit("terminal"),
-                disabledReason: this.submission.terminalStartDisabledReason(),
+                canStart: !this.submission.submitting && this.submission.canSubmit("terminal"),
+                disabledReason: this.submission.submitBlock("terminal")?.reason,
                 onStart: () => void this.submission.startInTerminal(),
               }
             : undefined,

@@ -48,6 +48,33 @@ describe("worker turn launcher reclaimed placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
+  it.each([
+    ["agent id", { agentId: "other", sessionKey: SESSION_KEY }],
+    ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
+    ["blank agent id", { agentId: " ", sessionKey: SESSION_KEY }],
+    ["blank session key", { agentId: "main", sessionKey: " " }],
+  ])("rejects a conflicting supplied %s before redispatch", async (_label, identity) => {
+    seedReclaimedPlacement();
+    const redispatchReclaimed = vi.fn(async () => {
+      throw new Error("redispatch should not run");
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      redispatchReclaimed,
+    });
+
+    await expect(
+      provider.executeTurn(
+        { sessionId: SESSION_ID, ...identity, runId: `run-reclaimed-conflict-${_label}` },
+        turn(`run-reclaimed-conflict-${_label}`),
+        vi.fn(),
+      ),
+    ).rejects.toThrow(/Worker turn (agent id|session key) (?:is required|does not match)/u);
+    expect(redispatchReclaimed).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
+  });
+
   it("redispatches a reclaimed placement before launching the worker turn", async () => {
     const reclaimed = seedReclaimedPlacement();
     const runId = "run-reclaimed-worker";

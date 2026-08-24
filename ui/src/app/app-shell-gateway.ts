@@ -1,7 +1,6 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
 import type { RouteId } from "../app-routes.ts";
 import type { SidebarWorkboardRuntime } from "../components/app-sidebar-workboard.ts";
 import {
@@ -308,7 +307,7 @@ export class ShellGatewayOwner {
       return;
     }
     const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || isSessionRouteId(routeId) || agents.state.agentsList) {
+    if (!agents || !routeId || agents.state.agentsList) {
       return;
     }
     if (this.host.agentsListClient === snapshot.client && this.host.agentsListSource === agents) {

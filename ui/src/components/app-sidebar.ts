@@ -7,15 +7,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
-import {
-  NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-  NATIVE_UPDATE_DECLINED_EVENT,
-} from "../app/native-link-routing.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -23,6 +18,7 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -81,7 +77,6 @@ const sidebarChromeImport = createIdleImport(() =>
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
-  @state() nativeUpdateDeclined = false;
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
@@ -143,7 +138,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
-  private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -216,11 +211,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override disconnectedCallback() {
     window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
-    window.removeEventListener(
-      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-      this.handleNativeUpdateAvailabilityChanged,
-    );
-    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     window.removeEventListener(
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
       this.hiddenSessionCatalogsChanged,
@@ -325,13 +315,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override connectedCallback() {
     super.connectedCallback();
-    this.nativeUpdateDeclined = false;
     window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
-    window.addEventListener(
-      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-      this.handleNativeUpdateAvailabilityChanged,
-    );
-    window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     this.hiddenSessionCatalogsChanged();
     window.addEventListener(
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
@@ -342,28 +326,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     sidebarChromeImport.schedule();
     this.catalogRendererImport.schedule();
   }
-
-  private readonly handleNativeUpdateDeclined = () => {
-    if (this.nativeUpdateDeclined) {
-      return;
-    }
-    this.nativeUpdateDeclined = true;
-    const campaign = this.updateSchedule?.campaign;
-    const updateBusy = this.updateBusy || campaign?.state === "applying";
-    if (
-      (this.updateAvailable || campaign) &&
-      !updateBusy &&
-      this.canUpdate &&
-      !this.refreshRequired
-    ) {
-      this.onUpdate();
-    }
-  };
-
-  private readonly handleNativeUpdateAvailabilityChanged = () => {
-    this.nativeUpdateDeclined = false;
-    this.requestUpdate();
-  };
 
   protected override firstUpdated() {
     requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
@@ -492,6 +454,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     trigger?: HTMLElement,
   ): void {
     this.sidebarMenus.catalogMenu.open(request, x, y, trigger);
+  }
+
+  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void {
+    this.sidebarMenus.catalogMenu.retargetTrigger(key, element);
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {

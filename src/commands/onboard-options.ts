@@ -5,11 +5,10 @@
  * non-interactive handlers reject options, and every one of them must honor --json.
  */
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import type { OnboardOptions } from "./onboard-types.js";
 
 /** Reports an invalid option and exits; returns false so validators can `return` it directly. */
 export function rejectOnboardingOption(
-  opts: OnboardOptions,
+  opts: { json?: boolean },
   runtime: RuntimeEnv,
   message: string,
 ): false {

@@ -392,7 +392,7 @@ describe("sendMessageDiscord", () => {
     ];
     const onDeliveryResult = vi.fn();
 
-    await sendMessageDiscord("channel:789", "a".repeat(2_500), {
+    const result = await sendMessageDiscord("channel:789", "a".repeat(2_500), {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -415,6 +415,7 @@ describe("sendMessageDiscord", () => {
       "card",
       "text",
     ]);
+    expect(result.receipt.parts.map(({ kind }) => kind)).toEqual(["card", "text"]);
   });
 
   it("delivers embed-only and native Components V2 messages over real HTTP", async () => {
@@ -500,6 +501,79 @@ describe("sendMessageDiscord", () => {
     ).rejects.toThrow("second chunk failed");
 
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
+  });
+
+  it("rechecks delivery authority before media caption follow-up chunks", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      const authorityRevoked = new Error("delivery authority revoked");
+      let authorityActive = true;
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      });
+      const onDeliveryResult = vi.fn(async () => {
+        authorityActive = false;
+      });
+
+      await expect(
+        sendMessageDiscord("channel:789", "a".repeat(2_500), {
+          rest: loopback.rest,
+          token: "test-token",
+          cfg: DISCORD_TEST_CFG,
+          mediaUrl: "file:///tmp/photo.jpg",
+          onDeliveryResult,
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toBe(authorityRevoked);
+
+      expect(onDeliveryResult).toHaveBeenCalledOnce();
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(1);
+      expect(messageRequests[0]?.path).toContain("/channels/789/messages");
+      expect(messageRequests[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it("rechecks delivery authority before each retried text post", async () => {
+    let authorityActive = true;
+    const loopback = await createDiscordLoopbackRest({
+      status: (request) => {
+        if (request.method === "POST") {
+          authorityActive = false;
+          return 503;
+        }
+        return 200;
+      },
+    });
+    try {
+      const authorityRevoked = new Error("delivery authority revoked");
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      });
+
+      await expect(
+        sendMessageDiscord("channel:789", "retry once", {
+          rest: loopback.rest,
+          token: "test-token",
+          cfg: DISCORD_TEST_CFG,
+          retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toBe(authorityRevoked);
+
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(1);
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("allows Discord link embeds when suppressEmbeds is disabled", async () => {
@@ -935,6 +1009,7 @@ describe("sendMessageDiscord", () => {
     });
 
     expect(res.messageId).toBe("fallback-msg");
+    expectSingleReceiptPart(res.receipt, { platformMessageId: "fallback-msg", kind: "text" });
     expect(postMock).toHaveBeenCalledTimes(2);
     expectBodyFileName(requireRestBody(postMock, 0), "photo.jpg");
     const fallbackBody = requireRestBody(postMock, 1);
@@ -1126,17 +1201,20 @@ describe("sendMessageDiscord", () => {
       name: "preserves reply reference across all text chunks by default",
       params: { text: "a".repeat(2001) },
       expectsSecondReply: true,
+      expectedKinds: ["text", "text"],
     },
     {
       name: "limits reply reference to the first text chunk when requested",
       params: { text: "a".repeat(2001), replyScope: "first" as const },
       expectsSecondReply: false,
       checksReceipt: true,
+      expectedKinds: ["text", "text"],
     },
     {
       name: "preserves reply reference for follow-up text chunks after media caption split by default",
       params: { text: "a".repeat(2500), mediaUrl: "file:///tmp/photo.jpg" },
       expectsSecondReply: true,
+      expectedKinds: ["media", "text"],
     },
     {
       name: "limits media caption reply reference to the first physical message when requested",
@@ -1146,9 +1224,11 @@ describe("sendMessageDiscord", () => {
         replyScope: "first" as const,
       },
       expectsSecondReply: false,
+      expectedKinds: ["media", "text"],
     },
-  ])("$name", async ({ params, expectsSecondReply, checksReceipt }) => {
+  ])("$name", async ({ params, expectsSecondReply, checksReceipt, expectedKinds }) => {
     const { firstBody, secondBody, result } = await sendChunkedReplyAndCollectBodies(params);
+    expect(result.receipt.parts.map(({ kind }) => kind)).toEqual(expectedKinds);
     expectReplyReference(firstBody, "orig-123");
     if (expectsSecondReply) {
       expectReplyReference(secondBody, "orig-123");

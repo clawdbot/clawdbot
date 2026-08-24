@@ -8,6 +8,7 @@ import {
   SOURCE_REPO,
   TARGET_REPO,
   WORKSPACE,
+  controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
@@ -400,9 +401,9 @@ suite.define(() => {
   });
 
   for (const reconnectKind of ["same-client reconnect", "client replacement"] as const) {
-    it(`marks a pending creation outcome unknown after ${reconnectKind}`, async () => {
+    it(`automatically resumes an idempotent session creation after ${reconnectKind}`, async () => {
       await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
-        const sessionKey = `agent:main:unknown-${reconnectKind.replaceAll(" ", "-")}`;
+        const sessionKey = `agent:main:resumed-${reconnectKind.replaceAll(" ", "-")}`;
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "agents.list": mainAgentList("Original agent", SOURCE_REPO),
@@ -413,12 +414,14 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await page.getByRole("heading", { name: "Original agent" }).waitFor();
         const message = page.locator(".new-session-page__message");
+        const projectTrigger = page.locator("#new-session-project-trigger");
         const start = page.locator("button.chat-send-btn");
         await message.fill("retry this draft after reconnect");
         await gateway.deferNext("sessions.create");
         await start.click();
-        await gateway.waitForRequest("sessions.create");
+        const originalCreate = await gateway.waitForRequest("sessions.create");
         await expect.poll(() => start.isDisabled()).toBe(true);
+        await gateway.deferNext("sessions.create");
 
         if (reconnectKind === "client replacement") {
           await gateway.setMethodResponse(
@@ -433,29 +436,66 @@ suite.define(() => {
           const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
+          expect(await message.isDisabled()).toBe(true);
+          expect(await projectTrigger.isDisabled()).toBe(true);
+          expect(await start.getAttribute("aria-busy")).toBe("true");
           await gateway.setOnline(true);
           await waitForControlUiGatewayReady(page);
           await expect
             .poll(async () => (await gateway.getRequests("agents.list")).length)
             .toBe(agentRequestsBefore + 1);
         }
-        await expect.poll(() => message.inputValue()).toBe("retry this draft after reconnect");
-        await expect.poll(() => message.isEnabled()).toBe(true);
-        await expect.poll(() => start.isDisabled()).toBe(true);
-        // The gate table also surfaces this reason in the Start tooltip, so
-        // scope to the page callout instead of a bare text match.
-        await page
-          .getByRole("alert")
-          .filter({
-            hasText:
-              "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
-          })
-          .waitFor();
-        expect(new URL(page.url()).pathname).toBe("/new");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.create")).length)
+          .toBe(2);
+        const resumedCreate = (await gateway.getRequests("sessions.create")).at(-1);
+        expect(originalCreate.params).toMatchObject({
+          idempotencyKey: expect.any(String),
+          message: "retry this draft after reconnect",
+        });
+        expect(resumedCreate?.params).toEqual(originalCreate.params);
+        expect(await message.inputValue()).toBe("retry this draft after reconnect");
+        expect(await message.isDisabled()).toBe(true);
+        expect(await projectTrigger.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+        await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+        await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
       });
     });
   }
+
+  it("keeps an interrupted creation fail-closed after the Gateway process restarts", async () => {
+    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "worktrees.branches": branchList(),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.getByRole("heading", { name: "Main" }).waitFor();
+      await page.locator(".new-session-page__message").fill("do not duplicate this task");
+      await gateway.deferNext("sessions.create");
+      await page.getByRole("button", { name: "Start session" }).click();
+      await gateway.waitForRequest("sessions.create");
+
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await gateway.setGatewayBootId("different-gateway-process");
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+
+      await page
+        .getByRole("alert")
+        .filter({
+          hasText:
+            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+        })
+        .waitFor();
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      expect(new URL(page.url()).pathname).toBe("/new");
+    });
+  });
 
   it("resets agent-derived workspace state when retargeted to a catalog", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {

@@ -349,9 +349,11 @@ export class BoardWidgetSandboxHost {
     this.offeredTicket = ticket;
     const controlUiBaseUrl = this.options.controlUiBaseUrl?.trim();
     this.bridgePort.postMessage(
-      controlUiBaseUrl
-        ? { type: "openclaw:widget-host-init", ticket, controlUiBaseUrl }
-        : { type: "openclaw:widget-host-init", ticket },
+      {
+        type: "openclaw:widget-host-init",
+        ticket,
+        ...(controlUiBaseUrl ? { controlUiBaseUrl } : {}),
+      },
       [],
     );
   }

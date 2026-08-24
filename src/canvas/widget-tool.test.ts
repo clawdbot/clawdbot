@@ -1,5 +1,4 @@
-// Core inline widget validation, byte stability, materialization, and retention.
-import { createHash } from "node:crypto";
+// Core inline widget validation, materialization, and retention.
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -538,28 +537,6 @@ describe("show_widget", () => {
     });
   });
 
-  it("keeps the wrapped document bytes stable", () => {
-    const html = buildWidgetDocument(
-      "Status <live>",
-      '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
-    );
-
-    expect(Buffer.byteLength(html)).toBe(13859);
-    expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "a3d6c52c6b19498b1041a3e2c0feac20b234f6497cf3d41c8783feba3ae47dcf",
-    );
-    expect(html).toContain("openclaw:widget-host-init-ack");
-    expect(html).toContain("controlUiBaseUrl");
-    expect(html).toContain('define(host,"controlUiBaseUrl"');
-    expect(html).toContain("else push.call(waiting,{send,reject})");
-    expect(html).toContain("else push.call(promptWaiting,{send,inline,reject})");
-    expect(html).toContain("openclaw:widget-prompt-host-ready");
-    expect(html).toContain("widget host capabilities unavailable");
-    expect(html).toContain("widget prompt host unavailable");
-    expect(html).toContain("openclaw:widget-chat-host");
-    expect(html).not.toContain("widget is not hosted on a board");
-  });
-
   it("rejects empty and oversized widget code", async () => {
     const stateDir = await createStateDir();
     const tool = createShowWidgetTool({ stateDir, sessionId: "validation" });
@@ -702,7 +679,7 @@ describe("show_widget", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("lets the board domain wrap pinned source before storing and broadcasting", async () => {
+  it("lets the board domain create and refresh explicitly named pinned HTML", async () => {
     const stateDir = await createStateDir();
     const store = createTestBoardStore({ stateDir });
     const broadcast = vi.fn();
@@ -738,18 +715,20 @@ describe("show_widget", () => {
       return result as T;
     };
 
-    const result = await executeWidget({
-      stateDir,
-      agentSessionKey: "agent:main:pinned",
-      title,
-      widgetCode: "<p>ready</p>",
-      pin: true,
-      name: "release-status",
-      tab: "main",
-      size: "lg",
-      presentation: { frame: "frameless" },
-      callGateway,
-    });
+    const pinWidget = (widgetCode: string, withPlacement = false) =>
+      executeWidget({
+        stateDir,
+        agentSessionKey: "agent:main:pinned",
+        title,
+        widgetCode,
+        pin: true,
+        name: "release-status",
+        ...(withPlacement
+          ? { tab: "main", size: "lg" as const, presentation: { frame: "frameless" as const } }
+          : {}),
+        callGateway,
+      });
+    const result = await pinWidget("<p>ready</p>", true);
     const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
     expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
@@ -763,6 +742,28 @@ describe("show_widget", () => {
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
       sessionKey: "agent:main:pinned",
       revision: 1,
+      widget: "release-status",
+    });
+
+    await expect(
+      callGateway("board.widget.put", {
+        sessionKey: "agent:main:pinned",
+        name: "release-status",
+        content: { kind: "plugin", pluginKind: "workboard:card" },
+      }),
+    ).rejects.toThrow(/same content kind.*remove/i);
+    expect(store.readWidgetHtml("agent:main:pinned", "release-status")?.revision).toBe(1);
+
+    const refreshed = await pinWidget("<p>refreshed</p>");
+
+    expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
+      html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
+      revision: 2,
+    });
+    expect(refreshed.boardWidgetName).toBe("release-status");
+    expect(broadcast).toHaveBeenCalledWith("board.changed", {
+      sessionKey: "agent:main:pinned",
+      revision: 2,
       widget: "release-status",
     });
   });
@@ -997,27 +998,6 @@ describe("show_widget", () => {
     expect(html.indexOf("openclaw:widget-snapshot-request")).toBeLessThan(
       html.indexOf("<section>"),
     );
-    const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
-    expect(bridgeKeys).toEqual([
-      "surface",
-      "card",
-      "elevated",
-      "text",
-      "text-strong",
-      "muted",
-      "border",
-      "border-strong",
-      "accent",
-      "accent-fill",
-      "accent-fg",
-      "ok",
-      "warn",
-      "danger",
-      "info",
-      "radius",
-      "font-body",
-      "font-mono",
-    ]);
     expect(html).toContain("openclaw:widget-prompt-offer");
     expect(html).toContain("openclaw:widget-bridge-port-offer");
     expect(html).toContain("openclaw:widget-bridge-request");

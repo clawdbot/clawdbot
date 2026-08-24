@@ -21,7 +21,10 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../../lib/keyboard-shortcut-catalog.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -62,7 +65,11 @@ import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts"
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
-import { admitInitialUserMessageHandoff } from "./history-merge.ts";
+import {
+  admitInitialUserMessageHandoff,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   applyChatCacheSnapshot,
@@ -109,10 +116,24 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       ) {
         return;
       }
-      // The memory miss is the ordering fence: any network replacement or live
-      // append that landed while IndexedDB was pending remains authoritative.
-      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, snapshot);
-      applyChatCacheSnapshot(state, snapshot);
+      // The memory miss fences network replacement; the pane projection merges
+      // live and pending rows that arrived while IndexedDB was pending.
+      const projection = reduceChatSessionProjection(
+        state,
+        { type: "snapshotLoaded", messages: snapshot.messages },
+        {
+          scope: readChatSessionProjectionScope(state, {
+            sessionKey,
+            sessionId: snapshot.sessionId,
+            ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
+              ? { activeLeafEntryId: snapshot.displayedLeafEntryId }
+              : {}),
+          }),
+        },
+      );
+      const mergedSnapshot = { ...snapshot, messages: [...projection.messages] };
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, mergedSnapshot);
+      applyChatCacheSnapshot(state, mergedSnapshot);
       state.requestUpdate?.();
     });
   }
@@ -308,11 +329,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this.active &&
       this.presented &&
       !event.defaultPrevented &&
-      !event.altKey &&
-      event.shiftKey &&
-      event.metaKey &&
-      !event.ctrlKey &&
-      resolveAsciiShortcutKey(event) === "b"
+      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
     ) {
       const state = this.state;
       if (!state) {

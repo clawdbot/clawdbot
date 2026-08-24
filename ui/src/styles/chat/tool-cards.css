@@ -916,6 +916,12 @@
   flex-shrink: 0;
 }
 
+/* Chromium can retain a skipped row's pre-menu geometry. Fully lay out the
+   active widget row so closing its top-layer menu cannot move the disclosure. */
+.chat-virtual-row:has(.chat-tool-card__widget-actions[open]) {
+  content-visibility: visible;
+}
+
 .chat-tool-card__widget-actions::part(menu) {
   min-width: 164px;
   max-width: 208px;

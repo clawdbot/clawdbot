@@ -73,6 +73,7 @@ export class DraftGatewayState {
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClientValue: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayUrlValue = "";
+  private gatewayBootIdValue = "";
   private gatewayRecoveryScopeValue = "";
   private gatewayRecoveryScopeReady = false;
   private gatewayConnectedValue = false;
@@ -178,6 +179,11 @@ export class DraftGatewayState {
     return this.gatewayRecoveryScopeValue;
   }
 
+  get sessionCreateScope(): string {
+    const scope = [this.gatewayUrlValue, this.gatewayRecoveryScopeValue, this.gatewayBootIdValue];
+    return scope.every(Boolean) ? JSON.stringify(scope) : "";
+  }
+
   get connected(): boolean {
     return this.gatewayConnectedValue;
   }
@@ -208,6 +214,15 @@ export class DraftGatewayState {
     const snapshot = gateway.snapshot;
     const connected = snapshot.phase === "connected";
     const firstBind = this.gatewaySource === null;
+    // The Gateway's idempotency ledger is process-local; a new boot cannot safely replay a start.
+    const bootId = connected
+      ? (snapshot.hello?.server?.bootId?.trim() ?? "")
+      : this.gatewayBootIdValue;
+    const gatewayBootChanged =
+      !firstBind &&
+      connected &&
+      Boolean(this.gatewayBootIdValue) &&
+      bootId !== this.gatewayBootIdValue;
     const gatewayUrlChanged = !firstBind && this.gatewayUrlValue !== gateway.connection.gatewayUrl;
     const gatewaySourceChanged = !firstBind && this.gatewaySource !== gateway;
     const identityChanged =
@@ -224,13 +239,20 @@ export class DraftGatewayState {
     this.gatewaySource = gateway;
     this.gatewayClientValue = snapshot.client;
     this.gatewayUrlValue = gateway.connection.gatewayUrl;
+    this.gatewayBootIdValue = bootId;
     this.gatewayRecoveryScopeValue = recoveryScope.next;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnectedValue = connected;
     if (this.read().visibility === "draft" && !this.read().canStartAsDraft) {
       this.callbacks.onVisibilityRetired();
     }
-    if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
+    if (
+      gatewayUrlChanged ||
+      gatewayBootChanged ||
+      identityChanged ||
+      connectionChanged ||
+      recoveryScope.changed
+    ) {
       const ownerChanged = gatewaySourceChanged || gatewayUrlChanged || recoveryScope.changed;
       const gatewayIdentityChanged = gatewayUrlChanged || recoveryScope.changed;
       this.invalidateDiscovery(

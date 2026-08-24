@@ -3,6 +3,7 @@ const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
     timeout: 2000,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -28,9 +29,14 @@ function ancestors(rows) {
 }
 function processIdentity(pid) {
   try {
+    // Identity gates every thaw, and execFileSync's timeout only signals before waiting for
+    // the child: under the default SIGTERM a ps that ignores it still blocks forever, so every
+    // probe here must be killable to stay bounded.
     const start = require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       maxBuffer: 4096,
+      timeout: 2000,
+      killSignal: "SIGKILL",
     }).trim();
     return start || null;
   } catch (error) {
@@ -40,7 +46,7 @@ function processIdentity(pid) {
 }
 function processStatus(pid) {
   try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim();
+    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000, killSignal: "SIGKILL" }).trim();
     const match = /^(\S+)\s+(.+)$/u.exec(output);
     return match ? { state: match[1], start: match[2] } : null;
   } catch (error) {
@@ -148,16 +154,40 @@ const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
   name.startsWith(workspaceKey + ".") && name.endsWith(".json"),
 );
 if (orphanNames.length > 16) throw new Error("too many workspace quiescence leases");
+let sawUnverifiedEmptyLeaseWatchdog = false;
 for (const name of orphanNames) {
   const match = name.match(/^[a-f0-9]{64}\.([a-f0-9]{32})\.json$/);
   if (!match) continue;
   const orphanPath = path.join(leaseDirectory, name);
   const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
-  if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
-    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
-  }
   resumeProcesses(lease.processes);
-  fs.unlinkSync(orphanPath);
+  let retainLeaseForRetry = false;
+  if (lease.watchdog !== null) {
+    try {
+      let watchdogMatches = processIdentity(lease.watchdog.pid) === lease.watchdog.start;
+      if (watchdogMatches) {
+        try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
+        for (let attempt = 0; attempt < 100 && watchdogMatches; attempt += 1) {
+          Atomics.wait(sleeper, 0, 0, 10);
+          watchdogMatches = processIdentity(lease.watchdog.pid) === lease.watchdog.start;
+        }
+        if (watchdogMatches) throw new Error("prior workspace quiescence watchdog did not retire");
+      }
+    } catch (error) {
+      if (lease.processes.length > 0) throw error;
+      sawUnverifiedEmptyLeaseWatchdog = true;
+      retainLeaseForRetry = !sharedHost;
+    }
+  }
+  if (retainLeaseForRetry) continue;
+  // The orphan's own watchdog can resume and unlink first; a lease that is already gone
+  // is the outcome we wanted, so it must not fail this sweep.
+  try { fs.unlinkSync(orphanPath); } catch (error) { if (!error || error.code !== "ENOENT") throw error; }
+}
+// Shared-host replacements can remove empty leases during a ps outage because they never sweep
+// processes. Dedicated replacements retain the watchdog identity so a retry can exclude it.
+if (!sharedHost && sawUnverifiedEmptyLeaseWatchdog) {
+  throw new Error("could not verify prior workspace quiescence watchdog retirement; retry when ps is available");
 }
 writeLease();
 const watchdog = childProcess.spawn(
@@ -171,17 +201,21 @@ if (!Number.isSafeInteger(watchdog.pid) || watchdog.pid < 1) {
   throw new Error("workspace quiescence watchdog did not start");
 }
 let watchdogStart = null;
-for (let attempt = 0; attempt < 100 && !watchdogStart; attempt += 1) {
-  watchdogStart = processIdentity(watchdog.pid);
-  if (!watchdogStart) Atomics.wait(sleeper, 0, 0, 10);
+try {
+  for (let attempt = 0; attempt < 100 && !watchdogStart; attempt += 1) {
+    watchdogStart = processIdentity(watchdog.pid);
+    if (!watchdogStart) Atomics.wait(sleeper, 0, 0, 10);
+  }
+  if (!watchdogStart) {
+    throw new Error("workspace quiescence watchdog identity was not observable");
+  }
+  watchdogReference = { pid: watchdog.pid, start: watchdogStart };
+  writeLease();
+} catch (error) {
+  try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || (killError.code !== "ESRCH" && killError.code !== "EPERM")) throw killError; }
+  try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
+  throw error;
 }
-if (!watchdogStart) {
-  try { process.kill(watchdog.pid, "SIGTERM"); } catch {}
-  fs.unlinkSync(leasePath);
-  throw new Error("workspace quiescence watchdog identity was not observable");
-}
-watchdogReference = { pid: watchdog.pid, start: watchdogStart };
-writeLease();
 let quietScans = 0;
 try {
   if (sharedHost) {
@@ -232,14 +266,17 @@ try {
     throw new Error("worker processes did not reach a quiescent state");
   }
 } catch (error) {
+  // Thaw before retiring the watchdog: a bounded identity probe can throw here, and
+  // retiring first would leave a stopped worker with no remaining resumer.
+  resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
   if (processIdentity(watchdog.pid) === watchdogStart) {
     try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || (killError.code !== "ESRCH" && killError.code !== "EPERM")) throw killError; }
   }
-  resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
   try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
   throw error;
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
+  let retryDelayMs = 1000;
   const check = () => {
     try {
       const watchdogFs = require("node:fs");
@@ -281,7 +318,18 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       }
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
-      if (!error || error.code !== "ENOENT") process.exitCode = 1;
+      // Only the lease disappearing or being unusable retires this watchdog. A missing ps also throws
+      // ENOENT, and treating that as "someone else finished" would exit with the workers
+      // still stopped, which is the freeze this loop exists to prevent.
+      if (error && error.code === "ENOENT" && error.path === watchedLeasePath) return;
+      // An unreadable lease is terminal: the pids to resume live in that file, so retrying
+      // cannot recover them and would leave this detached process alive forever.
+      if (error instanceof SyntaxError) return;
+      // Otherwise this is the lease's last resumer, so it retries with backoff until the sweep
+      // completes or the lease file is gone. Any attempt cap would just re-create the permanent
+      // freeze for a longer stall; whoever removes the lease retires this watchdog next tick.
+      setTimeout(check, retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, 60000);
     }
   };
   check();
@@ -421,12 +469,21 @@ try { raw = fs.readFileSync(leasePath, "utf8"); } catch (error) {
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
 const input = parseLease(raw, nonce);
-if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
-  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
-}
+// Thaw before retiring the watchdog: a bounded identity lookup can still fail, and
+// retiring the last resumer first would strand whatever the aborted sweep never reached.
 for (const entry of input.processes) {
   if (processIdentity(entry.pid) !== entry.start) continue;
   try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
-fs.unlinkSync(leasePath);
+let watchdogStart = null;
+try { if (input.watchdog !== null) watchdogStart = processIdentity(input.watchdog.pid); } catch (error) {
+  // An empty lease has nothing to strand, so ps cannot block its release.
+  if (input.processes.length > 0) throw error;
+}
+if (input.watchdog !== null && watchdogStart === input.watchdog.start) {
+  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
+}
+// The watchdog stays alive across the whole resume loop now, so it can win the unlink race.
+// Everything is thawed either way; a missing lease must not fail the sync.
+try { fs.unlinkSync(leasePath); } catch (error) { if (!error || error.code !== "ENOENT") throw error; }
 `;

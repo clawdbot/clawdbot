@@ -17,7 +17,7 @@ import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off", "full"] satisfies VerboseLevel[];
 const TRACE_LEVELS = ["on", "off"];
-const FAST_LEVELS = ["status", "auto", "on", "off"];
+const FAST_LEVELS = ["status", "auto", "on", "off", "default"];
 const REASONING_LEVELS = ["on", "off", "stream"] satisfies ReasoningLevel[];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
@@ -113,10 +113,10 @@ const TUI_COMMAND_ROWS = [
   ],
   ["session", "Switch session (or open picker)", "/session <key> (or /sessions)"],
   ["sessions", "Open session picker"],
-  ["model", "Set model (or open picker)", "/model <provider/model> (or /models)"],
+  ["model", "Set model (or open picker)", "/model <provider/model|default> (or /models)"],
   ["models", "Open model picker"],
-  ["think", "Set thinking level", "/think <{thinkingLevels}>", "thinking"],
-  ["fast", "Set fast mode auto/on/off", "/fast <status|auto|on|off>", FAST_LEVELS],
+  ["think", "Set thinking level", "/think <{thinkingLevels}|default>", "thinking"],
+  ["fast", "Set fast mode auto/on/off", "/fast <status|auto|on|off|default>", FAST_LEVELS],
   [
     "verbose",
     `Set verbose ${VERBOSE_LEVELS.join("/")}`,
@@ -258,7 +258,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     }
     const completions =
       command.completions === "thinking"
-        ? createLevelCompletion(thinkLevels)
+        ? createLevelCompletion([...thinkLevels, "default"])
         : command.completions
           ? createLevelCompletion([...command.completions])
           : undefined;

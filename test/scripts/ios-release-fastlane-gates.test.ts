@@ -1,5 +1,16 @@
 // iOS Fastlane release gate tests keep TestFlight upload on one canonical path.
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -16,6 +27,64 @@ const snapshotUITestPath = path.join(
 );
 const rootTabsPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootTabs.swift");
 const ciWorkflowPath = path.join(process.cwd(), ".github", "workflows", "ci.yml");
+const rubyVersionPath = path.join(process.cwd(), "apps", "ios", ".ruby-version");
+const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
+const gemfileLockPath = path.join(process.cwd(), "apps", "ios", "Gemfile.lock");
+const iosReadmePath = path.join(process.cwd(), "apps", "ios", "README.md");
+const fastlaneSetupPath = path.join(process.cwd(), "apps", "ios", "fastlane", "SETUP.md");
+const metadataReadmePath = path.join(
+  process.cwd(),
+  "apps",
+  "ios",
+  "fastlane",
+  "metadata",
+  "README.md",
+);
+const screenshotsScriptPath = path.join(process.cwd(), "scripts", "ios-screenshots.sh");
+
+function runIosScreenshotsCommand(
+  options: {
+    bundleCheckExit?: number;
+    bundleExit?: number;
+    conflictingGemfile?: boolean;
+  } = {},
+) {
+  const fixture = mkdtempSync(path.join(tmpdir(), "openclaw-ios-fastlane-"));
+  const tracePath = path.join(fixture, "trace.log");
+  const writeExecutable = (name: string, body: string) => {
+    const executable = path.join(fixture, name);
+    writeFileSync(executable, `#!/usr/bin/env bash\n${body}\n`, "utf8");
+    chmodSync(executable, 0o755);
+  };
+  writeExecutable(
+    "bundle",
+    '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
+      '[[ "${1:-}" == "_2.6.9_" ]] || exit 92\n' +
+      `[[ "\${2:-}" != "check" ]] || exit ${options.bundleCheckExit ?? 0}\n` +
+      'printf "bundle:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n' +
+      `exit ${options.bundleExit ?? 0}`,
+  );
+  writeExecutable("fastlane", 'printf "direct:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"');
+
+  try {
+    const result = spawnSync("bash", [screenshotsScriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BUNDLE_GEMFILE: options.conflictingGemfile ? path.join(fixture, "Gemfile") : "",
+        OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
+        OPENCLAW_FASTLANE_TEST_TRACE: tracePath,
+        PATH: `${fixture}:/usr/bin:/bin`,
+      },
+    });
+    return {
+      result,
+      trace: existsSync(tracePath) ? readFileSync(tracePath, "utf8") : "",
+    };
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+}
 
 function readFastfile(): string {
   return readFileSync(fastfilePath, "utf8");
@@ -58,6 +127,157 @@ function swiftFunctionBody(source: string, name: string): string {
 }
 
 describe("iOS Fastlane release upload gates", () => {
+  it("pins the CI Ruby and Fastlane toolchain", () => {
+    const workflow = readFileSync(ciWorkflowPath, "utf8");
+    const iosJobStart = workflow.indexOf("\n  ios-build:\n");
+    const iosJobEnd = workflow.indexOf("\n  android:\n", iosJobStart);
+    const iosJob = workflow.slice(iosJobStart, iosJobEnd);
+    const gemfile = readFileSync(gemfilePath, "utf8");
+    const lockfile = readFileSync(gemfileLockPath, "utf8");
+
+    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
+    expect(gemfile).toContain('gem "fastlane", "2.236.1"');
+    expect(gemfile).toContain('ruby "3.4.10"');
+    expect(lockfile).toContain("fastlane (2.236.1)");
+    expect(lockfile).toContain("arm64-darwin");
+    expect(lockfile).toContain("x86_64-darwin");
+    expect(lockfile).toContain("CHECKSUMS");
+    expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
+    expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
+    expect(iosJob).toContain('BUNDLE_DEPLOYMENT: "true"');
+    expect(iosJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
+    expect(iosJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
+    expect(iosJob).toContain('ruby-version: "3.4.10"');
+    expect(iosJob).toContain('bundler: "2.6.9"');
+    expect(iosJob).toContain("bundler-cache: false");
+    expect(iosJob).toContain("working-directory: apps/ios");
+    expect(iosJob).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
+    expect(iosJob).toContain("bundle _2.6.9_ check");
+    expect(iosJob).toContain("bundle _2.6.9_ exec fastlane --version");
+  });
+
+  it("documents every iOS Fastlane command through the pinned bundle", () => {
+    const documentedCommands = [iosReadmePath, fastlaneSetupPath, metadataReadmePath].flatMap(
+      (documentationPath) =>
+        readFileSync(documentationPath, "utf8")
+          .split("\n")
+          .filter((line) => /\bfastlane (?:ios [a-z_]+|spaceauth)\b/u.test(line)),
+    );
+
+    expect(documentedCommands).toHaveLength(7);
+    for (const command of documentedCommands) {
+      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane');
+    }
+  });
+
+  it("documents a direct Fastlane command that rejects an inherited Gemfile", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "openclaw-ios-fastlane-docs-"));
+    const bundlePath = path.join(fixture, "bundle");
+    const tracePath = path.join(fixture, "trace.log");
+    writeFileSync(
+      bundlePath,
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$BUNDLE_GEMFILE" > "$OPENCLAW_FASTLANE_TEST_TRACE"\n',
+      "utf8",
+    );
+    chmodSync(bundlePath, 0o755);
+
+    try {
+      const result = spawnSync(
+        "bash",
+        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check'],
+        {
+          cwd: path.join(process.cwd(), "apps", "ios"),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            BUNDLE_GEMFILE: path.join(fixture, "Gemfile"),
+            OPENCLAW_FASTLANE_TEST_TRACE: tracePath,
+            PATH: `${fixture}:/usr/bin:/bin`,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(tracePath, "utf8")).toBe(`${gemfilePath}\n`);
+    } finally {
+      rmSync(fixture, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the repository bundle when Fastlane is also on PATH", () => {
+    const { result, trace } = runIosScreenshotsCommand();
+
+    expect(result.status).toBe(0);
+    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+  });
+
+  it("fails closed when the repository bundle fails", () => {
+    const { result, trace } = runIosScreenshotsCommand({ bundleExit: 42 });
+
+    expect(result.status).toBe(42);
+    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+  });
+
+  it("prints the pinned setup command when the repository bundle is unavailable", () => {
+    const { result, trace } = runIosScreenshotsCommand({ bundleCheckExit: 1 });
+
+    expect(result.status).toBe(1);
+    expect(trace).toBe("");
+    expect(result.stderr).toContain("Install Ruby 3.4.10");
+    expect(result.stderr).toContain("gem install bundler -v 2.6.9");
+    expect(result.stderr).toContain("bundle _2.6.9_ install");
+  });
+
+  it("ignores a conflicting inherited Gemfile on the pinned path", () => {
+    const { result, trace } = runIosScreenshotsCommand({ conflictingGemfile: true });
+
+    expect(result.status).toBe(0);
+    expect(trace).toBe("bundle:_2.6.9_ exec fastlane ios screenshots\n");
+  });
+
+  it("fails closed when the repository Gemfile is absent", () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), "openclaw-ios-fastlane-missing-gemfile-"));
+    const wrapperPath = path.join(fixture, "scripts", "lib", "ios-fastlane.sh");
+    const binDir = path.join(fixture, "bin");
+    const tracePath = path.join(fixture, "trace.log");
+    mkdirSync(path.dirname(wrapperPath), { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    copyFileSync(path.join(process.cwd(), "scripts", "lib", "ios-fastlane.sh"), wrapperPath);
+    const inheritedGemfile = path.join(fixture, "Gemfile");
+    writeFileSync(inheritedGemfile, 'gem "fastlane"\n', "utf8");
+    const fastlanePath = path.join(binDir, "fastlane");
+    writeFileSync(
+      fastlanePath,
+      '#!/usr/bin/env bash\nprintf "direct:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n',
+      "utf8",
+    );
+    chmodSync(fastlanePath, 0o755);
+
+    try {
+      const result = spawnSync(
+        "bash",
+        ["-c", `source "${wrapperPath}"; run_ios_fastlane ios screenshots`],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            BUNDLE_GEMFILE: inheritedGemfile,
+            OPENCLAW_FASTLANE_TEST_TRACE: tracePath,
+            PATH: `${binDir}:/usr/bin:/bin`,
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(existsSync(tracePath)).toBe(false);
+      expect(result.stderr).toContain("repository iOS Gemfile is missing");
+      expect(result.stderr).toContain("Restore it from the repository checkout");
+      expect(result.stderr).toContain("bundle _2.6.9_ install");
+    } finally {
+      rmSync(fixture, { force: true, recursive: true });
+    }
+  });
+
   it("does not keep the old package release alias", () => {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
       scripts?: Record<string, string>;

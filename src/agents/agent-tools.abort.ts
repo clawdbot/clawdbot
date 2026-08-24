@@ -24,7 +24,7 @@ function throwAbortError(): never {
  * Tool settlements pass through untouched to preserve tool error semantics,
  * including non-Error rejections.
  */
-function raceWithAbortSignal<T>(
+export function raceWithAbortSignal<T>(
   promise: Promise<T>,
   signal: AbortSignal,
   yieldRunSignal?: AbortSignal,

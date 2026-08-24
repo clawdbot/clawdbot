@@ -354,6 +354,7 @@ describe("DebugOverlay", () => {
   it("graphs bounded status samples without clamping CPU and resets history on reopen", async () => {
     vi.useFakeTimers();
     let sampleCount = 0;
+    let diskResponse: "available" | "missing" | "rejected" = "available";
     const request = vi.fn(async (method: string) => {
       if (method === "status") {
         sampleCount += 1;
@@ -370,6 +371,18 @@ describe("DebugOverlay", () => {
             heapTotalBytes: 200 * 1_048_576,
           },
         };
+      }
+      if (method === "system.info") {
+        if (diskResponse === "rejected") {
+          throw new Error("system info unavailable");
+        }
+        return diskResponse === "available"
+          ? {
+              diskAvailableBytes: (700 - sampleCount) * 1_073_741_824,
+              diskTotalBytes: 1_000 * 1_073_741_824,
+              diskPath: "/var/lib/openclaw",
+            }
+          : {};
       }
       if (method === "sessions.list") {
         return { sessions: [] };
@@ -394,7 +407,7 @@ describe("DebugOverlay", () => {
       await vitalUpdated();
 
       // One sample: tiles show current values, charts wait for a second point.
-      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
+      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(4);
       expect(normalizedText(overlay.querySelector(".debug-overlay__vital--cpu"))).toContain(
         "loop 42%",
       );
@@ -416,7 +429,16 @@ describe("DebugOverlay", () => {
       expect(normalizedText(overlay.querySelector(".debug-overlay__vital--delay"))).toContain(
         "max 87ms",
       );
-      expect(overlay.querySelectorAll(".debug-vital__chart")).toHaveLength(3);
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--disk"))).toContain(
+        "698 GB free",
+      );
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--disk"))).toContain(
+        "1000 GB total",
+      );
+      expect(overlay.querySelector(".debug-overlay__vital--disk")?.getAttribute("title")).toBe(
+        "/var/lib/openclaw",
+      );
+      expect(overlay.querySelectorAll(".debug-vital__chart")).toHaveLength(4);
       // Healthy event loop: no tile carries the degraded tint.
       expect(overlay.querySelector(".debug-overlay__vital[data-degraded]")).toBeNull();
 
@@ -434,8 +456,20 @@ describe("DebugOverlay", () => {
       await vi.advanceTimersByTimeAsync(0);
       await vitalUpdated();
 
-      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
+      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(4);
       expect(overlay.querySelector(".debug-vital__chart")).toBeNull();
+
+      for (const response of ["missing", "rejected"] as const) {
+        diskResponse = response;
+        await vi.advanceTimersByTimeAsync(2_000);
+        await vitalUpdated();
+
+        expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
+        expect(overlay.querySelector(".debug-overlay__vital--disk")).toBeNull();
+        for (const vital of ["cpu", "memory", "delay"]) {
+          expect(overlay.querySelector(`.debug-overlay__vital--${vital}`)).not.toBeNull();
+        }
+      }
     } finally {
       overlay.remove();
       vi.useRealTimers();

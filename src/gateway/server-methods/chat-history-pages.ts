@@ -245,22 +245,34 @@ async function readIncrementalChatHistoryTail(params: {
   effectiveMaxChars: number;
   max: number;
   maxBytes: number;
+  offset?: number;
 }): Promise<IncrementalChatHistoryTail> {
+  const offset = params.offset ?? 0;
   const rawHistoryWindow = resolveSessionHistoryTailReadOptions(params.max);
   // Three raw rows per requested display row covers common tool/silent pairs
   // while keeping the first read far below the legacy 20x safety ceiling.
-  const initialMessages = Math.min(rawHistoryWindow.maxMessages, Math.max(1, params.max * 3));
-  const readPage = await readRecentSessionMessagesWithStatsAsync(params.readScope, {
-    maxMessages: initialMessages + 1,
-    maxLines: initialMessages + 1,
-    maxBytes: Math.max(params.maxBytes * 2, 1024 * 1024),
-    allowResetArchiveFallback: true,
-  });
+  const initialMessages = Math.min(
+    rawHistoryWindow.maxMessages,
+    Math.max(1, offset === 0 ? params.max * 3 : params.max),
+  );
+  const readPage =
+    offset === 0
+      ? await readRecentSessionMessagesWithStatsAsync(params.readScope, {
+          maxMessages: initialMessages + 1,
+          maxLines: initialMessages + 1,
+          maxBytes: Math.max(params.maxBytes * 2, 1024 * 1024),
+          allowResetArchiveFallback: true,
+        })
+      : await readSessionMessagesPageWithStatsAsync(params.readScope, {
+          offset,
+          maxMessages: initialMessages + 1,
+          allowResetArchiveFallback: true,
+        });
   const sessionStartedAt =
     typeof params.entry?.sessionStartedAt === "number" ? params.entry.sessionStartedAt : undefined;
   let rawPageMessages = Math.min(
     initialMessages,
-    Math.max(readPage.messages.length, readPage.totalMessages > 0 ? 1 : 0),
+    Math.max(readPage.messages.length, readPage.totalMessages > offset ? 1 : 0),
   );
   let overreadContextMessage =
     readPage.messages.length > initialMessages ? readPage.messages[0] : undefined;
@@ -278,13 +290,22 @@ async function readIncrementalChatHistoryTail(params: {
       ),
       overreadContextMessage,
     );
-  const project = () =>
-    projectRecentChatDisplayMessages(filteredRawMessages(), {
+  const project = () => {
+    const options = {
       maxChars: params.effectiveMaxChars,
-      maxMessages: params.max,
       resolveCurrentUserProfileDisplay,
       turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
-    });
+    };
+    return offset === 0
+      ? projectRecentChatDisplayMessages(filteredRawMessages(), {
+          ...options,
+          maxMessages: params.max,
+        })
+      : capOffsetChatHistoryProjectedMessages(
+          projectChatDisplayMessages(filteredRawMessages(), options),
+          params.max,
+        );
+  };
   let projected = project();
   let scanLimit = rawHistoryWindow.maxMessages;
   // Record count alone does not bound a walk over large tool results, and the
@@ -294,7 +315,7 @@ async function readIncrementalChatHistoryTail(params: {
   let scannedBytes = 0;
   // Projection pairs records across turns, so keep the accumulated window in
   // chronological order and retain exactly one older context record.
-  while (rawPageMessages < readPage.totalMessages) {
+  while (offset + rawPageMessages < readPage.totalMessages) {
     if (projected.length >= params.max) {
       break;
     }
@@ -312,7 +333,7 @@ async function readIncrementalChatHistoryTail(params: {
       scanLimit - rawPageMessages,
     );
     const page = await readSessionMessagesPageWithStatsAsync(params.readScope, {
-      offset: rawPageMessages,
+      offset: offset + rawPageMessages,
       maxMessages: chunkMessages + 1,
       allowResetArchiveFallback: true,
     });
@@ -416,25 +437,20 @@ export async function readChatHistoryPage(params: {
       pageOffset = anchoredPage.offset;
       hasOverreadContext = anchoredPage.hasOverreadContext;
       readPage = anchoredPage;
-    } else if (pageOffset === 0) {
+    } else {
       incrementalTail = await readIncrementalChatHistoryTail({
         entry,
         readScope,
         effectiveMaxChars,
         max,
         maxBytes: maxHistoryBytes,
+        offset: pageOffset,
       });
       readPage = incrementalTail.readPage;
-    } else {
-      readPage = await readSessionMessagesPageWithStatsAsync(readScope, {
-        offset: pageOffset,
-        maxMessages: max + 1,
-        allowResetArchiveFallback: true,
-      });
     }
     const isTailPage = !messageId && pageOffset === 0;
-    const overreadContextMessage = isTailPage
-      ? incrementalTail?.overreadContextMessage
+    const overreadContextMessage = incrementalTail
+      ? incrementalTail.overreadContextMessage
       : hasOverreadContext || readPage.messages.length > max
         ? readPage.messages[0]
         : undefined;
@@ -447,8 +463,8 @@ export async function readChatHistoryPage(params: {
           ),
           overreadContextMessage,
         );
-    const rawPageMessages = isTailPage
-      ? (incrementalTail?.rawPageMessages ?? 0)
+    const rawPageMessages = incrementalTail
+      ? incrementalTail.rawPageMessages
       : Math.min(
           max,
           Math.max(readPage.messages.length, readPage.totalMessages > pageOffset ? 1 : 0),
@@ -456,9 +472,10 @@ export async function readChatHistoryPage(params: {
     // localMessages is already announce-filtered above; the filter is
     // single-pass complete, so no second pass is needed.
     const recencyFilteredMessages = localMessages;
-    const projected = isTailPage
-      ? (incrementalTail?.projected ?? [])
+    const projected = incrementalTail
+      ? incrementalTail.projected
       : projectChatDisplayMessages(recencyFilteredMessages, {
+          includeCommentaryFallbacks: true,
           maxChars: effectiveMaxChars,
           resolveCurrentUserProfileDisplay,
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
@@ -552,6 +569,7 @@ export async function readChatHistoryPage(params: {
       typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
     );
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: effectiveMaxChars,
       resolveCurrentUserProfileDisplay,
     });
@@ -571,6 +589,7 @@ export async function readChatHistoryPage(params: {
   // local messages; the filter is single-pass complete, so no second pass is needed.
   const recencyFilteredMessages = cliHistory.messages;
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
+    includeCommentaryFallbacks: true,
     maxChars: effectiveMaxChars,
     maxMessages: max,
     resolveCurrentUserProfileDisplay,

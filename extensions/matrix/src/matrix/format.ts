@@ -16,6 +16,7 @@ import {
 } from "./format-profile.js";
 import type { MatrixSpoilerMarkers, MatrixSpoilerProtection } from "./format-profile.js";
 import {
+  findMatrixMarkdownMetadataRanges,
   findMatrixSpoilerDelimiterOffsets,
   hasMatrixSpoilerMetadataCollision,
 } from "./format-spoiler-ranges.js";
@@ -34,6 +35,7 @@ const md = new MarkdownIt({
   typographer: false,
 });
 
+md.linkify.set({ fuzzyLink: true });
 md.enable("strikethrough");
 
 const { escapeHtml } = md.utils;
@@ -54,7 +56,6 @@ type MatrixMentionCandidate = {
   userId?: string;
 };
 
-const ESCAPED_MENTION_SENTINEL = "\uE000";
 const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:[\]]+/g;
 const MATRIX_MENTION_SERVER_NAME_PATTERN =
   /(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?))*(?::\d+)?/;
@@ -113,7 +114,7 @@ function shouldSuppressAutoLink(
   if (token?.type !== "link_open" || token.info !== "auto") {
     return false;
   }
-  const href = token.attrGet("href") ?? "";
+  const href = String(token.attrGet("href") ?? "");
   const label = tokens[idx + 1]?.type === "text" ? (tokens[idx + 1]?.content ?? "") : "";
   return Boolean(href && label && isAutoLinkedFileRef(href, label));
 }
@@ -127,6 +128,7 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
 
 md.renderer.rules.html_block = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 md.renderer.rules.html_inline = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.text_special = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 md.renderer.rules.link_open = (tokens, idx, _options, _env, self) =>
   shouldSuppressAutoLink(tokens, idx) ? "" : self.renderToken(tokens, idx, _options);
 md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
@@ -137,10 +139,12 @@ md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
   return self.renderToken(tokens, idx, _options);
 };
 
-function maskEscapedMentions(markdown: string): string {
+function maskEscapedMentions(markdown: string): { markdown: string; marker?: string } {
   let masked = "";
   let idx = 0;
   let codeFenceLength = 0;
+  let marker: string | undefined;
+  const metadataRanges = markdown.includes("\\@") ? findMatrixMarkdownMetadataRanges(markdown) : [];
 
   while (idx < markdown.length) {
     if (markdown[idx] === "`" && !isMarkdownEscaped(markdown, idx)) {
@@ -157,8 +161,17 @@ function maskEscapedMentions(markdown: string): string {
       idx += runLength;
       continue;
     }
-    if (codeFenceLength === 0 && markdown[idx] === "\\" && markdown[idx + 1] === "@") {
-      masked += ESCAPED_MENTION_SENTINEL;
+    if (
+      codeFenceLength === 0 &&
+      markdown[idx] === "\\" &&
+      markdown[idx + 1] === "@" &&
+      !metadataRanges.some((range) => idx >= range.start && idx < range.end)
+    ) {
+      marker ??= createMatrixPrivateMarkers(
+        markdown,
+        "Matrix mention formatting exhausted its private marker pool",
+      ).open;
+      masked += marker;
       idx += 2;
       continue;
     }
@@ -166,21 +179,20 @@ function maskEscapedMentions(markdown: string): string {
     idx += 1;
   }
 
-  return masked;
+  return { markdown: masked, ...(marker ? { marker } : {}) };
 }
 
-function restoreEscapedMentions(text: string): string {
-  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "@");
+function restoreEscapedMentions(text: string, marker?: string, inCode = false): string {
+  return marker ? text.replaceAll(marker, inCode ? "\\@" : "@") : text;
 }
 
-function restoreEscapedMentionsInCode(text: string): string {
-  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "\\@");
-}
-
-function restoreEscapedMentionsInBlockTokens(tokens: MarkdownToken[]): void {
+function restoreEscapedMentionsInBlockTokens(tokens: MarkdownToken[], marker?: string): void {
+  if (!marker) {
+    return;
+  }
   for (const token of tokens) {
     if ((token.type === "fence" || token.type === "code_block") && token.content) {
-      token.content = restoreEscapedMentionsInCode(token.content);
+      token.content = restoreEscapedMentions(token.content, marker, true);
     }
   }
 }
@@ -402,8 +414,11 @@ function mutateInlineTokensWithMentions(params: {
   userIds: string[];
   seenUserIds: Set<string>;
   selfUserId: string | null;
+  escapedMentionMarker?: string;
 }): { children: MarkdownInlineToken[]; roomMentioned: boolean } {
   const nextChildren: MarkdownInlineToken[] = [];
+  const restoreMention = (text: string) =>
+    restoreEscapedMentions(text, params.escapedMentionMarker);
   let roomMentioned = false;
   let insideLinkDepth = 0;
   for (const child of params.children) {
@@ -418,11 +433,14 @@ function mutateInlineTokensWithMentions(params: {
       continue;
     }
     if (child.type !== "text" || !child.content) {
+      for (const nested of child.children ?? []) {
+        nested.content = restoreMention(nested.content);
+      }
       nextChildren.push(child);
       continue;
     }
 
-    const visibleContent = restoreEscapedMentions(child.content);
+    const visibleContent = restoreMention(child.content);
     if (insideLinkDepth > 0) {
       nextChildren.push(createTextToken(child, visibleContent));
       continue;
@@ -437,7 +455,7 @@ function mutateInlineTokensWithMentions(params: {
     for (const match of matches) {
       if (match.start > cursor) {
         nextChildren.push(
-          createTextToken(child, restoreEscapedMentions(child.content.slice(cursor, match.start))),
+          createTextToken(child, restoreMention(child.content.slice(cursor, match.start))),
         );
       }
       cursor = match.end;
@@ -465,9 +483,7 @@ function mutateInlineTokensWithMentions(params: {
       );
     }
     if (cursor < child.content.length) {
-      nextChildren.push(
-        createTextToken(child, restoreEscapedMentions(child.content.slice(cursor))),
-      );
+      nextChildren.push(createTextToken(child, restoreMention(child.content.slice(cursor))));
     }
   }
   return { children: nextChildren, roomMentioned };
@@ -616,9 +632,9 @@ async function resolveMarkdownMentionState(params: {
   client: MatrixClient;
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
-  const markdown = maskEscapedMentions(projectMatrixMarkdown(params.markdown));
+  const { markdown, marker } = maskEscapedMentions(projectMatrixMarkdown(params.markdown));
   const tokens = parseMatrixMarkdown(markdown, params.tableMode);
-  restoreEscapedMentionsInBlockTokens(tokens);
+  restoreEscapedMentionsInBlockTokens(tokens, marker);
   const selfUserId = await resolveMatrixSelfUserId(params.client);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
@@ -633,6 +649,7 @@ async function resolveMarkdownMentionState(params: {
       userIds,
       seenUserIds,
       selfUserId,
+      escapedMentionMarker: marker,
     });
     token.children = mutated.children;
     roomMentioned ||= mutated.roomMentioned;

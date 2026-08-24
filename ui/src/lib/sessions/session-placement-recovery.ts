@@ -1,5 +1,7 @@
+import { SessionToolOverridesSchema } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
 import type { SessionCreateParams } from "./create.ts";
 import {
   sessionPlacementRecoveryExactStorageKey,
@@ -8,7 +10,8 @@ import {
 
 export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; machineClass?: string }
-  | { kind: "device"; deviceId: string };
+  | { kind: "device"; deviceId: string }
+  | { kind: "auto-device" };
 
 export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode"> & {
   key?: string;
@@ -51,6 +54,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "worktree",
   "incognito",
   "visibility",
+  "toolOverrides",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
 
@@ -71,6 +75,8 @@ export function parseSessionPlacementCreateParams(
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
+    (record.toolOverrides !== undefined &&
+      !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -125,6 +131,9 @@ function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | n
   ) {
     // SAFETY: the device discriminator, exact keys, and device id are validated above.
     return value as SessionPlacementTarget;
+  }
+  if (value.kind === "auto-device" && Object.keys(value).every((key) => key === "kind")) {
+    return { kind: "auto-device" };
   }
   return null;
 }

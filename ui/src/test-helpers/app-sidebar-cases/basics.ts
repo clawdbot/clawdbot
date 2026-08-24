@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import { sessionRefFromPath } from "../../app-session-route-paths.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../../app-session-route-paths.ts";
 import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
@@ -93,8 +96,12 @@ describe("AppSidebar agent chip", () => {
         '[data-session-key="telegram:12345"] .sidebar-recent-session__link',
       )
       ?.getAttribute("href");
-    expect(href).toBe("/chat/research/telegram/12345");
-    expect(sessionRefFromPath(href ?? "")).toMatchObject({
+    const sessionUrl = new URL(href ?? "", window.location.origin);
+    expect(sessionUrl.pathname).toBe("/chat/research/telegram/12345");
+    expect(sessionUrl.searchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
+      SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
+    );
+    expect(sessionRefFromPath(sessionUrl.pathname)).toMatchObject({
       kind: "literal",
       sessionKey: "agent:research:telegram:12345",
     });

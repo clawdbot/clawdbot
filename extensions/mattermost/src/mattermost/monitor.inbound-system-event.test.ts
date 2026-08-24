@@ -780,9 +780,11 @@ describe("mattermost inbound user posts", () => {
         accountId: "default",
         pluginId: "mattermost",
         source: "mattermost-interactions",
-        replaceExisting: true,
         throwOnFailure: true,
       }),
+    );
+    expect(mockState.registerPluginHttpRoute.mock.calls[0]?.[0]).not.toHaveProperty(
+      "replaceExisting",
     );
     expect(mockState.registerMattermostMonitorSlashCommands).not.toHaveBeenCalled();
     expect(webSocketFactory).not.toHaveBeenCalled();

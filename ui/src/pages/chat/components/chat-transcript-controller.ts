@@ -24,8 +24,9 @@ import {
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import {
+  type ChatTranscriptInteractionAnchor,
   reconcileChatTranscriptInteractionResize,
-  resolveChatTranscriptInteractionRow,
+  resolveChatTranscriptInteractionAnchor,
 } from "./chat-transcript-interaction-anchor.ts";
 import { extractTranscriptRange, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
 import { initialScrollMargin, syncScrollMargin } from "./chat-transcript-scroll-margin.ts";
@@ -131,14 +132,14 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
   private pendingRowMeasureFrame: number | null = null;
-  private pendingInteractionRow: HTMLElement | null = null;
+  private pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
   private readonly captureInteractionResize = (event: Event) => {
-    const row = resolveChatTranscriptInteractionRow(event);
-    if (!row) {
+    const anchor = resolveChatTranscriptInteractionAnchor(event);
+    if (!anchor) {
       return;
     }
-    this.pendingInteractionRow = row;
-    this.host.requestUpdate();
+    this.pendingInteractionAnchor = anchor;
+    queueMicrotask(() => this.pendingInteractionAnchor === anchor && this.host.requestUpdate());
   };
   private measureConnectedRows(): void {
     // Only width invalidation owns forced DOM reads. Ordinary row refs stay on
@@ -397,7 +398,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           <div
             class="chat-thread-inner chat-thread-inner--virtual"
             ${ref(this.scrollElementRef)}
-            @click=${this.captureInteractionResize}
+            @click=${{ handleEvent: this.captureInteractionResize, capture: true }}
           >
             <div
               class="chat-virtual-sizer"
@@ -543,13 +544,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const virtualizer = this.virtualizerController.getVirtualizer();
     if (
       reconcileChatTranscriptInteractionResize(
-        this.pendingInteractionRow,
+        this.pendingInteractionAnchor,
         sidebarCommitTarget,
         this.scrollElement,
         virtualizer,
       )
     ) {
-      this.pendingInteractionRow = null;
+      this.pendingInteractionAnchor = null;
     }
   }
 

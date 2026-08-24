@@ -18,7 +18,12 @@ const MANAGED_UPDATE_HANDOFF_RESPONSE = {
 } as const;
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page.locator(".sidebar-footer-update:visible").click();
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  await updateIssue.locator(".sidebar-update-card__action").click();
 }
 
 suite.define(() => {
@@ -74,7 +79,7 @@ suite.define(() => {
         );
         await updateIssue.locator("summary").click();
         await updateIssue.locator(".sidebar-update-card__compact-reason").waitFor();
-        expect(await page.locator(".sidebar-footer-update:visible").isEnabled()).toBe(true);
+        expect(await page.locator(".sidebar-footer-update").count()).toBe(1);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "package-update-failure.png") });
       },
@@ -132,7 +137,7 @@ suite.define(() => {
             { exact: true },
           )
           .waitFor();
-        expect(await page.locator(".sidebar-footer-update:visible").isEnabled()).toBe(false);
+        expect(await page.locator(".sidebar-footer-update").count()).toBe(1);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
       },
@@ -288,6 +293,10 @@ suite.define(() => {
       ).toEqual([{ type: "start-update" }]);
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
+      // The confirmation closes the lazy Inbox. Recovery belongs to the
+      // persistent attention owner, not the now-disconnected update card.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => page.locator(".sidebar-issues-panel").count()).toBe(0);
       await page.evaluate(
         (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
         NATIVE_UPDATE_DECLINED_EVENT,

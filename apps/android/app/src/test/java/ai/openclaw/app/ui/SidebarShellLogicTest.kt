@@ -124,13 +124,46 @@ class SidebarShellLogicTest {
   }
 
   @Test
-  fun recentSessionsStayBoundedInsideTheSharedScrollableSidebar() {
-    val rows =
-      sidebarRecentSessions(
-        sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) },
+  fun collapsedSessionPresentationGroupsOnlyTheEightHighestPriorityActiveRows() {
+    val presentation =
+      sidebarSessionPresentation(
+        sessions =
+          listOf(
+            session("pinned", activity = 1, pinned = true),
+            session("archived", activity = 100, archived = true),
+          ) +
+            (1L..10L).map { activity ->
+              session(
+                key = "session-$activity",
+                activity = activity,
+                category = if (activity % 2L == 0L) "Work" else null,
+              )
+            },
+        knownGroups = listOf("Personal"),
+        expanded = false,
       )
 
-    assertEquals(8, rows.size)
+    val keys = presentation.sections.flatMap { it.entries }.map(ChatSessionEntry::key)
+    assertEquals(8, keys.size)
+    assertEquals(setOf("pinned", "session-10", "session-9", "session-8", "session-7", "session-6", "session-5", "session-4"), keys.toSet())
+    assertEquals(listOf("Pinned", "Work", "Ungrouped"), presentation.sections.map { it.title })
+    assertTrue(presentation.sections.all { it.entries.isNotEmpty() })
+    assertTrue(presentation.canExpand)
+  }
+
+  @Test
+  fun expandedSessionPresentationRevealsAllRowsAndCollapsesToTheSameResult() {
+    val sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) }
+
+    val collapsed = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false)
+    val expanded = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = true)
+
+    assertEquals(8, collapsed.sections.flatMap { it.entries }.size)
+    assertEquals(12, expanded.sections.flatMap { it.entries }.size)
+    assertFalse(collapsed.sections.flatMap { it.entries }.any { it.key == "session-1" })
+    assertTrue(expanded.sections.flatMap { it.entries }.any { it.key == "session-1" })
+    assertTrue(expanded.canExpand)
+    assertEquals(collapsed, sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false))
   }
 
   @Test
@@ -166,6 +199,7 @@ class SidebarShellLogicTest {
     displayName: String? = null,
     label: String? = null,
     owner: String? = null,
+    category: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
       key = key,
@@ -176,5 +210,6 @@ class SidebarShellLogicTest {
       displayName = displayName,
       label = label,
       ownerAgentId = owner,
+      category = category,
     )
 }

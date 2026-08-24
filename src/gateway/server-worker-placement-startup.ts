@@ -2,6 +2,7 @@ import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-ident
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -36,6 +37,7 @@ import { createPlacementSessionRetirement } from "./worker-environments/placemen
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
@@ -506,6 +508,19 @@ export function createGatewayWorkerPlacementRuntime(
       dispatch: dispatchService,
       isStopping: () => stopped,
     });
+    // Session evidence must survive until its remote owner has been reclaimed or proven gone.
+    const uninstallSessionMaintenancePreservation = registerSessionMaintenancePreserveKeysProvider(
+      () =>
+        params.placements.listForReconcile().flatMap((placement) =>
+          placement.state === "failed" &&
+          isFailedWorkerPlacementEnvironmentGone({
+            environmentService: params.environments,
+            placement,
+          })
+            ? []
+            : [placement.sessionKey],
+        ),
+    );
     const trackOperation = (
       slot: { current: Promise<void> | undefined },
       current: Promise<void>,
@@ -580,6 +595,7 @@ export function createGatewayWorkerPlacementRuntime(
           clearInterval(placementReconcileInterval);
           placementReconcileInterval = undefined;
           uninstallSessionIdentityMutation();
+          uninstallSessionMaintenancePreservation();
           uninstallPlacementAdmission();
         }
         const currentStop = (async () => {
@@ -608,26 +624,26 @@ export function createGatewayWorkerPlacementRuntime(
       hooks.unregisterSidecar(sidecar);
       return null;
     };
-    // Track startup reconciliation in the placement slot so a concurrent
-    // close prelude drains it before uninstalling guards and stopping environments.
-    const startupRecovery = recoverPendingWorkspaceReconciliations();
-    placementReconcile.current = startupRecovery;
     try {
-      await startupRecovery;
-    } finally {
-      if (placementReconcile.current === startupRecovery) {
-        placementReconcile.current = undefined;
+      // Track startup reconciliation in the placement slot so a concurrent
+      // close prelude drains it before uninstalling guards and stopping environments.
+      const startupRecovery = recoverPendingWorkspaceReconciliations();
+      placementReconcile.current = startupRecovery;
+      try {
+        await startupRecovery;
+      } finally {
+        if (placementReconcile.current === startupRecovery) {
+          placementReconcile.current = undefined;
+        }
       }
-    }
-    if (hooks.isClosePreludeStarted()) {
-      return await stopBeforeReady();
-    }
-    const startupReconcile = (async () => {
-      await dispatchService.reconcile("startup");
-      await reconcilePublications();
-    })();
-    placementReconcile.current = startupReconcile;
-    try {
+      if (hooks.isClosePreludeStarted()) {
+        return await stopBeforeReady();
+      }
+      const startupReconcile = (async () => {
+        await dispatchService.reconcile("startup");
+        await reconcilePublications();
+      })();
+      placementReconcile.current = startupReconcile;
       try {
         await startupReconcile;
       } finally {

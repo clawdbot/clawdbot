@@ -112,7 +112,9 @@ describe("qa scenario catalog causality", () => {
     expect(liveMultiRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
     expect(liveMultiRestartContract).toContain('"saveAs":"inbound"');
     expect(liveMultiRestartContract).toContain("probeText: config.finalMarker");
-    expect(liveMultiRestartContract).toContain("completedToolCallCounts.wait ?? 0) < checkpoint");
+    expect(liveMultiRestartContract).toContain(
+      "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
+    );
     expect(checkpointTranscriptIndex).toBeGreaterThanOrEqual(0);
     expect(checkpointStoreIndex).toBeGreaterThan(checkpointTranscriptIndex);
     expect(checkpointPersistenceAssertIndex).toBeGreaterThan(checkpointStoreIndex);
@@ -199,7 +201,12 @@ describe("qa scenario catalog causality", () => {
     expect(contract.match(/"sendInbound"/gu)).toHaveLength(1);
     expect(contract).not.toContain("startAgentRun");
     expect(contract).not.toContain("chat.send");
-    expect(contract).toContain("completedToolCallCounts.wait ?? 0) < checkpoint");
+    expect(contract).toContain(
+      "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
+    );
+    expect(contract).toContain(
+      "checkpointTranscript.assistantToolCallCounts.wait ?? 0) > (checkpointTranscript.completedToolCallCounts.wait ?? 0)",
+    );
     expect(contract).toContain("probeText: config.promptMarker");
     expect(pendingWaitIndex).toBeGreaterThanOrEqual(0);
     expect(checkpointStoreIndex).toBeGreaterThan(pendingWaitIndex);

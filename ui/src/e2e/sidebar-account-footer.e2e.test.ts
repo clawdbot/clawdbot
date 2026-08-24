@@ -43,6 +43,9 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
 
 async function assertIdentityMenuContract(sidebar: Locator, menu: Locator) {
   expect(await menu.locator('wa-dropdown-item[value="command:recent-activity"]').count()).toBe(0);
+  expect(
+    await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface") !== null),
+  ).toBe(false);
 }
 
 async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feature" | "main") {
@@ -69,6 +72,26 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     )?.trim();
     const buildPrefix = branch === "main" ? "git@0123456" : "feat/sidebar-f…@0123456";
     expect(buildLabel?.startsWith(`${buildPrefix} · `)).toBe(true);
+    const buildLink = menu.getByRole("link", { name: "Control UI build details" });
+    const buildTooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
+    const buildTooltipCard = sidebar.locator(".sidebar-build-hover-card");
+    await page.clock.install();
+    await buildLink.hover();
+    await page.clock.runFor(300);
+    await page.mouse.move(0, 0);
+    await page.clock.runFor(300);
+    expect(await buildTooltip.getAttribute("open")).toBeNull();
+    await buildLink.hover();
+    await page.clock.runFor(600);
+    await expect.poll(() => buildTooltip.getAttribute("open")).not.toBeNull();
+    await page.clock.resume();
+    await captureUnionProof(page, "build-chip-hover-intent", `${branch}-${theme}-intent-open.png`, [
+      footer,
+      menuSurface,
+      buildTooltipCard,
+    ]);
+    await page.mouse.move(0, 0);
+    await buildTooltipCard.waitFor({ state: "hidden" });
     await captureUnionProof(page, "sidebar-account-footer", `${branch}-${theme}-menu-default.png`, [
       footer,
       menuSurface,
@@ -139,6 +162,38 @@ suite.define(() => {
     const opened = await openSidebarFooterProofPage(suite);
     try {
       await runAccountFooterProof(opened.page, opened.sidebar, "feature");
+    } finally {
+      await suite.closeBrowserContext(opened.context);
+    }
+  });
+
+  it("navigates from the build link without opening its hovercard", async () => {
+    const opened = await openSidebarFooterProofPage(suite);
+    try {
+      const { page, sidebar } = opened;
+      await sidebar.locator(".sidebar-identity-card").click();
+      const buildLink = sidebar.getByRole("link", {
+        name: "Control UI build details",
+        exact: true,
+      });
+      const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
+      await tooltip.evaluate((element) => {
+        document.documentElement.dataset.buildTooltipOpenedByClick = "false";
+        element.addEventListener(
+          "wa-show",
+          () => {
+            document.documentElement.dataset.buildTooltipOpenedByClick = "true";
+          },
+          { once: true },
+        );
+      });
+
+      await buildLink.click();
+
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/about");
+      expect(await page.locator("html").getAttribute("data-build-tooltip-opened-by-click")).toBe(
+        "false",
+      );
     } finally {
       await suite.closeBrowserContext(opened.context);
     }

@@ -117,6 +117,24 @@ function providerWithRunner(runCommand: CrabboxCommandRunner, warn?: (message: s
   }, warn);
 }
 
+function failedNodeEnrollment(
+  error: Error,
+): NonNullable<Parameters<WorkerProvider["provision"]>[2]> {
+  return {
+    beginNodeEnrollment: async () => ({
+      mode: "connect",
+      setupCode: "secret-setup-value",
+      setupId: "setup-id",
+      openclawVersion: "2026.8.1",
+      packageSpecs: ["openclaw@2026.8.1"],
+      displayName: "Cloud worker test",
+      waitForDeviceId: async () => {
+        throw error;
+      },
+    }),
+  };
+}
+
 function hasLoneSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codeUnit = value.charCodeAt(index);
@@ -1395,13 +1413,155 @@ describe("Crabbox worker provider", () => {
     },
   );
 
-  it.each(["preparation", "completion"] as const)(
+  it("collects redacted node evidence before stopping an unenrolled lease", async () => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    const pairingSecret = "pairing-secret-value-0123456789";
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push({ argv, options });
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run" && String(options.input).includes("node.log tail:")) {
+        return commandResult({
+          stdout: [
+            "package-spec=openclaw@2026.8.1 node-pid=alive node.log tail:",
+            `gateway rejected websocket upgrade (HTTP 403): proxy_attribution_required token=${pairingSecret}`,
+          ].join(" "),
+        });
+      }
+      return commandResult();
+    });
+
+    const originalError = new Error("Worker node did not connect before the enrollment deadline");
+    const error = await provider
+      .provision(PROFILE, OPERATION_ID, failedNodeEnrollment(originalError))
+      .catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({
+      cause: originalError,
+      message: expect.stringContaining(
+        "Worker node did not connect before the enrollment deadline; box evidence: package-spec=openclaw@2026.8.1 node-pid=alive node.log tail:",
+      ),
+    });
+    const message = error instanceof Error ? error.message : "";
+    expect(message).toContain("proxy_attribution_required");
+    expect(message).not.toContain(pairingSecret);
+
+    const diagnosticCall = calls.find(
+      ({ argv, options }) => argv[1] === "run" && String(options.input).includes("node.log tail:"),
+    );
+    expect(diagnosticCall?.argv).toEqual([
+      SIBLING_BINARY,
+      "run",
+      "--provider",
+      "aws",
+      "--network",
+      "public",
+      "--tailscale=false",
+      "--id",
+      LEASE_ID,
+      "--keep=true",
+      "--no-sync",
+      "--script-stdin",
+    ]);
+    expect(diagnosticCall?.options.timeoutMs).toBe(60_000);
+    expect(diagnosticCall?.options.env).toBeUndefined();
+    expect(String(diagnosticCall?.options.input)).toContain(`cloud-workers/${LEASE_ID}`);
+    expect(String(diagnosticCall?.options.input)).not.toContain("setup-code");
+    expect(calls.slice(-2).map(({ argv }) => argv[1])).toEqual(["run", "stop"]);
+  });
+
+  it.each([
+    {
+      name: "exits unsuccessfully",
+      result: commandResult({ code: 9, stderr: "SSH transport unavailable" }),
+      reason: "Crabbox enrollment diagnostics failed with exit code 9: SSH transport unavailable",
+    },
+    {
+      name: "times out",
+      result: commandResult({ code: null, killed: true, termination: "timeout" }),
+      reason: "Crabbox enrollment diagnostics did not exit normally (timeout)",
+    },
+    {
+      name: "cannot start",
+      result: undefined,
+      reason: "Crabbox enrollment diagnostics could not start",
+    },
+  ])("preserves enrollment failure when evidence collection $name", async ({ result, reason }) => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push(argv);
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run" && String(options.input).includes("node.log tail:")) {
+        if (!result) {
+          throw new Error("spawn failed token=diagnostic-secret-value-0123456789");
+        }
+        return result;
+      }
+      return commandResult();
+    });
+
+    const originalError = new Error("Worker node did not connect before the enrollment deadline");
+    await expect(
+      provider.provision(PROFILE, OPERATION_ID, failedNodeEnrollment(originalError)),
+    ).rejects.toMatchObject({
+      cause: originalError,
+      message: `${originalError.message}; box evidence unavailable: ${reason}`,
+    });
+    expect(calls.slice(-2).map((argv) => argv[1])).toEqual(["run", "stop"]);
+  });
+
+  it.each([
+    {
+      name: "a surrogate pair at the byte boundary",
+      output: `${"x".repeat(2_033)}😀secret-tail`,
+      expected: "x".repeat(2_033),
+    },
+    {
+      name: "multibyte Unicode output",
+      output: "😀".repeat(800),
+      expected: "😀".repeat(508),
+    },
+  ])("bounds enrollment evidence for $name", async ({ output, expected }) => {
+    const provider = providerWithRunner(async (argv, options) => {
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run" && String(options.input).includes("node.log tail:")) {
+        return commandResult({ stdout: output });
+      }
+      return commandResult();
+    });
+
+    const originalError = new Error("Worker node did not connect before the enrollment deadline");
+    const error = await provider
+      .provision(PROFILE, OPERATION_ID, failedNodeEnrollment(originalError))
+      .catch((cause: unknown) => cause);
+    const message = error instanceof Error ? error.message : "";
+    const evidence = message.split("; ")[1] ?? "";
+
+    expect(evidence).toBe(`box evidence: ${expected}`);
+    expect(Buffer.byteLength(evidence, "utf8")).toBeLessThanOrEqual(2_048);
+    expect(hasLoneSurrogate(message)).toBe(false);
+  });
+
+  it.each(["preparation", "completion", "diagnostics"] as const)(
     "preserves its fixed lease when the Gateway aborts enrollment %s",
     async (phase) => {
       const calls: string[][] = [];
       const controller = new AbortController();
-      const provider = providerWithRunner(async (argv) => {
+      const provider = providerWithRunner(async (argv, options) => {
         calls.push(argv);
+        if (
+          phase === "diagnostics" &&
+          argv[1] === "run" &&
+          String(options.input).includes("node.log tail:")
+        ) {
+          controller.abort();
+          return commandResult({ stdout: "package-spec=absent node-pid=dead-or-absent" });
+        }
         return argv[1] === "inspect"
           ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
           : commandResult();
@@ -1422,6 +1582,9 @@ describe("Crabbox worker provider", () => {
               displayName: "Bound worker",
               signal: controller.signal,
               waitForDeviceId: async () => {
+                if (phase === "diagnostics") {
+                  throw new Error("Worker node did not connect before the enrollment deadline");
+                }
                 controller.abort();
                 controller.signal.throwIfAborted();
                 return "device-bound";
@@ -2090,6 +2253,39 @@ describe("Crabbox worker provider", () => {
       expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
       expect(warnings).toEqual([
         `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to v0.44.0 or newer for \`crabbox heartbeat\`; cloud worker machines may be reaped after 60m of coordinator-idle time`,
+      ]);
+    } finally {
+      await provider.destroy(lease);
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the measured heartbeat duration when the command times out", async () => {
+    vi.useFakeTimers();
+    const warnings: string[] = [];
+    const provider = providerWithRunner(
+      async (argv) => {
+        if (argv[1] === "inspect") {
+          return commandResult({ stdout: inspectJson() });
+        }
+        if (argv[1] === "heartbeat") {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 60_012);
+          });
+          return commandResult({ code: null, killed: true, termination: "timeout" });
+        }
+        return commandResult();
+      },
+      (message) => warnings.push(message),
+    );
+    const lease = lifecycleLease();
+
+    try {
+      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await vi.advanceTimersByTimeAsync(60_012);
+
+      expect(warnings).toEqual([
+        "Crabbox heartbeat did not exit normally (timeout after 60012 ms); cloud worker machines may be reaped after 60m of coordinator-idle time",
       ]);
     } finally {
       await provider.destroy(lease);

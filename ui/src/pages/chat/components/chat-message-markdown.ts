@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
@@ -82,7 +83,7 @@ export type MessageActionDetails = {
   shouldFetchFullMessage: boolean;
 };
 
-export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
+function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
   return normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
@@ -94,14 +95,24 @@ export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMe
     .trim();
 }
 
+/** Keep internal oversized-history markers out of every user-visible text surface. */
+export function resolveMessageDisplayMarkdown(
+  message: unknown,
+  normalizedMessage: NormalizedMessage,
+): string {
+  const metadata = asNullableRecord(asNullableRecord(message)?.["__openclaw"]);
+  if (metadata?.truncated === true && metadata.reason === "oversized") {
+    return t("chat.messages.tooLargeToDisplay");
+  }
+  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
+    ? stripThinkingTags(markdown).trim()
+    : markdown.trim();
+}
+
 export function resolveMessageReplyText(message: unknown): string {
   const normalizedMessage = normalizeMessage(message);
-  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
-  const visibleMarkdown =
-    normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-      ? stripThinkingTags(markdown).trim()
-      : markdown.trim();
-  return visibleMarkdown;
+  return resolveMessageDisplayMarkdown(message, normalizedMessage);
 }
 
 export function resolveMessageActionDetails(params: {

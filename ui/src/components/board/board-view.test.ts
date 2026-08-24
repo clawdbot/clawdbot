@@ -41,7 +41,7 @@ describe("openclaw-board-view", () => {
     }
   });
 
-  it("renders the shared sandbox for an empty same-origin gateway URL", async () => {
+  it("renders an ungranted widget in the shared sandbox without popup authority", async () => {
     const view = await mount({
       context: gatewayContext(null),
       snapshot: snapshot({
@@ -58,9 +58,8 @@ describe("openclaw-board-view", () => {
 
     const frame = view.querySelector("iframe");
     expect(frame?.getAttribute("src")).toContain(":18790/mcp-app-sandbox");
-    expect(frame?.getAttribute("sandbox")).toBe(
-      "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox",
-    );
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-popups");
     expect(frame?.getAttribute("loading")).toBe("eager");
     expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });

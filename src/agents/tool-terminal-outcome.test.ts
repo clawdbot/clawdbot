@@ -83,14 +83,14 @@ describe("tool terminal outcome observer", () => {
       toolName: "message",
       arguments: { action: "send", to: "channel:original" },
       outcome: "failure",
-      failure: { error: "timed out during execution" },
+      failure: { error: "timed out during execution", executionStarted: false },
     });
 
     expect(resolution).toMatchObject({
       executionStarted: true,
       executedArguments: { action: "send", to: "channel:adjusted" },
       sideEffectEvidence: true,
-      lastToolError: { mutatingAction: true },
+      lastToolError: { executionStarted: true, mutatingAction: true },
     });
   });
 
@@ -111,7 +111,7 @@ describe("tool terminal outcome observer", () => {
     expect(resolution).toMatchObject({
       executionStarted: false,
       sideEffectEvidence: false,
-      lastToolError: { mutatingAction: false },
+      lastToolError: { executionStarted: false, mutatingAction: false },
     });
   });
 

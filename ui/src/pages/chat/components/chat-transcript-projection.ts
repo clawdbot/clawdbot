@@ -1,8 +1,8 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { nothing, type TemplateResult } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
-import { i18n } from "../../../i18n/index.ts";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { i18n, t } from "../../../i18n/index.ts";
+import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
@@ -136,9 +136,23 @@ export function projectChatTranscript(
   };
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
+  const archiveActor = activeSession?.archivedBy;
+  const archiveNotice =
+    activeSession?.archived && activeSession.archivedAt !== undefined && archiveActor?.id
+      ? ({
+          kind: "notice",
+          key: `archive:${activeSession.sessionId ?? activeSession.key}:${activeSession.archivedAt}`,
+          label: t("sessionsView.archivedBy", {
+            name: archiveActor.label ?? archiveActor.id,
+          }),
+          text: "",
+          timestamp: activeSession.archivedAt,
+        } satisfies Extract<ChatItem, { kind: "notice" }>)
+      : undefined;
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
+    archiveNotice,
     runId: props.runId ?? null,
     locale,
     messages: props.messages,
@@ -327,6 +341,7 @@ export function projectChatTranscript(
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
+      personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply

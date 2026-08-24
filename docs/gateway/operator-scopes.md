@@ -15,7 +15,7 @@ teams, or machines, run separate Gateways under separate OS users or hosts.
 Related: [Security](/gateway/security), [Gateway protocol](/gateway/protocol),
 [Gateway pairing](/gateway/pairing), [Devices CLI](/cli/devices).
 
-## Roles
+## Connection roles
 
 Every Gateway WebSocket client connects with one role:
 
@@ -42,6 +42,91 @@ require the `node` role.
 
 Unknown future `operator.*` scopes require an exact match unless the caller
 already holds `operator.admin`.
+
+## Named operator roles
+
+Team Gateways can bind authenticated user profiles to named operator roles.
+Each role combines exactly three closed policies: access to other people's
+sessions, agents available for session creation and agent runs, and a maximum
+set of operator scopes.
+
+```json5
+{
+  gateway: {
+    roles: {
+      default: "guest",
+      definitions: {
+        maintainer: {
+          sessions: { others: "write" },
+          agents: "*",
+          scopes: ["operator.read", "operator.write", "operator.approvals"],
+        },
+        guest: {
+          sessions: { others: "view" },
+          agents: ["guest-agent"],
+          scopes: ["operator.read", "operator.write"],
+        },
+      },
+    },
+  },
+}
+```
+
+Use the administrator-scoped `users.setRole` Gateway method with
+`{ profileId, role }` to assign a configured role; set `role: null` to clear an
+assignment. Assignment changes immediately invalidate and close that profile's
+active Gateway connections; reconnecting applies the current role and scope
+ceiling. `gateway.roles.default` is required whenever roles are configured,
+must name an existing definition, and applies to profiles without a valid
+assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
+deployments unchanged.
+
+When roles are configured, identity-authenticated operator connections do not
+receive reusable device or bootstrap tokens: those tokens are not bound to a
+person and could bypass the role ceiling. Device-token or bootstrap-token
+authentication without a verified user identity is rejected for operator
+Gateway connections and HTTP requests. Reconnect through the trusted proxy or
+another supported verified identity, such as Tailscale; node connections,
+shared-secret/password access, and Gateways without role configuration retain
+their existing behavior.
+
+For sessions created by other people, `sessions.others` supports these values:
+
+- `"none"`: hides foreign sessions from lists and targeted access, filters
+  session-level usage to visible sessions, and denies Gateway-wide `usage.cost`
+  because its aggregate can include hidden sessions.
+- `"view"`: allows reading but does not allow mutation, even when a session is
+  otherwise shared.
+- `"suggest"`: allows viewing and the existing suggestion flow.
+- `"write"`: allows participation in foreign sessions; draft and incognito
+  restrictions remain in force.
+
+A person always owns their own sessions. Explicit session membership can raise
+`"view"` or `"suggest"` access for a specific session, and connections already
+holding `operator.admin` retain their administrative session access.
+
+Set `agents: "*"` to allow session creation and agent runs on every agent, list
+agent IDs to allow only those agents, or use an empty array to disallow both.
+The allowlist also applies when a run targets an already-existing session.
+The role's `scopes` list intersects scopes granted through connection auth,
+identity grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP
+requests. It cannot grant scopes the connection did not already receive.
+Control UI plugin grants carry the authenticated profile inside a signed
+cookie; plugin HTTP requests reapply the profile's current role ceiling and
+reject grants without a matching durable identity when roles are enabled.
+Include `operator.admin` explicitly only when that role should retain
+administrative connection authority.
+
+Named roles apply only to connections with an authenticated durable user
+profile. They organize collaboration within one trusted Gateway domain and do
+not replace separate Gateways when hostile-tenant isolation is required.
+Diagnostic audit methods, including `audit.run.inspect`, remain shared-domain
+`operator.read` surfaces and are not filtered by session role. Likewise,
+`operator.write` still authorizes Gateway-wide operations such as tool
+invocation, ordinary node command relay, and other write-scoped control-plane
+actions; session restrictions do not turn that scope into a per-person
+isolation boundary. Use separate Gateways when mutually untrusted people must
+not share diagnostics or control-plane write authority.
 
 ## Identity scope grants
 
@@ -74,6 +159,8 @@ Connection authority is resolved in this order:
 2. OpenClaw unions a matching server-side identity grant with those scopes.
 3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
    An absent header means no cap; a present-but-empty header yields no scopes.
+4. If the authenticated profile has an effective named operator role,
+   OpenClaw intersects the result with that role's configured scope ceiling.
 
 The result is used for both `hello.auth.scopes` and Gateway method
 authorization. Identity grants are session-only: they do not create or modify

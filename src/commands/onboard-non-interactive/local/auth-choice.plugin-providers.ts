@@ -33,6 +33,7 @@ import {
   projectAgentModelDefaults,
   type OnboardingAgentTarget,
 } from "../../onboard-agent-target.js";
+import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -64,10 +65,20 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   ) => ApiKeyCredential | null;
 }): Promise<OpenClawConfig | null | undefined> {
   const { agentDir, workspaceDir } = params.target;
+  const reject = (message: string): null => {
+    rejectOnboardingOption(params.opts, params.runtime, message);
+    return null;
+  };
   let nextConfig = params.nextConfig;
   const prefixedProviderId = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)
     ? params.authChoice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length).split(":", 1)[0]?.trim()
     : undefined;
+  // Prefixed choices bypass generic validation, so reject empty IDs before provider discovery.
+  if (prefixedProviderId === "") {
+    return reject(
+      `Auth choice ${JSON.stringify(params.authChoice)} is missing a provider id. Use "${PROVIDER_PLUGIN_CHOICE_PREFIX}<provider-id>".`,
+    );
+  }
   const preferredProviderId =
     prefixedProviderId ||
     (await resolvePreferredProviderForAuthChoice({
@@ -105,14 +116,12 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     if (prefixedProviderId) {
       // Explicit provider-plugin choices are user intent; fail closed if the
       // target provider is unavailable rather than falling back to core auth.
-      params.runtime.error(
+      return reject(
         [
           `Auth choice "${params.authChoice}" was not matched to a trusted provider plugin.`,
           "If this provider comes from a workspace plugin, trust/allow it first and retry.",
         ].join("\n"),
       );
-      params.runtime.exit(1);
-      return null;
     }
     // Keep mismatch diagnostics metadata-only so untrusted workspace plugins are not loaded.
     const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
@@ -130,14 +139,12 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     if (untrustedOnlyManifestMatch) {
       // Manifest metadata can identify untrusted matches without loading the
       // plugin implementation, preserving workspace trust boundaries.
-      params.runtime.error(
+      return reject(
         [
           `Auth choice "${params.authChoice}" matched a provider plugin that is not trusted or enabled for setup.`,
           "If this provider comes from a workspace plugin, trust/allow it first and retry.",
         ].join("\n"),
       );
-      params.runtime.exit(1);
-      return null;
     }
     const installCatalogParams = {
       config: nextConfig,
@@ -149,11 +156,9 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       installCatalogParams,
     );
     if (deprecatedInstallCatalogEntry) {
-      params.runtime.error(
+      return reject(
         `${JSON.stringify(params.authChoice)} is no longer supported. Use --auth-choice ${JSON.stringify(deprecatedInstallCatalogEntry.choiceId)} instead.`,
       );
-      params.runtime.exit(1);
-      return null;
     }
     const installCatalogEntry = resolveProviderInstallCatalogEntry(
       params.authChoice,
@@ -182,11 +187,9 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       promptInstall: false,
     });
     if (!installResult.installed) {
-      params.runtime.error(
+      return reject(
         `Unable to install the ${installCatalogEntry.label} plugin for non-interactive setup.`,
       );
-      params.runtime.exit(1);
-      return null;
     }
     nextConfig = installResult.cfg;
     providerChoice = resolveProviderPluginChoice({
@@ -201,11 +204,9 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       choice: params.authChoice,
     });
     if (!providerChoice) {
-      params.runtime.error(
+      return reject(
         `Installed plugin "${installCatalogEntry.label}" did not expose auth choice "${params.authChoice}".`,
       );
-      params.runtime.exit(1);
-      return null;
     }
   }
 
@@ -214,25 +215,21 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     providerChoice.provider.pluginId ?? providerChoice.provider.id,
   );
   if (!enableResult.enabled) {
-    params.runtime.error(
+    return reject(
       `${providerChoice.provider.label} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
     );
-    params.runtime.exit(1);
-    return null;
   }
 
   const method = providerChoice.method;
   if (!method.runNonInteractive) {
     // Interactive-only plugin setup methods may prompt, so non-interactive
     // setup must reject them before entering plugin code.
-    params.runtime.error(
+    return reject(
       [
         `Auth choice "${params.authChoice}" requires interactive mode.`,
         `The ${providerChoice.provider.label} provider plugin does not implement non-interactive setup.`,
       ].join("\n"),
     );
-    params.runtime.exit(1);
-    return null;
   }
 
   const agentScopedModels = enableResult.config.agents?.ownership === "explicit";

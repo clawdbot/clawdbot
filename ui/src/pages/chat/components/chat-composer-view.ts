@@ -342,26 +342,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             <div class="agent-chat__composer-input-row">
               ${renderChatComposerPlusMenu({
                 attachments: props,
-                showCapabilities: props.capabilityMenu !== undefined,
-                basePath: props.capabilityMenu?.basePath ?? "",
+                capabilityMenu: props.capabilityMenu,
                 disabled: !canCompose || props.suggestionComposer === true,
                 open: state.capabilityMenuOpen,
                 view: state.capabilityMenuView,
                 toolOverrides: props.toolOverrides,
-                skills: props.capabilityMenu?.skills ?? null,
-                skillsLoading: props.capabilityMenu?.skillsLoading ?? false,
-                skillsError: props.capabilityMenu?.skillsError ?? false,
-                mcpServers: props.capabilityMenu?.mcpServers ?? [],
-                toolsEffectiveResult: props.capabilityMenu?.toolsEffectiveResult ?? null,
-                toolsEffectiveLoading: props.capabilityMenu?.toolsEffectiveLoading ?? false,
-                toolsEffectiveError: props.capabilityMenu?.toolsEffectiveError ?? false,
-                toolAccessMutationBlockedReason:
-                  props.capabilityMenu?.toolAccessMutationBlockedReason ?? null,
-                webSearchBaseEnabled: props.capabilityMenu?.webSearchBaseEnabled ?? true,
-                mutationBlockedReason: props.capabilityMenu?.mutationBlockedReason ?? null,
-                canAdmin: props.capabilityMenu?.canAdmin ?? false,
-                adminBlockedReason: props.capabilityMenu?.adminBlockedReason ?? null,
-                addServerDialog: props.capabilityMenu?.addServerDialog,
                 onOpenChange: (open) => {
                   state.capabilityMenuOpen = open;
                   if (!open) {
@@ -373,12 +358,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   state.capabilityMenuView = view;
                   requestUpdate();
                 },
-                onLoadSkills: props.capabilityMenu?.onLoadSkills ?? (() => {}),
-                onPatchToolOverrides: props.capabilityMenu?.onPatchToolOverrides ?? (() => {}),
-                onNavigate: props.capabilityMenu?.onNavigate ?? (() => {}),
-                onAddServer: props.capabilityMenu?.onAddServer,
-                onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
-                onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
               <div class="agent-chat__composer-combobox">
                 <textarea

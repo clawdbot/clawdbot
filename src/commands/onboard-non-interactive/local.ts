@@ -31,6 +31,7 @@ import {
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
+import { rejectOnboardingOption } from "../onboard-options.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
@@ -223,14 +224,12 @@ export async function runNonInteractiveLocalSetup(params: {
   if (!opts.authChoice && inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
     // Multiple provider flags make implicit auth selection ambiguous; require a
     // single explicit --auth-choice rather than choosing by flag order.
-    runtime.error(
-      [
-        "Multiple API key flags were provided for non-interactive setup.",
-        "Use a single provider flag or pass --auth-choice explicitly.",
-        `Flags: ${inferredAuthChoice.matches.map((match) => match.label).join(", ")}`,
-      ].join("\n"),
-    );
-    runtime.exit(1);
+    const message = [
+      "Multiple API key flags were provided for non-interactive setup.",
+      "Use a single provider flag or pass --auth-choice explicitly.",
+      `Flags: ${inferredAuthChoice.matches.map((match) => match.label).join(", ")}`,
+    ].join("\n");
+    rejectOnboardingOption(opts, runtime, message);
     return;
   }
   const authChoice = opts.authChoice ?? inferredAuthChoice?.choice ?? "skip";

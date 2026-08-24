@@ -41,9 +41,7 @@ export function renderFloatingUpdateCard(params: {
   // it still needs the floating copy while navigation is hidden.
   const desktopNavigationHidden = params.navigationSurfaceHidden && !params.mobileNavLayout;
   const showAttention = desktopNavigationHidden && !params.onboarding && !params.compact;
-  const showUpdateCard =
-    !params.compact &&
-    (params.refreshRequired || (!params.onboarding && params.navigationSurfaceHidden));
+  const showUpdateCard = !params.compact && params.refreshRequired;
   if (!showAttention && !showUpdateCard) {
     return nothing;
   }

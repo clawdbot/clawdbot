@@ -65,10 +65,13 @@ interface EmbeddedGatewayRuntime {
     messages: unknown[],
     sessionStartedAt: number | undefined,
   ) => unknown[];
-  projectChatDisplayMessages: (msgs: unknown[], opts?: { maxChars?: number }) => unknown[];
+  projectChatDisplayMessages: (
+    msgs: unknown[],
+    opts?: { includeCommentaryFallbacks?: boolean; maxChars?: number },
+  ) => unknown[];
   projectRecentChatDisplayMessages: (
     msgs: unknown[],
-    opts?: { maxChars?: number; maxMessages?: number },
+    opts?: { includeCommentaryFallbacks?: boolean; maxChars?: number; maxMessages?: number },
   ) => unknown[];
   capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
   listSessionsFromStoreAsync: (opts: {
@@ -428,15 +431,20 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const projected =
     params.offset === undefined
       ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
+          includeCommentaryFallbacks: true,
           maxChars: effectiveMaxChars,
           maxMessages: max,
         })
       : offset === 0
         ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
+            includeCommentaryFallbacks: true,
             maxChars: effectiveMaxChars,
             maxMessages: max,
           })
-        : rt.projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars });
+        : rt.projectChatDisplayMessages(recencyFilteredMessages, {
+            includeCommentaryFallbacks: true,
+            maxChars: effectiveMaxChars,
+          });
   const windowed =
     params.offset === undefined || offset === 0
       ? projected

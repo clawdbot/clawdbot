@@ -44,6 +44,7 @@ import {
 } from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { noteDispatchProcessedOutcome } from "./dispatch-processed-outcome.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
@@ -96,6 +97,7 @@ export async function gatherDispatchRequest(
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply_operation_aborted" });
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
       status: "complete" as const,
@@ -158,6 +160,10 @@ export async function gatherDispatchRequest(
   let agentDispatchStartedAt = 0;
 
   const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+    noteDispatchProcessedOutcome({
+      outcome,
+      ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
+    });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
       replyHotPathTiming.logIfSlow({
@@ -248,6 +254,7 @@ export async function gatherDispatchRequest(
     dispatchOperationSessionKey &&
     initialDispatchReplyOperation
   ) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply-operation-active" });
     messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
     return {
       status: "complete" as const,

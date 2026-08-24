@@ -338,6 +338,76 @@ describe("renderSessionHovercard", () => {
     ).toBe("Alice Baker, Mira, Riley 3 more participants");
   });
 
+  it("opens the creator's activity feed from the identity row", () => {
+    const container = document.createElement("div");
+    const navigate = vi.fn();
+    render(
+      renderSessionHovercard({
+        row: row(),
+        personActivity: { basePath: "/ui", navigate },
+      }),
+      container,
+    );
+
+    const name = container.querySelector<HTMLAnchorElement>(".session-hovercard__identity-name");
+    expect(name?.getAttribute("href")).toBe("/ui/activity?person=alice");
+    expect(
+      container.querySelector(".person-activity-avatar-link")?.getAttribute("aria-hidden"),
+    ).toBe("true");
+
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    name?.dispatchEvent(click);
+    expect(navigate).toHaveBeenCalledWith("alice");
+    expect(click.defaultPrevented).toBe(true);
+  });
+
+  it("links every participant name while keeping the locale's list phrasing", () => {
+    const container = document.createElement("div");
+    const navigate = vi.fn();
+    render(
+      renderSessionHovercard({
+        selfUserId: "self",
+        row: row({
+          participants: [
+            { type: "human", id: "self", label: "You" },
+            { type: "human", id: "mira", label: "Mira" },
+            { type: "human", id: "riley", label: "Riley" },
+          ],
+          participantCount: 5,
+        }),
+        personActivity: { basePath: "", navigate },
+      }),
+      container,
+    );
+
+    expect(
+      container
+        .querySelector(".session-hovercard__identity-copy")
+        ?.textContent?.replace(/\s+/gu, " ")
+        .trim(),
+    ).toBe("Alice Baker · with Mira, Riley +2");
+    const participantLinks = [
+      ...container.querySelectorAll<HTMLAnchorElement>("a.session-hovercard__participant-name"),
+    ];
+    expect(participantLinks.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+      ["Mira", "/activity?person=mira"],
+      ["Riley", "/activity?person=riley"],
+    ]);
+
+    participantLinks[1]?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    expect(navigate).toHaveBeenCalledWith("riley");
+  });
+
+  it("keeps the identity plain text when no activity route is available", () => {
+    const container = document.createElement("div");
+    render(renderSessionHovercard({ row: row() }), container);
+
+    expect(container.querySelector(".session-hovercard__identity-name")?.tagName).toBe("SPAN");
+    expect(container.querySelector(".person-activity-avatar-link")).toBeNull();
+  });
+
   it("keeps authoritative overflow when the participant projection is truncated", () => {
     const container = document.createElement("div");
     render(

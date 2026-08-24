@@ -40,6 +40,10 @@ import type {
   InternalSessionEntry as SessionEntry,
   SessionToolOverrides,
 } from "../config/sessions.js";
+import {
+  buildSessionCreationStamp,
+  type SessionCreatedVia,
+} from "../config/sessions/session-entry-provenance.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -167,6 +171,7 @@ function normalizeSessionToolOverrides(
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   existingEntry?: SessionEntry;
   isLabelInUse: (label: string) => boolean;
   storeKey: string;
@@ -178,7 +183,7 @@ export async function projectSessionsPatchEntry(params: {
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const { cfg, storeKey, patch } = params;
+  const { cfg, storeKey, patch, creation } = params;
   const authorizedHarnessCreation =
     params.existingEntry === undefined &&
     isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
@@ -245,20 +250,16 @@ export async function projectSessionsPatchEntry(params: {
     return loadedModelCatalog;
   };
 
-  const existing = params.existingEntry
-    ? projectCanonicalSessionEntryShape({ ...params.existingEntry })
-    : undefined;
+  const existing =
+    params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
-  const next: SessionEntry = existing?.sessionId
-    ? {
-        ...existing,
-        updatedAt: Math.max(existing.updatedAt ?? 0, now),
-      }
-    : {
-        ...existing,
-        sessionId: randomUUID(),
-        updatedAt: Math.max(existing?.updatedAt ?? 0, now),
-      };
+  const next: SessionEntry = {
+    ...existing,
+    sessionId: existing?.sessionId || randomUUID(),
+    updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
+    ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
+  };
   if (existing && !existing.sessionId) {
     delete next.label;
     delete next.category;

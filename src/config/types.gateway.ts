@@ -541,6 +541,26 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+/** Closed session, agent, and operator-scope policy for one named team role. */
+export type GatewayOperatorRoleDefinition = {
+  sessions: {
+    /** Maximum access to another person's sessions without explicit membership. */
+    others: "none" | "view" | "suggest" | "write";
+  };
+  /** Agent IDs available for session creation and runs, or all agents when set to "*". */
+  agents: "*" | string[];
+  /** Ceiling applied to the authenticated profile's granted operator scopes. */
+  scopes: OperatorScope[];
+};
+
+/** Optional named operator-role policies for Gateway deployments shared by a team. */
+export type GatewayOperatorRolesConfig = {
+  /** Required validated default for profiles without a valid assigned role. */
+  default?: string;
+  /** Closed capability bundles indexed by administrator-selected role names. */
+  definitions: Record<string, GatewayOperatorRoleDefinition>;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -568,6 +588,8 @@ export type GatewayConfig = {
   cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
+  /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
+  roles?: GatewayOperatorRolesConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;

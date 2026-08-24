@@ -3752,7 +3752,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("tombstones when the final owner-release retry consumes the last charge", async () => {
-    const { sessionsDir, storePath } = await makeMainSessionFixture({
+    const { sessionsDir, storePath } = await makeControlUiRecoveryFixture({
       mainRestartRecovery: {
         cycleId: "cycle-final-attempt",
         revision: 1,
@@ -3777,6 +3777,7 @@ describe("main-session-restart-recovery", () => {
     await waitForFast(() => {
       expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
         status: "failed",
+        lastRunId: "control-ui-run",
         mainRestartRecovery: { tombstone: expect.any(Object) },
       });
     });
@@ -4124,6 +4125,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryTerminalRunIds: ["discord-message-1"],
     });
     const completed = loadSessionEntry({ sessionKey, storePath });
+    expect(completed?.lastRunId).toBeUndefined();
     expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(completed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(completed?.restartRecoveryDeliveryContext).toBeUndefined();
@@ -4334,10 +4336,8 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("matches a checkpointed Control UI hook to its run-keyed user turn", async () => {
-    const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
+    const { sessionsDir, storePath, sessionKey } = await makeControlUiRecoveryFixture({
       restartRecoveryBeforeAgentReplyState: "handled-silent",
-      restartRecoveryDeliveryRunId: "control-ui-run",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "quiet", idempotencyKey: "control-ui-run:user" },
@@ -4349,6 +4349,7 @@ describe("main-session-restart-recovery", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       status: "done",
       abortedLastRun: false,
+      lastRunId: "control-ui-run",
       restartRecoveryTerminalRunIds: ["control-ui-run"],
     });
   });

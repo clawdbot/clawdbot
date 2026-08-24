@@ -72,7 +72,7 @@ jobs:
           NODE
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 1
@@ -115,15 +115,15 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: Dockerfile
 
       # Keep release smoke builds bounded and log-producing. The Blacksmith
       # build action can leave jobs in-progress without step logs when a remote
@@ -262,7 +262,7 @@ jobs:
       # locally before restoring the exact called-workflow revision.
       - &trusted_workflow_subdir_checkout_step
         name: Checkout trusted release harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
           ref: main
@@ -336,9 +336,9 @@ jobs:
           NODE
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: Dockerfile
 
       - name: Build local root Dockerfile smoke image
         env:
@@ -432,7 +432,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
@@ -652,9 +652,9 @@ jobs:
           test -s "${RUNNER_TEMP}/candidate.tar.gz"
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: scripts/docker/install-sh-smoke/Dockerfile
 
       - name: Build pinned candidate packaging harness
         run: |
@@ -683,6 +683,7 @@ jobs:
             -e CI=1 \
             -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
             -v "${package_dir}:/output" \
+            -v "$PWD/.release-harness:/harness:ro" \
             openclaw-install-candidate-packager:local \
             -lc '
               set -euo pipefail
@@ -693,6 +694,11 @@ jobs:
                 --no-same-permissions \
                 -C "$source_dir"
               cd "$source_dir"
+              preflight_args=(--source-dir "$source_dir")
+              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+                preflight_args+=(--allow-unreleased-changelog)
+              fi
+              node /harness/scripts/package-source-preflight.mjs "${preflight_args[@]}"
               mkdir -p /tmp/corepack
               corepack enable --install-directory /tmp/corepack
               export PATH="/tmp/corepack:$PATH"
@@ -792,9 +798,9 @@ jobs:
       - *trusted_workflow_subdir_identity_step
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: scripts/docker/install-sh-smoke/Dockerfile
 
       - name: Build installer smoke image
         env:
@@ -865,9 +871,9 @@ jobs:
       - *trusted_workflow_subdir_identity_step
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: scripts/docker/install-sh-nonroot/Dockerfile
 
       - name: Build installer non-root image
         env:
@@ -1350,98 +1356,106 @@ jobs:
           exit "$failed"
 
   bun_global_install_smoke:
-    needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
+    needs: [preflight, installer_smoke_candidate_payload]
     if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - *trusted_workflow_subdir_checkout_step
       - *trusted_workflow_subdir_identity_step
 
-      - name: Validate root Dockerfile image artifact binding
+      - name: Validate candidate payload artifact binding
         env:
-          ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
-          ARTIFACT_DIGEST: ${{ needs.root_dockerfile_image.outputs.artifact_digest }}
-          ARTIFACT_ID: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
-          ARTIFACT_NAME: ${{ needs.root_dockerfile_image.outputs.artifact_name }}
-          ARTIFACT_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
-          ARTIFACT_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          ARTIFACT_DIGEST: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
+          ARTIFACT_HARNESS_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.harness_repository }}
+          ARTIFACT_HARNESS_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.harness_sha }}
+          ARTIFACT_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
+          ARTIFACT_TARGET_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.target_sha }}
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -euo pipefail
           [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact ID is missing or invalid." >&2
+            echo "Candidate payload artifact ID is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
-            echo "Root image artifact digest is missing or invalid." >&2
-            exit 1
-          }
-          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
-            echo "Root image archive SHA-256 is missing or invalid." >&2
+            echo "Candidate payload artifact digest is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact run ID is missing or invalid." >&2
+            echo "Candidate payload artifact run ID is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact run attempt is missing or invalid." >&2
+            echo "Candidate payload artifact run attempt is missing or invalid." >&2
             exit 1
           }
-          expected_artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          [[ "$ARTIFACT_TARGET_SHA" == "$TARGET_SHA" ]]
+          [[ "$ARTIFACT_HARNESS_REPOSITORY" == "$HARNESS_REPOSITORY" ]]
+          [[ "$ARTIFACT_HARNESS_SHA" == "$HARNESS_SHA" ]]
+          expected_artifact_name="install-smoke-candidate-payload-${TARGET_SHA}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
           [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
-            echo "Root image artifact name does not match the target and producer run attempt." >&2
+            echo "Candidate payload artifact name does not match the producer tuple." >&2
             exit 1
           }
           bash .release-harness/scripts/docker/shared-image-artifact.sh \
-            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            verify-upload "Candidate payload" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
             "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
-      - name: Download root Dockerfile image artifact
+      - name: Download candidate payload artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          artifact-ids: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
-          path: ${{ runner.temp }}/install-smoke-root-image
-          run-id: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          artifact-ids: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-candidate-payload
+          run-id: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
           github-token: ${{ github.token }}
-
-      - name: Verify and load root Dockerfile image artifact
-        env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
-          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
-          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
-          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
-          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
-        run: |
-          set -euo pipefail
-          bash .release-harness/scripts/docker/shared-image-artifact.sh \
-            load "${RUNNER_TEMP}/install-smoke-root-image" install-smoke-root \
-            "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
-
-      - name: Require local root Dockerfile image
-        env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: docker image inspect "$IMAGE_REF" >/dev/null
 
       - name: Setup trusted release harness for Bun smoke
         uses: ./.release-harness/.github/actions/setup-release-harness
         with:
           node-version: "24.x"
 
+      - name: Verify candidate payload contents
+        env:
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
+          MANIFEST_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.manifest_sha256 }}
+          PACKAGE_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          PRODUCER_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
+          SOURCE_ARCHIVE_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.source_archive_sha256 }}
+          TARGET_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/install-smoke-candidate-payload.mts verify \
+            --payload-dir "${RUNNER_TEMP}/install-smoke-candidate-payload" \
+            --repository "$TARGET_REPOSITORY" \
+            --target-sha "$TARGET_SHA" \
+            --harness-repository "$HARNESS_REPOSITORY" \
+            --harness-sha "$HARNESS_SHA" \
+            --run-id "$PRODUCER_RUN_ID" \
+            --run-attempt "$PRODUCER_RUN_ATTEMPT" \
+            --package-version "$PACKAGE_VERSION" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
+
       - name: Install Bun for global smoke
         run: npm install -g bun@1.3.14
 
-      - name: Run Bun global install image-provider smoke
+      - name: Run Bun global install candidate-payload smoke
         working-directory: .release-harness
         env:
-          OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
-          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
+          OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz
         run: bash scripts/e2e/bun-global-install-smoke.sh
 
   docker-e2e-fast:
@@ -1454,15 +1468,15 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: scripts/e2e/Dockerfile
 
       - name: Setup Node environment for package smoke
         uses: ./.github/actions/setup-node-env
