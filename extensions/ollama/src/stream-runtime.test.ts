@@ -1356,8 +1356,9 @@ describe("parseNdjsonStream", () => {
     }).getReader();
 
     await expect(async () => {
-      for await (const _chunk of parseNdjsonStream(reader)) {
+      for await (const chunk of parseNdjsonStream(reader)) {
         // Drain the response so decoder finalization runs at real EOF.
+        void chunk;
       }
     }).rejects.toThrow(/utf-8/i);
   });
