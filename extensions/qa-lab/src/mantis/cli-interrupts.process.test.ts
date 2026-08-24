@@ -44,14 +44,19 @@ it.skipIf(process.platform === "win32")(
       import { writeSync } from "node:fs";
       import { runWithMantisCliInterrupts } from ${JSON.stringify(interruptsModuleUrl)};
 
-      await runWithMantisCliInterrupts(async (signal) => {
-        writeSync(1, "ready\\n");
-        await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-        writeSync(1, "cleanup-started\\n");
-        await new Promise((resolve) => setTimeout(resolve, ${CLEANUP_DELAY_MS}));
-        writeSync(1, "cleanup-complete\\n");
-        throw signal.reason;
-      });
+      const keepalive = setInterval(() => {}, 1_000);
+      try {
+        await runWithMantisCliInterrupts(async (signal) => {
+          writeSync(1, "ready\\n");
+          await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+          writeSync(1, "cleanup-started\\n");
+          await new Promise((resolve) => setTimeout(resolve, ${CLEANUP_DELAY_MS}));
+          writeSync(1, "cleanup-complete\\n");
+          throw signal.reason;
+        });
+      } finally {
+        clearInterval(keepalive);
+      }
     `;
     const child = spawn(
       process.execPath,
