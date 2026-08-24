@@ -177,6 +177,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "worker_environments.shared_host INTEGER",
       "worker_environments.node_setup_id TEXT",
       "worker_environments.node_device_id TEXT",
+      "node_worker_launches.worker_container_json TEXT",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
       "worker_session_placement_moves.abandon_source INTEGER",
