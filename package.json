@@ -2081,7 +2081,7 @@
     "semver": "7.8.5",
     "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
-    "tslog": "5.1.0",
+    "tslog": "4.11.0",
     "typebox": "1.3.14",
     "typescript": "6.0.3",
     "undici": "8.10.0",

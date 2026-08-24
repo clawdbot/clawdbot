@@ -352,8 +352,15 @@ function logToFile(
   if (level === "silent") {
     return;
   }
-  const args = meta && Object.keys(meta).length > 0 ? [meta, message] : [message];
-  fileLogger.log(levelToMinLevel(level), level.toUpperCase(), ...args);
+  const method = fileLogger[level];
+  if (typeof method !== "function") {
+    return;
+  }
+  if (meta && Object.keys(meta).length > 0) {
+    method.call(fileLogger, meta, message);
+  } else {
+    method.call(fileLogger, message);
+  }
 }
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
