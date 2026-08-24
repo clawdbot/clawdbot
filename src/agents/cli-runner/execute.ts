@@ -271,10 +271,7 @@ export async function executePreparedCliRun(
   // Plugin-owned transports own their child/session lifecycle; their MCP grant
   // still needs the per-turn capture key used by other non-live executions.
   const usePluginOwnedExecution = Boolean(
-    context.preparedBackend.execute &&
-    !nodePlacement &&
-    !context.preparedBackend.secretInput &&
-    params.controlOperation !== "compact",
+    context.preparedBackend.execute && !nodePlacement && params.controlOperation !== "compact",
   );
   const useManagedClaudeLiveSession =
     usePluginOwnedExecution && acceptsCliLiveSession(context) && !params.onSuccessfulAuthBinding;

@@ -1,13 +1,15 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import type {
   Options as ClaudeAgentSdkOptions,
   PermissionResult as ClaudeAgentSdkPermissionResult,
   Query as ClaudeAgentSdkQuery,
   SDKUserMessage as ClaudeAgentSdkUserMessage,
+  SpawnOptions as ClaudeAgentSdkSpawnOptions,
+  SpawnedProcess as ClaudeAgentSdkSpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionCloseReason,
@@ -15,7 +17,9 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const CLAUDE_EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] satisfies NonNullable<
+  ClaudeAgentSdkOptions["effort"]
+>[];
 const CLAUDE_STREAM_PROTOCOL_FLAGS = new Set([
   "-p",
   "--print",
@@ -53,6 +57,11 @@ const CLAUDE_VALUE_FLAGS = new Set([
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
 
+type ClaudeAgentSdkSecretInput = {
+  fd: 3;
+  createData: () => Buffer;
+};
+
 type ClaudeAgentSdkTurn = {
   context: CliBackendExecuteContext;
   controller: AbortController;
@@ -85,6 +94,43 @@ function splitClaudeToolNames(value: string): string[] {
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
+}
+
+function spawnClaudeAgentSdkCredentialProcess(
+  options: ClaudeAgentSdkSpawnOptions,
+  secretInput: ClaudeAgentSdkSecretInput,
+): ClaudeAgentSdkSpawnedProcess {
+  const child = spawn(options.command, options.args, {
+    cwd: options.cwd,
+    env: options.env,
+    signal: options.signal,
+    stdio: ["pipe", "pipe", "pipe", process.platform === "win32" ? "overlapped" : "pipe"],
+  });
+  let credential: Buffer | undefined;
+  try {
+    const descriptor = child.stdio[secretInput.fd];
+    if (!(descriptor instanceof Writable)) {
+      throw new Error(`Claude Agent SDK secret descriptor ${secretInput.fd} is unavailable.`);
+    }
+    credential = secretInput.createData();
+    const rejectDelivery = () => {
+      credential?.fill(0);
+      child.kill();
+    };
+    descriptor.on("error", rejectDelivery);
+    descriptor.once("close", () => descriptor.off("error", rejectDelivery));
+    descriptor.end(credential, (error?: Error | null) => {
+      credential?.fill(0);
+      if (error) {
+        child.kill();
+      }
+    });
+    return child;
+  } catch (error) {
+    credential?.fill(0);
+    child.kill();
+    throw error;
+  }
 }
 
 async function authorizeClaudeAgentSdkTool(params: {
@@ -120,6 +166,7 @@ function resolveClaudeAgentSdkOptions(
   context: CliBackendExecuteContext,
   abortController: AbortController,
   currentTurn: () => ClaudeAgentSdkTurn | undefined,
+  secretInput?: ClaudeAgentSdkSecretInput,
 ): ClaudeAgentSdkOptions {
   const options: ClaudeAgentSdkOptions = {
     abortController,
@@ -188,6 +235,11 @@ function resolveClaudeAgentSdkOptions(
     },
   };
 
+  if (secretInput) {
+    options.spawnClaudeCodeProcess = (spawnOptions) =>
+      spawnClaudeAgentSdkCredentialProcess(spawnOptions, secretInput);
+  }
+
   if (context.useResume && context.sessionId) {
     options.resume = context.sessionId;
   } else if (context.sessionId) {
@@ -255,10 +307,11 @@ function resolveClaudeAgentSdkOptions(
         break;
       }
       case "--effort": {
-        if (!CLAUDE_EFFORT_LEVELS.has(value)) {
+        const effort = CLAUDE_EFFORT_LEVELS.find((level) => level === value);
+        if (!effort) {
           throw new Error(`Unsupported Claude Agent SDK effort: ${value}`);
         }
-        options.effort = value as NonNullable<ClaudeAgentSdkOptions["effort"]>;
+        options.effort = effort;
         break;
       }
       case "--mcp-config": {
@@ -488,6 +541,7 @@ function createClaudeAgentSdkSession(
 async function* executeClaudeAgentSdkLiveTurn(
   context: CliBackendExecuteContext,
   capability: CliBackendLiveSessionCapability,
+  secretInput?: ClaudeAgentSdkSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
   let existingHandle = capability.current();
@@ -501,7 +555,6 @@ async function* executeClaudeAgentSdkLiveTurn(
   if (existingHandle && (!session || session.closed)) {
     existingHandle.close("restart");
     await existingHandle.waitForExit();
-    existingHandle = capability.current();
     session = undefined;
   }
   session ??= createClaudeAgentSdkSession(capability);
@@ -535,6 +588,7 @@ async function* executeClaudeAgentSdkLiveTurn(
         context,
         session.controller,
         () => session.currentTurn,
+        secretInput,
       );
       session.query = query({ prompt: session.prompts, options });
       void consumeClaudeAgentSdkSession(session, session.query);
@@ -564,10 +618,13 @@ async function* executeClaudeAgentSdkLiveTurn(
   }
 }
 
-/** Execute an ambient Claude Code login through Anthropic's maintained SDK transport. */
-export const executeClaudeAgentSdk: CliBackendExecute = async function* (context) {
+/** Execute Claude Code through Anthropic's maintained SDK transport and private auth boundary. */
+export async function* executeClaudeAgentSdk(
+  context: CliBackendExecuteContext,
+  secretInput?: ClaudeAgentSdkSecretInput,
+): AsyncIterable<Record<string, unknown>> {
   if (context.liveSession) {
-    yield* executeClaudeAgentSdkLiveTurn(context, context.liveSession);
+    yield* executeClaudeAgentSdkLiveTurn(context, context.liveSession, secretInput);
     return;
   }
 
@@ -583,7 +640,12 @@ export const executeClaudeAgentSdk: CliBackendExecute = async function* (context
 
   try {
     context.abortSignal?.throwIfAborted();
-    const options = resolveClaudeAgentSdkOptions(context, controller, () => activeTurn);
+    const options = resolveClaudeAgentSdkOptions(
+      context,
+      controller,
+      () => activeTurn,
+      secretInput,
+    );
     for await (const message of query({ prompt: context.prompt, options })) {
       if (message.type === "result") {
         sawTerminalResult = true;
@@ -600,4 +662,4 @@ export const executeClaudeAgentSdk: CliBackendExecute = async function* (context
     }
     context.abortSignal?.removeEventListener("abort", abort);
   }
-};
+}

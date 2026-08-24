@@ -93,6 +93,7 @@ function runPlugin(
     onNoOutputTimeout?: NonNullable<
       Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
     >;
+    onInterrupted?: (reason: "aborted" | "timeout") => boolean;
   } = {},
 ) {
   return executePluginOwnedProcess({
@@ -116,6 +117,7 @@ function runPlugin(
         }
       : {}),
     ...(options.onNoOutputTimeout ? { onNoOutputTimeout: options.onNoOutputTimeout } : {}),
+    ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
     consumeStdout: options.consumeStdout ?? (() => {}),
   });
@@ -129,16 +131,17 @@ function registerOwnerSession(context: PreparedCliRunContext, generation: string
     beginCapture: () => {},
     abortSignal: new AbortController().signal,
   });
+  const close = vi.fn(() => capability.remove(session));
   const session: CliBackendLiveSessionHandle = {
     generation,
     fingerprint: capability.fingerprint,
     isIdle: () => true,
-    close: vi.fn(() => capability.remove(session)),
+    close,
     waitForExit: vi.fn(async () => {}),
   };
   capability.register(session);
   activeSessions.add(session);
-  return session;
+  return { handle: session, close };
 }
 
 function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
@@ -147,7 +150,14 @@ function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
     throw new Error("Host execution did not expose its abort signal.");
   }
   return new Promise((_, reject) => {
-    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    signal.addEventListener(
+      "abort",
+      () =>
+        reject(
+          signal.reason instanceof Error ? signal.reason : new Error("CLI test run was aborted."),
+        ),
+      { once: true },
+    );
   });
 }
 
@@ -245,7 +255,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     await runPlugin(
       noResume.context,
       async function* (execution) {
-        expect(execution.liveSession?.current()).toBe(reusableSession);
+        expect(execution.liveSession?.current()).toBe(reusableSession.handle);
         yield SUCCESS_RESULT;
       },
       { liveSession: true, useResume: false },
@@ -293,7 +303,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     const first = await createExecution({ runId: "plugin-prepared-resource-owner" });
     const cleanup = vi.fn(async () => {});
     first.context.preparedBackend.claimLiveSessionResources = vi.fn(() => cleanup);
-    const exited = createDeferred<void>();
+    const exited = createDeferred();
     let handle: CliBackendLiveSessionHandle | undefined;
 
     await runPlugin(
@@ -468,7 +478,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
-    originalHandle.close("restart");
+    originalHandle.handle.close("restart");
     registerOwnerSession(first.context, "replacement-live-process");
     const replacement = await createExecution({
       config,
@@ -501,6 +511,45 @@ describe("plugin-owned CLI execution host boundary", () => {
     );
   });
 
+  it("cancels an in-flight native approval and never releases its late decision", async () => {
+    const controller = new AbortController();
+    const { context } = await createExecution({
+      abortSignal: controller.signal,
+      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      nativeTools: ["WebFetch"],
+    });
+    const approval = createDeferred<{ id: string; decision: "allow-always" }>();
+    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
+    const granted = vi.fn();
+    const closed = vi.fn();
+    const run = runPlugin(context, async function* (execution) {
+      try {
+        const decision = await requestNativeTool(execution, "WebFetch", {
+          url: "https://example.com/canceled-approval",
+        });
+        if (decision.behavior === "allow") {
+          granted();
+        }
+        yield SUCCESS_RESULT;
+      } finally {
+        closed();
+      }
+    });
+    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
+    const approvalSignal = mockCallGatewayTool.mock.calls[0]?.[3]?.signal;
+
+    controller.abort();
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(approvalSignal?.aborted).toBe(true);
+    expect(closed).toHaveBeenCalledOnce();
+    expect(granted).not.toHaveBeenCalled();
+
+    approval.resolve({ id: "canceled-approval", decision: "allow-always" });
+    await Promise.resolve();
+    expect(granted).not.toHaveBeenCalled();
+  });
+
   it("fences a retained permission callback as soon as its turn finishes", async () => {
     const { context } = await createExecution();
     let requestToolPermission: CliBackendExecuteContext["requestToolPermission"] | undefined;
@@ -521,16 +570,30 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("preserves an authoritative terminal error if the plugin throws while draining", async () => {
+  it.each([
+    {
+      name: "a 429 error-marked success",
+      terminal: {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 429,
+        result: "Claude subscription rate limit reached.",
+      },
+    },
+    {
+      name: "a 529 provider-error subtype despite an unset error flag",
+      terminal: {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: false,
+        api_error_status: 529,
+        errors: ["Anthropic API overloaded (529)."],
+      },
+    },
+  ])("preserves $name if the plugin throws while draining", async ({ terminal }) => {
     const { context } = await createExecution();
     const output: string[] = [];
-    const terminal = {
-      type: "result",
-      subtype: "success",
-      is_error: true,
-      api_error_status: 429,
-      result: "Claude subscription rate limit reached.",
-    };
 
     await expect(
       runPlugin(
@@ -549,29 +612,29 @@ describe("plugin-owned CLI execution host boundary", () => {
   it.each([
     {
       name: "a stream without a terminal result",
-      execute: async function* () {
+      async *execute() {
         yield { type: "system", subtype: "init" };
       },
       error: "without a terminal result",
     },
     {
       name: "a plugin failure after an otherwise successful result",
-      execute: async function* () {
+      async *execute() {
         yield SUCCESS_RESULT;
         throw new Error("SDK stream failed after the result");
       },
       error: "SDK stream failed after the result",
     },
-  ])("rejects $name", async ({ execute, error }) => {
+  ])("rejects $name", async (testCase) => {
     const { context } = await createExecution();
 
-    await expect(runPlugin(context, execute)).rejects.toThrow(error);
+    await expect(runPlugin(context, () => testCase.execute())).rejects.toThrow(testCase.error);
   });
 
   it("aborts a silent plugin stream through the host no-output watchdog", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution({ timeoutMs: 5_000 });
-    const streamStarted = createDeferred<void>();
+    const streamStarted = createDeferred();
     const run = runPlugin(
       context,
       async function* (execution) {
@@ -597,6 +660,16 @@ describe("plugin-owned CLI execution host boundary", () => {
     {
       name: "init-only resumed traffic remains safely retryable",
       event: { type: "system", subtype: "init", session_id: "sdk-session" },
+      code: "cli_no_output_timeout",
+    },
+    {
+      name: "actual SDK command lifecycle traffic remains safely retryable",
+      event: {
+        type: "command_lifecycle",
+        subtype: "started",
+        command: "resume",
+        session_id: "sdk-session",
+      },
       code: "cli_no_output_timeout",
     },
     {
@@ -668,7 +741,7 @@ describe("plugin-owned CLI execution host boundary", () => {
   it("keeps tracked background work alive beyond the ordinary no-output watchdog", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution();
-    const backgroundFinished = createDeferred<void>();
+    const backgroundFinished = createDeferred();
     const received: string[] = [];
     let completed = false;
     const run = runPlugin(
@@ -701,7 +774,7 @@ describe("plugin-owned CLI execution host boundary", () => {
   it("propagates caller cancellation and closes the active plugin iterator", async () => {
     const controller = new AbortController();
     const { context } = await createExecution({ abortSignal: controller.signal });
-    const streamStarted = createDeferred<void>();
+    const streamStarted = createDeferred();
     const streamClosed = vi.fn();
     const run = runPlugin(context, async function* (execution) {
       try {
@@ -718,5 +791,62 @@ describe("plugin-owned CLI execution host boundary", () => {
 
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect(streamClosed).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "AbortError",
+      reason: "aborted" as const,
+      abort: (controller: AbortController) => controller.abort(),
+    },
+    {
+      name: "the caller's TimeoutError",
+      reason: "timeout" as const,
+      abort: (controller: AbortController) => {
+        const timeout = new Error("caller deadline exceeded");
+        timeout.name = "TimeoutError";
+        controller.abort(timeout);
+      },
+    },
+    {
+      name: "AbortError wrapping a TimeoutError",
+      reason: "aborted" as const,
+      abort: (controller: AbortController) => {
+        const timeout = new Error("caller deadline exceeded");
+        timeout.name = "TimeoutError";
+        const cancellation = new Error("caller cancelled", { cause: timeout });
+        cancellation.name = "AbortError";
+        controller.abort(cancellation);
+      },
+    },
+  ])("preserves streamed assistant output after $name", async ({ abort, reason }) => {
+    const controller = new AbortController();
+    const { context } = await createExecution({ abortSignal: controller.signal });
+    const output: string[] = [];
+    const preserveOutput = vi.fn(() => output.length > 0);
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        yield {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Here is the answer so far" }] },
+        };
+        await waitUntilAborted(execution);
+        yield SUCCESS_RESULT;
+      },
+      {
+        consumeStdout: output.push.bind(output),
+        onInterrupted: preserveOutput,
+      },
+    );
+    await vi.waitFor(() => expect(output).toHaveLength(1));
+
+    abort(controller);
+
+    await expect(run).resolves.toMatchObject({ reason: "manual-cancel", exitCode: null });
+    expect(preserveOutput).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(JSON.parse(output[0] ?? "{}")).toMatchObject({
+      message: { content: [{ text: "Here is the answer so far" }] },
+    });
   });
 });

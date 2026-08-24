@@ -7,7 +7,7 @@ import {
 } from "../../infra/event-session-routing.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
-import type { CliOutput } from "../cli-output-contracts.js";
+import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
@@ -171,6 +171,7 @@ export async function executeCliProcess(params: {
   let nodeRunAbortSignal: AbortSignal | undefined;
   let nodeRunTruncated = false;
   const pluginTimeout: { error?: FailoverError } = {};
+  let terminalInterruption: CliTerminalInterruption | undefined;
   let result: RunExit;
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
   if (params.nodePlacement) {
@@ -209,6 +210,19 @@ export async function executeCliProcess(params: {
       activeToolCount: params.events.activeParsedToolCount,
       onNoOutputTimeout: (error) => {
         pluginTimeout.error = error;
+      },
+      onInterrupted: (reason) => {
+        streamingParser?.finish();
+        const partialOutput = streamingParser?.getOutput();
+        if (
+          !partialOutput?.text.trim() ||
+          partialOutput.errorText ||
+          partialOutput.terminalFailure
+        ) {
+          return false;
+        }
+        terminalInterruption = { reason };
+        return true;
       },
       ...(params.useManagedClaudeLiveSession
         ? {
@@ -280,7 +294,8 @@ export async function executeCliProcess(params: {
   }
   if (
     (runParams.abortSignal?.aborted || nodeRunAbortSignal?.aborted) &&
-    result.reason === "manual-cancel"
+    result.reason === "manual-cancel" &&
+    !terminalInterruption
   ) {
     throw createCliAbortError();
   }
@@ -364,7 +379,7 @@ export async function executeCliProcess(params: {
     }
   }
 
-  if (result.exitCode !== 0 || result.reason !== "exit") {
+  if (!terminalInterruption && (result.exitCode !== 0 || result.reason !== "exit")) {
     params.options?.onPhase?.("send");
     if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
       const timeoutSeconds = Math.round(params.noOutputTimeoutMs / 1000);
@@ -493,6 +508,7 @@ export async function executeCliProcess(params: {
   );
   return {
     ...parsed,
+    ...(terminalInterruption ? { terminalInterruption } : {}),
     diagnostics: { ...parsed.diagnostics, process: processDiagnostics },
     rawText,
     finalPromptText: params.prompt,

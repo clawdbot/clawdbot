@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import type {
+  SpawnOptions as ClaudeAgentSdkSpawnOptions,
+  SpawnedProcess as ClaudeAgentSdkSpawnedProcess,
+} from "@anthropic-ai/claude-agent-sdk";
+import type {
+  CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
@@ -106,6 +112,28 @@ function sdkNativeTool(options: Record<string, unknown>): SdkNativeToolCallback 
   return callback;
 }
 
+type SdkPreToolUseCallback = (
+  input: {
+    hook_event_name: "PreToolUse";
+    tool_name: string;
+    tool_input: unknown;
+    tool_use_id: string;
+  },
+  toolUseId: string | undefined,
+  options: { signal: AbortSignal },
+) => Promise<unknown>;
+
+function sdkPreToolUse(options: Record<string, unknown>): SdkPreToolUseCallback {
+  const hooks = options.hooks as {
+    PreToolUse?: Array<{ hooks?: SdkPreToolUseCallback[] }>;
+  };
+  const callback = hooks.PreToolUse?.[0]?.hooks?.[0];
+  if (!callback) {
+    throw new Error("Claude Agent SDK did not register its native permission hook.");
+  }
+  return callback;
+}
+
 function createLiveCapability(
   fingerprint = "matching-session-policy",
   state: { current?: CliBackendLiveSessionHandle } = {},
@@ -158,7 +186,7 @@ afterEach(async () => {
 });
 
 describe("Anthropic Agent SDK runtime ownership", () => {
-  it("keeps explicit credentials and isolated completions on their existing protected transports", () => {
+  it("keeps selected SDK credentials on their private descriptor and isolates side questions", () => {
     const backend = buildAnthropicCliBackend();
     const base = {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -171,6 +199,10 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       ...base,
       authCredential: { type: "token", token: "fixture-token" },
     } as Parameters<NonNullable<typeof backend.prepareExecution>>[0]);
+    const emptyCredential = backend.prepareExecution?.({
+      ...base,
+      authCredential: { type: "token", token: "   " },
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0]);
     const sideQuestion = backend.prepareExecution?.({
       ...base,
       executionMode: "side-question",
@@ -181,48 +213,219 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       expect.objectContaining({
         env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
         secretInput: expect.objectContaining({ fd: 3 }),
+        execute: expect.any(Function),
       }),
     );
-    expect(credential).not.toHaveProperty("execute");
+    expect(emptyCredential).toEqual(
+      expect.objectContaining({ env: {}, execute: expect.any(Function) }),
+    );
+    expect(emptyCredential).not.toHaveProperty("secretInput");
     expect(sideQuestion).not.toHaveProperty("execute");
   });
 
-  it("excludes restricted native-capable turns while admitting MCP-only SDK runs", () => {
+  it("delivers a selected credential only through descriptor 3 and zeroes its delivered buffer", async () => {
     const backend = buildAnthropicCliBackend();
-    const base = {
+    const token = "selected-private-descriptor-fixture";
+    const prepared = (await backend.prepareExecution?.({
       workspaceDir: "/tmp/openclaw-workspace",
       provider: "claude-cli",
       modelId: "claude-sonnet-4-6",
-      executionMode: "agent" as const,
+      executionMode: "agent",
+      authCredential: { type: "token", token },
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as {
+      env: Record<string, string>;
+      secretInput: { fd: 3; createData: () => Buffer };
+      execute: CliBackendExecute;
+      cleanup?: () => Promise<void>;
     };
-
-    const nativeCapable = backend.prepareExecution?.({
-      ...base,
-      toolAvailability: {
-        native: ["Bash"],
-        openClaw: ["message"],
-      },
+    let deliveredBuffer: Buffer | undefined;
+    const originalCreateData = prepared.secretInput.createData;
+    vi.spyOn(prepared.secretInput, "createData").mockImplementation(() => {
+      deliveredBuffer = originalCreateData();
+      return deliveredBuffer;
     });
-    const gatewayToolsOnly = backend.prepareExecution?.({
-      ...base,
-      toolAvailability: {
-        native: [],
-        openClaw: ["message"],
-      },
+    let descriptorOutput: { fd: number; digest: string } | undefined;
+    useSdkMessages([SUCCESS_RESULT], async (options) => {
+      const spawnProcess = options.spawnClaudeCodeProcess as
+        | ((input: ClaudeAgentSdkSpawnOptions) => ClaudeAgentSdkSpawnedProcess)
+        | undefined;
+      if (!spawnProcess) {
+        throw new Error("Selected Claude credentials require an SDK-private descriptor spawner.");
+      }
+      const args = [
+        "-e",
+        [
+          'const data = require("node:fs").readFileSync(3);',
+          'const digest = require("node:crypto").createHash("sha256").update(data).digest("hex");',
+          "process.stdout.write(JSON.stringify({fd: Number(process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR), digest}));",
+          "data.fill(0);",
+        ].join(""),
+      ];
+      const env = { PATH: process.env.PATH, ...prepared.env };
+      expect(JSON.stringify(args)).not.toContain(token);
+      expect(Object.values(env)).not.toContain(token);
+      const child = spawnProcess({
+        command: process.execPath,
+        args,
+        cwd: process.cwd(),
+        env,
+        signal: new AbortController().signal,
+      });
+      const output = await new Promise<string>((resolve, reject) => {
+        let stdout = "";
+        child.stdout.on("data", (chunk: Buffer | string) => {
+          stdout += chunk.toString();
+        });
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (code === 0) {
+            resolve(stdout);
+          } else {
+            reject(new Error(`Credential descriptor proof exited ${String(code)}.`));
+          }
+        });
+      });
+      descriptorOutput = JSON.parse(output) as { fd: number; digest: string };
     });
 
-    expect(nativeCapable).not.toEqual(expect.objectContaining({ execute: expect.any(Function) }));
-    expect(gatewayToolsOnly).toEqual(expect.objectContaining({ execute: expect.any(Function) }));
+    const events: Record<string, unknown>[] = [];
+    for await (const event of prepared.execute(
+      createContext({ env: { ...createContext().env, ...prepared.env } }),
+    )) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(SUCCESS_RESULT);
+    expect(descriptorOutput).toEqual({
+      fd: 3,
+      digest: createHash("sha256").update(token).digest("hex"),
+    });
+    expect(deliveredBuffer).toBeDefined();
+    expect(deliveredBuffer?.every((byte) => byte === 0)).toBe(true);
+    await prepared.cleanup?.();
+    expect(() => prepared.secretInput.createData()).toThrow("no longer available");
   });
 
+  it.each(
+    [
+      {
+        name: "denies",
+        decision: {
+          behavior: "deny" as const,
+          message: "OpenClaw denied restricted native Bash execution.",
+        },
+      },
+      {
+        name: "allows",
+        decision: { behavior: "allow" as const, updatedInput: { command: "printf approved" } },
+      },
+    ].flatMap(({ name, decision }) => [
+      { name: `${name} ambient`, credential: undefined, decision },
+      {
+        name: `${name} selected-credential`,
+        credential: { type: "token" as const, token: "selected-profile-fixture" },
+        decision,
+      },
+    ]),
+  )(
+    "$name restricted native Bash through the prepared SDK approval owner",
+    async ({ credential, decision }) => {
+      const backend = buildAnthropicCliBackend();
+      const toolAvailability = {
+        native: ["Bash"],
+        openClaw: ["message"],
+      };
+      const prepareContext = {
+        workspaceDir: "/tmp/openclaw-workspace",
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        executionMode: "agent" as const,
+        toolAvailability,
+      };
+      const prepared = await backend.prepareExecution?.({
+        ...prepareContext,
+        ...(credential ? { authCredential: credential } : {}),
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0]);
+      if (!prepared?.execute) {
+        throw new Error("Restricted native Bash must use OpenClaw's SDK approval owner.");
+      }
+
+      const args = backend.resolveExecutionArgs?.({
+        ...prepareContext,
+        useResume: false,
+        baseArgs: backend.config.args ?? [],
+      });
+      if (!args) {
+        throw new Error("Anthropic did not prepare restricted native execution arguments.");
+      }
+      const requestToolPermission = vi.fn(async () => decision);
+      const input = { command: "cat /tmp/openclaw-proof-private.txt" };
+      let hookDecision: unknown;
+      let callbackDecision: unknown;
+      useSdkMessages([SUCCESS_RESULT], async (options) => {
+        const signal = new AbortController().signal;
+        hookDecision = await sdkPreToolUse(options)(
+          {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: input,
+            tool_use_id: "restricted-native-bash",
+          },
+          "restricted-native-bash",
+          { signal },
+        );
+        callbackDecision = await sdkNativeTool(options)("Bash", input, {
+          signal,
+          toolUseID: "restricted-native-bash",
+        });
+      });
+
+      const events: Record<string, unknown>[] = [];
+      const executionContext = createContext({ args, requestToolPermission, toolAvailability });
+      Object.assign(executionContext.env, prepared.env);
+      for await (const event of prepared.execute(executionContext)) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual(SUCCESS_RESULT);
+      expect(sdkOptions()).toEqual(
+        expect.objectContaining({
+          tools: ["Bash"],
+          allowedTools: ["mcp__openclaw__message"],
+          settingSources: [],
+          permissionMode: "default",
+        }),
+      );
+      if (credential) {
+        expect(sdkOptions().spawnClaudeCodeProcess).toEqual(expect.any(Function));
+        expect(sdkOptions().env).toEqual(
+          expect.objectContaining({ CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" }),
+        );
+        expect(JSON.stringify(sdkOptions().env)).not.toContain(credential.token);
+      }
+      expect(hookDecision).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: decision.behavior,
+          ...(decision.behavior === "allow"
+            ? { updatedInput: decision.updatedInput }
+            : { permissionDecisionReason: decision.message }),
+        },
+      });
+      expect(callbackDecision).toEqual(decision);
+      expect(requestToolPermission).toHaveBeenCalledTimes(2);
+      expect(requestToolPermission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "Bash",
+          toolInput: input,
+          toolCallId: "restricted-native-bash",
+        }),
+      );
+    },
+  );
+
   it("runs the installed authenticated executable with the exact host-prepared environment", async () => {
-    const result = {
-      type: "result",
-      subtype: "success",
-      is_error: false,
-      result: "Launch code remembered.",
-      session_id: SESSION_ID,
-    };
+    const result = { ...SUCCESS_RESULT, result: "Launch code remembered." };
     useSdkMessages([result]);
     const context = createContext();
 
@@ -246,12 +449,30 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe("Remember the launch code.");
   });
 
-  it("never starts the SDK after its admitted run was already aborted", async () => {
+  it.each([
+    {
+      name: "the caller's cancellation reason",
+      reason: new Error("OpenClaw cancelled the run before SDK startup."),
+    },
+    { name: "the default AbortError", reason: undefined },
+  ])("preserves $name without starting an already-aborted SDK run", async ({ reason }) => {
     const controller = new AbortController();
-    const reason = new Error("OpenClaw cancelled the run before SDK startup.");
     controller.abort(reason);
 
-    await expect(collect(createContext({ abortSignal: controller.signal }))).rejects.toBe(reason);
+    await expect(collect(createContext({ abortSignal: controller.signal }))).rejects.toBe(
+      controller.signal.reason,
+    );
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects cancellation that races the SDK's asynchronous module load", async () => {
+    const controller = new AbortController();
+    const reason = new Error("OpenClaw cancelled the run while the SDK was loading.");
+    const running = collect(createContext({ abortSignal: controller.signal }));
+
+    controller.abort(reason);
+
+    await expect(running).rejects.toBe(reason);
     expect(queryMock).not.toHaveBeenCalled();
   });
 
@@ -271,6 +492,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
+    const activate = vi.spyOn(capability, "activate");
     const first = collect(createContext({ prompt: "Remember orange.", liveSession: capability }));
     await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
     live.streams[0]?.write({ ...SUCCESS_RESULT, result: "Remembered orange." });
@@ -294,7 +516,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     await expect(second).resolves.toContainEqual(expect.objectContaining({ result: "Orange." }));
     expect(queryMock).toHaveBeenCalledOnce();
     expect(capability.current()).toBe(firstHandle);
-    expect(capability.activate).toHaveBeenCalledTimes(2);
+    expect(activate).toHaveBeenCalledTimes(2);
     expect(live.prompts[0]?.map((message) => message.message)).toEqual([
       { role: "user", content: "Remember orange." },
       { role: "user", content: "Which color did I mention?" },
@@ -335,6 +557,49 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         }),
       }),
     );
+  });
+
+  it("refuses to start a live process when its owner will not activate the admitted turn", async () => {
+    const capability = createLiveCapability();
+    const reason = new Error("OpenClaw rejected a stale execution owner.");
+    vi.spyOn(capability, "activate").mockImplementation(() => {
+      throw reason;
+    });
+    const remove = vi.spyOn(capability, "remove");
+
+    await expect(collect(createContext({ liveSession: capability }))).rejects.toBe(reason);
+
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(capability.current()).toBeUndefined();
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it("closes the warm process and fences retained permissions when its active turn is aborted", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    const controller = new AbortController();
+    const running = collect(
+      createContext({ abortSignal: controller.signal, liveSession: capability }),
+    );
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    const canUseTool = sdkNativeTool(sdkOptions());
+    const reason = new Error("OpenClaw cancelled the active warm turn.");
+
+    controller.abort(reason);
+
+    await expect(running).rejects.toBe(reason);
+    expect(live.closes[0]).toHaveBeenCalledOnce();
+    expect(capability.current()).toBeUndefined();
+    await expect(
+      canUseTool(
+        "Bash",
+        { command: "echo stale" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "cancelled-native-tool",
+        },
+      ),
+    ).resolves.toEqual({ behavior: "deny", message: "The OpenClaw run is no longer active." });
   });
 
   it("rebinds a persistent SDK approval callback to only the active admitted turn", async () => {
@@ -397,6 +662,37 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(firstApproval).toHaveBeenCalledOnce();
     expect(secondApproval).toHaveBeenCalledOnce();
     expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an approval that resolves after its exact admitted turn has already ended", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    let resolveApproval:
+      | ((decision: { behavior: "allow"; updatedInput: Record<string, unknown> }) => void)
+      | undefined;
+    const requestToolPermission = vi.fn(
+      () =>
+        new Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }>((resolve) => {
+          resolveApproval = resolve;
+        }),
+    );
+    const running = collect(createContext({ requestToolPermission, liveSession: capability }));
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    const approval = sdkNativeTool(sdkOptions())(
+      "Bash",
+      { command: "echo late" },
+      { signal: new AbortController().signal, toolUseID: "late-native-approval" },
+    );
+    await vi.waitFor(() => expect(requestToolPermission).toHaveBeenCalledOnce());
+
+    live.streams[0]?.write(SUCCESS_RESULT);
+    await running;
+    resolveApproval?.({ behavior: "allow", updatedInput: { command: "echo late" } });
+
+    await expect(approval).resolves.toEqual({
+      behavior: "deny",
+      message: "The OpenClaw run is no longer active.",
+    });
   });
 
   it("holds provisional synthetic results until the real background-agent answer arrives", async () => {
@@ -487,12 +783,49 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     ).not.toContain(context.env.OPENCLAW_MCP_TOKEN);
   });
 
+  it("preserves managed skill plugins without letting isolated plugins discover MCP servers", async () => {
+    useSdkMessages();
+
+    await collect(
+      createContext({
+        args: [
+          "-p",
+          "--plugin-dir",
+          "/tmp/openclaw-native-skills",
+          "--plugin-dir-no-mcp",
+          "/tmp/openclaw-isolated-skills",
+        ],
+      }),
+    );
+
+    expect(sdkOptions().plugins).toEqual([
+      { type: "local", path: "/tmp/openclaw-native-skills" },
+      { type: "local", path: "/tmp/openclaw-isolated-skills", skipMcpDiscovery: true },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "unsafe project settings",
+      args: ["-p", "--setting-sources", "project"],
+      error: "Claude Agent SDK settings must be limited to user settings.",
+    },
+    {
+      name: "a missing private MCP configuration path",
+      args: ["-p", "--mcp-config"],
+      error: "Claude Agent SDK cannot preserve --mcp-config without its value",
+    },
+  ])("rejects $name before starting the Claude subprocess", async ({ args, error }) => {
+    await expect(collect(createContext({ args }))).rejects.toThrow(error);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it("expands wildcard MCP grants into only the exact tools admitted by OpenClaw", async () => {
     useSdkMessages();
 
     await collect(
       createContext({
-        args: ["-p", "--allowedTools", "mcp__openclaw__*"],
+        args: ["-p", "--allowedTools", "Bash,mcp__openclaw__*,Edit"],
         toolAvailability: {
           native: [],
           openClaw: ["message", "memory_search"],
@@ -507,6 +840,8 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       }),
     );
     expect(sdkOptions().allowedTools).not.toContain("mcp__openclaw__*");
+    expect(sdkOptions().allowedTools).not.toContain("Bash");
+    expect(sdkOptions().allowedTools).not.toContain("Edit");
   });
 
   it("enforces native tool policy before user settings can shadow the permission callback", async () => {
@@ -516,28 +851,12 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     }));
     let nativeDecision: unknown;
     let gatewayDecision: unknown;
+    let malformedDecision: unknown;
     useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const hooks = options.hooks as {
-        PreToolUse?: Array<{
-          hooks?: Array<
-            (
-              input: {
-                hook_event_name: "PreToolUse";
-                tool_name: string;
-                tool_input: Record<string, unknown>;
-                tool_use_id: string;
-              },
-              toolUseId: string | undefined,
-              options: { signal: AbortSignal },
-            ) => Promise<unknown>
-          >;
-        }>;
-      };
-      const hook = hooks.PreToolUse?.[0]?.hooks?.[0];
-      expect(hook).toEqual(expect.any(Function));
+      const hook = sdkPreToolUse(options);
       const signal = new AbortController().signal;
 
-      nativeDecision = await hook?.(
+      nativeDecision = await hook(
         {
           hook_event_name: "PreToolUse",
           tool_name: "Bash",
@@ -547,7 +866,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         "native-tool-shadowed",
         { signal },
       );
-      gatewayDecision = await hook?.(
+      gatewayDecision = await hook(
         {
           hook_event_name: "PreToolUse",
           tool_name: "mcp__openclaw__message",
@@ -555,6 +874,16 @@ describe("Anthropic Agent SDK runtime ownership", () => {
           tool_use_id: "gateway-tool-owned",
         },
         "gateway-tool-owned",
+        { signal },
+      );
+      malformedDecision = await hook(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: "not-an-object",
+          tool_use_id: "malformed-native-tool",
+        },
+        "malformed-native-tool",
         { signal },
       );
     });
@@ -569,6 +898,13 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       },
     });
     expect(gatewayDecision).toEqual({ continue: true });
+    expect(malformedDecision).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "OpenClaw rejected malformed native tool input.",
+      },
+    });
     expect(requestToolPermission).toHaveBeenCalledOnce();
     expect(requestToolPermission).toHaveBeenCalledWith({
       toolName: "Bash",
@@ -576,6 +912,37 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       toolCallId: "native-tool-shadowed",
       abortSignal: expect.any(AbortSignal),
     });
+  });
+
+  it("projects an approved native pre-tool action with the exact host-authorized input", async () => {
+    const updatedInput = { command: "printf SDK_TOOL_OK" };
+    const requestToolPermission = vi.fn(async () => ({ behavior: "allow" as const, updatedInput }));
+    let decision: unknown;
+    useSdkMessages([SUCCESS_RESULT], async (options) => {
+      decision = await sdkPreToolUse(options)(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "printf original" },
+          tool_use_id: "approved-native-tool",
+        },
+        undefined,
+        { signal: new AbortController().signal },
+      );
+    });
+
+    await collect(createContext({ requestToolPermission }));
+
+    expect(decision).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        updatedInput,
+      },
+    });
+    expect(requestToolPermission).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: "approved-native-tool" }),
+    );
   });
 
   it("keeps bypass-shaped backend arguments behind the host permission callback", async () => {
@@ -676,19 +1043,38 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(requestToolPermission).toHaveBeenCalledOnce();
   });
 
-  it("preserves error-marked success results for the host error and failover owners", async () => {
-    const result = {
-      type: "result",
-      subtype: "success",
-      is_error: true,
-      api_error_status: 429,
-      result: "Claude subscription rate limit reached.",
-      session_id: SESSION_ID,
-    };
-    useSdkMessages([result]);
+  it.each([429, 529])(
+    "yields an HTTP %i error-marked success before surfacing the SDK's later exit error",
+    async (apiErrorStatus) => {
+      const result = {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: apiErrorStatus,
+        result: "Claude subscription returned an upstream error.",
+        session_id: SESSION_ID,
+      };
+      const exitError = new Error("Claude Code returned an error result.");
+      queryMock.mockImplementation(() =>
+        Object.assign(
+          (async function* () {
+            yield result;
+            throw exitError;
+          })(),
+          { close: vi.fn() },
+        ),
+      );
+      const observed: Record<string, unknown>[] = [];
+      const running = (async () => {
+        for await (const event of executeClaudeAgentSdk(createContext())) {
+          observed.push(event);
+        }
+      })();
 
-    expect(await collect(createContext())).toContainEqual(result);
-  });
+      await expect(running).rejects.toBe(exitError);
+      expect(observed).toContainEqual(result);
+    },
+  );
 
   it("fails closed when the official SDK exits without a terminal result", async () => {
     useSdkMessages([]);

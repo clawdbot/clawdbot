@@ -251,14 +251,11 @@ export function buildAnthropicCliBackend(
           ...authInput?.env,
         };
         const agentSdkExecution =
-          !credentialContext.authCredential &&
-          !isolatedCompletion &&
-          context.executionMode === "agent" &&
-          (!context.toolAvailability || context.toolAvailability.native.length === 0)
+          !isolatedCompletion && context.executionMode === "agent"
             ? {
-                execute: async function* (executionContext: CliBackendExecuteContext) {
+                async *execute(executionContext: CliBackendExecuteContext) {
                   const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
-                  yield* executeClaudeAgentSdk(executionContext);
+                  yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
                 },
               }
             : undefined;

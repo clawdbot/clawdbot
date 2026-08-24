@@ -68,7 +68,7 @@ export function registerAgentTurnCommand(
     .option("--reply-account <id>", "Delivery account id override")
     .option(
       "--local",
-      "Run the embedded agent locally (requires model provider API keys in your shell)",
+      "Run the embedded agent locally using configured provider credentials or local CLI logins",
       false,
     )
     .option("--deliver", "Send the agent's reply back to the selected channel", false)

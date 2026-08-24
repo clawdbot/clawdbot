@@ -74,18 +74,20 @@ async function createOwner(
     ...(options.capture ? { captureKey: options.capture.key } : {}),
     ...(options.requiredGeneration ? { requiredGeneration: options.requiredGeneration } : {}),
   });
-  const exited = createDeferred<void>();
+  const exited = createDeferred();
+  const close = vi.fn(() => {
+    capability.remove(session);
+    if (!options.deferExit) {
+      exited.resolve();
+    }
+  });
+  const waitForExit = vi.fn(() => exited.promise);
   const session: CliBackendLiveSessionHandle = {
     generation: options.generation ?? `generation-${index}`,
     fingerprint: capability.fingerprint,
     isIdle: vi.fn(() => options.idle ?? false),
-    close: vi.fn(() => {
-      capability.remove(session);
-      if (!options.deferExit) {
-        exited.resolve();
-      }
-    }),
-    waitForExit: vi.fn(() => exited.promise),
+    close,
+    waitForExit,
   };
   const register = () => {
     capability.register(session);
@@ -96,6 +98,7 @@ async function createOwner(
     admission,
     beginCapture,
     capability,
+    close,
     context,
     exited,
     grant,
@@ -103,6 +106,7 @@ async function createOwner(
     session,
     sessionId,
     sessionKey,
+    waitForExit,
   };
 }
 
@@ -222,7 +226,7 @@ describe("generic plugin-owned live session registry", () => {
     expect(() => changed.capability.current()).toThrow(
       expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
     );
-    expect(original.session.close).not.toHaveBeenCalled();
+    expect(original.close).not.toHaveBeenCalled();
     expect(original.capability.current()).toBe(original.session);
   });
 
@@ -249,9 +253,62 @@ describe("generic plugin-owned live session registry", () => {
     );
 
     resumed.capability.remove(original.session);
+    resumed.capability.remove(original.session);
     expect(original.grant?.revokeProcessToken).toHaveBeenCalledOnce();
     expect(resumed.grant?.revokeProcessToken).not.toHaveBeenCalled();
     expect(original.capability.current()).toBeUndefined();
+  });
+
+  it("fences MCP capture when its admitted authority closes during process transfer", async () => {
+    const original = await createOwner({
+      sessionId: "transfer-closed-owner",
+      capture: { token: "original-process-token", key: "original-capture" },
+    });
+    original.register();
+    const resumed = await createOwner({
+      sessionId: "transfer-closed-owner",
+      capture: { token: "replacement-turn-token", key: "replacement-capture" },
+    });
+    resumed.grant?.adoptProcessToken.mockImplementation(() => resumed.admission.close());
+
+    expect(() => resumed.capability.activate(original.session)).toThrow("no longer active");
+
+    expect(resumed.grant?.adoptProcessToken).toHaveBeenCalledExactlyOnceWith(
+      "original-process-token",
+    );
+    expect(resumed.beginCapture).not.toHaveBeenCalled();
+    expect(original.capability.current()).toBe(original.session);
+  });
+
+  it.each([
+    {
+      name: "a captured process cannot resume without an admitted turn grant",
+      originalCapture: { token: "captured-process-token", key: "captured-process-key" },
+      resumedCapture: undefined,
+    },
+    {
+      name: "an uncaptured process cannot inherit a newly admitted turn grant",
+      originalCapture: undefined,
+      resumedCapture: { token: "new-turn-token", key: "new-turn-key" },
+    },
+  ])("$name", async ({ originalCapture, resumedCapture }) => {
+    const sessionId = "changed-capture-topology-owner";
+    const original = await createOwner({
+      sessionId,
+      ...(originalCapture ? { capture: originalCapture } : {}),
+    });
+    original.register();
+    const resumed = await createOwner({
+      sessionId,
+      ...(resumedCapture ? { capture: resumedCapture } : {}),
+    });
+
+    expect(() => resumed.capability.activate(original.session)).toThrow("MCP topology changed");
+    expect(resumed.beginCapture).not.toHaveBeenCalled();
+    if (resumed.grant) {
+      expect(resumed.grant.adoptProcessToken).not.toHaveBeenCalled();
+    }
+    expect(original.capability.current()).toBe(original.session);
   });
 
   it("keeps claimed native skill resources until subprocess exit and cleans exactly once", async () => {
@@ -267,8 +324,8 @@ describe("generic plugin-owned live session registry", () => {
     owner.exited.resolve();
     await closing;
 
-    expect(owner.session.close).toHaveBeenCalledWith("restart");
-    expect(owner.session.waitForExit).toHaveBeenCalledOnce();
+    expect(owner.close).toHaveBeenCalledWith("restart");
+    expect(owner.waitForExit).toHaveBeenCalledOnce();
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
@@ -282,7 +339,7 @@ describe("generic plugin-owned live session registry", () => {
 
     const replacement = await createOwner();
     expect(() => replacement.register()).not.toThrow();
-    expect(owners[0]?.session.close).toHaveBeenCalledWith("idle");
+    expect(owners[0]?.close).toHaveBeenCalledWith("idle");
 
     const overflow = await createOwner();
     expect(() => overflow.register()).toThrow("Too many CLI live sessions are active.");

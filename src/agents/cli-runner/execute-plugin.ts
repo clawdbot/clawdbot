@@ -1,5 +1,6 @@
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type {
@@ -9,8 +10,9 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
-import type { FailoverError } from "../failover-error.js";
+import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
 import {
   requestClaudeNativeToolApproval,
   resolveClaudeNativeToolApprovalPlan,
@@ -123,10 +125,11 @@ function waitForIteratorValue<T>(
   signal: AbortSignal,
 ): Promise<IteratorResult<T>> {
   if (signal.aborted) {
-    return Promise.reject(signal.reason);
+    return Promise.reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
   }
   return new Promise((resolve, reject) => {
-    const rejectAborted = () => reject(signal.reason);
+    const rejectAborted = () =>
+      reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
     signal.addEventListener("abort", rejectAborted, { once: true });
     void iterator.next().then(
       (value) => {
@@ -135,7 +138,7 @@ function waitForIteratorValue<T>(
       },
       (error: unknown) => {
         signal.removeEventListener("abort", rejectAborted);
-        reject(error);
+        reject(toErrorObject(error, "CLI plugin execution stream failed."));
       },
     );
   });
@@ -179,6 +182,7 @@ export async function executePluginOwnedProcess(params: {
   consumeStdout: (chunk: string) => void;
   activeToolCount?: () => number;
   onNoOutputTimeout?: (error: FailoverError) => void;
+  onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
   liveSession?: {
     captureKey?: string;
     beginCapture: (captureKey: string | undefined) => void;
@@ -289,44 +293,43 @@ export async function executePluginOwnedProcess(params: {
       }
       assertActive();
     }
-    iterator = params
-      .execute({
-        command,
-        args: params.executionArgs,
-        cwd,
-        env: params.env,
-        prompt: params.prompt,
-        modelId: params.context.normalizedModel,
-        systemPrompt: params.context.systemPrompt.trim(),
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        useResume: params.useResume,
+    const execution = params.execute({
+      command,
+      args: params.executionArgs,
+      cwd,
+      env: params.env,
+      prompt: params.prompt,
+      modelId: params.context.normalizedModel,
+      systemPrompt: params.context.systemPrompt.trim(),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      useResume: params.useResume,
+      abortSignal: signal,
+      timeoutMs: run.timeoutMs,
+      ...(run.executionMode ? { executionMode: run.executionMode } : {}),
+      ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
+      ...(params.liveSession
+        ? {
+            liveSession: createCliLiveSessionCapability({
+              context: params.context,
+              argv: [command, ...params.executionArgs],
+              env: params.env,
+              captureKey: params.liveSession.captureKey,
+              beginCapture: params.liveSession.beginCapture,
+              abortSignal: signal,
+              requiredGeneration: params.liveSession.requiredGeneration,
+              claimResources: params.context.preparedBackend.claimLiveSessionResources,
+            }),
+          }
+        : {}),
+      requestToolPermission: createPluginToolPermissionHandler({
+        context: params.context,
         abortSignal: signal,
-        timeoutMs: run.timeoutMs,
-        ...(run.executionMode ? { executionMode: run.executionMode } : {}),
-        ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
-        ...(params.liveSession
-          ? {
-              liveSession: createCliLiveSessionCapability({
-                context: params.context,
-                argv: [command, ...params.executionArgs],
-                env: params.env,
-                captureKey: params.liveSession.captureKey,
-                beginCapture: params.liveSession.beginCapture,
-                abortSignal: signal,
-                requiredGeneration: params.liveSession.requiredGeneration,
-                claimResources: params.context.preparedBackend.claimLiveSessionResources,
-              }),
-            }
-          : {}),
-        requestToolPermission: createPluginToolPermissionHandler({
-          context: params.context,
-          abortSignal: signal,
-          onPendingApproval: (delta) => {
-            outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-          },
-        }),
-      })
-      [Symbol.asyncIterator]();
+        onPendingApproval: (delta) => {
+          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
+        },
+      }),
+    });
+    iterator = execution[Symbol.asyncIterator]();
 
     for (;;) {
       const next = await waitForIteratorValue(iterator, signal);
@@ -366,7 +369,11 @@ export async function executePluginOwnedProcess(params: {
     }
   } catch (error) {
     if (run.abortSignal?.aborted || termination.reason === "manual-cancel") {
-      throw createCliAbortError();
+      const reason = isSignalTimeoutReason(run.abortSignal?.reason) ? "timeout" : "aborted";
+      if (!params.onInterrupted?.(reason)) {
+        throw createCliAbortError();
+      }
+      termination.reason = "manual-cancel";
     }
     // SDKs can throw after emitting an authoritative failed terminal record.
     // Preserve that record so the existing parser owns auth/rate-limit failover.
