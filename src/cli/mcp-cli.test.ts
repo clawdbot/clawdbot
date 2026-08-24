@@ -426,6 +426,57 @@ describe("mcp cli", () => {
     });
   });
 
+  it.each([
+    {
+      command: "configure",
+      flag: "--include",
+      value: "search,read_*",
+      expected: { include: ["search", "read_*"], exclude: ["admin_*"] },
+    },
+    {
+      command: "configure",
+      flag: "--exclude",
+      value: "write_*",
+      expected: { include: ["old_*"], exclude: ["write_*"] },
+    },
+    {
+      command: "tools",
+      flag: "--include",
+      value: "search,read_*",
+      expected: { include: ["read_*", "search"], exclude: ["admin_*"] },
+    },
+    {
+      command: "tools",
+      flag: "--exclude",
+      value: "write_*",
+      expected: { include: ["old_*"], exclude: ["write_*"] },
+    },
+  ])(
+    "preserves sibling tool filters for $command $flag",
+    async ({ command, flag, value, expected }) => {
+      await withTempHome("openclaw-cli-mcp-home-", async () => {
+        const workspaceDir = await createWorkspace();
+        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+        await runMcpCommand([
+          "mcp",
+          "set",
+          "docs",
+          JSON.stringify({
+            command: "node",
+            args: ["server.mjs"],
+            toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
+          }),
+        ]);
+        await runMcpCommand(["mcp", command, "docs", flag, value]);
+
+        mockLog.mockClear();
+        await runMcpCommand(["mcp", "show", "docs", "--json"]);
+        expect(JSON.parse(lastLogLine()).toolFilter).toEqual(expected);
+      });
+    },
+  );
+
   it("requires an explicit MCP tool filter operation", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
@@ -438,14 +489,17 @@ describe("mcp cli", () => {
     });
   });
 
-  it("clears per-server MCP tool filters only when requested", async () => {
+  it.each([
+    ["tools", "--clear"],
+    ["configure", "--clear-tools"],
+  ])("clears per-server MCP tool filters with %s %s", async (command, clearFlag) => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
       await runMcpCommand(["mcp", "tools", "docs", "--include", "search"]);
-      await runMcpCommand(["mcp", "tools", "docs", "--clear"]);
+      await runMcpCommand(["mcp", command, "docs", clearFlag]);
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "docs", "--json"]);
