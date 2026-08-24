@@ -93,10 +93,14 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   const primaryModifierMatches = wantsMod
     ? event.metaKey !== event.ctrlKey
     : !event.metaKey && event.ctrlKey === wantsCtrl;
+  // "/" and Backquote ignore Shift: some layouts need Shift to produce "/",
+  // and the shipped terminal chord accepts Ctrl+Shift+` (layouts where the
+  // Backquote key is shifted, e.g. producing ~, must keep working).
+  const shiftInsensitiveKey = combo.key === "/" || combo.key === "Backquote";
   if (
     !primaryModifierMatches ||
     event.altKey !== combo.modifiers.includes("alt") ||
-    (combo.key !== "/" && event.shiftKey !== combo.modifiers.includes("shift"))
+    (!shiftInsensitiveKey && event.shiftKey !== combo.modifiers.includes("shift"))
   ) {
     return false;
   }

@@ -68,6 +68,18 @@ describe("keyboard shortcut catalog matching", () => {
 
     expect(matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel, terminal)).toBe(true);
     expect(isTerminalPanelShortcut(terminal)).toBe(true);
+    // Shipped contract: Ctrl+Shift+Backquote still toggles the terminal
+    // (layouts where the Backquote key is shifted must keep working).
+    expect(
+      isTerminalPanelShortcut(
+        new KeyboardEvent("keydown", {
+          key: "~",
+          code: "Backquote",
+          ctrlKey: true,
+          shiftKey: true,
+        }),
+      ),
+    ).toBe(true);
     expect(matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, appearance)).toBe(
       true,
     );
