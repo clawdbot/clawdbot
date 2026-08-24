@@ -1,17 +1,8 @@
 // Qa Lab plugin module implements Mantis evidence artifact handling.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
-
-type DiscordQaSummary = {
-  scenarios?: {
-    artifactPaths?: Record<string, string>;
-    details?: string;
-    id?: string;
-    status?: string;
-    title?: string;
-  }[];
-};
 
 type NormalizedScenarioSummary = {
   details?: string;
@@ -36,6 +27,10 @@ export async function copyMantisDirContents(sourceDir: string, targetDir: string
   await fs.cp(sourceDir, targetDir, { recursive: true });
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
 async function readNormalizedLaneResult(params: {
   publishedLaneDir: string;
   scenario: string;
@@ -45,7 +40,7 @@ async function readNormalizedLaneResult(params: {
   try {
     rawSummary = await fs.readFile(summaryPath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isNotFoundError(error)) {
       return undefined;
     }
     throw error;
@@ -83,16 +78,24 @@ export async function readMantisLaneResult(params: {
   }
 
   const summaryPath = path.join(params.publishedLaneDir, "discord-qa-summary.json");
-  const summary = JSON.parse(await fs.readFile(summaryPath, "utf8")) as DiscordQaSummary;
-  const scenarioSummary =
-    summary.scenarios?.find((entry) => entry.id === params.scenario) ?? summary.scenarios?.[0];
+  const parsed: unknown = JSON.parse(await fs.readFile(summaryPath, "utf8"));
+  const scenarios =
+    isPlainObject(parsed) && Array.isArray(parsed.scenarios)
+      ? parsed.scenarios.filter(isPlainObject)
+      : [];
+  const scenarioSummary = scenarios.find((entry) => entry.id === params.scenario) ?? scenarios[0];
+  const artifactPaths = isPlainObject(scenarioSummary?.artifactPaths)
+    ? scenarioSummary.artifactPaths
+    : undefined;
   return {
     outputDir: params.publishedLaneDir,
-    scenarioDetails: scenarioSummary?.details,
-    screenshotPath: scenarioSummary?.artifactPaths?.screenshot,
-    status: scenarioSummary?.status ?? "fail",
+    scenarioDetails:
+      typeof scenarioSummary?.details === "string" ? scenarioSummary.details : undefined,
+    screenshotPath:
+      typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
+    status: typeof scenarioSummary?.status === "string" ? scenarioSummary.status : "fail",
     summaryPath,
-    videoPath: scenarioSummary?.artifactPaths?.video,
+    videoPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
   };
 }
 

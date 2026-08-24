@@ -168,7 +168,7 @@ export async function runMantisCommand(params: {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 function isPathWithinOrEqual(parentPath: string, childPath: string): boolean {

@@ -736,52 +736,8 @@ describe("mantis before/after runtime", () => {
     }
   });
 
-  it("removes a Mantis-owned partial lane directory only after exact registration is absent", async () => {
+  it("uses legacy porcelain before removing an unregistered owned lane directory", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-unregistered");
-    const listCalls: string[] = [];
-    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
-      if (command === "git" && execution.stage === "worktree-add") {
-        await fs.mkdir(String(args[4]), { recursive: true });
-        return successfulCommandResult();
-      }
-      if (command === "pnpm" && execution.stage === "qa") {
-        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
-        return successfulCommandResult();
-      }
-      if (command === "git" && execution.stage === "worktree-cleanup") {
-        if (args[1] === "remove") {
-          return failedCommandResult();
-        }
-        expect(args).toEqual(["worktree", "list", "--porcelain", "-z"]);
-        listCalls.push(listCalls.length === 0 ? "baseline" : "candidate");
-        return successfulCommandResult("");
-      }
-      throw new Error(`unexpected ${execution.stage} command`);
-    });
-
-    const result = await runMantisBeforeAfter({
-      baseline: "baseline-ref",
-      candidate: "candidate-ref",
-      commandRunner: runner,
-      outputDir: ".artifacts/qa-e2e/mantis/cleanup-unregistered",
-      repoRoot,
-      skipBuild: true,
-      skipInstall: true,
-    });
-
-    expect(result.status).toBe("pass");
-    expect(listCalls).toEqual(["baseline", "candidate"]);
-    await expect(fs.stat(path.join(outputDir, "worktrees", "baseline"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.join(outputDir, "worktrees", "candidate"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
-  });
-
-  it("falls back to legacy porcelain before removing an unregistered lane directory", async () => {
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-legacy-git");
     const listCalls: string[][] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
@@ -806,7 +762,7 @@ describe("mantis before/after runtime", () => {
       baseline: "baseline-ref",
       candidate: "candidate-ref",
       commandRunner: runner,
-      outputDir: ".artifacts/qa-e2e/mantis/cleanup-legacy-git",
+      outputDir: ".artifacts/qa-e2e/mantis/cleanup-unregistered",
       repoRoot,
       skipBuild: true,
       skipInstall: true,
@@ -819,6 +775,12 @@ describe("mantis before/after runtime", () => {
       ["worktree", "list", "--porcelain", "-z"],
       ["worktree", "list", "--porcelain"],
     ]);
+    await expect(fs.stat(path.join(outputDir, "worktrees", "baseline"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.stat(path.join(outputDir, "worktrees", "candidate"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
   });
 
