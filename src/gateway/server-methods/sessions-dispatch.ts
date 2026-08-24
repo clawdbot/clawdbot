@@ -183,7 +183,7 @@ function respondWorkerPlacement(params: {
   respond: RespondFn;
   key: string;
   sessionId: string;
-  deviceId?: string;
+  context: GatewayRequestContext;
   placement: Parameters<typeof projectWorkerSessionPlacement>[0];
 }): void {
   params.respond(
@@ -194,10 +194,10 @@ function respondWorkerPlacement(params: {
       sessionId: params.sessionId,
       placement: projectWorkerSessionPlacement(
         params.placement,
-        undefined,
-        params.deviceId
-          ? { kind: "device", status: "available", deviceId: params.deviceId }
-          : undefined,
+        params.context.workerPlacementDiskSpaceReader?.read(params.placement),
+        // Canonical fenced runner reader; a node lost after durable provision
+        // must project offline here exactly as sessions.list would.
+        params.context.workerPlacementRunnerAvailabilityReader?.read(params.placement),
       ),
     },
     undefined,
@@ -456,7 +456,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           respond,
           key: target.canonicalKey,
           sessionId,
-          deviceId: dispatchTarget.deviceId,
+          context,
           placement,
         });
         return;
@@ -619,7 +619,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         },
         sessionMutationAuthorization?.assertCurrent,
       );
-      respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, placement });
+      respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, context, placement });
     } catch (error) {
       respondWorkerDispatchError(error, respond);
     }

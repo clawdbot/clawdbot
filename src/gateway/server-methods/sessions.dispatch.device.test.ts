@@ -310,6 +310,16 @@ describe("sessions.dispatch device targets", () => {
           sshEndpoint: null,
           sharedHost: true,
         });
+        // attachSession resets the fixture environment; restamp the paired
+        // device binding so the canonical runner reader can name the host.
+        const attachSessionActual = vi
+          .mocked(harness.environments.attachSession)
+          .getMockImplementation();
+        vi.mocked(harness.environments.attachSession).mockImplementation(async (...args) => {
+          const minted = await attachSessionActual?.(...args);
+          harness.markEnvironmentNodeDeviceId("second");
+          return minted as Awaited<ReturnType<typeof harness.environments.attachSession>>;
+        });
         dispatchTestMocks.resolveTarget.mockReturnValue(
           makeSessionTarget({
             sessionId: "session-1",
