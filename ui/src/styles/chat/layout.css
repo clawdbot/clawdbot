@@ -429,6 +429,12 @@ openclaw-chat-page {
   content-visibility: auto;
 }
 
+/* Message context can extend above its row. Release paint containment only
+   while it is open so the popover stays visible without giving up idle skips. */
+.chat-virtual-row:has(details.msg-meta[open]) {
+  content-visibility: visible;
+}
+
 .chat-virtual-row--first > :first-child {
   margin-top: 0 !important;
 }
