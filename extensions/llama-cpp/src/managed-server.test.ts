@@ -18,6 +18,7 @@ vi.mock("./llama-server-install.js", async (importOriginal) => ({
 import { selectLlamaServerAsset } from "./llama-server-install.js";
 import {
   ensureLlamaCppModel,
+  ensureManagedLlamaServerForChat,
   inspectLlamaServerRuntime,
   prepareManagedLlamaServer,
 } from "./managed-server.js";
@@ -106,7 +107,7 @@ describe("managed llama-server", () => {
     );
   });
 
-  it("writes separate chat and embedding presets without unwired capabilities", async () => {
+  it("writes a 2048-token physical batch in the combined preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const asset = selectLlamaServerAsset("darwin", "arm64");
@@ -126,13 +127,14 @@ describe("managed llama-server", () => {
         chatModelPath: "/models/chat.gguf",
         contextSize: 8192,
         maxTokens: 2048,
+        embeddingModelIsDefault: true,
         embeddingModelPath: "/models/embedding.gguf",
         port: 19_432,
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
       expect(preset).toContain(
-        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nembedding = true",
+        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
       );
       expect(preset).not.toMatch(/mmproj|draft/iu);
     } finally {
@@ -140,7 +142,7 @@ describe("managed llama-server", () => {
     }
   });
 
-  it("writes an embedding-only preset without requiring a chat model", async () => {
+  it("preserves the llama.cpp physical batch default for a custom embedding model", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const asset = selectLlamaServerAsset("darwin", "arm64");
@@ -164,6 +166,58 @@ describe("managed llama-server", () => {
         "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
       );
       expect(preset).not.toContain("jinja");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a custom embedding model when chat prepares the shared restart preset", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-chat-preset-"));
+    const presetPath = path.join(tempRoot, "models.ini");
+    const chatModelPath = path.join(tempRoot, "chat.gguf");
+    const embeddingModelPath = path.join(tempRoot, "custom-embedding.gguf");
+    const asset = selectLlamaServerAsset("darwin", "arm64");
+    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
+      command: path.join(tempRoot, "llama-server"),
+      asset,
+    });
+    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+      installDir: tempRoot,
+      command: path.join(tempRoot, "llama-server"),
+      presetPath,
+    });
+
+    try {
+      await Promise.all([
+        fs.writeFile(chatModelPath, "GGUF"),
+        fs.writeFile(embeddingModelPath, "GGUF"),
+      ]);
+      await Promise.all([
+        prepareManagedLlamaServer({
+          embeddingModelPath,
+          port: 19_434,
+        }),
+        ensureManagedLlamaServerForChat({
+          provider: {
+            baseUrl: "http://127.0.0.1:19434/v1",
+            localService: { command: path.join(tempRoot, "llama-server"), args: [] },
+            models: [],
+            params: { modelCacheDir: tempRoot },
+          },
+          model: {
+            id: "chat-model",
+            params: { modelPath: chatModelPath, contextSize: 8192 },
+            maxTokens: 2048,
+          },
+        }),
+      ]);
+
+      const preset = await fs.readFile(presetPath, "utf8");
+      expect(preset).toContain(`[chat-model]\nmodel = ${chatModelPath}\nctx-size = 8192`);
+      expect(preset).toContain(
+        `[embeddinggemma-300m-qat-q8_0]\nmodel = ${embeddingModelPath}\nembedding = true`,
+      );
+      expect(preset).not.toContain("ubatch-size");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
