@@ -614,6 +614,20 @@ describe("iOS Fastlane release upload gates", () => {
     expect(reducerJob).not.toContain("SnapshotDerivedData");
   });
 
+  it("records a clean Fastlane semver when version output ends in punctuation", () => {
+    const workflow = readFileSync(ciWorkflowPath, "utf8");
+    const parser = workflow.match(/run_ios_fastlane --version 2>&1 \| awk '([^']+)'/u)?.[1];
+
+    expect(parser).toBeDefined();
+    const result = spawnSync("awk", [parser!], {
+      encoding: "utf8",
+      input: "fastlane installation at path:\nfastlane 2.236.1.\n",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2.236.1\n");
+  });
+
   it("preserves caller-pinned Swift tools in archive build PATH", () => {
     const fastfile = readFastfile();
     const pathBuilder = functionBody(fastfile, "xcodebuild_shell_join");

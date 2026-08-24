@@ -4091,7 +4091,7 @@ jobs:
           set -euo pipefail
           fastlane_version="$(
             source scripts/lib/ios-fastlane.sh
-            run_ios_fastlane --version 2>&1 | awk '/fastlane [0-9]+\.[0-9]+\.[0-9]+/ { version=$NF } END { print version }'
+            run_ios_fastlane --version 2>&1 | awk 'match($0, /fastlane [0-9]+\.[0-9]+\.[0-9]+/) { version=substr($0, RSTART + 9, RLENGTH - 9) } END { print version }'
           )"
           xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
           test "$xcode_version" = "$IOS_SCREENSHOT_XCODE_VERSION"
