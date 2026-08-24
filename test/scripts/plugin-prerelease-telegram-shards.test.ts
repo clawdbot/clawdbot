@@ -19,6 +19,12 @@ type WorkflowStep = {
   run?: string;
 };
 
+type PluginPrereleaseMatrixRow = {
+  extensions_csv: string;
+  includePatterns: string[];
+  task: string;
+};
+
 function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
 }
@@ -52,7 +58,7 @@ function runPluginPrereleaseManifest() {
   const root = mkdtempSync(join(tmpdir(), "openclaw-plugin-prerelease-telegram-shards-"));
   const outputPath = join(root, "github-output");
   try {
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       EXPECTED_SHA: "",
       FULL_RELEASE_VALIDATION: "false",
@@ -75,7 +81,9 @@ function runPluginPrereleaseManifest() {
           return [line.slice(0, separator), line.slice(separator + 1)];
         }),
     );
-    return JSON.parse(output.get("plugin_prerelease_extension_matrix") ?? "{}");
+    return JSON.parse(output.get("plugin_prerelease_extension_matrix") ?? "{}") as {
+      include: PluginPrereleaseMatrixRow[];
+    };
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -121,31 +129,21 @@ describe("plugin prerelease Telegram extension shards", () => {
 
   it("keeps dedicated Telegram shards inside the existing aggregate job contract", () => {
     const workflow = readPluginPrereleaseWorkflow();
-    const preflight = workflow.jobs.preflight;
-    const manifestStep = preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
-    );
     const extensionJob = workflow.jobs["plugin-prerelease-extension-shard"];
     const runStep = extensionJob.steps.find(
       (step: WorkflowStep) => step.name === "Run extension shard",
     );
     const suite = workflow.jobs["plugin-prerelease-suite"];
     const matrix = runPluginPrereleaseManifest();
-    const genericRows = matrix.include.filter(
-      (row: Record<string, unknown>) => row.task === "extensions-batch",
-    );
-    const telegramRows = matrix.include.filter(
-      (row: Record<string, unknown>) => row.task === "extension-file-shard",
-    );
+    const genericRows = matrix.include.filter((row) => row.task === "extensions-batch");
+    const telegramRows = matrix.include.filter((row) => row.task === "extension-file-shard");
     const trackedTelegramTestFiles = listTrackedTestFilesForRoots(["extensions/telegram"]);
     const runnableTelegramTestFiles = listTelegramRunnableTestFiles();
 
     expect(genericRows).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
-    expect(
-      genericRows.some((row: Record<string, unknown>) =>
-        String(row.extensions_csv).split(",").includes("telegram"),
-      ),
-    ).toBe(false);
+    expect(genericRows.some((row) => row.extensions_csv.split(",").includes("telegram"))).toBe(
+      false,
+    );
     const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
     const expectedTelegramPartitions = splitExtensionTestJobTargets(
       telegramConfig,
@@ -163,9 +161,9 @@ describe("plugin prerelease Telegram extension shards", () => {
         }),
       ),
     );
-    const telegramPartitions = telegramRows.map((row: Record<string, unknown>) => {
+    const telegramPartitions = telegramRows.map((row) => {
       expect(row.includePatterns).toBeInstanceOf(Array);
-      return row.includePatterns as string[];
+      return row.includePatterns;
     });
     expect(telegramPartitions.every((partition) => partition.length > 0)).toBe(true);
     expect(telegramPartitions.flat().toSorted((left, right) => left.localeCompare(right))).toEqual(
