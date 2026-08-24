@@ -1,10 +1,10 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
-import { localEditorFilePath } from "../../../lib/gateway-locality.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
@@ -64,7 +64,6 @@ export type FileViewControls = {
   execNode: string | null;
   editorMenuOpen: boolean;
   editing: boolean;
-  gatewayUrl: string | null;
   loadingEditor: boolean;
   mountKey: number;
   matches: number[];
@@ -118,7 +117,7 @@ export function renderSidebarFile(
   onViewRawText: () => void,
   controls?: FileViewControls,
 ) {
-  const absolutePath = localEditorFilePath(content, controls?.gatewayUrl, controls?.execNode);
+  const absolutePath = localEditorFilePath(content, controls?.execNode);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
   return html`
     <section class="sidebar-file-view">

@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
+import { isLoopbackHostname } from "../lib/gateway-locality.ts";
+import {
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../test-helpers/native-gateways.ts";
 import {
   fetchSessionMenuWork,
   resolveSessionPullRequestIndicatorState,
@@ -18,15 +23,28 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
   };
 }
 
-function sessionMenuClient(
-  request: (method: string, params: unknown) => Promise<unknown>,
-  gatewayUrl = "ws://localhost:18789",
-) {
-  return {
-    gatewayUrl,
-    request: request as never,
-  };
+function sessionMenuClient(request: (method: string, params: unknown) => Promise<unknown>) {
+  return { request: request as never };
 }
+
+beforeEach(() => {
+  setNativeGatewayTestState("local");
+});
+
+afterEach(() => {
+  clearNativeGatewayTestState();
+  vi.restoreAllMocks();
+});
+
+describe("isLoopbackHostname", () => {
+  it.each([
+    ["127.0.0.5", true],
+    ["[::1]", true],
+    ["127.0.0.1.evil.com", false],
+  ])("classifies %s as loopback: %s", (hostname, expected) => {
+    expect(isLoopbackHostname(hostname)).toBe(expected);
+  });
+});
 
 describe("session pull request indicators", () => {
   it.each([
@@ -55,42 +73,31 @@ describe("session pull request indicators", () => {
 
 describe("fetchSessionMenuWork", () => {
   it.each([
-    { name: "localhost", gatewayUrl: "ws://localhost:18789", expectedPath: "/work/trees/demo" },
-    { name: "same-origin relative URL", gatewayUrl: "/gateway", expectedPath: "/work/trees/demo" },
-    {
-      name: "IPv4 loopback block",
-      gatewayUrl: "ws://127.0.0.5:18789",
-      expectedPath: "/work/trees/demo",
-    },
-    { name: "IPv6 loopback", gatewayUrl: "ws://[::1]:18789", expectedPath: "/work/trees/demo" },
-    { name: "remote gateway", gatewayUrl: "wss://gateway.example.test", expectedPath: null },
-    { name: "gateway LAN address", gatewayUrl: "ws://192.168.1.5:18789", expectedPath: null },
-    {
-      name: "deceptive loopback hostname",
-      gatewayUrl: "wss://127.0.0.1.evil.com",
-      expectedPath: null,
-    },
+    { name: "plain browser", nativeGateway: null, expectedPath: null },
+    { name: "native local gateway", nativeGateway: "local", expectedPath: "/work/trees/demo" },
+    { name: "native remote gateway", nativeGateway: "remote", expectedPath: null },
     {
       name: "remote execution node",
-      gatewayUrl: "ws://localhost:18789",
+      nativeGateway: "local",
       execNode: "build-mac",
       expectedPath: null,
     },
-  ])("exposes editor paths only for viewer-local files: $name", async (testCase) => {
+  ] as const)("exposes editor paths only for native-local files: $name", async (testCase) => {
+    setNativeGatewayTestState(testCase.nativeGateway);
     const request = vi.fn(async () => ({
       worktrees: [{ id: "wt-1", path: "/work/trees/demo" }],
     }));
 
     await expect(
       fetchSessionMenuWork({
-        client: sessionMenuClient(request, testCase.gatewayUrl),
+        client: sessionMenuClient(request),
         loadPullRequests: async () => ({
           pullRequests: [pullRequest({ url: "https://example.test/pr" })],
           rateLimited: false,
           status: "ready",
         }),
         worktreeId: "wt-1",
-        execNode: testCase.execNode,
+        execNode: "execNode" in testCase ? testCase.execNode : undefined,
       }),
     ).resolves.toEqual({
       pullRequestUrl: "https://example.test/pr",

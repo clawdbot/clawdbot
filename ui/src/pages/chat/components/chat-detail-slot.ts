@@ -56,7 +56,6 @@ export function renderChatDetailSlot(params: {
     html`<openclaw-chat-detail-panel
       class="chat-sidebar"
       .content=${content}
-      .gatewayUrl=${host.client?.gatewayUrl ?? null}
       .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
       .basePath=${params.chat.basePath ?? ""}
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}

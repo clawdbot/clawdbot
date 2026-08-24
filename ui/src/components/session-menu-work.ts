@@ -4,13 +4,13 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { isLoopbackGatewayUrl } from "../lib/gateway-locality.ts";
+import { isNativeLocalGateway } from "../app/native-editor-locality.runtime.ts";
 
 // Shared by the app sidebar and the Sessions page: both hosts resolve the
 // same worktree-session extras (PR link, checkout path) when opening the
 // session context menu, after the menu is already visible.
 type SessionMenuWorkParams = {
-  client: Pick<GatewayBrowserClient, "request" | "gatewayUrl">;
+  client: Pick<GatewayBrowserClient, "request">;
   /** Omitted when the Gateway does not advertise pushed PR snapshots. */
   loadPullRequests?: () => Promise<ControlUiSessionPullRequestSnapshot | undefined>;
   worktreeId?: string;
@@ -61,10 +61,10 @@ async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string
 
 async function loadWorktreePath(params: SessionMenuWorkParams): Promise<string | null> {
   const worktreeId = params.worktreeId;
-  // The checkout path only means anything to an editor running on the same
-  // machine as the browser, so withhold it for a remote gateway or a session
-  // pinned to an exec node. Callers render the editor entry off this value.
-  if (!worktreeId || params.execNode || !isLoopbackGatewayUrl(params.client.gatewayUrl)) {
+  if (!worktreeId || params.execNode) {
+    return null;
+  }
+  if (!isNativeLocalGateway()) {
     return null;
   }
   try {

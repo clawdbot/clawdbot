@@ -10,9 +10,6 @@ export function renderChatSidebarEditorMenu(params: {
   onOpenChange: (open: boolean) => void;
   onOpenEditor: (editor: EditorId) => void;
 }) {
-  // A null path means the file is not reachable from this browser (remote
-  // gateway or exec node), so the handoff would silently no-op. Drop the
-  // control rather than leaving a disabled one that cannot explain itself.
   if (!params.absolutePath) {
     return nothing;
   }

@@ -41,7 +41,7 @@ type SessionMenuData = {
  * hides the block entirely (plain chat sessions), loading keeps the items
  * rendered-but-disabled so the menu layout never shifts under the pointer.
  * A resolved null `worktreePath` drops the editor row for good — see
- * `gateway-locality.ts` for why a remote checkout never gets one.
+ * `native-editor-locality.runtime.ts` for which checkouts ever get one.
  */
 export type SessionMenuWork = {
   loading: boolean;

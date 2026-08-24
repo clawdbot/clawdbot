@@ -7,6 +7,10 @@ import type {
   SessionDiffFile,
   SessionsDiffResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
+import {
+  localEditorFilePath,
+  observeNativeGateway,
+} from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/tooltip.ts";
@@ -24,7 +28,6 @@ import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { localEditorFilePath } from "../../../lib/gateway-locality.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
@@ -151,7 +154,6 @@ function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
 }
 
 class SessionDiffPanel extends OpenClawLightDomElement {
-  @property({ attribute: false }) gatewayUrl: string | null = null;
   @property({ attribute: false }) execNode: string | null = null;
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
   @property({ attribute: false }) loadFileText: SessionDiffFileTextLoader | null = null;
@@ -168,6 +170,13 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   private readonly fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
   private readonly unavailableFileText = new WeakSet<FileView>();
   private prefetchedDiffResult: SessionsDiffResult | null = null;
+
+  constructor() {
+    super();
+    observeNativeGateway(this, () => {
+      this.menu = null;
+    });
+  }
 
   private readonly diffTask = new Task(this, {
     args: () =>
@@ -477,11 +486,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const collapsed = this.collapsedPaths.has(file.path);
     const { directory, name } = splitPath(file.path);
     const absPath = result.root
-      ? (localEditorFilePath(
-          { root: result.root, path: file.path },
-          this.gatewayUrl,
-          this.execNode,
-        ) ?? undefined)
+      ? (localEditorFilePath({ root: result.root, path: file.path }, this.execNode) ?? undefined)
       : undefined;
     const pathTitle = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
     return html`

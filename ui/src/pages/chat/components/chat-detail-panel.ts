@@ -1,4 +1,8 @@
 import { property, state } from "lit/decorators.js";
+import {
+  localEditorFilePath,
+  observeNativeGateway,
+} from "../../../app/native-editor-locality.runtime.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -6,7 +10,6 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { localEditorFilePath } from "../../../lib/gateway-locality.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
@@ -29,7 +32,6 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
-  @property({ attribute: false }) gatewayUrl: string | null = null;
   @property({ attribute: false }) execNode: string | null = null;
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
@@ -73,6 +75,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     FileCopyAction,
     ReturnType<typeof globalThis.setTimeout>
   >();
+
+  constructor() {
+    super();
+    observeNativeGateway(this);
+  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -320,7 +327,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (content?.kind !== "file") {
       return;
     }
-    const absPath = localEditorFilePath(content, this.gatewayUrl, this.execNode);
+    const absPath = localEditorFilePath(content, this.execNode);
     if (!absPath) {
       return;
     }
@@ -598,7 +605,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         execNode: this.execNode,
         editorMenuOpen: this.fileEditorMenuOpen,
         editing: this.fileEditing,
-        gatewayUrl: this.gatewayUrl,
         loadingEditor: this.fileEditorLoading,
         mountKey: this.fileOperationVersion,
         matches,
