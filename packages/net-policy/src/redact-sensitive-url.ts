@@ -34,16 +34,23 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "private_key",
   "credential",
   "authorization",
-  // Common signed/API gateway aliases that do not contain an existing secret-name marker.
+  // Common signed-URL aliases that exact marker matches above do not cover.
   "sig",
   "x_api_key",
   "x_access_token",
   "x_auth_token",
+  "x_amz_credential",
+  "x_goog_credential",
+  "x_goog_signature",
 ]);
 // Align with FORM_BODY_KEY_SEPARATOR_RE: category-Lo Hangul fillers can splice sensitive names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 // Proxy and per-resource bearer URLs may prefix a token key or suffix it with a random hex id.
 const SUFFIXED_OR_SCOPED_TOKEN_QUERY_PARAM_RE = /(?:^|_)token(?:_[a-f0-9]{16,})?$/u;
+// Broad credential markers for diagnostic sinks only. Deliberately over-matches
+// (`token_count` included); see isSensitiveUrlQueryParamNameForDiagnostics.
+const SENSITIVE_URL_QUERY_PARAM_DIAGNOSTIC_MARKER_RE =
+  /(?:token|password|secret|key|auth|credential)/iu;
 
 // Telegram bot credentials use `/bot<token>/...`; align this shape with logging/redact.ts.
 const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3[aA])[A-Za-z0-9_-]{20,}(?=\/|$)/giu;
@@ -122,6 +129,31 @@ export function isSensitiveUrlQueryParamName(name: string): boolean {
     normalized.unresolvedEncoding ||
     SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized.value) ||
     SUFFIXED_OR_SCOPED_TOKEN_QUERY_PARAM_RE.test(normalized.value)
+  );
+}
+
+/**
+ * Superset of {@link isSensitiveUrlQueryParamName} for log and diagnostic sinks.
+ *
+ * The canonical classifier above is deliberately exact-by-name so that URLs we
+ * show back to a user keep their non-secret params readable: `token_count`,
+ * `signal` and `sigmoid` must stay visible even though they embed a marker
+ * substring. Diagnostic sinks have the opposite bias — an unredacted value is a
+ * credential leak, while an over-redacted one only costs some debuggability —
+ * so they match the marker substrings too. Use this for error text and log
+ * lines; use {@link isSensitiveUrlQueryParamName} for user-visible URLs.
+ */
+export function isSensitiveUrlQueryParamNameForDiagnostics(name: string): boolean {
+  if (isSensitiveUrlQueryParamName(name)) {
+    return true;
+  }
+  if (SENSITIVE_URL_QUERY_PARAM_DIAGNOSTIC_MARKER_RE.test(name)) {
+    return true;
+  }
+  // Also match after separator stripping and percent-decoding so spliced names
+  // such as `sessionㅤsecret` cannot slip a credential through a log sink.
+  return SENSITIVE_URL_QUERY_PARAM_DIAGNOSTIC_MARKER_RE.test(
+    normalizeUrlQueryParamName(name).value,
   );
 }
 
