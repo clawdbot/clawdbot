@@ -18,6 +18,10 @@ import {
   type ActiveTaskRestartBlocker,
   formatActiveTaskRestartBlocker,
 } from "../tasks/task-restart-blocker.js";
+import {
+  type GatewaySuspensionParticipantBlocker,
+  inspectGatewaySuspensionParticipants,
+} from "./gateway-suspension-participants.js";
 
 type GatewayActiveWorkCounts = {
   queueSize: number;
@@ -33,6 +37,7 @@ type GatewayActiveWorkCounts = {
   queuedTurns: number;
   terminalPersistence: number;
   terminalSessions: number;
+  pluginParticipants: number;
   /** Compatibility aggregate. Categories can overlap; use individual counts for diagnostics. */
   totalActive: number;
 };
@@ -51,10 +56,13 @@ export type GatewayActiveWorkBlocker = {
     | "chat-run"
     | "queued-turn"
     | "terminal-persistence"
-    | "terminal-session";
+    | "terminal-session"
+    | "plugin-participant";
   count: number;
   message: string;
   task?: ActiveTaskRestartBlocker;
+  /** Set for plugin-participant blockers so operators can name the owner. */
+  participantId?: string;
 };
 
 export type GatewayActiveWorkSnapshot = {
@@ -84,6 +92,7 @@ export type GatewayActiveWorkInspectors = {
   getQueuedTurns: () => number;
   getTerminalPersistence: () => number;
   getTerminalSessions: () => number;
+  getPluginParticipants: () => GatewaySuspensionParticipantBlocker[];
 };
 
 const defaultInspectors: GatewayActiveWorkInspectors = {
@@ -102,6 +111,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getQueuedTurns: () => 0,
   getTerminalPersistence: () => 0,
   getTerminalSessions: () => 0,
+  getPluginParticipants: inspectGatewaySuspensionParticipants,
 };
 
 function normalizeCount(value: number): number {
@@ -113,6 +123,7 @@ export function createGatewayActiveWorkSnapshot(
   options: { ignoreTerminalSessions?: boolean } = {},
 ): GatewayActiveWorkSnapshot {
   const resolved = { ...defaultInspectors, ...inspectors };
+  const participantBlockers = resolved.getPluginParticipants();
   const counts: GatewayActiveWorkCounts = {
     queueSize: normalizeCount(resolved.getQueueSize()),
     pendingReplies: normalizeCount(resolved.getPendingReplies()),
@@ -127,6 +138,10 @@ export function createGatewayActiveWorkSnapshot(
     queuedTurns: normalizeCount(resolved.getQueuedTurns()),
     terminalPersistence: normalizeCount(resolved.getTerminalPersistence()),
     terminalSessions: normalizeCount(resolved.getTerminalSessions()),
+    pluginParticipants: participantBlockers.reduce(
+      (total, blocker) => total + normalizeCount(blocker.count),
+      0,
+    ),
     totalActive: 0,
   };
   counts.totalActive =
@@ -190,6 +205,15 @@ export function createGatewayActiveWorkSnapshot(
       "terminal-session",
       `${counts.terminalSessions} open terminal session(s)`,
     );
+  }
+
+  for (const participant of participantBlockers) {
+    blockers.push({
+      kind: "plugin-participant",
+      count: normalizeCount(participant.count),
+      message: participant.message,
+      participantId: participant.participantId,
+    });
   }
 
   if (counts.activeTasks > 0) {
