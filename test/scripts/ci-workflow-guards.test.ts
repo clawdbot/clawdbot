@@ -1524,16 +1524,36 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("retains pending same-SHA QA calls in the shared concurrency group", () => {
+  it("separates release QA lanes without weakening their resource locks", () => {
     const workflowPath = ".github/workflows/qa-live-transports-convex.yml";
     const workflowSource = readFileSync(workflowPath, "utf8");
     const workflow = parse(workflowSource);
+    const releaseWorkflow = readReleaseChecksWorkflow();
 
+    expect(workflow.on.workflow_call.inputs.lock_scope).toEqual({
+      description: "Concurrency scope for a trusted single-lane reusable call",
+      required: false,
+      default: "all",
+      type: "string",
+    });
     expect(workflow.concurrency).toEqual({
-      group: "qa-lab-all-lanes-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}",
+      group:
+        "qa-lab-${{ inputs.lock_scope || 'all' }}-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}",
       "cancel-in-progress": false,
       queue: "max",
     });
+    expect(workflow.jobs.run_live_matrix.concurrency).toEqual({
+      group: "qa-live-matrix-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      "cancel-in-progress": false,
+      queue: "max",
+    });
+    expect(workflow.jobs.run_live_buzz.concurrency).toEqual({
+      group: "qa-live-buzz-shared",
+      "cancel-in-progress": false,
+      queue: "max",
+    });
+    expect(releaseWorkflow.jobs.qa_live_release_checks.with.lock_scope).toBe("matrix");
+    expect(releaseWorkflow.jobs.qa_live_buzz_release_checks.with.lock_scope).toBe("buzz");
   });
 
   it("extracts module heredocs only at exact closing marker lines", () => {
