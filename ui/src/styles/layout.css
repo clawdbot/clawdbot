@@ -1836,11 +1836,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session__archive-glyph svg {
-  width: var(--session-row-glyph-size, 11px);
-  height: var(--session-row-glyph-size, 11px);
+  width: 11px;
+  height: 11px;
   stroke: currentColor;
   fill: none;
-  stroke-width: var(--session-row-glyph-stroke, 1.8px);
+  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session--dragging {
@@ -1853,7 +1853,7 @@ openclaw-settings-save-indicator:empty {
   --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
   /* Title line box, shared by the label's line-height and the overlaid actions:
      both must resolve the same value or the buttons drift off the title. */
-  --sidebar-session-title-line-height: calc(18px * var(--control-ui-text-scale));
+  --sidebar-title-line-height: calc(18px * var(--control-ui-text-scale));
 
   display: flex;
   align-items: center;
@@ -1960,11 +1960,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-child-session-toggle__icon svg {
-  width: var(--session-row-glyph-size, 11px);
-  height: var(--session-row-glyph-size, 11px);
+  width: 11px;
+  height: 11px;
   fill: none;
   stroke: currentColor;
-  stroke-width: var(--session-row-glyph-stroke, 1.8px);
+  stroke-width: 1.8px;
 }
 
 .sidebar-child-session-toggle__count {
@@ -1985,11 +1985,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-board-glyph svg {
-  width: var(--session-row-glyph-size, 13px);
-  height: var(--session-row-glyph-size, 13px);
+  width: 13px;
+  height: 13px;
   fill: none;
   stroke: currentColor;
-  stroke-width: var(--session-row-glyph-stroke, 1.7px);
+  stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -2088,7 +2088,7 @@ openclaw-settings-save-indicator:empty {
 .sidebar-recent-session__name {
   display: block;
   width: 100%;
-  line-height: var(--sidebar-session-title-line-height);
+  line-height: var(--sidebar-title-line-height);
   flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
@@ -2139,13 +2139,13 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-child-session__status svg {
-  width: var(--session-row-glyph-size, 12px);
-  height: var(--session-row-glyph-size, 12px);
+  width: 12px;
+  height: 12px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: var(--session-row-glyph-stroke, 1.8px);
+  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
@@ -2169,18 +2169,14 @@ openclaw-settings-save-indicator:empty {
 
 /* Title line midpoint = the link's top padding plus half the title's line box.
    Deriving it keeps the buttons on the title when either value changes. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):not(
-    .sidebar-recent-session--single-line
-  )
+.sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__link {
   padding-block: 1px;
 }
 
-.sidebar-recent-session:not(.sidebar-recent-session--child):not(
-    .sidebar-recent-session--single-line
-  )
+.sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__aside {
-  inset: calc(1px + max(24px, var(--sidebar-session-title-line-height)) / 2) 2px auto auto;
+  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 2px auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2200,71 +2196,21 @@ openclaw-settings-save-indicator:empty {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* The full button remains a 24px pointer target. Constrain only its painted
-   hover fill to the title line so it cannot cover the persistent endcap below. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):not(
-    .sidebar-recent-session--single-line
-  )
-  .session-action::before {
-  inset-block: max(
-    0px,
-    calc(
-      (var(--session-row-action-size, 24px) - max(24px, var(--sidebar-session-title-line-height))) /
-        2
-    )
-  );
-}
-
 /* Only the title yields width to the actions. The second line keeps subtitle,
    badges, state and time visible, which is the point of moving the buttons up. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+.sidebar-recent-session:not(
+    .sidebar-recent-session--child,
+    .sidebar-recent-session--single-line
+  ):is(:hover, :focus-within)
   .sidebar-recent-session__title-row {
-  padding-right: var(--session-row-actions-reserve, 52px);
+  padding-right: var(--row-actions-reserve);
 }
 
 /* Single-line rows put the endcap beside the title, so the reservation has to
    cover the whole line there rather than the title alone. */
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   .sidebar-recent-session__text {
-  padding-right: var(--session-row-actions-reserve, 52px);
-}
-
-.sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
-  .sidebar-recent-session__title-row {
-  padding-right: 0;
-}
-
-/* Touch keeps the actions permanently visible beside the persistent endcap. */
-@media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session,
-  .sidebar-recent-session__link {
-    min-height: 44px;
-  }
-
-  .sidebar-recent-session {
-    --sidebar-child-session-toggle-width: max(44px, calc(36px * var(--control-ui-text-scale)));
-  }
-
-  .sidebar-child-session-toggle {
-    height: 44px;
-  }
-
-  .sidebar-recent-session:not(.sidebar-recent-session--child):not(
-      .sidebar-recent-session--single-line
-    )
-    > .sidebar-recent-session__aside {
-    inset: 50% 2px auto auto;
-  }
-
-  /* Always-visible 44px controls span a two-line row, so reserve their width
-     from the whole text column rather than letting them cover the endcap. */
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
-    padding-right: var(--session-row-actions-reserve, 52px);
-  }
-
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__title-row {
-    padding-right: 0;
-  }
+  padding-right: var(--row-actions-reserve);
 }
 
 .nav-collapse-toggle__icon {
@@ -3096,9 +3042,33 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 @media (hover: none), (pointer: coarse) {
-  .sidebar-zone-entry .sidebar-recent-session,
-  .sidebar-zone-entry .sidebar-recent-session__link {
+  .sidebar-recent-session,
+  .sidebar-recent-session__link,
+  .sidebar-zone-entry :is(.sidebar-recent-session, .sidebar-recent-session__link) {
     min-height: 44px;
+  }
+
+  .sidebar-recent-session {
+    --sidebar-child-session-toggle-width: max(44px, calc(36px * var(--control-ui-text-scale)));
+  }
+
+  .sidebar-child-session-toggle {
+    height: 44px;
+  }
+
+  .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
+    > .sidebar-recent-session__aside {
+    inset: 50% 2px auto auto;
+  }
+
+  /* Always-visible 44px controls span a two-line row, so reserve their width
+     from the whole text column rather than letting them cover the endcap. */
+  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
+    padding-right: var(--row-actions-reserve);
+  }
+
+  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__title-row {
+    padding-right: 0;
   }
 }
 
@@ -4449,11 +4419,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .sidebar-session-pr-indicator svg {
-  width: var(--session-row-glyph-size, 16px);
-  height: var(--session-row-glyph-size, 16px);
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
-  stroke-width: var(--session-row-glyph-stroke, 1.7px);
+  stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -4472,17 +4442,13 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: flex;
   align-items: center;
   min-width: 0;
-  height: var(--sidebar-session-title-line-height);
-  overflow: hidden;
 }
 
 /* Desktop action hitboxes belong entirely to the title line. Grow that line to
    the 24px target and reclaim the space from the link padding above. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):not(
-    .sidebar-recent-session--single-line
-  )
+.sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   .sidebar-recent-session__title-row {
-  height: max(24px, var(--sidebar-session-title-line-height));
+  height: max(24px, var(--sidebar-title-line-height));
 }
 
 /* Single-line rows lay the text column out in a row, so the title box has to
@@ -4537,15 +4503,14 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .sidebar-recent-session__details-endcap {
   display: inline-flex;
   align-items: center;
-  gap: var(--session-row-glyph-gap, 6px);
+  gap: var(--row-glyph-gap, 6px);
   max-width: 100%;
   height: 18px;
   min-width: 0;
-  padding-right: var(--session-row-glyph-inset, 0);
+  padding-right: calc((var(--row-action-size) - 14px) / 2);
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;
-  transition: opacity var(--duration-fast) ease;
 }
 
 .sidebar-recent-session__details-endcap .session-row-state {
@@ -4556,16 +4521,13 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--session-row-glyph-size, 16px);
-  height: var(--session-row-glyph-size, 16px);
+  width: 16px;
+  height: 16px;
   flex: none;
 }
 
 .sidebar-session-attention__icon--question,
-.sidebar-session-attention__icon--approval {
-  color: var(--warn);
-}
-
+.sidebar-session-attention__icon--approval,
 .sidebar-session-attention__icon--agent {
   color: var(--warn);
 }
@@ -4575,11 +4537,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .sidebar-session-attention__icon svg {
-  width: var(--session-row-glyph-size, 15px);
-  height: var(--session-row-glyph-size, 15px);
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
-  stroke-width: var(--session-row-glyph-stroke, 1.8px);
+  stroke-width: 1.8px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }

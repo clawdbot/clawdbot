@@ -5817,38 +5817,22 @@ td.data-table-key-col {
 .session-row-host {
   /* One size and one stroke for every glyph the row draws. Seven different
      values used to land on the same line, which read as broken alignment.
-     Surfaces outside a row keep their own sizes through the fallbacks. */
-  --session-row-glyph-size: 14px;
-  --session-row-glyph-stroke: 1.6px;
+     The row-scoped SVG rule below leaves other surfaces at their own sizes. */
+  /* One grid for everything in the trailing column. The 24px action target sets
+     the desktop pitch; 14px endcap glyphs use the remaining 10px as their gap
+     so both lines share one trailing axis. */
+  --row-action-size: 24px;
+  --row-glyph-gap: 10px;
 
-  /* The run ring is optically sized, not box-matched: it inks its whole box
-     while the line icons beside it only ink 9-10px of theirs (measured: pin
-     9.3, menu dots 10.0), so a box-matched ring reads a size larger than
-     everything on its line. Rows outside this host keep the ring's own size. */
-  --session-row-ring-size: calc(var(--session-row-glyph-size) - 3px);
-
-  /* One grid for everything in the trailing column. The 24px action target and
-     its hair of separation set the desktop pitch; bare endcap glyphs borrow
-     that pitch and the button's inset so both lines share one trailing axis. */
-  --session-row-action-size: 24px;
-  --session-row-action-gap: 1px;
-  --session-row-glyph-pitch: calc(var(--session-row-action-size) + var(--session-row-action-gap));
-  --session-row-glyph-gap: calc(var(--session-row-glyph-pitch) - var(--session-row-glyph-size));
-  --session-row-glyph-inset: calc(
-    (var(--session-row-action-size) - var(--session-row-glyph-size)) / 2
-  );
-
-  /* What the title gives up so the actions have somewhere to land: both boxes,
-     the gap between them, and a hair of clearance from the ellipsis. */
-  --session-row-actions-reserve: calc(
-    var(--session-row-action-size) * 2 + var(--session-row-action-gap) + 3px
-  );
+  /* What the title gives up so the actions have somewhere to land: both boxes
+     plus a hair of clearance from the ellipsis. */
+  --row-actions-reserve: calc(var(--row-action-size) * 2 + 3px);
 
   position: relative;
 }
 
 .session-row-host[data-session-row-action-count="1"] {
-  --session-row-actions-reserve: calc(var(--session-row-action-size) + 3px);
+  --row-actions-reserve: calc(var(--row-action-size) + 3px);
 }
 
 .session-row-host--draft {
@@ -5927,13 +5911,12 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--session-row-glyph-gap, 6px);
+  gap: var(--row-glyph-gap, 6px);
   /* The ring and the unread dot are bare shapes, not icons in a box, so
      right-flush they hung 2-4px past the icon column above them. One glyph-wide
      floor plus the centring above puts whatever the row is showing on the same
-     axis as the icons. No fallback on purpose: outside a row host the token is
-     undefined, min-width falls back to auto, and other surfaces are unchanged. */
-  min-width: var(--session-row-glyph-size);
+     axis as the icons. */
+  min-width: 14px;
   pointer-events: none;
 }
 
@@ -5945,11 +5928,11 @@ td.data-table-key-col {
 }
 
 .sidebar-session-fork-indicator svg {
-  width: var(--session-row-glyph-size, 14px);
-  height: var(--session-row-glyph-size, 14px);
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
-  stroke-width: var(--session-row-glyph-stroke, 1.6px);
+  stroke-width: 1.6px;
 }
 
 /* Attribute badges (attached automation, approval, cloud placement):
@@ -5957,7 +5940,7 @@ td.data-table-key-col {
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: var(--session-row-glyph-gap, 6px);
+  gap: var(--row-glyph-gap, 6px);
   flex: 0 0 auto;
 }
 
@@ -5967,7 +5950,8 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--attention {
+.session-row-badge--attention,
+.session-row-badge--approval {
   gap: 2px;
   color: var(--warn);
   font-size: 10px;
@@ -5983,13 +5967,8 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--approval {
-  display: inline-flex;
-  align-items: center;
-  color: var(--warn);
-}
-
-.session-row-badge--cloud[data-placement-state="failed"] {
+.session-row-badge--cloud[data-placement-state="failed"],
+.session-row-badge--cloud[data-disk-space-status="critical"] {
   color: var(--danger);
 }
 
@@ -6004,41 +5983,31 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts] {
-  color: var(--warn);
-}
-
+.session-row-badge--cloud[data-workspace-conflicts],
 .session-row-badge--cloud[data-disk-space-status="warning"] {
   color: var(--warn);
 }
 
-.session-row-badge--cloud[data-disk-space-status="critical"] {
-  color: var(--danger);
-}
-
 .session-row-badge svg {
-  width: var(--session-row-glyph-size, 12px);
-  height: var(--session-row-glyph-size, 12px);
+  width: 12px;
+  height: 12px;
   stroke: currentColor;
   fill: none;
-  stroke-width: var(--session-row-glyph-stroke, 1.6px);
+  stroke-width: 1.6px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .session-row-actions {
   display: inline-flex;
-  align-items: center;
-  gap: var(--session-row-action-gap, 1px);
 }
 
 .session-action {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--session-row-action-size, 24px);
-  height: var(--session-row-action-size, 24px);
+  width: var(--row-action-size);
+  height: var(--row-action-size);
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -6046,38 +6015,20 @@ td.data-table-key-col {
   color: var(--muted);
   opacity: 0;
   pointer-events: none;
-  transition:
-    opacity var(--duration-fast) ease,
-    color var(--duration-fast) ease;
 }
 
-.session-action::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: transparent;
-  pointer-events: none;
-  transition: background var(--duration-fast) ease;
-}
-
-.session-action svg {
-  position: relative;
-  z-index: 1;
-  width: var(--session-row-glyph-size, 14px);
-  height: var(--session-row-glyph-size, 14px);
+.session-row-host svg {
+  width: 14px;
+  height: 14px;
   stroke: currentColor;
   fill: none;
-  stroke-width: var(--session-row-glyph-stroke, 1.6px);
+  stroke-width: 1.6px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.session-action:hover:not(:disabled)::before {
-  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
-}
-
 .session-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
   color: var(--text);
 }
 
@@ -6110,10 +6061,7 @@ td.data-table-key-col {
    duplicate picker; touch users need pin/menu controls without hover. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.session-row-host {
-    --session-row-action-size: 44px;
-    /* Keep semantic endcap glyphs compact while their trailing axis follows
-       the larger touch target through --session-row-glyph-inset. */
-    --session-row-glyph-pitch: 25px;
+    --row-action-size: 44px;
   }
 
   .sidebar-recent-session .session-action {
@@ -6133,8 +6081,8 @@ td.data-table-key-col {
 .session-run-spinner {
   box-sizing: border-box;
   display: inline-block;
-  width: var(--session-row-ring-size, 12px);
-  height: var(--session-row-ring-size, 12px);
+  width: 11px;
+  height: 11px;
   flex: 0 0 auto;
   border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
   border-top-color: var(--run);
