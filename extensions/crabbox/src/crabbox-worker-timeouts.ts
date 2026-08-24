@@ -57,6 +57,6 @@ export function resolveCrabboxProvisionCallTimeoutMs(
     resolveCrabboxProvisionBaseTimeoutMs(profile) +
     countCrabboxProvisionSetupPhases(profile) * CRABBOX_SETUP_TIMEOUT_MS +
     CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS +
-    CRABBOX_LIFECYCLE_TIMEOUT_MS
+    resolveCrabboxLifecycleTimeoutMs(profile.provider)
   );
 }
