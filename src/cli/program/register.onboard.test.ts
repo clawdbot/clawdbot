@@ -62,7 +62,8 @@ vi.mock("../../commands/system-agent-with-inference.js", () => ({
   runSystemAgentWithInference: mocks.runSystemAgentWithInference,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -251,15 +252,29 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipUi).toBe(true);
   });
 
-  it("rejects conflicting custom model input capabilities", async () => {
-    await runCli(["onboard", "--custom-image-input", "--custom-text-input"]);
+  it.each([false, true])(
+    "rejects conflicting custom model input capabilities (json: %s)",
+    async (json) => {
+      await runCli([
+        "onboard",
+        "--custom-image-input",
+        "--custom-text-input",
+        ...(json ? ["--json"] : []),
+      ]);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Use either --custom-image-input or --custom-text-input, not both.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-  });
+      const message = "Use either --custom-image-input or --custom-text-input, not both.";
+      expect(runtime.error).toHaveBeenCalledWith(message);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledWith(
+          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+        );
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
