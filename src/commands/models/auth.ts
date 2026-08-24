@@ -302,7 +302,7 @@ async function resolveModelsAuthContext(params?: {
 
 async function resolveModelsAuthAgent(rawAgentId?: string | null, config?: OpenClawConfig) {
   const cfg = config ?? (await loadValidConfigOrThrow());
-  return resolveModelsTargetAgent(cfg, rawAgentId ?? undefined);
+  return resolveModelsTargetAgent(cfg, rawAgentId ?? undefined, { kind: "mutation" });
 }
 
 function resolveRequestedProviderOrThrow(

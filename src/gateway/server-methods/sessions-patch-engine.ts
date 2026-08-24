@@ -33,7 +33,6 @@ import {
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   prepareSessionPatchArchive,
@@ -58,8 +57,8 @@ type MutationTarget = PatchTargetIdentity & {
 };
 
 type PreparedPatchTarget = {
-  archivePreparation?: SessionPatchArchivePreparation;
   archiveActor: ReturnType<typeof gatewayClientSessionCreator>;
+  archivePreparation?: SessionPatchArchivePreparation;
   canonicalKey: string;
   fullPatch: SessionsPatchParams;
   index: number;
@@ -72,9 +71,7 @@ type PreparedPatchTarget = {
   targetAgentId: string;
 };
 
-type MutationOutcome =
-  | { ok: true; archiveStateChanged: boolean; entry: SessionEntry }
-  | { ok: false; error: ErrorShape };
+type MutationOutcome = { ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape };
 
 type ModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
 
@@ -427,7 +424,6 @@ async function executeSessionPatchMutations(params: {
                             continue;
                           }
                         }
-                        const wasArchivedBeforePatch = existingEntry?.archivedAt !== undefined;
                         const projected = await projectSessionsPatchEntry({
                           cfg,
                           existingEntry,
@@ -479,9 +475,6 @@ async function executeSessionPatchMutations(params: {
                         );
                         projectedOutcomes.push({
                           ok: true,
-                          archiveStateChanged:
-                            typeof target.fullPatch.archived === "boolean" &&
-                            wasArchivedBeforePatch !== (cloned.archivedAt !== undefined),
                           entry: cloned,
                         });
                       } catch (error) {
@@ -507,34 +500,6 @@ async function executeSessionPatchMutations(params: {
               }
             }),
           );
-
-          for (const target of prepared) {
-            const outcome = outcomes[target.index];
-            if (!outcome?.ok || !archiveActor) {
-              continue;
-            }
-            if (!outcome.archiveStateChanged) {
-              continue;
-            }
-            const action = outcome.entry.archivedAt === undefined ? "unarchived" : "archived";
-            try {
-              await appendSessionAudit({
-                cfg,
-                target: {
-                  agentId: target.targetAgentId,
-                  entry: outcome.entry,
-                  sessionKey: target.canonicalKey,
-                  storePath: target.storePath,
-                },
-                text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
-                now: Date.now(),
-              });
-            } catch (error) {
-              sessionLog.warn(
-                `sessions.patch: ${action} audit note failed for ${target.canonicalKey}; archive kept: ${formatErrorMessage(error)}`,
-              );
-            }
-          }
         },
       });
     } finally {

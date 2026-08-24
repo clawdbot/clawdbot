@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import { playwrightCore } from "./playwright-core.runtime.js";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { ensurePageState } from "./pw-session-state.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
 import { downloadViaPlaywright, waitForDownloadViaPlaywright } from "./pw-tools-core.downloads.js";
@@ -83,7 +83,7 @@ describe.runIf(runChromiumProof)("managed Chromium download cancellation", () =>
 
     const cdpPort = await getFreePort();
     const profileDir = path.join(rootDir, "profile");
-    const context = await playwrightCore.chromium.launchPersistentContext(profileDir, {
+    const context = await getPlaywrightCore().chromium.launchPersistentContext(profileDir, {
       headless: true,
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
       args: [`--remote-debugging-port=${cdpPort}`],
@@ -222,11 +222,14 @@ describe.runIf(runChromiumProof)("managed Chromium download cancellation", () =>
     await context.close();
 
     const restartedCdpPort = await getFreePort();
-    const restartedContext = await playwrightCore.chromium.launchPersistentContext(profileDir, {
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      args: [`--remote-debugging-port=${restartedCdpPort}`],
-    });
+    const restartedContext = await getPlaywrightCore().chromium.launchPersistentContext(
+      profileDir,
+      {
+        headless: true,
+        executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+        args: [`--remote-debugging-port=${restartedCdpPort}`],
+      },
+    );
     cleanup.push(async () => await restartedContext.close());
     const restartedPage = restartedContext.pages()[0] ?? (await restartedContext.newPage());
     await restartedPage.goto(`http://127.0.0.1:${downloadPort}/`);

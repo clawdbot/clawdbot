@@ -5,7 +5,11 @@ import {
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
-import type { ExecApprovalsFile, ExecApprovalsResolved } from "./exec-approvals-core.js";
+import type {
+  ExecApprovalsFile,
+  ExecApprovalsResolved,
+  ExecApprovalsSnapshot,
+} from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFilePrepared } from "./exec-approvals-resolver.js";
 import {
   ensureExecApprovals,
@@ -41,6 +45,21 @@ export {
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
 } from "./exec-approvals-store.js";
+
+export function redactExecApprovals(
+  snapshot: Omit<ExecApprovalsSnapshot, "raw"> & { raw?: ExecApprovalsSnapshot["raw"] },
+): Omit<ExecApprovalsSnapshot, "raw"> {
+  const { raw: _raw, ...rest } = snapshot;
+  const socketPath = snapshot.file.socket?.path?.trim();
+  // Socket connection material is runtime-only; presentation boundaries need only its path.
+  return {
+    ...rest,
+    file: {
+      ...snapshot.file,
+      socket: socketPath ? { path: socketPath } : undefined,
+    },
+  };
+}
 
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();

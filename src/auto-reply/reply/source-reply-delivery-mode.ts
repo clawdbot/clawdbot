@@ -21,6 +21,7 @@ export type SourceReplyDeliveryModeContext = {
   CommandSource?: "text" | "native";
   CommandTurn?: CommandTurnContext;
   BotUsername?: string;
+  WasMentioned?: boolean;
   InputProvenance?: InputProvenance;
 };
 
@@ -41,6 +42,22 @@ export function isExplicitSourceReplyCommand(
   cfg: OpenClawConfig,
 ): boolean {
   return isExplicitCommandTurnContext(ctx, cfg);
+}
+
+/**
+ * Room events remain ambient despite stale mention/direct facts. Explicit commands stay directed
+ * because their parsed command context is authoritative.
+ */
+export function isDirectedSourceReplyTurn(
+  ctx: SourceReplyDeliveryModeContext,
+  cfg: OpenClawConfig,
+  isDirectChat: boolean,
+  inboundEventKind = ctx.InboundEventKind,
+): boolean {
+  return (
+    isExplicitSourceReplyCommand(ctx, cfg) ||
+    (inboundEventKind !== "room_event" && (isDirectChat || ctx.WasMentioned === true))
+  );
 }
 
 /** Returns true for text slash commands that lack authorization metadata. */

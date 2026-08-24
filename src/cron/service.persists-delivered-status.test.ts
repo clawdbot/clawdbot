@@ -94,21 +94,6 @@ function buildWebhookIsolatedAgentTurnJob(name: string): CronAddInput {
   };
 }
 
-function buildAnnounceWithFailureDestinationJob(name: string): CronAddInput {
-  return {
-    ...buildAnnounceIsolatedAgentTurnJob(name),
-    delivery: {
-      mode: "announce",
-      channel: "forum",
-      to: "123",
-      failureDestination: {
-        mode: "webhook",
-        to: "https://example.invalid/cron-failure",
-      },
-    },
-  };
-}
-
 function buildFailureDestinationOnlyJob(name: string): CronAddInput {
   return {
     ...buildIsolatedAgentTurnJob(name),
@@ -735,7 +720,7 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
   });
 
-  it("keeps failure notification delivery separate from successful result delivery", async () => {
+  it("does not infer scheduler alert delivery from a failed run result", async () => {
     let capturedEvent:
       | {
           delivered?: boolean;
@@ -761,77 +746,32 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDelivered).toBe(false);
     expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
     expect(updated?.state.lastDeliveryError).toBe("Agent couldn't generate a response.");
-    expect(updated?.state.lastFailureNotificationDelivered).toBe(true);
-    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
     expect(updated?.state.lastFailureNotificationDeliveryError).toBeUndefined();
     expect(capturedEvent?.delivered).toBe(false);
     expect(capturedEvent?.deliveryStatus).toBe("not-delivered");
-    expect(capturedEvent?.failureNotificationDelivery).toEqual({
-      delivered: true,
-      status: "delivered",
-    });
+    expect(capturedEvent?.failureNotificationDelivery).toBeUndefined();
   });
 
-  it("marks failure-destination-only error notification delivery unknown", async () => {
-    let capturedEvent:
-      | {
-          delivered?: boolean;
-          deliveryStatus?: string;
-          failureNotificationDelivery?: {
-            delivered?: boolean;
-            status: string;
-            error?: string;
-          };
-        }
-      | undefined;
+  it("persists scheduler-authorized alert intent as delivery unknown", async () => {
+    let failureNotificationDelivery: { delivered?: boolean; status: string; error?: string };
+    const job = buildAnnounceIsolatedAgentTurnJob("authorized-failure-notification");
+    job.failureAlert = { after: 1 };
+
     const updated = await runIsolatedJobAndReadState({
-      job: buildFailureDestinationOnlyJob("failure-destination-only"),
+      job,
       status: "error",
-      error: "Agent couldn't generate a response.",
-      onFinished: (evt) => {
-        capturedEvent = evt;
+      error: "provider unavailable",
+      onFinished: (event) => {
+        failureNotificationDelivery = event.failureNotificationDelivery!;
       },
     });
 
-    expect(updated?.state.lastRunStatus).toBe("error");
-    expect(updated?.state.lastDelivered).toBeUndefined();
-    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
     expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
     expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
-    expect(capturedEvent?.delivered).toBeUndefined();
-    expect(capturedEvent?.deliveryStatus).toBe("not-requested");
-    expect(capturedEvent?.failureNotificationDelivery).toEqual({ status: "unknown" });
-  });
-
-  it("does not treat primary error delivery as alternate failure-destination delivery", async () => {
-    let capturedEvent:
-      | {
-          delivered?: boolean;
-          deliveryStatus?: string;
-          failureNotificationDelivery?: {
-            delivered?: boolean;
-            status: string;
-            error?: string;
-          };
-        }
-      | undefined;
-    const updated = await runIsolatedJobAndReadState({
-      job: buildAnnounceWithFailureDestinationJob("announce-plus-failure-destination"),
-      status: "error",
-      delivered: true,
-      error: "Agent couldn't generate a response.",
-      onFinished: (evt) => {
-        capturedEvent = evt;
-      },
-    });
-
-    expect(updated?.state.lastRunStatus).toBe("error");
-    expect(updated?.state.lastDelivered).toBe(false);
-    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
-    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
-    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
-    expect(capturedEvent?.delivered).toBe(false);
-    expect(capturedEvent?.failureNotificationDelivery).toEqual({ status: "unknown" });
+    expect(updated?.state.lastFailureNotificationDeliveryError).toBeUndefined();
+    expect(failureNotificationDelivery!).toEqual({ status: "unknown" });
   });
 
   it("keeps best-effort failure destinations suppressed", async () => {

@@ -539,6 +539,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
+    var sheetPresentationWindow: NSWindow? {
+        self.window
+    }
+
     /// Human description of work in flight ("Installing the Gateway…").
     /// While set, closing the window asks for confirmation instead of quitting
     /// setup mid-operation.
@@ -601,8 +605,15 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 
     func close() {
         self.busyReason = nil
+        // AppKit ignores close while its modal sheet is still attached.
+        self.dismissAttachedSheet()
         self.window?.close()
         self.window = nil
+    }
+
+    func dismissAttachedSheet() {
+        guard let window, let sheet = window.attachedSheet else { return }
+        window.endSheet(sheet)
     }
 
     func setWindowCloseEnabled(_ enabled: Bool) {
@@ -638,6 +649,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 struct OnboardingView: View {
     enum CLIInstallPhase {
         case idle
+        case choosingTarget
         case installing
         case startingService
     }

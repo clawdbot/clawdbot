@@ -21,6 +21,33 @@ const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
 
+function mockPerplexityResponseOnce(body: unknown): void {
+  withTrustedWebSearchEndpointMock.mockImplementationOnce(
+    async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
+      await run(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+  );
+}
+
+function createConfiguredPerplexityTool(structured: boolean) {
+  const webSearch = {
+    apiKey: directPerplexityApiKey,
+    ...(structured ? {} : { baseUrl: "https://api.perplexity.ai" }),
+  };
+  const tool = createPerplexityWebSearchProvider().createTool({
+    config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
+    searchConfig: {},
+  });
+  if (!tool) {
+    throw new Error("Expected tool definition");
+  }
+  return tool;
+}
+
 describe("perplexity web search provider", () => {
   it("points missing-key users to fetch/browser alternatives", async () => {
     await withEnvAsync(
@@ -66,6 +93,78 @@ describe("perplexity web search provider", () => {
     ).rejects.toThrow("Perplexity caller canceled");
     expect(withTrustedWebSearchEndpointMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "missing choices", response: {} },
+    { name: "whitespace content", response: { choices: [{ message: { content: " \n " } }] } },
+  ])("rejects and does not cache chat-completions $name", async ({ name, response }) => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    mockPerplexityResponseOnce(response);
+    mockPerplexityResponseOnce({
+      choices: [{ message: { content: "  Recovered grounded answer  " } }],
+      citations: ["https://example.test/recovered"],
+    });
+
+    const tool = createConfiguredPerplexityTool(false);
+    const args = { query: `perplexity empty answer ${name}` };
+    await expect(tool.execute(args)).rejects.toThrow(
+      "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+    );
+
+    const recovered = await tool.execute(args);
+    expect(recovered.content).toContain("  Recovered grounded answer  ");
+    expect(recovered.citations).toEqual(["https://example.test/recovered"]);
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { name: "chat completions", structured: false, expectedRequests: 1 },
+    { name: "native Search API", structured: true, expectedRequests: 2 },
+  ])(
+    "uses count as a cache dimension only when $name sends it upstream",
+    async ({ name, structured, expectedRequests }) => {
+      withTrustedWebSearchEndpointMock.mockReset();
+      const response = structured
+        ? { results: [] }
+        : {
+            choices: [
+              {
+                message: {
+                  content: "Grounded answer",
+                  annotations: [
+                    {
+                      type: "url_citation",
+                      url_citation: { url: "https://example.test/citation" },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+      mockPerplexityResponseOnce(response);
+      if (structured) {
+        mockPerplexityResponseOnce(response);
+      }
+
+      const tool = createConfiguredPerplexityTool(structured);
+      const query = `perplexity cache count ${name}`;
+      const first = await tool.execute({ query, count: 1 });
+      const second = await tool.execute({ query, count: 7 });
+      const third = await tool.execute({ query, count: 1 });
+
+      expect(first.cached).toBeUndefined();
+      expect(second.cached).toBe(structured ? undefined : true);
+      expect(third.cached).toBe(true);
+      expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(expectedRequests);
+      if (structured) {
+        expect(first.results).toEqual([]);
+        expect(first.count).toBe(0);
+      } else {
+        expect(first.content).toContain("Grounded answer");
+        expect(first.citations).toEqual(["https://example.test/citation"]);
+      }
+    },
+  );
 
   it.each([
     { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
@@ -216,15 +315,7 @@ describe("perplexity web search provider", () => {
   });
 
   it("sends official date filter fields in the Search API request body", async () => {
-    withTrustedWebSearchEndpointMock.mockImplementationOnce(
-      async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
-        await run(
-          new Response(JSON.stringify({ results: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        ),
-    );
+    mockPerplexityResponseOnce({ results: [] });
 
     await withEnvAsync(
       { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },

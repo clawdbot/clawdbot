@@ -169,6 +169,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatarReason?: string | null;
       assistantAgentId?: string;
       devGitBranch?: string;
+      environment?: { label: string; color: string };
       localMediaPreviewRoots?: string[];
       seamColor?: string;
       terminalEnabled: boolean;
@@ -1533,6 +1534,32 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("exposes only the environment identity on public HTML while bootstrap stays authenticated", async () => {
+    await withControlUiRoot({
+      indexHtml: "<html><head></head><body>Hello</body></html>\n",
+      fn: async (tmp) => {
+        const config: OpenClawConfig = {
+          gateway: { controlUi: { environment: { label: "edge & team", color: "amber" } } },
+        };
+        const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
+        const documentResponse = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: {} } as IncomingMessage,
+          documentResponse.res,
+          { root: { kind: "resolved", path: tmp }, config, auth },
+        );
+
+        expect(documentResponse.res.statusCode).toBe(200);
+        expect(responseBody(documentResponse.end)).toContain(
+          'data-openclaw-environment="{&quot;label&quot;:&quot;edge &amp; team&quot;,&quot;color&quot;:&quot;amber&quot;}"',
+        );
+
+        const bootstrapResponse = await runBootstrapConfigRequest({ rootPath: tmp, config, auth });
+        expect(bootstrapResponse.res.statusCode).toBe(401);
+      },
+    });
+  });
+
   it("rewrites public asset hrefs in index.html when Control UI uses a configured base path (#94157)", async () => {
     const html =
       '<html><head><link rel="manifest" href="/manifest.webmanifest" /><link rel="icon" href="/favicon.svg" /></head><body></body></html>\n';
@@ -1694,6 +1721,7 @@ describe("handleControlUiHttpRequest", () => {
               },
               gateway: {
                 cliAgents: { enabled: true },
+                controlUi: { environment: { label: "edge", color: "amber" } },
               },
             },
           },
@@ -1707,6 +1735,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("roboclaw");
         expect(parsed.seamColor).toBe("#1A2b3C");
+        expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.cliAgentsEnabled).toBe(true);
         expect(parsed.automaticallyFetchFavicons).toBe(true);

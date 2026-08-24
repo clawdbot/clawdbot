@@ -5,6 +5,7 @@ import {
   httpSource,
   matchesSource,
   messageRows,
+  failoverSignalRows,
   patternsSource,
   reason,
   retrySource,
@@ -22,24 +23,14 @@ export const structuredMiscCases = [
     },
     expected: reason("format"),
   },
-  {
-    id: "billing-image-size",
-    source: billingSource,
-    signal: { message: "image exceeds 5 MB maximum" },
-    expected: null,
-  },
-  {
-    id: "billing-malformed-function-call",
-    source: billingSource,
-    signal: { message: "Unhandled stop reason: MALFORMED_FUNCTION_CALL" },
-    expected: null,
-  },
-  {
-    id: "billing-bare-400",
-    source: billingSource,
-    signal: { message: "400 status code (no body)" },
-    expected: null,
-  },
+  ...failoverSignalRows(billingSource, null, [
+    ["billing-image-size", { message: "image exceeds 5 MB maximum" }],
+    [
+      "billing-malformed-function-call",
+      { message: "Unhandled stop reason: MALFORMED_FUNCTION_CALL" },
+    ],
+    ["billing-bare-400", { message: "400 status code (no body)" }],
+  ]),
   {
     id: "matches-google-invalid-argument",
     source: matchesSource,
@@ -56,30 +47,21 @@ export const structuredMiscCases = [
     signal: { message: "model is not ready" },
     expected: null,
   },
-  {
-    id: "structured-rate-limit-type-without-hook",
-    source: structuredSource,
-    signal: { provider: "anthropic", errorType: "rate_limit_error", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-api-error-type-without-hook",
-    source: structuredSource,
-    signal: { provider: "anthropic", errorType: "api_error", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-non-owner-server-code",
-    source: structuredSource,
-    signal: { provider: "google", code: "SERVER_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-non-owner-insufficient-quota",
-    source: structuredSource,
-    signal: { provider: "anthropic", code: "INSUFFICIENT_QUOTA", message: "" },
-    expected: null,
-  },
+  ...failoverSignalRows(structuredSource, null, [
+    [
+      "structured-rate-limit-type-without-hook",
+      { provider: "anthropic", errorType: "rate_limit_error", message: "" },
+    ],
+    [
+      "structured-api-error-type-without-hook",
+      { provider: "anthropic", errorType: "api_error", message: "" },
+    ],
+    ["structured-non-owner-server-code", { provider: "google", code: "SERVER_ERROR", message: "" }],
+    [
+      "structured-non-owner-insufficient-quota",
+      { provider: "anthropic", code: "INSUFFICIENT_QUOTA", message: "" },
+    ],
+  ]),
   {
     id: "http-bad-request",
     source: httpSource,
@@ -179,173 +161,126 @@ export const structuredMiscCases = [
     },
     { id: "retry-image-width", message: "Image width 500 exceeds the maximum allowed size" },
   ]),
-  {
-    id: "structured-openai-internal-non-owner",
-    source: structuredSource,
-    signal: { provider: "openai", code: "INTERNAL", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-openai-deadline-non-owner",
-    source: structuredSource,
-    signal: { provider: "openai", code: "DEADLINE_EXCEEDED", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-anthropic-unavailable-non-owner",
-    source: structuredSource,
-    signal: { provider: "anthropic", code: "UNAVAILABLE", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-google-api-error-non-owner",
-    source: structuredSource,
-    signal: { provider: "google", code: "API_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-google-rate-limit-error-non-owner",
-    source: structuredSource,
-    signal: { provider: "google", code: "RATE_LIMIT_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "structured-generic-sdk-type",
-    source: structuredSource,
-    signal: { provider: "demo-provider", message: "unclassified provider failure" },
-    expected: null,
-  },
+  ...failoverSignalRows(structuredSource, null, [
+    ["structured-openai-internal-non-owner", { provider: "openai", code: "INTERNAL", message: "" }],
+    [
+      "structured-openai-deadline-non-owner",
+      { provider: "openai", code: "DEADLINE_EXCEEDED", message: "" },
+    ],
+    [
+      "structured-anthropic-unavailable-non-owner",
+      { provider: "anthropic", code: "UNAVAILABLE", message: "" },
+    ],
+    [
+      "structured-google-api-error-non-owner",
+      { provider: "google", code: "API_ERROR", message: "" },
+    ],
+    [
+      "structured-google-rate-limit-error-non-owner",
+      { provider: "google", code: "RATE_LIMIT_ERROR", message: "" },
+    ],
+    [
+      "structured-generic-sdk-type",
+      { provider: "demo-provider", message: "unclassified provider failure" },
+    ],
+  ]),
   // Structured provider codes with hooks intentionally disabled for determinism.
-  {
-    id: "anthropic-rate-limit-error-type-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: { provider: "anthropic", errorType: "rate_limit_error", message: "" },
-    expected: null,
-  },
-  {
-    id: "anthropic-api-error-type-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: { provider: "anthropic", errorType: "api_error", message: "" },
-    expected: null,
-  },
-  {
-    id: "anthropic-rate-limit-code-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: { provider: "anthropic", code: "RATE_LIMIT_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "anthropic-api-error-code-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: { provider: "anthropic", code: "API_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "openai-server-code-core-fallback",
-    source: "extensions/openai/openai-provider.test.ts",
-    signal: { provider: "openai", code: "SERVER_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "openai-insufficient-quota-code-core-fallback",
-    source: "extensions/openai/openai-provider.test.ts",
-    signal: { provider: "openai", code: "INSUFFICIENT_QUOTA", message: "" },
-    expected: null,
-  },
-  {
-    id: "google-unavailable-code-core-fallback",
-    source: "extensions/google/provider-hooks.test.ts",
-    signal: { provider: "google", code: "UNAVAILABLE", message: "" },
-    expected: null,
-  },
-  {
-    id: "google-deadline-code-core-fallback",
-    source: "extensions/google/provider-hooks.test.ts",
-    signal: { provider: "google-vertex", code: "DEADLINE_EXCEEDED", message: "" },
-    expected: null,
-  },
-  {
-    id: "google-internal-code-core-fallback",
-    source: "extensions/google/provider-hooks.test.ts",
-    signal: { provider: "google-antigravity", code: "INTERNAL", message: "" },
-    expected: null,
-  },
-  {
-    id: "anthropic-claude-cli-rate-limit-type-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: { provider: "claude-cli", errorType: "rate_limit_error", message: "" },
-    expected: null,
-  },
-  {
-    id: "anthropic-claude-cli-api-error-type-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: { provider: "claude-cli", errorType: "api_error", message: "" },
-    expected: null,
-  },
-  {
-    id: "anthropic-rate-limit-type-api-code-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: {
-      provider: "anthropic",
-      errorType: "rate_limit_error",
-      code: "API_ERROR",
-      message: "",
-    },
-    expected: null,
-  },
-  {
-    id: "anthropic-insufficient-quota-code-core-fallback",
-    source: "extensions/anthropic/index.test.ts",
-    signal: {
-      provider: "anthropic",
-      errorType: "UNKNOWN_ERROR",
-      code: "INSUFFICIENT_QUOTA",
-      message: "",
-    },
-    expected: null,
-  },
-  {
-    id: "azure-openai-server-code-core-fallback",
-    source: "extensions/openai/openai-provider.test.ts",
-    signal: { provider: "azure-openai", code: "SERVER_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "azure-openai-insufficient-quota-code-core-fallback",
-    source: "extensions/openai/openai-provider.test.ts",
-    signal: { provider: "azure-openai", code: "INSUFFICIENT_QUOTA", message: "" },
-    expected: null,
-  },
-  {
-    id: "azure-openai-responses-server-code-core-fallback",
-    source: "extensions/openai/openai-provider.test.ts",
-    signal: { provider: "azure-openai-responses", code: "SERVER_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "azure-openai-responses-insufficient-quota-code-core-fallback",
-    source: "extensions/openai/openai-provider.test.ts",
-    signal: { provider: "azure-openai-responses", code: "INSUFFICIENT_QUOTA", message: "" },
-    expected: null,
-  },
-  {
-    id: "openai-api-error-code-core-fallback",
-    source: "extensions/openai/openai-provider.test.ts",
-    signal: { provider: "openai", code: "API_ERROR", message: "" },
-    expected: null,
-  },
-  {
-    id: "google-gemini-cli-unavailable-core-fallback",
-    source: "extensions/google/provider-hooks.test.ts",
-    signal: { provider: "google-gemini-cli", code: "UNAVAILABLE", message: "" },
-    expected: null,
-  },
-  {
-    id: "google-insufficient-quota-core-fallback",
-    source: "extensions/google/provider-hooks.test.ts",
-    signal: { provider: "google-vertex", code: "INSUFFICIENT_QUOTA", message: "" },
-    expected: null,
-  },
+  ...failoverSignalRows("extensions/anthropic/index.test.ts", null, [
+    [
+      "anthropic-rate-limit-error-type-core-fallback",
+      { provider: "anthropic", errorType: "rate_limit_error", message: "" },
+    ],
+    [
+      "anthropic-api-error-type-core-fallback",
+      { provider: "anthropic", errorType: "api_error", message: "" },
+    ],
+    [
+      "anthropic-rate-limit-code-core-fallback",
+      { provider: "anthropic", code: "RATE_LIMIT_ERROR", message: "" },
+    ],
+    [
+      "anthropic-api-error-code-core-fallback",
+      { provider: "anthropic", code: "API_ERROR", message: "" },
+    ],
+  ]),
+  ...failoverSignalRows("extensions/openai/openai-provider.test.ts", null, [
+    ["openai-server-code-core-fallback", { provider: "openai", code: "SERVER_ERROR", message: "" }],
+    [
+      "openai-insufficient-quota-code-core-fallback",
+      { provider: "openai", code: "INSUFFICIENT_QUOTA", message: "" },
+    ],
+  ]),
+  ...failoverSignalRows("extensions/google/provider-hooks.test.ts", null, [
+    [
+      "google-unavailable-code-core-fallback",
+      { provider: "google", code: "UNAVAILABLE", message: "" },
+    ],
+    [
+      "google-deadline-code-core-fallback",
+      { provider: "google-vertex", code: "DEADLINE_EXCEEDED", message: "" },
+    ],
+    [
+      "google-internal-code-core-fallback",
+      { provider: "google-antigravity", code: "INTERNAL", message: "" },
+    ],
+  ]),
+  ...failoverSignalRows("extensions/anthropic/index.test.ts", null, [
+    [
+      "anthropic-claude-cli-rate-limit-type-core-fallback",
+      { provider: "claude-cli", errorType: "rate_limit_error", message: "" },
+    ],
+    [
+      "anthropic-claude-cli-api-error-type-core-fallback",
+      { provider: "claude-cli", errorType: "api_error", message: "" },
+    ],
+    [
+      "anthropic-rate-limit-type-api-code-core-fallback",
+      {
+        provider: "anthropic",
+        errorType: "rate_limit_error",
+        code: "API_ERROR",
+        message: "",
+      },
+    ],
+    [
+      "anthropic-insufficient-quota-code-core-fallback",
+      {
+        provider: "anthropic",
+        errorType: "UNKNOWN_ERROR",
+        code: "INSUFFICIENT_QUOTA",
+        message: "",
+      },
+    ],
+  ]),
+  ...failoverSignalRows("extensions/openai/openai-provider.test.ts", null, [
+    [
+      "azure-openai-server-code-core-fallback",
+      { provider: "azure-openai", code: "SERVER_ERROR", message: "" },
+    ],
+    [
+      "azure-openai-insufficient-quota-code-core-fallback",
+      { provider: "azure-openai", code: "INSUFFICIENT_QUOTA", message: "" },
+    ],
+    [
+      "azure-openai-responses-server-code-core-fallback",
+      { provider: "azure-openai-responses", code: "SERVER_ERROR", message: "" },
+    ],
+    [
+      "azure-openai-responses-insufficient-quota-code-core-fallback",
+      { provider: "azure-openai-responses", code: "INSUFFICIENT_QUOTA", message: "" },
+    ],
+    ["openai-api-error-code-core-fallback", { provider: "openai", code: "API_ERROR", message: "" }],
+  ]),
+  ...failoverSignalRows("extensions/google/provider-hooks.test.ts", null, [
+    [
+      "google-gemini-cli-unavailable-core-fallback",
+      { provider: "google-gemini-cli", code: "UNAVAILABLE", message: "" },
+    ],
+    [
+      "google-insufficient-quota-core-fallback",
+      { provider: "google-vertex", code: "INSUFFICIENT_QUOTA", message: "" },
+    ],
+  ]),
   {
     id: "ollama-cloud-incomplete-stream",
     source: "extensions/ollama/index.test.ts",

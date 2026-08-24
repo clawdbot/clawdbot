@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { t } from "../../i18n/index.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page-entry.ts";
 
@@ -53,6 +54,13 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
+  it("labels the message input independently of its placeholder", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+
+    expect(textarea?.getAttribute("aria-label")).toBe(t("newSession.messagePlaceholder"));
+  });
+
   it("clears source draft state when destination data is still pending", async () => {
     const page = await mount(routeData("research"));
     window.history.replaceState({}, "", "/new?agent=research");

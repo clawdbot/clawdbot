@@ -236,7 +236,7 @@ vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
 
 type SecretRegistryEntry = {
   id: string;
-  configFile: "openclaw.json" | "auth-profiles.json";
+  configFile: "openclaw.json" | "auth-profile-store";
   pathPattern: string;
   refPathPattern?: string;
   secretShape: "secret_input" | "sibling_ref";
@@ -247,7 +247,7 @@ type SecretRegistryEntry = {
 type SecretRefCredentialMatrix = {
   entries: Array<{
     id: string;
-    configFile: "openclaw.json" | "auth-profiles.json";
+    configFile: "openclaw.json" | "auth-profile-store";
     path: string;
     refPath?: string;
     secretShape: SecretRegistryEntry["secretShape"];
@@ -880,7 +880,7 @@ const OPENCLAW_PLUGIN_COVERAGE_BATCHES = buildCoverageBatches(
   collectOpenClawCoverageEntries({ includePluginEntries: true }),
 );
 const AUTH_PROFILE_COVERAGE_BATCHES = buildCoverageBatches(
-  COVERAGE_REGISTRY_ENTRIES.filter((entry) => entry.configFile === "auth-profiles.json"),
+  COVERAGE_REGISTRY_ENTRIES.filter((entry) => entry.configFile === "auth-profile-store"),
 );
 
 function toCoverageBatchCase(batch: SecretRegistryEntry[]) {

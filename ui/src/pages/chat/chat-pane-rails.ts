@@ -20,6 +20,7 @@ export function createChatPaneRails(params: {
   sidebarLayout: ChatPaneSidebarLayout;
   paneWidth: number;
   presentationId: string;
+  presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
   setObserverVisibility: (visible: boolean) => void;
 }) {
@@ -44,6 +45,7 @@ export function createChatPaneRails(params: {
     draftScope: params.presentationId,
     expanded: hasPanelSlot("workspace"),
     narrowLayout: false,
+    presented: params.presented,
   });
   const sessionWorkspace = {
     ...sessionWorkspaceBase,
@@ -60,6 +62,7 @@ export function createChatPaneRails(params: {
     narrowLayout: false,
     openTaskId: openTaskDetailId(state.sidebarContent, sidebarLayout),
     onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
+    presented: params.presented,
   });
   const backgroundTasks = {
     ...backgroundTasksBase,

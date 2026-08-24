@@ -24,7 +24,7 @@ type EmbeddedRunReplyItem = {
   channelData?: Record<string, unknown>;
   nonTerminalToolErrorWarning?: boolean;
   preserveDraftPreview?: boolean;
-  sourceReplyMirror?: { idempotencyKey?: string };
+  sourceReplyMirror?: { idempotencyKey?: string; transcriptOwner?: true };
 };
 
 /** Builds transcript mirrors and completion evidence for message-tool source replies. */
@@ -71,6 +71,7 @@ export function buildSourceReplyPayloadState(params: {
           idempotencyKey:
             payload.idempotencyKey ??
             (params.runId ? `${params.runId}:internal-source-reply:${index}` : undefined),
+          ...(payload.transcriptOwner ? { transcriptOwner: true as const } : {}),
         },
       },
     ];

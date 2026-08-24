@@ -33,6 +33,7 @@ import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
 import { secretRefKey } from "./ref-contract.js";
 import {
+  clearActiveCredentialDegradedOwners,
   setActiveDegradedSecretOwners,
   type DegradedSecretOwner,
   type SecretOwnerRefState,
@@ -1172,6 +1173,7 @@ export function clearSecretsRuntimeSnapshotState(): void {
   activeRefreshContext = null;
   clearActiveRuntimeWebToolsMetadata();
   setActiveDegradedSecretOwners([]);
+  clearActiveCredentialDegradedOwners();
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();

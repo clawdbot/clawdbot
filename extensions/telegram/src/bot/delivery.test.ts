@@ -1140,6 +1140,202 @@ describe("deliverReplies", () => {
     expect(recordSentMessage).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      kind: "photo",
+      method: "sendPhoto",
+      fileName: "photo.jpg",
+      contentType: "image/jpeg",
+      audioAsVoice: false,
+    },
+    {
+      kind: "document",
+      method: "sendDocument",
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+      audioAsVoice: false,
+    },
+    {
+      kind: "voice",
+      method: "sendVoice",
+      fileName: "voice.ogg",
+      contentType: "audio/ogg",
+      audioAsVoice: true,
+    },
+  ])("preserves accepted $kind ids when a later media send fails", async (testCase) => {
+    const rejection = new Error(`${testCase.kind} send failed`);
+    const sendMedia = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 71, chat: { id: "123" } })
+      .mockRejectedValueOnce(rejection);
+    mockMediaLoad(testCase.fileName, testCase.contentType, "first");
+    mockMediaLoad(testCase.fileName, testCase.contentType, "second");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/first", "https://example.com/second"],
+            ...(testCase.audioAsVoice ? { audioAsVoice: true } : {}),
+          },
+        ],
+        runtime: createRuntime(),
+        bot: createBot({ [testCase.method]: sendMedia }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["71"]);
+    expect(sendMedia).toHaveBeenCalledTimes(2);
+    expect(recordSentMessage).toHaveBeenCalledOnce();
+  });
+
+  it("preserves accepted media ids when a later media download fails", async () => {
+    const downloadError = new Error("later media download failed");
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 72, chat: { id: "123" } });
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+    loadWebMedia.mockRejectedValueOnce(downloadError);
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/first", "https://example.com/second"] }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["72"]);
+    expect(sendPhoto).toHaveBeenCalledOnce();
+  });
+
+  it("preserves accepted media ids when accepted-message bookkeeping fails", async () => {
+    const bookkeepingError = new Error("accepted media bookkeeping failed");
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 73, chat: { id: "123" } });
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+    recordSentMessage.mockImplementationOnce(() => {
+      throw bookkeepingError;
+    });
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["73"]);
+    expect(sendPhoto).toHaveBeenCalledOnce();
+  });
+
+  it.each(["send", "download"])(
+    "preserves accepted voice fallback text when a later media %s fails",
+    async (failureMode) => {
+      const laterFailure = new Error(`later voice ${failureMode} failed`);
+      const sendVoice = vi.fn().mockRejectedValueOnce(createVoiceMessagesForbiddenError());
+      const sendMessage = vi.fn().mockResolvedValueOnce({ message_id: 74, chat: { id: "123" } });
+      mockMediaLoad("voice.ogg", "audio/ogg", "first");
+      if (failureMode === "download") {
+        loadWebMedia.mockRejectedValueOnce(laterFailure);
+      } else {
+        mockMediaLoad("voice.ogg", "audio/ogg", "second");
+        sendVoice.mockRejectedValueOnce(laterFailure);
+      }
+
+      let observed: unknown;
+      try {
+        await deliverWith({
+          replies: [
+            {
+              text: "Voice fallback",
+              audioAsVoice: true,
+              mediaUrls: ["https://example.com/first", "https://example.com/second"],
+            },
+          ],
+          runtime: createRuntime(),
+          bot: createBot({ sendVoice, sendMessage }),
+        });
+      } catch (error) {
+        observed = error;
+      }
+
+      expect(isChannelPartialDeliveryError(observed)).toBe(true);
+      if (!isChannelPartialDeliveryError(observed)) {
+        throw observed;
+      }
+      expect(observed.deliveryResult.messageIds).toEqual(["74"]);
+      expect(sendMessage).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves media and accepted caption-follow-up ids when later media fails", async () => {
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 75, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("later photo failed"));
+    const sendMessage = vi.fn().mockResolvedValueOnce({ message_id: 76, chat: { id: "123" } });
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+    mockMediaLoad("photo.jpg", "image/jpeg", "second");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [
+          {
+            text: "x".repeat(1025),
+            mediaUrls: ["https://example.com/first", "https://example.com/second"],
+          },
+        ],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto, sendMessage }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["75", "76"]);
+  });
+
+  it("keeps an initial media send failure unwrapped when nothing was delivered", async () => {
+    const rejection = new Error("initial photo send failed");
+    const sendPhoto = vi.fn().mockRejectedValue(rejection);
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(recordSentMessage).not.toHaveBeenCalled();
+  });
+
   it("does not mirror media follow-up text that Telegram rejects as empty", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
     const invisibleText = "\u200B".repeat(1025);

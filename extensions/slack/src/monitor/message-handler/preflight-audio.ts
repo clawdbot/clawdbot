@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
-import { createChannelPreflightAudio } from "openclaw/plugin-sdk/media-understanding-runtime";
+import {
+  createChannelPreflightAudio,
+  formatAudioTranscriptForAgent,
+} from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "../media-types.js";
 
@@ -33,7 +36,7 @@ export function formatSlackAudioTranscriptForAgent(params: {
   transcript: string;
   rawBody: string;
 }): string {
-  const framed = `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(params.transcript)}`;
+  const framed = formatAudioTranscriptForAgent(params.transcript);
   return [framed, params.rawBody].filter(Boolean).join("\n");
 }
 
