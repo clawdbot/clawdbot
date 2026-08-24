@@ -327,11 +327,17 @@ describe("discordMessageActions", () => {
       "event-list",
       "event-create",
     ]);
-    expect(defaultDiscovery?.schema).toBeUndefined();
+    expect(defaultDiscovery?.schema).toMatchObject({
+      actions: ["send"],
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
+      },
+    });
     expect(workDiscovery?.schema).toMatchObject({
-      actions: ["react", "reactions"],
+      actions: expect.arrayContaining(["react", "reactions", "send"]),
       properties: {
         emoji: { description: expect.stringContaining('action:"emoji-list"') },
+        components: { description: expect.stringContaining("Discord Components V2") },
       },
     });
   });
@@ -368,12 +374,35 @@ describe("discordMessageActions", () => {
       } as OpenClawConfig,
     });
     expect(discovery?.schema).toMatchObject({
-      actions: ["react", "reactions"],
+      actions: expect.arrayContaining(["react", "reactions", "send"]),
       properties: {
         emoji: {
           description: expect.stringMatching(
             /Unicode.*name:id.*<:name:id>.*<a:name:id>.*emoji-list/,
           ),
+        },
+        components: {
+          description: expect.stringContaining("Discord Components V2"),
+          properties: {
+            blocks: { type: "array" },
+            modal: { type: "object" },
+          },
+        },
+      },
+    });
+  });
+
+  it("declares Discord components for send message tool calls", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: { channels: { discord: { token: "Bot token-main" } } } as OpenClawConfig,
+    });
+
+    expect(discovery?.schema).toMatchObject({
+      actions: expect.arrayContaining(["send"]),
+      properties: {
+        components: {
+          description: expect.stringContaining("Components V2 payload"),
+          additionalProperties: true,
         },
       },
     });

@@ -9,10 +9,10 @@ import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/co
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
-import { readDiscordComponentSpec } from "./components.js";
+import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
 import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
@@ -170,20 +170,53 @@ function describeDiscordMessageTool({
   if (discovery.isEnabled("presence", false)) {
     actions.add("set-presence");
   }
+  const schemaProperties: Record<string, TSchema> = {};
+  const schemaActions: ChannelMessageActionName[] = [];
+  if (actions.has("react")) {
+    schemaProperties.emoji = Type.Optional(
+      Type.String({
+        description: `Unicode emoji or custom name:id (also <:name:id> / <a:name:id>).${actions.has("emoji-list") ? ' Use action:"emoji-list" for server emojis.' : ""}`,
+      }),
+    );
+    schemaActions.push("react", "reactions");
+  }
+  if (discovery.isEnabled("messages")) {
+    schemaProperties.components = Type.Optional(
+      Type.Object(
+        {
+          blocks: Type.Optional(
+            Type.Array(Type.Unknown(), {
+              description:
+                "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
+            }),
+          ),
+          modal: Type.Optional(
+            Type.Object(
+              {},
+              {
+                additionalProperties: true,
+                description: "Optional Discord modal triggered by generated components.",
+              },
+            ),
+          ),
+        },
+        {
+          additionalProperties: true,
+          description:
+            "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+        },
+      ),
+    );
+    schemaActions.push("send");
+  }
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
-    ...(actions.has("react")
+    ...(schemaActions.length > 0
       ? {
           schema: {
-            properties: {
-              emoji: Type.Optional(
-                Type.String({
-                  description: `Unicode emoji or custom name:id (also <:name:id> / <a:name:id>).${actions.has("emoji-list") ? ' Use action:"emoji-list" for server emojis.' : ""}`,
-                }),
-              ),
-            },
-            actions: ["react", "reactions"],
+            properties: schemaProperties,
+            actions: schemaActions,
           },
         }
       : {}),
@@ -219,7 +252,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       sessionKey: ctx.sessionKey,
       inboundEventKind: ctx.inboundEventKind,
     });
-    const rawComponents = ctx.params.components;
+    const rawComponents = coerceDiscordComponentParam(ctx.params.components);
     if (typeof rawComponents === "function") {
       return null;
     }

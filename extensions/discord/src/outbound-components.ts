@@ -5,7 +5,11 @@ import {
   createLazyRuntimeNamedExport,
 } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAskUserQuestionOptionIndices } from "openclaw/plugin-sdk/reply-payload";
-import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
+import {
+  coerceDiscordComponentParam,
+  readDiscordComponentSpec,
+  type DiscordComponentMessageSpec,
+} from "./components.js";
 
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
@@ -174,10 +178,10 @@ export async function resolveDiscordComponentSpec(
     | undefined;
   const rawComponentSpec =
     discordData?.presentationComponents ??
-    (discordData?.components &&
-    typeof discordData.components === "object" &&
-    !Array.isArray(discordData.components)
-      ? readDiscordComponentSpec(discordData.components)
+    (coerceDiscordComponentParam(discordData?.components) &&
+    typeof coerceDiscordComponentParam(discordData?.components) === "object" &&
+    !Array.isArray(coerceDiscordComponentParam(discordData?.components))
+      ? readDiscordComponentSpec(coerceDiscordComponentParam(discordData?.components))
       : null);
   if (rawComponentSpec) {
     return addPayloadTextFallback(rawComponentSpec, payload);
