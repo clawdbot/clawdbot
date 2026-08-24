@@ -3,8 +3,12 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
+import { isBuiltInModelProviderOverlayId } from "../config/model-provider-config.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOfficialExternalProviderPluginIds } from "../plugins/official-external-plugin-catalog.js";
+import { isPubliclyKnownPluginId } from "../plugins/plugin-public-identity.js";
+import { listEnabledPluginRecords } from "../plugins/plugin-runtime-inventory.js";
 import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -42,6 +46,7 @@ type TelemetryPayload = {
   features: {
     channels: string[];
     providerFamilies: string[];
+    plugins: string[];
     pluginsEnabled: number;
     sessionsLast24h: number;
   };
@@ -79,17 +84,6 @@ function isUpdateCheckDisabled(config: OpenClawConfig): boolean {
 function isDoNotTrackEnabled(): boolean {
   const value = process.env.DO_NOT_TRACK?.trim().toLowerCase();
   return value === "1" || value === "true";
-}
-
-function isEnabledPlugin(config: OpenClawConfig, pluginId: string): boolean {
-  const plugins = config.plugins;
-  if (plugins?.enabled === false || plugins?.deny?.includes(pluginId)) {
-    return false;
-  }
-  if (plugins?.allow && plugins.allow.length > 0 && !plugins.allow.includes(pluginId)) {
-    return false;
-  }
-  return plugins?.entries?.[pluginId]?.enabled !== false;
 }
 
 function countRecentSessions(nowMs: number): number {
@@ -163,6 +157,9 @@ export function buildTelemetryPayload(
   config: OpenClawConfig,
   options: { surface: TelemetrySurface },
 ): TelemetryPayload {
+  const enabledPlugins = listEnabledPluginRecords(config);
+  const publicPlugins = enabledPlugins.filter(isPubliclyKnownPluginId);
+  const publicChannelIds = new Set(publicPlugins.flatMap((plugin) => plugin.channelIds));
   const channels = Object.entries(config.channels ?? {})
     .filter(
       ([channelId, channelConfig]) =>
@@ -170,7 +167,7 @@ export function buildTelemetryPayload(
         !isChannelConfigMetadataKey(channelId) &&
         isRecord(channelConfig) &&
         channelConfig.enabled !== false &&
-        isEnabledPlugin(config, channelId),
+        publicChannelIds.has(channelId),
     )
     .map(([channelId]) => channelId)
     .toSorted();
@@ -185,12 +182,17 @@ export function buildTelemetryPayload(
     ),
   ];
   const providerFamilies = [...new Set(configuredProviders)]
-    .filter((providerId) => SAFE_FEATURE_NAME.test(providerId))
+    .filter(
+      (providerId) =>
+        SAFE_FEATURE_NAME.test(providerId) &&
+        (isBuiltInModelProviderOverlayId(providerId) ||
+          resolveOfficialExternalProviderPluginIds({ providerIds: new Set([providerId]) }).length >
+            0),
+    )
     .toSorted();
-  const enabledPluginEntries = Object.keys(config.plugins?.entries ?? {}).filter(
-    (pluginId) => SAFE_FEATURE_NAME.test(pluginId) && isEnabledPlugin(config, pluginId),
-  );
-  const pluginsEnabled = new Set([...channels, ...enabledPluginEntries]).size;
+  const plugins = [...new Set(publicPlugins.map((plugin) => plugin.id))]
+    .filter((pluginId) => SAFE_FEATURE_NAME.test(pluginId))
+    .toSorted();
 
   return {
     schema: 1,
@@ -201,7 +203,8 @@ export function buildTelemetryPayload(
     features: {
       channels,
       providerFamilies,
-      pluginsEnabled,
+      plugins,
+      pluginsEnabled: enabledPlugins.length,
       sessionsLast24h: countRecentSessions(Date.now()),
     },
   };
