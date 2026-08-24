@@ -856,7 +856,9 @@ describe("chat Swarm progress", () => {
     const scrollAnchor = widget?.previousElementSibling;
     expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
     expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    const composerStack = widget?.nextElementSibling;
+    expect(composerStack?.classList.contains("chat-main__composer-stack")).toBe(true);
+    expect(composerStack?.querySelector(".agent-chat__composer-shell")).not.toBeNull();
     expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
   });
 });
@@ -888,9 +890,9 @@ describe("inline approval card", () => {
     const inlineSurface = container.querySelector(".chat-inline-approval");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
     expect(inlineSurface?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(
-      inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-    ).toBe(true);
+    const composerStack = inlineSurface?.nextElementSibling;
+    expect(composerStack?.classList.contains("chat-main__composer-stack")).toBe(true);
+    expect(composerStack?.querySelector(".agent-chat__composer-shell")).not.toBeNull();
     const countdown = expectDefined(
       container.querySelector<LitElement>(".exec-approval-countdown"),
       "inline approval countdown",
@@ -1953,7 +1955,9 @@ describe("chat scroll-to-bottom affordance", () => {
     const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     const queue = requireElement(container, ".chat-queue", "composer queue");
     const composer = requireElement(shell, ".agent-chat__input", "composer");
-    expect(wrapper.nextElementSibling).toBe(shell);
+    const composerStack = requireElement(container, ".chat-main__composer-stack", "composer stack");
+    expect(wrapper.nextElementSibling).toBe(composerStack);
+    expect(shell.closest(".chat-main__composer-stack")).toBe(composerStack);
     expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
     expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });

@@ -1,6 +1,5 @@
 // Control UI E2E tests cover composable skill references in the chat composer.
 import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -9,24 +8,8 @@ const suite = createControlUiE2eSuite({
   name: "Control UI skill references",
 });
 
-async function setComposerCaret(composer: Locator, caret: number) {
-  await composer.evaluate((element, position) => {
-    if (!(element instanceof HTMLTextAreaElement)) {
-      throw new Error("Chat composer is not a textarea");
-    }
-    element.setSelectionRange(position, position);
-  }, caret);
-}
-
-type FriendlyTokenGeometry = {
-  clipped: number;
-  label?: string;
-  overlapsNextWord: boolean;
-  overflow: number;
-};
-
 suite.define(() => {
-  it("references multiple skills inside a normal prompt and sends the visible tokens", async () => {
+  it("references multiple skills inside a normal prompt and sends their raw names", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     await suite.withPage(
       {
@@ -49,16 +32,6 @@ suite.define(() => {
           },
           {
             acceptsArgs: true,
-            description: "Exercise friendly token labels.",
-            name: "bench_skill_01",
-            skillDisplayName: "Bench Skill 01",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/bench_skill_01"],
-          },
-          {
-            acceptsArgs: true,
             description: "Build and review technical documentation.",
             name: "technical_documentation",
             skillDisplayName: "Technical Documentation",
@@ -76,16 +49,6 @@ suite.define(() => {
             source: "skill",
             skillModelVisible: true,
             textAliases: ["/status_report"],
-          },
-          {
-            acceptsArgs: true,
-            description: "Exercise wrapped token geometry.",
-            name: "wrap",
-            skillDisplayName: "Extremely Detailed Wrapped Composition Helper",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/wrap"],
           },
           {
             acceptsArgs: false,
@@ -135,36 +98,6 @@ suite.define(() => {
         await composer.press("Enter");
         await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
 
-        const firstTokenStart = "Review this with ".length;
-        await setComposerCaret(composer, "Review this with $autoreview ".length);
-        await composer.press("ArrowLeft");
-        await expect
-          .poll(() =>
-            page.locator(".agent-chat__composer-caret").getAttribute("data-composer-caret-offset"),
-          )
-          .toBe(String(firstTokenStart));
-        if (artifactDir) {
-          await page.locator(".agent-chat__composer-shell").screenshot({
-            path: path.join(artifactDir, "skill-reference-caret-desktop.png"),
-          });
-        }
-
-        await composer.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new Error("Chat composer is not a textarea");
-          }
-          const tokenInterior = "Review this with $auto".length;
-          element.setSelectionRange(tokenInterior, tokenInterior);
-          element.dispatchEvent(new Event("select", { bubbles: true }));
-        });
-        await expect
-          .poll(() =>
-            composer.evaluate((element) =>
-              element instanceof HTMLTextAreaElement ? element.selectionStart : null,
-            ),
-          )
-          .toBe(firstTokenStart);
-
         await composer.fill(`${await composer.inputValue()}and $technical`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await composer.press("Tab");
@@ -203,172 +136,6 @@ suite.define(() => {
           .toEqual({ first: "/status", last: "/status_report" });
         await composer.press("Tab");
         await expect.poll(() => composer.inputValue()).toBe("/status");
-
-        const readFriendlyTokenGeometry = () =>
-          page
-            .locator(".agent-chat__composer-draft-overlay")
-            .evaluate((element): FriendlyTokenGeometry[] => {
-              return Array.from(
-                element.querySelectorAll<HTMLElement>(".agent-chat__skill-token"),
-              ).map((token) => {
-                let sibling: ChildNode | null = token.nextSibling;
-                while (sibling && (!(sibling instanceof Text) || !/\S/u.test(sibling.data))) {
-                  sibling = sibling.nextSibling;
-                }
-                if (!(sibling instanceof Text)) {
-                  throw new Error("Expected text after skill token");
-                }
-                const nextWordStart = sibling.data.search(/\S/u);
-                const wordRange = document.createRange();
-                wordRange.setStart(sibling, nextWordStart);
-                wordRange.setEnd(sibling, nextWordStart + 1);
-                const wordRect = wordRange.getBoundingClientRect();
-                const tokenRect = token.getBoundingClientRect();
-                const horizontalOverlap =
-                  Math.min(tokenRect.right, wordRect.right) -
-                  Math.max(tokenRect.left, wordRect.left);
-                const verticalOverlap =
-                  Math.min(tokenRect.bottom, wordRect.bottom) -
-                  Math.max(tokenRect.top, wordRect.top);
-                return {
-                  clipped: token.scrollWidth - token.clientWidth,
-                  label: token.textContent?.trim(),
-                  overlapsNextWord: horizontalOverlap > 0 && verticalOverlap > 0,
-                  overflow:
-                    Math.max(0, element.getBoundingClientRect().left - tokenRect.left) +
-                    Math.max(0, tokenRect.right - element.getBoundingClientRect().right),
-                };
-              });
-            });
-
-        await composer.fill("Use $bench_skill_01 next and $autoreview later");
-        await expect
-          .poll(readFriendlyTokenGeometry)
-          .toSatisfy(
-            (tokens) =>
-              tokens?.length === 2 &&
-              tokens.every(
-                (token: FriendlyTokenGeometry) =>
-                  token.clipped <= 1 &&
-                  !token.overlapsNextWord &&
-                  token.overflow <= 1 &&
-                  ["Bench Skill 01", "Auto Review"].includes(token.label ?? ""),
-              ),
-          );
-
-        await page.setViewportSize({ width: 390, height: 844 });
-        await composer.fill(
-          "A mobile line that wraps before $bench_skill_01 next and $autoreview later",
-        );
-        await expect
-          .poll(readFriendlyTokenGeometry)
-          .toSatisfy(
-            (tokens) =>
-              tokens?.length === 2 &&
-              tokens.every(
-                (token: FriendlyTokenGeometry) =>
-                  token.clipped <= 1 && !token.overlapsNextWord && token.overflow <= 1,
-              ),
-          );
-
-        const mobileTokenStart = "A mobile line that wraps before ".length;
-        await setComposerCaret(composer, mobileTokenStart + "$bench_skill_01 ".length);
-        await composer.press("ArrowLeft");
-        await expect
-          .poll(() =>
-            page.locator(".agent-chat__composer-caret").getAttribute("data-composer-caret-offset"),
-          )
-          .toBe(String(mobileTokenStart));
-        if (artifactDir) {
-          await page.locator(".agent-chat__composer-shell").screenshot({
-            path: path.join(artifactDir, "skill-reference-caret-mobile.png"),
-          });
-        }
-
-        await composer.fill("שלום עם $bench_skill_01 הבא ואז $autoreview מאוחר יותר");
-        await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
-        await expect
-          .poll(readFriendlyTokenGeometry)
-          .toSatisfy(
-            (tokens) =>
-              tokens?.length === 2 &&
-              tokens.every(
-                (token: FriendlyTokenGeometry) =>
-                  token.clipped <= 1 && !token.overlapsNextWord && token.overflow <= 1,
-              ),
-          );
-
-        await page.setViewportSize({ width: 420, height: 780 });
-        await composer.fill(
-          "A wrapped prompt leading into $wrap: then following copy that must share the native textarea wrap.",
-        );
-        const overlay = page.locator(".agent-chat__composer-draft-overlay");
-        const token = overlay.locator(".agent-chat__skill-token");
-        await token.waitFor({ state: "visible" });
-        await expect.poll(() => token.getAttribute("data-raw")).toBe("$wrap");
-        await expect
-          .poll(() => overlay.textContent())
-          .toSatisfy((text) =>
-            text
-              ?.replace(/\s+/gu, " ")
-              .includes(
-                "A wrapped prompt leading into Extremely Detailed Wrapped Composition Helper: then",
-              ),
-          );
-        const [textareaGeometry, overlayGeometry] = await Promise.all([
-          composer.evaluate((element) => {
-            const style = getComputedStyle(element);
-            return {
-              clientWidth: element.clientWidth,
-              font: style.font,
-              lineHeight: style.lineHeight,
-              overflowWrap: style.overflowWrap,
-              paddingInline: style.paddingInline,
-              whiteSpace: style.whiteSpace,
-            };
-          }),
-          overlay.evaluate((element) => {
-            const style = getComputedStyle(element);
-            return {
-              clientWidth: element.clientWidth,
-              font: style.font,
-              lineHeight: style.lineHeight,
-              overflowWrap: style.overflowWrap,
-              paddingInline: style.paddingInline,
-              whiteSpace: style.whiteSpace,
-            };
-          }),
-        ]);
-        expect(overlayGeometry).toEqual(textareaGeometry);
-
-        await expect
-          .poll(() => overlay.evaluate((element) => getComputedStyle(element).whiteSpace))
-          .toBe("pre-wrap");
-
-        if (artifactDir) {
-          await page.locator(".agent-chat__composer-shell").screenshot({
-            path: path.join(artifactDir, "skill-reference-wrapped.png"),
-          });
-        }
-
-        const rtlDraft = "שלום עם $wrap: וטקסט נוסף שצריך להישאר מיושר עם שדה הכתיבה.";
-        const rtlTokenStart = rtlDraft.indexOf("$wrap");
-        const rtlTokenEnd = rtlTokenStart + "$wrap".length;
-        const rtlDraftWithoutToken = `${rtlDraft.slice(0, rtlTokenStart)}${rtlDraft.slice(
-          rtlTokenEnd,
-        )}`;
-        await composer.fill(rtlDraft);
-        await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
-        await expect.poll(() => overlay.getAttribute("dir")).toBe("rtl");
-        await token.waitFor({ state: "visible" });
-
-        await setComposerCaret(composer, rtlTokenEnd);
-        await composer.press("Backspace");
-        await expect.poll(() => composer.inputValue()).toBe(rtlDraftWithoutToken);
-        await composer.fill(rtlDraft);
-        await setComposerCaret(composer, rtlTokenStart);
-        await composer.press("Delete");
-        await expect.poll(() => composer.inputValue()).toBe(rtlDraftWithoutToken);
       },
     );
   });

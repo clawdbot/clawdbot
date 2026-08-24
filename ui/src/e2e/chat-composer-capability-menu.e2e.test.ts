@@ -216,7 +216,6 @@ suite.define(() => {
       await expect
         .poll(() => attachTrigger.getAttribute("class"))
         .toContain("agent-chat__input-btn--has-overrides");
-      await expect.poll(() => page.locator(".agent-chat__session-overrides-pill").count()).toBe(0);
 
       let composer = await openMenu(page);
       const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");

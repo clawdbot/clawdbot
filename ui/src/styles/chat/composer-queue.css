@@ -63,10 +63,6 @@
   line-height: 1.4;
 }
 
-.chat-queue__global-state[data-chat-queue-global-state="reconnect"] {
-  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
-}
-
 .chat-queue__scroll[data-scrollable="true"] {
   height: calc(3.55 * var(--chat-queue-row-height));
   overflow-y: auto;

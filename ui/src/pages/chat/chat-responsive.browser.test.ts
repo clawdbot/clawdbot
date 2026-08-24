@@ -237,15 +237,13 @@ function queueMatrixCellHtml(
   const disconnected = runtime === "disconnected";
   const editing = variant === "editing";
   const steerMode = mode === "steer";
-  const globalState = disconnected
-    ? `<div class="chat-queue__global-state" data-chat-queue-global-state="reconnect">Waiting for reconnect</div>`
-    : "";
   const badge = steerMode
     ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
     : "";
+  const state = disconnected ? '<span class="chat-queue__state">Waiting for reconnect</span>' : "";
   const copy = editing
     ? `<textarea class="chat-queue__edit-input">Edit ${mode} message</textarea>`
-    : `<span class="chat-queue__copy"><span class="chat-queue__text">${mode} message</span>${badge}</span>`;
+    : `<span class="chat-queue__copy"><span class="chat-queue__text">${mode} message</span>${badge}${state}</span>`;
   const actions = editing
     ? `<span class="chat-queue__actions"><button class="chat-queue__edit-submit">${iconSvg()}</button><button class="chat-queue__edit-cancel">${iconSvg()}</button></span>`
     : `<span class="chat-queue__actions">${runtime === "connected-running" ? `<button class="chat-queue__action chat-queue__steer">${iconSvg()}<span>Steer</span></button>` : ""}<button class="chat-queue__remove">${iconSvg()}</button><button class="chat-queue__more">${iconSvg()}</button></span>`;
@@ -253,7 +251,6 @@ function queueMatrixCellHtml(
     <header>${mode} · ${runtime} · ${variant}</header>
     <div class="agent-chat__composer-shell">
       <div class="chat-queue">
-        ${globalState}
         <div class="chat-queue__scroll">
           <div class="chat-queue__item chat-queue__item--no-avatar${steerMode ? " chat-queue__item--steered" : ""}${disconnected ? " chat-queue__item--reconnect" : ""}${editing ? " chat-queue__item--editing" : ""}">
             <span class="chat-queue__leading">${iconSvg()}</span>${copy}${actions}
@@ -501,17 +498,9 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
   `;
 }
 
-function composerControlsHtml(crowded = false) {
+function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
-      ${
-        crowded
-          ? `<span class="agent-chat__session-overrides-pill">
-          <button class="agent-chat__session-overrides-open" type="button">4 session overrides</button>
-          <button class="agent-chat__session-overrides-clear" type="button" aria-label="Clear session overrides">${iconSvg()}</button>
-        </span>`
-          : ""
-      }
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
           <details class="chat-controls__inline-select chat-controls__model-picker">
@@ -775,7 +764,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                         </details>
                       </div>
                     </div>
-                    ${composerControlsHtml(opts.crowdedComposerFooter)}
+                    ${composerControlsHtml()}
                       <div class="agent-chat__composer-actions">
                         <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
                       </div>
@@ -4051,10 +4040,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(await page.getByText("Waiting for current run", { exact: true }).count()).toBe(0);
       expect(
         await page.locator('[data-queue-cell*="-disconnected-"] .chat-queue__global-state').count(),
-      ).toBe(9);
+      ).toBe(0);
       expect(
         await page.locator('[data-queue-cell*="-disconnected-"] .chat-queue__state').count(),
-      ).toBe(0);
+      ).toBe(5);
       expect(
         await page
           .locator('[data-queue-cell*="-connected-running-"] .chat-queue__global-state')
