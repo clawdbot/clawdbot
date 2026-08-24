@@ -431,7 +431,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return { kind: "completed" };
     }
     if ("blocked" in inbound) {
-      return inbound.reason ? { kind: "completed", reason: inbound.reason } : { kind: "completed" };
+      return inbound.reason
+        ? { kind: "completed", metadata: { reason: inbound.reason } }
+        : { kind: "completed" };
     }
     if (
       await maybeResolveWhatsAppQuestionReaction({

@@ -25,7 +25,7 @@ const WhatsAppDirectEntrySchema = z
       .max(1)
       .optional()
       .describe(
-        "Probabilistically drops otherwise authorized inbound messages before an agent turn is created. 1 is always admit; 0 is always drop. Evaluated per exact direct entry, then direct wildcard, then account. Useful to simulate human non-response. Dropped messages are completely silent (no read receipts, no agent logs).",
+        "Probabilistically drops otherwise authorized inbound messages before an agent turn is created. 1 is always admit; 0 is always drop. Evaluated per exact direct entry, then direct wildcard, then account. Useful to simulate human non-response. Dropped messages do not generate read receipts or agent activity logs, but are recorded as completed in the durable queue with a reply_rate_suppressed reason.",
       ),
   })
   .strict()
@@ -67,6 +67,7 @@ const WhatsAppCommonShape = {
   }),
   pluginHooks: WhatsAppPluginHooksSchema,
 };
+
 
 function enforceOpenDmPolicyAllowFromStar(params: {
   dmPolicy: unknown;

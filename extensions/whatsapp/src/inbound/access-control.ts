@@ -196,11 +196,38 @@ export async function checkInboundAccessControl(params: {
     const e164 = normalizeE164(params.from) ?? params.from;
     const exactCfg = policy.account.direct?.[e164];
     const wildcardCfg = policy.account.direct?.["*"];
-    const rate = exactCfg?.replyRate ?? wildcardCfg?.replyRate ?? policy.account.replyRate;
+    let rate: number | undefined;
+    let scope: string | undefined;
+
+    if (exactCfg?.replyRate !== undefined) {
+      rate = exactCfg.replyRate;
+      scope = `exact match ${e164}`;
+    } else if (wildcardCfg?.replyRate !== undefined) {
+      rate = wildcardCfg.replyRate;
+      scope = "wildcard direct";
+    } else if (policy.account.replyRate !== undefined) {
+      rate = policy.account.replyRate;
+      scope = "account default";
+    }
+
+    if (rate !== undefined) {
+      logWhatsAppVerbose(
+        params.verbose,
+        `[whatsapp access-control] Resolved replyRate ${rate} from ${scope}`,
+      );
+    }
+
     if (typeof rate === "number" && rate >= 0 && rate < 1) {
-      const messageHash = createHash("md5").update(params.messageId ?? "test-fixture-id").digest("hex").substring(0, 8);
+      const messageHash = createHash("md5")
+        .update(params.messageId ?? "test-fixture-id")
+        .digest("hex")
+        .substring(0, 8);
       const randomValue = parseInt(messageHash, 16) / 0xffffffff;
       if (randomValue >= rate) {
+        logWhatsAppVerbose(
+          params.verbose,
+          `[whatsapp rate-limit] Dropping message ${params.messageId}... MD5 hash modulo ${randomValue.toFixed(2)} >= ${rate}`,
+        );
         logWhatsAppVerbose(
           params.verbose,
           `Ignored message from ${params.from} (${rate * 100}% probabilistic rule).`,

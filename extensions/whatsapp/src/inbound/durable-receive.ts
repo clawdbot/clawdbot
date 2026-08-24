@@ -38,7 +38,9 @@ export type WhatsAppIngressAdmission = Omit<WhatsAppDurableInboundPayload, "mess
 
 export type WhatsAppIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-export type WhatsAppIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
+export type WhatsAppIngressDispatchResult = ChannelIngressMonitorDeliveryResult<{
+  reason?: string;
+}>;
 
 type WhatsAppIngressFacts = {
   eventId: string;
@@ -100,7 +102,9 @@ export function createWhatsAppIngressMonitor(params: {
   return createChannelIngressMonitor<
     WhatsAppIngressAdmission,
     WhatsAppDurableInboundPayload,
-    WhatsAppDurableInboundPayload
+    WhatsAppDurableInboundPayload,
+    unknown,
+    { reason?: string }
   >({
     queue: params.queue,
     inspect: (admission) => inspectWhatsAppIngressMessage(admission.message),

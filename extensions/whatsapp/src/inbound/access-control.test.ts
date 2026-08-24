@@ -787,3 +787,110 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(result.isSelfChat).toBe(true);
   });
 });
+
+describe("checkInboundAccessControl replyRate", () => {
+  it("drops the message and records suppression metadata when random hash >= replyRate", async () => {
+    // "test-fixture-id" hashes to 0.20168...
+    // So replyRate = 0.20 causes randomValue (0.20168) >= rate (0.20) -> dropped
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          replyRate: 0.2,
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Test",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+      messageId: "test-fixture-id",
+    });
+
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toBe("reply_rate_suppressed");
+    }
+  });
+
+  it("admits the message when random hash < replyRate", async () => {
+    // "test-fixture-id" hashes to 0.20168...
+    // So replyRate = 0.21 causes randomValue (0.20168) >= rate (0.21) -> FALSE -> admitted
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          replyRate: 0.21,
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Test",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+      messageId: "test-fixture-id",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("respects precedence: exact > wildcard > account", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          replyRate: 1.0, // Account admits
+          direct: {
+            "*": {
+              replyRate: 1.0, // Wildcard admits
+            },
+            "+15550001111": {
+              replyRate: 0.0, // Exact drops
+            },
+          },
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Test",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+      messageId: "test-fixture-id",
+    });
+
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toBe("reply_rate_suppressed");
+    }
+  });
+});
