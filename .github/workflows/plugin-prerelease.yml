@@ -211,9 +211,11 @@ jobs:
           }
 
           try {
-            const { createExtensionTestShards, DEFAULT_EXTENSION_TEST_SHARD_COUNT } = await import(
-              targetPlanPath("extension-test-plan")
-            );
+            const {
+              createExtensionTestShards,
+              DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+              splitExtensionTestJobTargets,
+            } = await import(targetPlanPath("extension-test-plan"));
             const allExtensionShards = createExtensionTestShards({
               shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
             });
@@ -243,7 +245,6 @@ jobs:
               shard_index: shard.index + 1,
               task: "extensions-batch",
             }));
-            const telegramShardCount = 2;
             const telegramVitestConfig = telegramPlanGroup
               ? (await import(`./${telegramPlanGroup.config}`)).default
               : null;
@@ -264,23 +265,21 @@ jobs:
                   .replaceAll("\\", "/"),
               )
               .sort();
-            const telegramPartitionSize = Math.ceil(telegramTestFiles.length / telegramShardCount);
-            const telegramShards =
-              telegramPlanGroup && telegramTestFiles.length > 0
-                ? Array.from({ length: telegramShardCount }, (_, index) => ({
+            const telegramJobTargets = telegramPlanGroup
+              ? splitExtensionTestJobTargets(telegramPlanGroup.config, telegramTestFiles)
+              : [];
+            const telegramShards = telegramPlanGroup
+              ? telegramJobTargets.map((includePatterns, index) => ({
                   check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
                   extensions_csv: "telegram",
-                  includePatterns: telegramTestFiles.slice(
-                    index * telegramPartitionSize,
-                    (index + 1) * telegramPartitionSize,
-                  ),
+                  includePatterns,
                   vitest_config: telegramPlanGroup.config,
                   vitest_max_workers: 1,
                   runner: "blacksmith-8vcpu-ubuntu-2404",
                   shard_index: DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
                   task: "extension-file-shard",
                 }))
-                : [];
+              : [];
             extensionShards = [...batchShards, ...telegramShards];
           } catch (error) {
             const errorCode =
@@ -524,6 +523,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}
     steps:
       - name: Checkout

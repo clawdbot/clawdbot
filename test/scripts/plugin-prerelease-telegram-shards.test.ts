@@ -8,6 +8,7 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
   listTrackedTestFilesForRoots,
+  splitExtensionTestJobTargets,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import { createExtensionTelegramVitestConfig } from "../vitest/vitest.extension-telegram.config.ts";
@@ -145,20 +146,23 @@ describe("plugin prerelease Telegram extension shards", () => {
         String(row.extensions_csv).split(",").includes("telegram"),
       ),
     ).toBe(false);
-    expect(telegramRows).toEqual([
-      expect.objectContaining({
-        check_name: "checks-node-extensions-telegram-shard-1",
-        extensions_csv: "telegram",
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        vitest_config: "test/vitest/vitest.extension-telegram.config.ts",
-      }),
-      expect.objectContaining({
-        check_name: "checks-node-extensions-telegram-shard-2",
-        extensions_csv: "telegram",
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        vitest_config: "test/vitest/vitest.extension-telegram.config.ts",
-      }),
-    ]);
+    const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
+    const expectedTelegramPartitions = splitExtensionTestJobTargets(
+      telegramConfig,
+      runnableTelegramTestFiles,
+    );
+    expect(telegramRows).toHaveLength(expectedTelegramPartitions.length);
+    expect(telegramRows).toEqual(
+      expectedTelegramPartitions.map((includePatterns, index) =>
+        expect.objectContaining({
+          check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
+          extensions_csv: "telegram",
+          includePatterns,
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          vitest_config: telegramConfig,
+        }),
+      ),
+    );
     const telegramPartitions = telegramRows.map((row: Record<string, unknown>) => {
       expect(row.includePatterns).toBeInstanceOf(Array);
       return row.includePatterns as string[];
@@ -168,10 +172,8 @@ describe("plugin prerelease Telegram extension shards", () => {
       runnableTelegramTestFiles,
     );
     expect(new Set(telegramPartitions.flat()).size).toBe(runnableTelegramTestFiles.length);
-    expect(telegramPartitions.map((partition) => partition.length)).toEqual([
-      Math.ceil(runnableTelegramTestFiles.length / 2),
-      Math.floor(runnableTelegramTestFiles.length / 2),
-    ]);
+    expect(telegramPartitions.every((partition) => partition.length <= 10)).toBe(true);
+    expect(Math.max(...telegramPartitions.map((partition) => partition.length))).toBe(10);
     expect(
       trackedTelegramTestFiles.filter((file) => !runnableTelegramTestFiles.includes(file)).length,
     ).toBeGreaterThan(0);
@@ -202,6 +204,7 @@ describe("plugin prerelease Telegram extension shards", () => {
     }
 
     expect(extensionJob.strategy["fail-fast"]).toBe(false);
+    expect(extensionJob.strategy["max-parallel"]).toBe(12);
     expect(extensionJob["timeout-minutes"]).toBe(60);
     expect(extensionJob.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
