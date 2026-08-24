@@ -1,4 +1,3 @@
-import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   listAgentEntries,
@@ -50,12 +49,10 @@ import {
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
-import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
 } from "../cron/store.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import { waitUntilGatewayConfigApplied } from "./claws-cli.gateway-readiness.js";
@@ -67,6 +64,7 @@ import type {
   ClawsStatusOptions,
 } from "./claws-cli.js";
 import { failNonDryRun, requireRemoveConsent, resolveLatestPlanConsent } from "./claws-consent.js";
+import { renderClawAddPlanSummary } from "./claws-plan-render.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -86,47 +84,8 @@ function logExperimentalWarning(runtime: RuntimeEnv): void {
 }
 
 function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
-  runtime.log(`Agent: ${plan.agent.finalId}`);
-  runtime.log(`Workspace: ${plan.agent.workspace}`);
-  runtime.log(`Actions: ${plan.summary.totalActions}`);
-  runtime.log(`Packages: ${plan.summary.packageActions}`);
-  for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
-    const requirementState =
-      typeof action.details?.requirementState === "string"
-        ? action.details.requirementState
-        : "unresolved";
-    runtime.log(
-      `  Requirement ${action.target}: ${requirementState}${action.action === "install" ? " (installation requires this exact plan consent)" : ""}`,
-    );
-  }
-  runtime.log(`MCP servers: ${plan.summary.mcpServerActions}`);
-  for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    const server = action.details as Record<string, unknown> | undefined;
-    const target =
-      typeof server?.url === "string"
-        ? redactSensitiveUrlLikeString(server.url)
-        : typeof server?.command === "string"
-          ? redactSensitiveArgv([
-              server.command,
-              ...(Array.isArray(server.args)
-                ? server.args.filter((arg): arg is string => typeof arg === "string")
-                : []),
-            ]).join(" ")
-          : "invalid declaration";
-    runtime.log(`  MCP ${action.id}: ${target}`);
-  }
-  runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
-  if (plan.capabilityChanges.length > 0) {
-    runtime.log(`Capability escalations (${plan.capabilityChanges.length}):`);
-    for (const change of plan.capabilityChanges) {
-      runtime.log(
-        redactSensitiveText(`  ! ${change.kind}:${change.id} ${JSON.stringify(change.effect)}`),
-      );
-    }
-    runtime.log("The plan integrity binds every capability line above.");
-  }
-  if (plan.summary.blockedActions > 0) {
-    runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
+  for (const line of renderClawAddPlanSummary(plan).lines) {
+    runtime.log(line);
   }
 }
 
