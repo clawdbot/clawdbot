@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
@@ -87,7 +88,7 @@ describe.runIf(runChromiumProof)("managed Chromium download cancellation", () =>
     cleanup.push(async () => await closePlaywrightBrowserConnection({ cdpUrl }));
 
     const controlledPage = await getPageForTargetId({ cdpUrl, targetId });
-    const saveStarted = Promise.withResolvers<void>();
+    const saveStarted = createDeferred<void>();
     let cancellationCount = 0;
     controlledPage.once("download", (download) => {
       const saveAs = download.saveAs.bind(download);

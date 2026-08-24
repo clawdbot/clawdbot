@@ -1,7 +1,6 @@
 /** Shared Playwright download capture and output handling. */
 import crypto from "node:crypto";
 import path from "node:path";
-import type { Page } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -9,6 +8,11 @@ import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 type BrowserDownloadCaptureState = {
   downloadWaiterDepth: number;
+};
+
+type BrowserDownloadPage = {
+  on(event: "download", handler: (download: unknown) => void): unknown;
+  off(event: "download", handler: (download: unknown) => void): unknown;
 };
 
 export type BrowserDownloadCaptureOptions = {
@@ -67,7 +71,7 @@ export async function saveBrowserDownload(
 
 /** Arm one page download while maintaining explicit/passive ownership depth. */
 export function createDownloadCaptureForPage(
-  page: Page,
+  page: BrowserDownloadPage,
   state: BrowserDownloadCaptureState,
   timeoutMs: number,
   opts: BrowserDownloadCaptureOptions = {},
@@ -96,7 +100,7 @@ export function createDownloadCaptureForPage(
   const releaseWaiter = () => {
     if (handler) {
       state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
-      page.off("download", handler as never);
+      page.off("download", handler);
       handler = undefined;
     }
     if (timer) {
@@ -126,7 +130,7 @@ export function createDownloadCaptureForPage(
         .finally(cleanup)
         .then(resolve, reject);
     };
-    page.on("download", handler as never);
+    page.on("download", handler);
     timer = setTimeout(
       () => {
         if (done) {

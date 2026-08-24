@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Page } from "playwright-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 
@@ -12,13 +12,13 @@ describe("Playwright download capture cancellation", () => {
     const state = { downloadWaiterDepth: 0 };
     const controller = new AbortController();
     const reason = new Error("download request aborted");
-    const validation = Promise.withResolvers<void>();
+    const validation = createDeferred<void>();
     const beforeSave = vi.fn(async () => {
       await validation.promise;
     });
     const saveAs = vi.fn(async () => {});
     const cancel = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page as Page, state, 1_000, {
+    const capture = createDownloadCaptureForPage(page, state, 1_000, {
       beforeSave,
       signal: controller.signal,
     });
@@ -63,8 +63,8 @@ describe("Playwright download capture cancellation", () => {
     const state = { downloadWaiterDepth: 0 };
     const controller = new AbortController();
     const reason = new Error("download request aborted");
-    const saveGate = Promise.withResolvers<void>();
-    const saveStarted = Promise.withResolvers<string>();
+    const saveGate = createDeferred<void>();
+    const saveStarted = createDeferred<string>();
     const saveAs = vi.fn(async (tempPath: string) => {
       await fs.writeFile(tempPath, "cancelled partial contents", "utf8");
       saveStarted.resolve(tempPath);
@@ -73,7 +73,7 @@ describe("Playwright download capture cancellation", () => {
     const cancel = vi.fn(async () => {
       saveGate.resolve();
     });
-    const capture = createDownloadCaptureForPage(page as Page, state, 1_000, {
+    const capture = createDownloadCaptureForPage(page, state, 1_000, {
       mode: "explicit",
       outputPath,
       outputRoot,
@@ -117,9 +117,9 @@ describe("Playwright download capture cancellation", () => {
   it("finishes atomic publication when cancellation arrives after its commit boundary", async () => {
     const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-publish-"));
     const outputPath = path.join(outputRoot, "published.bin");
-    const renameStarted = Promise.withResolvers<void>();
-    const releaseRename = Promise.withResolvers<void>();
-    const renameFinished = Promise.withResolvers<void>();
+    const renameStarted = createDeferred<void>();
+    const releaseRename = createDeferred<void>();
+    const renameFinished = createDeferred<void>();
     const originalRename = fs.rename.bind(fs);
     const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
       if (String(destination).endsWith(`${path.sep}published.bin`)) {
@@ -137,7 +137,7 @@ describe("Playwright download capture cancellation", () => {
     const controller = new AbortController();
     const reason = new Error("download aborted during publication");
     const cancel = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page as Page, state, 1_000, {
+    const capture = createDownloadCaptureForPage(page, state, 1_000, {
       mode: "explicit",
       outputPath,
       outputRoot,
