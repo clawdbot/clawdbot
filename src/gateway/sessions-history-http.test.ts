@@ -1215,7 +1215,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("keeps older SQLite history reachable past an all-silent bounded tail", async () => {
+  test("backfills REST and SSE history past an all-silent bounded tail", async () => {
     const storePath = await createSessionStoreFile();
     const sessionId = "sess-silent-tail";
     const sessionKey = "agent:main:main";
@@ -1235,9 +1235,11 @@ describe("session history HTTP endpoints", () => {
       const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
         query: "?limit=1",
       });
-      expect(firstPage.messages).toEqual([]);
-      expect(firstPage.hasMore).toBe(true);
-      expect(firstPage.nextCursor).toBe("2");
+      expect(firstPage.messages?.map((message) => message.content)).toEqual([
+        "reachable older history",
+      ]);
+      expect(firstPage.hasMore).toBe(false);
+      expect(firstPage.nextCursor).toBeUndefined();
 
       const stream = await openSessionHistorySse(harness.port, sessionKey, {
         query: "?limit=1",
@@ -1245,19 +1247,15 @@ describe("session history HTTP endpoints", () => {
       try {
         const event = await readSseEvent(stream.reader, stream.streamState);
         expect(event.event).toBe("history");
-        expect(event.data).toMatchObject({ messages: [], hasMore: true, nextCursor: "2" });
+        const history = event.data as SessionHistoryBody;
+        expect(history.messages?.map((message) => message.content)).toEqual([
+          "reachable older history",
+        ]);
+        expect(history.hasMore).toBe(false);
+        expect(history.nextCursor).toBeUndefined();
       } finally {
         await stream.reader.cancel();
       }
-
-      const olderPage = await readSessionHistoryBody(harness.port, sessionKey, {
-        query: "?limit=1&cursor=2",
-      });
-      expect(olderPage.messages?.map((message) => message.content)).toEqual([
-        "reachable older history",
-      ]);
-      expect(olderPage.hasMore).toBe(false);
-      expect(olderPage.nextCursor).toBeUndefined();
     });
   });
 
@@ -1449,13 +1447,22 @@ describe("session history HTTP endpoints", () => {
         sessionKey?: string;
         messages?: Array<{
           content?: Array<{ text?: string }>;
+          openclawStreamFallback?: { itemId?: string; replacementText?: string; source?: string };
           __openclaw?: { id?: string; seq?: number };
         }>;
       };
       expect(body.sessionKey).toBe("agent:main:main");
-      expect(body.messages).toHaveLength(1);
-      expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
-      expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
+      expect(body.messages).toHaveLength(2);
+      expect(body.messages?.[0]).toMatchObject({
+        content: [{ type: "text", text: "internal reasoning" }],
+        openclawStreamFallback: {
+          itemId: "item_commentary",
+          replacementText: "internal reasoning",
+          source: "segment",
+        },
+      });
+      expect(body.messages?.[1]?.content?.[0]?.text).toBe("Done.");
+      expectOpenClawMetadata(body.messages?.[1]?.["__openclaw"], {
         id: visibleMessageId,
         seq: 2,
       });

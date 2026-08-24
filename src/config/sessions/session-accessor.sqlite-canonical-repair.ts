@@ -23,21 +23,12 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { bindSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import { invalidateExistingSessionTranscriptDisplayInTransaction } from "./session-transcript-display.js";
 import {
   deleteSessionTranscriptIndexInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
-import {
-  startSessionTranscriptDisplayReconcile,
-  startSessionTranscriptIndexReconcile,
-} from "./session-transcript-reconcile.js";
-import {
-  ensureSessionTranscriptSourceGenerationInTransaction,
-  readSessionTranscriptSourceGenerationInTransaction,
-  replaceSessionTranscriptSourceGenerationInTransaction,
-} from "./session-transcript-source-generation.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -171,15 +162,16 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
           ),
         ]);
         const db = getSessionKysely(database.db);
-        const windowSessionIds = executeSqliteQuerySync(
+        const eventSessionIds = executeSqliteQuerySync(
           database.db,
           db
-            .selectFrom("session_windows")
+            .selectFrom("transcript_events")
             .select("session_id")
-            .where("session_id", "in", sessionIds),
+            .where("session_id", "in", sessionIds)
+            .groupBy("session_id"),
         ).rows;
-        for (const row of windowSessionIds) {
-          ensureSessionTranscriptSourceGenerationInTransaction(database, row.session_id);
+        for (const row of eventSessionIds) {
+          ensureTranscriptGenerationInTransaction(database, row.session_id);
         }
       }, toDatabaseOptions(group.resolved));
     });
@@ -477,22 +469,9 @@ function copySqliteSessionOwnedStateForRepair(params: {
     if (!replaced) {
       continue;
     }
-    // Every transcript projection follows the selected canonical source, including replacements
-    // whose final sequence is unchanged or lower than the destination it supersedes.
-    const displayProjectionInvalidated = invalidateExistingSessionTranscriptDisplayInTransaction(
-      params.destination.db,
-      sessionId,
-    );
+    // Search and active-event tables are derived from transcript_events; force their canonical rebuild.
     deleteSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     reconcileSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
-    const startReconcile = displayProjectionInvalidated
-      ? startSessionTranscriptDisplayReconcile
-      : startSessionTranscriptIndexReconcile;
-    startReconcile({
-      agentId: params.destination.agentId,
-      path: params.destination.path,
-      preferredSessionId: sessionId,
-    });
     publishSessionEntryCacheInvalidation(params.destination);
   }
   // Membership is authorization state and follows the selected winner. Boards,
@@ -532,10 +511,13 @@ function copySqliteSessionGenerationRows(params: {
       .selectAll()
       .where("session_id", "=", params.sessionId),
   ).rows;
-  const sourceGeneration = readSessionTranscriptSourceGenerationInTransaction(
+  const rewriteWatermarks = executeSqliteQuerySync(
     params.source.db,
-    params.sessionId,
-  );
+    sourceDb
+      .selectFrom("transcript_rewrite_watermarks")
+      .selectAll()
+      .where("session_id", "=", params.sessionId),
+  ).rows;
   const trajectoryEvents = executeSqliteQuerySync(
     params.source.db,
     sourceDb
@@ -554,18 +536,16 @@ function copySqliteSessionGenerationRows(params: {
     !params.sourceWindowPresent &&
     transcriptEvents.length === 0 &&
     transcriptIdentities.length === 0 &&
-    sourceGeneration === undefined &&
+    rewriteWatermarks.length === 0 &&
     trajectoryEvents.length === 0 &&
     parentStreamEvents.length === 0
   ) {
     return false;
   }
-  if (params.sourceWindowPresent && !sourceGeneration) {
-    throw new Error(`Canonical transcript source ${params.sessionId} has no generation`);
-  }
   for (const table of [
     "transcript_event_identities",
     "transcript_events",
+    "transcript_rewrite_watermarks",
     "trajectory_runtime_events",
     "acp_parent_stream_events",
   ] as const) {
@@ -586,7 +566,12 @@ function copySqliteSessionGenerationRows(params: {
       destinationDb.insertInto("transcript_event_identities").values(row),
     );
   }
-  replaceSessionTranscriptSourceGenerationInTransaction(params.destination, params.sessionId);
+  for (const row of rewriteWatermarks) {
+    executeSqliteQuerySync(
+      params.destination.db,
+      destinationDb.insertInto("transcript_rewrite_watermarks").values(row),
+    );
+  }
   for (const row of trajectoryEvents) {
     executeSqliteQuerySync(
       params.destination.db,

@@ -3,11 +3,13 @@
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { ensureOpenClawAgentTranscriptProjectionSourceColumns } from "../../state/openclaw-agent-transcript-projection-source-schema.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import {
+  isSessionTranscriptIndexReconcileRunning,
+  startSessionTranscriptIndexReconcile,
+} from "./session-transcript-reconcile.js";
 
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
@@ -64,12 +66,12 @@ export function searchSessionTranscripts(params: {
     ...(databasePath ? { path: databasePath } : {}),
   };
   const database = openOpenClawAgentDatabase(databaseOptions);
-  ensureOpenClawAgentTranscriptProjectionSourceColumns(database.db);
   const dirtySessions = listSessionsNeedingTranscriptIndexReconcile(database.db);
   if (dirtySessions.length > 0) {
     startSessionTranscriptIndexReconcile(databaseOptions);
   }
-  const indexing = dirtySessions.length > 0;
+  const indexing =
+    dirtySessions.length > 0 || isSessionTranscriptIndexReconcileRunning(databaseOptions);
   const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
   const sessionKeys = params.sessionKeys ?? [];
   const whereSession =
@@ -89,20 +91,10 @@ export function searchSessionTranscripts(params: {
       bm25(session_transcript_fts) AS rank
     FROM session_transcript_fts
     JOIN session_windows ON session_windows.session_id = session_transcript_fts.session_id
-    JOIN transcript_rewrite_watermarks AS source
-      ON source.session_id = session_transcript_fts.session_id
-    JOIN session_transcript_index_state AS state
-      ON state.session_id = session_transcript_fts.session_id
-      AND state.needs_rebuild = 0
-      AND state.source_generation = source.generation
-      AND state.indexed_seq = (
-        SELECT latest.seq
-        FROM transcript_events AS latest
-        WHERE latest.session_id = session_transcript_fts.session_id
-        ORDER BY latest.seq DESC
-        LIMIT 1
-      )
     WHERE session_transcript_fts MATCH ?${whereSession}
+      AND session_transcript_fts.session_id NOT IN (
+        SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0
+      )
     ORDER BY rank ASC, timestamp DESC, message_id ASC
     LIMIT ?
   `);

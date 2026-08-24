@@ -199,6 +199,14 @@ export function extractProjectedText(content: unknown): string {
   return parts.join("\n");
 }
 
+export function isSessionsSendInterSessionUserMessage(message: Record<string, unknown>): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
 export function isProjectedSessionsSendForwardedMessage(message: Record<string, unknown>): boolean {
   if (message.role !== "assistant") {
     return false;

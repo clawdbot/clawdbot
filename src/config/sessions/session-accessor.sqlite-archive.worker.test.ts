@@ -30,7 +30,6 @@ import {
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 type TestTranscriptEvent = {
   id: string;
@@ -46,14 +45,7 @@ describe("SQLite transcript archive worker", () => {
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(async () => {
-    const target = resolveSqliteTargetFromSessionStorePath(storePath);
-    if (target.path) {
-      await waitForSessionTranscriptIndexReconcile({
-        agentId: target.agentId ?? "main",
-        path: target.path,
-      });
-    }
+  afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

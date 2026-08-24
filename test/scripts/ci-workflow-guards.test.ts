@@ -58,6 +58,11 @@ const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$
   exit 1
 fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 const TSX_IMPORT = import.meta.resolve("tsx");
 const TYPESCRIPT_NODE_MODULES = path.dirname(
   path.dirname(fileURLToPath(import.meta.resolve("typescript/package.json"))),
@@ -3675,6 +3680,7 @@ NODE
 
     const callers: Array<{ file: string; mode: unknown; step: WorkflowStep }> = [];
     const directCaches: Array<{ file: string; step: WorkflowStep }> = [];
+    const rubySetups: Array<{ file: string; step: WorkflowStep }> = [];
     for (const file of [
       ...findYamlFiles(".github/workflows"),
       ...findYamlFiles(".github/actions"),
@@ -3690,6 +3696,9 @@ NODE
         if (step.uses?.startsWith("actions/cache")) {
           directCaches.push({ file, step });
         }
+        if (step.uses?.startsWith("ruby/setup-ruby@")) {
+          rubySetups.push({ file, step });
+        }
         if (
           step.uses === "./.github/actions/setup-node-env" ||
           step.uses?.endsWith("/.github/actions/setup-node-env") ||
@@ -3698,6 +3707,14 @@ NODE
         ) {
           callers.push({ file, mode: step.with?.["cache-mode"], step });
         }
+      }
+    }
+    expect(rubySetups.length).toBeGreaterThan(0);
+    for (const { file, step } of rubySetups) {
+      const bundlerCache = String(step.with?.["bundler-cache"] ?? "false");
+      expect(["false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
+      if (bundlerCache === "true") {
+        expect(String(step.if), `${file}: ${step.name}`).toContain("cache_write_allowed == 'true'");
       }
     }
     expect(callers.length).toBeGreaterThan(0);
@@ -3981,7 +3998,12 @@ NODE
       mkdirSync(consumer, { recursive: true });
       writeFileSync(
         path.join(source, "package.json"),
-        JSON.stringify({ files: ["index.js"], name: "cache-proof-dep", version: "1.0.0" }),
+        JSON.stringify({
+          files: ["index.js"],
+          name: "cache-proof-dep",
+          packageManager: rootPackageManager,
+          version: "1.0.0",
+        }),
       );
       writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
       execFileSync("pnpm", ["pack", "--pack-destination", registry], {
@@ -4046,6 +4068,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
           JSON.stringify({
             dependencies: { "cache-proof-dep": "1.0.0" },
             name: "cache-proof-root",
+            packageManager: rootPackageManager,
             private: true,
           }),
         );

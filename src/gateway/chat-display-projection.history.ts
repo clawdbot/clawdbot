@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
@@ -7,16 +8,10 @@ import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/hea
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
-  isSessionsSendInterSessionUserMessage,
   normalizeInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import {
-  isTtsSupplement,
-  readTtsMarker,
-  ttsMarkerMatches,
-} from "../sessions/transcript-display-classification.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
@@ -26,20 +21,93 @@ import {
   hasTranscriptMediaFacts,
   isEmptyTextOnlyContent,
   isProjectedSessionsSendForwardedMessage,
+  isSessionsSendInterSessionUserMessage,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
+
+function digestTtsSupplementText(text: string): string {
+  return createHash("sha256").update(text.trim()).digest("hex");
+}
+
+function readTtsSupplementMarker(
+  message: Record<string, unknown>,
+): { textSha256?: string; spokenText?: string } | undefined {
+  const marker = readRecord(message.openclawTtsSupplement);
+  if (!marker) {
+    return undefined;
+  }
+  const textSha256 =
+    typeof marker.textSha256 === "string" && marker.textSha256.trim()
+      ? marker.textSha256.trim()
+      : undefined;
+  const spokenText =
+    typeof marker.spokenText === "string" && marker.spokenText.trim()
+      ? marker.spokenText.trim()
+      : undefined;
+  return textSha256 || spokenText ? { textSha256, spokenText } : undefined;
+}
+
+function isAssistantTtsSupplementMessage(message: Record<string, unknown>): boolean {
+  if (asRoleContentMessage(message)?.role !== "assistant") {
+    return false;
+  }
+  if (!readTtsSupplementMarker(message)) {
+    return false;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  let hasSupplementBlock = false;
+  for (const block of content) {
+    const record = readRecord(block);
+    if (!record) {
+      continue;
+    }
+    if (record.type !== "text") {
+      hasSupplementBlock = true;
+      continue;
+    }
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    if (text && text !== "Audio reply") {
+      return false;
+    }
+  }
+  return hasSupplementBlock;
+}
+
+function ttsSupplementMatchesAssistant(
+  marker: { textSha256?: string; spokenText?: string },
+  message: Record<string, unknown>,
+): boolean {
+  if (asRoleContentMessage(message)?.role !== "assistant") {
+    return false;
+  }
+  if (isProjectedSessionsSendForwardedMessage(message)) {
+    return false;
+  }
+  if (readTtsSupplementMarker(message)) {
+    return false;
+  }
+  const text = extractProjectedText(message.content ?? message.text).trim();
+  if (!text) {
+    return false;
+  }
+  if (marker.textSha256 && digestTtsSupplementText(text) === marker.textSha256) {
+    return true;
+  }
+  return Boolean(marker.spokenText && text === marker.spokenText);
+}
 
 function mergeTtsSupplementContent(
   target: Record<string, unknown>,
   supplement: Record<string, unknown>,
 ): Record<string, unknown> {
   const supplementBlocks = Array.isArray(supplement.content)
-    ? supplement.content.filter(
-        (block) =>
-          Boolean(block) &&
-          typeof block === "object" &&
-          (block as { type?: unknown }).type !== "text",
-      )
+    ? supplement.content.filter((block) => {
+        const record = readRecord(block);
+        return record !== undefined && record.type !== "text";
+      })
     : [];
   if (supplementBlocks.length === 0) {
     return target;
@@ -58,18 +126,18 @@ function mergeTtsSupplementContent(
 export function mergeTtsSupplementMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  if (!messages.some(isTtsSupplement)) {
+  if (!messages.some(isAssistantTtsSupplementMessage)) {
     return messages;
   }
   const merged: Array<Record<string, unknown>> = [];
   let changed = false;
   for (const message of messages) {
-    const marker = readTtsMarker(message);
-    if (marker && isTtsSupplement(message)) {
+    const marker = readTtsSupplementMarker(message);
+    if (marker && isAssistantTtsSupplementMessage(message)) {
       let targetIndex = -1;
       for (let i = merged.length - 1; i >= 0; i--) {
         const candidate = merged[i];
-        if (candidate && ttsMarkerMatches(marker, candidate)) {
+        if (candidate && ttsSupplementMatchesAssistant(marker, candidate)) {
           targetIndex = i;
           break;
         }

@@ -6,7 +6,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { ensureOpenClawAgentDisplayRowSchema } from "./openclaw-agent-display-row-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -145,7 +144,6 @@ describe("sqlite hot query plans", () => {
       agentId: "worker-1",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    ensureOpenClawAgentDisplayRowSchema(database.db);
 
     expectPlanIncludes({
       db: database.db,
@@ -359,47 +357,5 @@ describe("sqlite hot query plans", () => {
     );
     expect(historyAnchorPlan).toContain("sqlite_autoindex_transcript_event_identities_1");
     expect(historyAnchorPlan).toContain("idx_agent_transcript_active_event_seq");
-
-    const displayOrdinalPlan = explainQueryPlan(
-      database.db,
-      `
-        SELECT row_id, row_version, revision, display_ordinal, source_event_seq, kind
-          FROM session_transcript_display_rows
-         WHERE session_id = ? AND display_ordinal >= ?
-         ORDER BY display_ordinal ASC
-         LIMIT 201
-      `,
-      ["session-1", 100],
-    );
-    expect(displayOrdinalPlan).toContain("idx_agent_transcript_display_ordinal");
-    expect(displayOrdinalPlan).not.toContain("SCAN session_transcript_display_rows");
-    expect(displayOrdinalPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
-
-    const displayTailPlan = explainQueryPlan(
-      database.db,
-      `
-        SELECT row_id, row_version, revision, display_ordinal, source_event_seq, kind
-          FROM session_transcript_display_rows
-         WHERE session_id = ?
-         ORDER BY display_ordinal DESC
-         LIMIT 201
-      `,
-      ["session-1"],
-    );
-    expect(displayTailPlan).toContain("idx_agent_transcript_display_ordinal");
-    expect(displayTailPlan).not.toContain("SCAN session_transcript_display_rows");
-    expect(displayTailPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
-
-    const displayIdentityPlan = explainQueryPlan(
-      database.db,
-      `
-        SELECT row_version, revision, display_ordinal, source_event_seq, kind
-          FROM session_transcript_display_rows
-         WHERE session_id = ? AND row_id = ?
-      `,
-      ["session-1", "row-1"],
-    );
-    expect(displayIdentityPlan).toContain("sqlite_autoindex_session_transcript_display_rows_1");
-    expect(displayIdentityPlan).not.toContain("SCAN session_transcript_display_rows");
   });
 });

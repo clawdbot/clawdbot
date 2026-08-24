@@ -49,7 +49,7 @@ import {
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
 } from "./session-accessor.sqlite-status.js";
-import * as transcript from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -629,8 +629,8 @@ export function writeSessionEntry(
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   const transcriptObservedAt =
-    transcript.readTranscriptMutationStateInTransaction(database, normalizedEntry.sessionId)
-      .updatedAt ?? updatedAt;
+    readTranscriptMutationStateInTransaction(database, normalizedEntry.sessionId).updatedAt ??
+    updatedAt;
   const boundSessionRoot = bindSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
   const conversation = prepareSessionConversationForWrite({
     database,
@@ -728,7 +728,6 @@ export function writeSessionEntry(
         }),
       ),
   );
-  transcript.ensureSessionTranscriptSourceGenerationInTransaction(database, sessionRow.session_id);
   if (conversation) {
     linkSessionConversation({
       database,
@@ -740,4 +739,5 @@ export function writeSessionEntry(
   }
   publishSessionEntryCacheInvalidation(database, sessionNode, writeGeneration);
 }
+
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

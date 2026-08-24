@@ -141,10 +141,12 @@ vi.mock("./session-history-state.js", () => ({
     history: { items: [], nextCursor: null, messages: [] },
   }),
   resolveCursorSeq: (_cursor: string | undefined) => undefined,
-  resolveSessionHistoryTailReadOptions: (limit: number) => ({
-    maxMessages: limit * 20 + 20,
-    maxLines: limit * 20 + 20,
-  }),
+  readBoundedSessionHistorySnapshotAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return { messages: [], totalMessages: 0 };
+  },
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),

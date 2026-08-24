@@ -452,6 +452,11 @@ cancel adopted children.
 
 ## Live and E2E shards
 
+The native Telegram Mantis proof workflow uses a lossless workflow-level
+concurrency queue. Only one proof allocates a runner at a time; up to 100
+additional requests wait without consuming their proof timeout or contending
+for the shared Telegram user.
+
 The release live/E2E child keeps broad native `pnpm test:live` coverage, but it runs it as named shards through `scripts/test-live-shard.mjs` instead of one serial job:
 
 - `native-live-src-agents` and `native-live-src-agents-zai-coding`

@@ -13,7 +13,6 @@ import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
@@ -21,6 +20,7 @@ import {
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import {
+  normalizeGatewayRestartDelayMs,
   resolveGatewayRestartDeferralTimeoutMs,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
@@ -112,47 +112,6 @@ async function readPreUpdateConfigForPostCoreFinalize(): Promise<
       ? (snapshot.parsed as OpenClawConfig)
       : snapshot.sourceConfig,
   };
-}
-
-function resolveManagedServiceHandoffRestartDelayMs(
-  restartDelayMs: number | undefined,
-  supervisor: ReturnType<typeof detectRespawnSupervisor>,
-): number {
-  const resolvedDelayMs = restartDelayMs ?? MANAGED_HANDOFF_RESTART_DELAY_MS;
-  if (supervisor !== "systemd") {
-    return resolvedDelayMs;
-  }
-  // systemd needs a short grace period after the handoff process starts before
-  // the gateway exits, otherwise the service can restart before handoff state is durable.
-  return Math.max(resolvedDelayMs, MANAGED_HANDOFF_RESTART_DELAY_MS);
-}
-
-function hasManagedServiceHandoffContext(
-  env: NodeJS.ProcessEnv,
-  supervisor: ReturnType<typeof detectRespawnSupervisor>,
-): boolean {
-  if (supervisor === "launchd") {
-    return Boolean(
-      env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
-      env.LAUNCH_JOB_LABEL?.trim() ||
-      env.LAUNCH_JOB_NAME?.trim() ||
-      env.XPC_SERVICE_NAME?.trim(),
-    );
-  }
-  if (supervisor === "systemd") {
-    // Ambient systemd markers only prove that a service manager started this
-    // process. The detached CLI needs the durable unit name to stop the same
-    // gateway before mutating the install root.
-    return Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
-  }
-  if (supervisor === "schtasks") {
-    return Boolean(
-      env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
-      (env.OPENCLAW_SERVICE_MARKER?.trim() === GATEWAY_SERVICE_MARKER &&
-        env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND),
-    );
-  }
-  return false;
 }
 
 export const updateHandlers: GatewayRequestHandlers = {
@@ -269,8 +228,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       threadId: requestedThreadId,
       note,
       continuationMessage,
-      restartDelayMs,
+      restartDelayMs: requestedRestartDelayMs,
     } = parseRestartRequestParams(params);
+    const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
       extractDeliveryInfo(sessionKey);
     const deliveryContext = requestedDeliveryContext ?? sessionDeliveryContext;
@@ -312,16 +272,15 @@ export const updateHandlers: GatewayRequestHandlers = {
         installKind: status.installKind,
         git: status.git,
       }).channel;
-      const supervisor = detectRespawnSupervisor(process.env, process.platform);
-      const hasHandoffContext = supervisor
-        ? hasManagedServiceHandoffContext(process.env, supervisor)
-        : false;
+      const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+        includeLinuxOpenClawGatewayServiceMarker: true,
+      });
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
       const managedGitPreflightFailure =
         installSurface.kind === "git" &&
         effectiveChannel === "dev" &&
-        hasHandoffContext &&
+        supervisor &&
         !isGatewayExternallySupervised()
           ? await runGatewayUpdatePreflight(installRoot, timeoutMs, adoptedDevTarget)
           : undefined;
@@ -386,15 +345,16 @@ export const updateHandlers: GatewayRequestHandlers = {
           ...(handoffChannel ? { channel: handoffChannel } : {}),
           ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
         });
-        if (supervisor && hasHandoffContext) {
+        if (supervisor) {
           try {
             const beforeVersion = await readPackageVersion(installRoot);
             const startedAt = Date.now();
             const handoffId = randomUUID();
-            const managedRestartDelayMs = resolveManagedServiceHandoffRestartDelayMs(
-              restartDelayMs,
-              supervisor,
-            );
+            // systemd needs startup grace before the Gateway exits and its state becomes durable.
+            const managedRestartDelayMs =
+              supervisor === "systemd"
+                ? Math.max(restartDelayMs, MANAGED_HANDOFF_RESTART_DELAY_MS)
+                : restartDelayMs;
             sentinelMeta.handoffId = handoffId;
             sentinelMeta.root = resolveUpdateInstallRoot(installRoot);
             // Managed services update from a detached helper so the running
@@ -416,7 +376,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             sentinelMeta.handoffId = started.handoffId ?? handoffId;
             // The owner pairs helper creation with parent exit before any
             // persistence can fail. Joiners leave both to the active owner.
-            if (ownsManagedServiceHandoff) {
+            if (started.status === "started") {
               handoff = {
                 status: "started",
                 ...(started.pid ? { pid: started.pid } : {}),
@@ -425,6 +385,11 @@ export const updateHandlers: GatewayRequestHandlers = {
               managedHandoffRestart = scheduleGatewaySigusr1Restart({
                 delayMs: managedRestartDelayMs,
                 reason: "update.run",
+                successorOwner: {
+                  kind: "managed-update-handoff",
+                  handoffId: started.handoffId,
+                  installRoot: started.installRoot,
+                },
                 skipDeferral: true,
                 skipCooldown: true,
                 audit: {

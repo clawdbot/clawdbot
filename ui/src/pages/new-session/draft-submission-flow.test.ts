@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -16,18 +15,12 @@ import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { patchNewSessionPreference } from "./preferences.ts";
+import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 // The closed list of gates allowed to block without a visible reason: the busy
 // Start button and an empty draft explain themselves. Growing it is a product
 // decision — edit this list and the matching one in submit-gates.ts together.
 const SILENT_SUBMIT_GATES = ["submitting", "empty-draft"];
-
-class ControllerHost implements ReactiveControllerHost {
-  readonly updateComplete = Promise.resolve(true);
-  addController(_controller: ReactiveController) {}
-  removeController(_controller: ReactiveController) {}
-  requestUpdate() {}
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -101,7 +94,7 @@ function createDraftFixture(options: FixtureOptions = {}) {
   vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
     context.gateway.snapshot.sessionKey = sessionKey;
   });
-  const host = new ControllerHost();
+  const host = new TestReactiveControllerHost();
   const gateway = new DraftGatewayState(
     host,
     () => ({
@@ -109,7 +102,7 @@ function createDraftFixture(options: FixtureOptions = {}) {
       data: options.data,
       isConnected: phase === "connected",
       isAdmin: place?.isAdmin() ?? false,
-      canStartAsDraft: flow?.canStartAsDraft() ?? false,
+      canStartAsDraft: flow?.capabilities.canStartAsDraft(context) ?? false,
       visibility: flow?.visibility ?? "normal",
       cloudProfileId: place?.cloudProfileId ?? "",
       pendingPlacement: flow?.pendingPlacement ?? {
@@ -174,7 +167,7 @@ function createDraftFixture(options: FixtureOptions = {}) {
   gateway.synchronize(context.gateway);
   place.setAgentsHydrated(true);
   place.adoptAgentDefaults();
-  return { context, flow, gateway, place, request, requestUpdate };
+  return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
 }
 
 function registerTextPayload(id: string) {
@@ -267,6 +260,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     });
     let resolveBranches!: (value: unknown) => void;
     const fixture = createDraftFixture({
+      scopes: ["operator.admin", "operator.read", "operator.write"],
       agents: [
         {
           id: "main",
@@ -509,6 +503,11 @@ describe("DraftSubmissionFlow", () => {
       retire: ({ flow }: ReturnType<typeof createDraftFixture>) => flow.setVisibility("draft"),
     },
     {
+      scenario: "the requested session capabilities change",
+      retire: ({ capabilities }: ReturnType<typeof createDraftFixture>) =>
+        capabilities.setToolOverrides({ skills: { release: false } }),
+    },
+    {
       scenario: "another session becomes selected",
       retire: ({ context }: ReturnType<typeof createDraftFixture>) => {
         context.gateway.snapshot.sessionKey = "agent:main:dashboard:elsewhere";
@@ -529,6 +528,7 @@ describe("DraftSubmissionFlow", () => {
     },
   ])("never retries a committed session after $scenario", async ({ retire }) => {
     const fixture = createDraftFixture({
+      scopes: ["operator.admin", "operator.read", "operator.write"],
       agents: [
         { id: "main", workspace: "/workspace", model: { primary: "openai/test" } },
         { id: "other", workspace: "/workspace", model: { primary: "openai/test" } },
@@ -716,7 +716,7 @@ describe("DraftSubmissionFlow", () => {
       sessions: { state: { result: null }, createResult: vi.fn() },
       config: { current: {} },
     } as unknown as ApplicationContext;
-    const host = new ControllerHost();
+    const host = new TestReactiveControllerHost();
     const gateway = new DraftGatewayState(
       host,
       () => ({
@@ -724,7 +724,7 @@ describe("DraftSubmissionFlow", () => {
         data: undefined,
         isConnected: true,
         isAdmin: place?.isAdmin() ?? false,
-        canStartAsDraft: flow?.canStartAsDraft() ?? false,
+        canStartAsDraft: flow?.capabilities.canStartAsDraft(context) ?? false,
         visibility: flow?.visibility ?? "normal",
         cloudProfileId: place?.cloudProfileId ?? "",
         pendingPlacement: flow?.pendingPlacement ?? {
@@ -914,7 +914,7 @@ describe("DraftSubmissionFlow", () => {
       navigateAndWait,
       preload,
     } as unknown as ApplicationContext;
-    const host = new ControllerHost();
+    const host = new TestReactiveControllerHost();
     const gateway = new DraftGatewayState(
       host,
       () => ({
@@ -922,7 +922,7 @@ describe("DraftSubmissionFlow", () => {
         data: undefined,
         isConnected: true,
         isAdmin: place?.isAdmin() ?? false,
-        canStartAsDraft: flow?.canStartAsDraft() ?? false,
+        canStartAsDraft: flow?.capabilities.canStartAsDraft(context) ?? false,
         visibility: flow?.visibility ?? "normal",
         cloudProfileId: place?.cloudProfileId ?? "",
         pendingPlacement: flow?.pendingPlacement ?? {

@@ -46,13 +46,13 @@ import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
 } from "./session-accessor.sqlite-transcript-sequences.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
-import { readSessionTranscriptSourceGenerationInTransaction } from "./session-transcript-source-generation.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -137,18 +137,14 @@ export async function rewriteTranscriptEventRowsExact(
     let result: { generation: string } | null = null;
     runOpenClawAgentWriteTransaction((database) => {
       const currentGeneration =
-        readSessionTranscriptSourceGenerationInTransaction(database.db, resolved.sessionId)
-          ?.generation ?? null;
+        readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null;
       const initialGenerationMaterialized =
         params.allowInitialGenerationMaterialization === true && params.expectedGeneration === null;
       if (currentGeneration !== params.expectedGeneration && !initialGenerationMaterialized) {
         return;
       }
       rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, params.rows);
-      const generation = readSessionTranscriptSourceGenerationInTransaction(
-        database.db,
-        resolved.sessionId,
-      )?.generation;
+      const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
       if (generation) {
         result = { generation };
       }

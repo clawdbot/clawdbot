@@ -1027,26 +1027,121 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
-  it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
-    const result = sanitizeChatHistoryMessages([
-      userHistoryMessage("hello", { timestamp: 1 }),
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "thinking like caveman",
-            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-          },
-        ],
-        timestamp: 2,
-      },
-      assistantHistoryMessage("real reply", { timestamp: 3 }),
-    ]);
+  it("projects keyed commentary entries into durable preamble rows", () => {
+    const result = sanitizeChatHistoryMessages(
+      [
+        userHistoryMessage("hello", { timestamp: 1 }),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "thinking like caveman",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+          ],
+          timestamp: 2,
+        },
+        assistantHistoryMessage("real reply", { timestamp: 3 }),
+      ],
+      undefined,
+      { includeCommentaryFallbacks: true },
+    );
 
     expect(result).toEqual([
       userHistoryMessage("hello", { timestamp: 1 }),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "thinking like caveman" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "thinking like caveman",
+          source: "segment",
+          itemId: "msg_commentary",
+        },
+      },
       assistantHistoryMessage("real reply", { timestamp: 3 }),
+    ]);
+  });
+
+  it("uses one capped text value for commentary content and fallback metadata", () => {
+    const fullText = "A long commentary message that must be capped";
+    const [fallback] = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: fullText,
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg_commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      12,
+      { includeCommentaryFallbacks: true },
+    ) as Array<{
+      content: Array<{ text: string }>;
+      openclawStreamFallback: { replacementText: string };
+    }>;
+
+    expect(fallback?.openclawStreamFallback.replacementText).toBe(fallback?.content[0]?.text);
+    expect(fallback?.openclawStreamFallback.replacementText).not.toBe(fullText);
+  });
+
+  it("splits commentary from final text and tool history", () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call-1",
+      name: "read",
+      arguments: { path: "README.md" },
+    };
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Checking the file",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+            toolCall,
+            {
+              type: "text",
+              text: "Done.",
+              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      undefined,
+      { includeCommentaryFallbacks: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Checking the file" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "Checking the file",
+          source: "segment",
+          itemId: "msg_commentary",
+        },
+      },
+      {
+        role: "assistant",
+        content: [toolCall, { type: "text", text: "Done." }],
+        timestamp: 2,
+      },
     ]);
   });
 });
@@ -1753,21 +1848,59 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("preserves structured trace alongside visible assistant progress text", () => {
-    const result = projectRecentChatDisplayMessages([
-      userHistoryMessage("fix it", { timestamp: 1 }),
+    const result = projectRecentChatDisplayMessages(
+      [
+        userHistoryMessage("fix it", { timestamp: 1 }),
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "private reasoning" },
+            {
+              type: "text",
+              text: "I will clean that up now.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg-progress",
+                phase: "commentary",
+              }),
+            },
+            {
+              type: "toolCall",
+              id: "call-read",
+              name: "read",
+              arguments: { path: "AGENTS.md" },
+            },
+          ],
+          timestamp: 2,
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-read",
+          toolName: "read",
+          content: [{ type: "text", text: "file contents" }],
+          timestamp: 3,
+        },
+      ],
+      { includeCommentaryFallbacks: true },
+    );
+
+    expect(result.slice(1, 3)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I will clean that up now." }],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+        openclawStreamFallback: {
+          replacementText: "I will clean that up now.",
+          source: "segment",
+          itemId: "msg-progress",
+        },
+      },
       {
         role: "assistant",
         content: [
           { type: "thinking", thinking: "private reasoning" },
-          {
-            type: "text",
-            text: "I will clean that up now.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "msg-progress",
-              phase: "commentary",
-            }),
-          },
           {
             type: "toolCall",
             id: "call-read",
@@ -1778,53 +1911,45 @@ describe("projectRecentChatDisplayMessages", () => {
         timestamp: 2,
         __openclaw: { seq: 2 },
       },
-      {
-        role: "toolResult",
-        toolCallId: "call-read",
-        toolName: "read",
-        content: [{ type: "text", text: "file contents" }],
-        timestamp: 3,
-      },
     ]);
-
-    expect(result[1]).toEqual({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "private reasoning" },
-        { type: "text", text: "I will clean that up now." },
-        {
-          type: "toolCall",
-          id: "call-read",
-          name: "read",
-          arguments: { path: "AGENTS.md" },
-        },
-      ],
-      timestamp: 2,
-      __openclaw: { seq: 2 },
-    });
   });
 
-  it("keeps pure commentary assistant messages hidden", () => {
-    const result = projectRecentChatDisplayMessages([
+  it("projects pure keyed commentary as a durable preamble", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        userHistoryMessage("status", { timestamp: 1 }),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Working...",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg-commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      { includeCommentaryFallbacks: true },
+    );
+
+    expect(result).toEqual([
       userHistoryMessage("status", { timestamp: 1 }),
       {
         role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "Working...",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "msg-commentary",
-              phase: "commentary",
-            }),
-          },
-        ],
+        content: [{ type: "text", text: "Working..." }],
         timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "Working...",
+          source: "segment",
+          itemId: "msg-commentary",
+        },
       },
     ]);
-
-    expect(result).toEqual([userHistoryMessage("status", { timestamp: 1 })]);
   });
 
   it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {

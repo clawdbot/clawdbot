@@ -103,23 +103,24 @@ class NodeWorkerSupervisor {
     this.capacity = new NodeWorkerCapacity(this.store, options);
   }
 
-  private requireSupervisorIdentity(): NodeWorkerProcessIdentity {
-    return (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
-  }
-
   initialize(): Promise<void> {
-    return (this.initializationPromise ??= this.containerEngine
-      ? this.initializeContainerHosting()
-      : this.capacity.initialize(async (receipt) => {
-          await this.recoverRunning(receipt, false);
-        }));
-  }
-
-  private async initializeContainerHosting(): Promise<void> {
-    await this.containerLifecycle?.initialize();
-    await this.capacity.initialize(async (receipt) => {
-      await this.recoverRunning(receipt, false);
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    const initialization = (async () => {
+      if (this.containerLifecycle) {
+        await this.containerLifecycle.initialize();
+      }
+      await this.capacity.initialize(async (receipt) => {
+        await this.recoverRunning(receipt, false);
+      });
+    })().catch((error: unknown) => {
+      if (this.initializationPromise === initialization) {
+        this.initializationPromise = undefined;
+      }
+      throw error;
     });
+    return (this.initializationPromise = initialization);
   }
 
   private requireContainerLifecycle(): NodeWorkerContainerLifecycle {
@@ -164,7 +165,7 @@ class NodeWorkerSupervisor {
         return receipt;
       }
     }
-    const supervisor = this.requireSupervisorIdentity();
+    const supervisor = (this.supervisorIdentity ??= requireNodeWorkerProcessIdentity(process.pid));
     const claimInput = {
       launchId: input.launchId,
       planHash,

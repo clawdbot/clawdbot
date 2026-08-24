@@ -39,8 +39,6 @@ export type SqliteSchemaCompatibility = {
    * STRICT datatype. Allowed-missing tables remain exact when present.
    */
   allowCompatibleAdditiveColumns?: boolean;
-  /** Optional canonical tables that may carry compatible future additive columns when present. */
-  compatibleAdditiveColumnTables?: readonly string[];
   /**
    * Exact owner-defined trigger groups that may be absent when their derived
    * or lazily ensured schema is absent, but must be complete and canonical
