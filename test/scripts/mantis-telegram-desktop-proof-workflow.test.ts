@@ -60,11 +60,24 @@ describe("Mantis Telegram proof workflow", () => {
     const collect = readFileSync("scripts/mantis/telegram-visible-collect-proof.sh", "utf8");
     const stop = collect.indexOf("pkill -TERM -u codex");
     const snapshot = collect.indexOf('install -m 0400 "$output_root/agent-evidence.json"');
+    const laneSnapshot = collect.indexOf('"$SESSION_ROOT/${lane}.json"');
     const build = collect.indexOf("telegram-visible-proof.mjs collect");
     expect(stop).toBeGreaterThan(-1);
     expect(snapshot).toBeGreaterThan(stop);
-    expect(build).toBeGreaterThan(snapshot);
+    expect(laneSnapshot).toBeGreaterThan(snapshot);
+    expect(build).toBeGreaterThan(laneSnapshot);
     expect(collect).toContain("${RUNNER_TEMP}/mantis-trusted-evidence-");
+    expect(collect).toContain("sudo install -m 0400");
+  });
+
+  it("keeps exact worktrees readable while preserving root-owned immutable revisions", () => {
+    const prepare = readFileSync("scripts/mantis/telegram-visible-prepare-codex.sh", "utf8");
+    const sut = readFileSync("scripts/mantis/mantis-sut-container.sh", "utf8");
+    expect(prepare).toContain('sudo chmod 0755 "$worktree_root"');
+    expect(sut).toContain("worktree root is not root-owned");
+    expect(sut).toContain("prepared worktree is not root-owned");
+    expect(sut).toContain("prepared worktree is writable");
+    expect(sut).not.toContain("worktree root mode mismatch");
   });
 
   it("restores baseline builds only for the exact selected revision", () => {

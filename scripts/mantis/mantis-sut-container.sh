@@ -468,7 +468,6 @@ require_locked_worktree() {
   local worktree_root
   worktree_root="$(realpath -e "$(<"$worktree_root_file")")"
   [[ "$(stat -c %u "$worktree_root")" == "0" ]] || die "worktree root is not root-owned"
-  [[ "$(stat -c %a "$worktree_root")" == "700" ]] || die "worktree root mode mismatch"
   [[ "$lane" == "baseline" || "$lane" == "candidate" ]] || die "invalid proof lane"
   [[ "$repo_root" == "$worktree_root/$lane" ]] || die "repo root does not match the proof lane"
   [[ "$(stat -c %u "$repo_root")" == "0" ]] || die "prepared worktree is not root-owned"

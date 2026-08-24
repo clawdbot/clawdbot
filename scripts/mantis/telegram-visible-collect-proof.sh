@@ -20,12 +20,18 @@ trusted_root="${RUNNER_TEMP}/mantis-trusted-evidence-${GITHUB_RUN_ID}-${GITHUB_R
 test ! -e "$trusted_root"
 install -d -m 0700 "$trusted_root"
 install -m 0400 "$output_root/agent-evidence.json" "$trusted_root/agent-evidence.json"
+runner_user="$(id -un)"
+runner_group="$(id -gn)"
+for lane in baseline candidate; do
+  sudo install -m 0400 -o "$runner_user" -g "$runner_group" \
+    "$SESSION_ROOT/${lane}.json" "$trusted_root/${lane}.json"
+done
 evidence="$trusted_root/evidence"
 node scripts/mantis/telegram-visible-proof.mjs collect \
   --agent-manifest "$trusted_root/agent-evidence.json" \
-  --baseline-facts "$SESSION_ROOT/baseline.json" \
+  --baseline-facts "$trusted_root/baseline.json" \
   --baseline-sha "$BASELINE_SHA" \
-  --candidate-facts "$SESSION_ROOT/candidate.json" \
+  --candidate-facts "$trusted_root/candidate.json" \
   --candidate-sha "$CANDIDATE_SHA" \
   --published-root "$SESSION_ROOT/published" \
   --output-dir "$evidence"
