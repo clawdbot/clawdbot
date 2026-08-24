@@ -5144,8 +5144,8 @@ describe("package artifact reuse", () => {
       },
       {
         workflowPath: MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW,
-        jobName: "run_telegram_desktop_proof",
-        stepName: "Upload Mantis Telegram desktop artifacts",
+        jobName: "run_telegram_visible_proof",
+        stepName: "Upload Mantis Telegram artifacts",
       },
       {
         workflowPath: MANTIS_TELEGRAM_LIVE_WORKFLOW,
