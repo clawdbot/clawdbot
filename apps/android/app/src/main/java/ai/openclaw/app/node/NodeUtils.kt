@@ -77,12 +77,17 @@ fun parseHexColorArgb(raw: String?): Long? {
 
 fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
   val ui = config?.get("ui").asObjectOrNull()
-  val prefs = ui?.get("prefs").asObjectOrNull()
-  // Match Control UI precedence: a present string user accent wins, even when invalid.
-  val accent =
-    readJsonPrimitive(prefs, "accent")?.takeIf { it.isString }?.contentOrNull
-      ?: readJsonPrimitive(ui, "seamColor")?.takeIf { it.isString }?.contentOrNull
-  return parseHexColorArgb(accent)
+  // Control UI precedence (gateway talk.config): a present user accent wins over the
+  // operator seam color even when it is not a usable hex string; only an absent or
+  // JSON-null accent falls through, matching the gateway's `??` selection.
+  val chosen =
+    ui
+      ?.get("prefs")
+      .asObjectOrNull()
+      ?.get("accent")
+      ?.takeIf { it !is JsonNull }
+      ?: ui?.get("seamColor")
+  return parseHexColorArgb((chosen as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull)
 }
 
 /** Converts gateway invocation throwables into protocol code/message pairs. */

@@ -70,7 +70,7 @@ class NodeUtilsTest {
         """{"ui":{"prefs":{"accent":"#123456"},"seamColor":"#ABCDEF"}}""" to 0xFF123456L,
         """{"ui":{"seamColor":"ABCDEF"}}""" to 0xFFABCDEFL,
         """{"ui":{"prefs":{"accent":"invalid"},"seamColor":"#ABCDEF"}}""" to null,
-        """{"ui":{"prefs":{"accent":123},"seamColor":"#ABCDEF"}}""" to 0xFFABCDEFL,
+        """{"ui":{"prefs":{"accent":123},"seamColor":"#ABCDEF"}}""" to null,
         """{"ui":{"prefs":{"accent":null},"seamColor":"#ABCDEF"}}""" to 0xFFABCDEFL,
         """{"ui":{}}""" to null,
         """{}""" to null,

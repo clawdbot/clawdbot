@@ -1425,6 +1425,7 @@ class NodeRuntime private constructor(
         wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
           subscribeOperatorSessionEvents()
+          refreshBrandingFromGateway()
           refreshWakeWordsFromGateway()
           refreshExecApprovalsFromGateway()
           if (voiceReplySpeakerLazy.isInitialized()) {
