@@ -5,6 +5,7 @@ import {
   renderPanelRefreshStatus,
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
+import { renderPanelState } from "../../components/panel-state.ts";
 import {
   renderSettingsEmpty,
   renderSettingsRow,
@@ -67,6 +68,22 @@ export function renderLogs(props: LogsProps) {
   });
   const exportFileLabel: ExportFileLabel = needle || levelFiltered ? "filtered" : "visible";
   const exportDisplayLabel = t(`gatewayLogs.exportLabels.${exportFileLabel}`);
+  const streamContent = !props.status.hasLoaded
+    ? props.status.error
+      ? nothing
+      : renderPanelState({ kind: "loading" })
+    : filtered.length === 0
+      ? renderSettingsEmpty(t("gatewayLogs.empty"))
+      : filtered.map(
+          (entry) => html`
+            <div class="log-row">
+              <div class="log-time mono">${formatLogTime(entry.time)}</div>
+              <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
+              <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
+              <div class="log-message mono">${entry.message ?? entry.raw}</div>
+            </div>
+          `,
+        );
 
   // The stream fills the remaining viewport height; the settings-page column
   // wrapper is intentionally skipped so the fill-height flex chain
@@ -143,20 +160,7 @@ export function renderLogs(props: LogsProps) {
             </div>
           `
         : nothing}
-      <div class="log-stream" @scroll=${props.onScroll}>
-        ${filtered.length === 0
-          ? renderSettingsEmpty(t("gatewayLogs.empty"))
-          : filtered.map(
-              (entry) => html`
-                <div class="log-row">
-                  <div class="log-time mono">${formatLogTime(entry.time)}</div>
-                  <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
-                  <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
-                  <div class="log-message mono">${entry.message ?? entry.raw}</div>
-                </div>
-              `,
-            )}
-      </div>
+      <div class="log-stream" @scroll=${props.onScroll}>${streamContent}</div>
     </div>
   `;
 }

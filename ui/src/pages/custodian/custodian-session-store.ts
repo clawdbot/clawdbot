@@ -35,8 +35,8 @@ import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./stru
 import {
   createCustodianTranscriptMessages,
   custodianErrorMessage,
+  CustodianTranscriptLoader,
   hasUnresolvedCustodianQuestion,
-  readCustodianTranscript,
   retireCustodianQuestions,
   type CustodianMessage,
 } from "./transcript.ts";
@@ -58,6 +58,7 @@ export class CustodianSessionStore {
   wizardSecretVisible = false;
   questionReplyUncertain = false;
   error: string | null = null;
+  transcript = new CustodianTranscriptLoader();
   setupIssue: CustodianSetupIssue | null = null;
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
@@ -601,13 +602,17 @@ export class CustodianSessionStore {
     ) {
       return false;
     }
-    const turns = await readCustodianTranscript(client);
-    if (turns === null || epoch !== this.requestEpoch || client !== this.activeClient) {
+    const result = await this.transcript.read(client);
+    if (epoch !== this.requestEpoch || client !== this.activeClient) {
       return false;
     }
-    const transcript = createCustodianTranscriptMessages(turns, this.nextMessageId);
-    this.messages = transcript.messages;
-    this.nextMessageId = transcript.nextMessageId;
+    this.transcript.finish(result);
+    if (!result.ok) {
+      this.emit();
+      return false;
+    }
+    const transcript = createCustodianTranscriptMessages(result.turns, this.nextMessageId);
+    [this.messages, this.nextMessageId] = [transcript.messages, transcript.nextMessageId];
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.emit();
     return true;
@@ -619,10 +624,10 @@ export class CustodianSessionStore {
     this.answeredQuestions = new Set();
     this.retryParams = null;
     this.error = null;
+    this.transcript.reset();
     this.setupIssue = null;
     this.input = "";
-    this.wizardValue = undefined;
-    this.wizardSecretVisible = false;
+    [this.wizardValue, this.wizardSecretVisible] = [undefined, false];
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
   }

@@ -86,6 +86,15 @@ afterEach(async () => {
 });
 
 describe("renderLogs", () => {
+  it("does not claim the log is empty before the initial load completes", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps({ loading: true, entries: [] })), container);
+
+    expect(container.textContent).not.toContain("No log entries.");
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+  });
+
   it("renders the subtitle under the section header", () => {
     const container = document.createElement("div");
 

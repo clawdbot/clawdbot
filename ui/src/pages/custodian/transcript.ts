@@ -5,6 +5,13 @@ import type {
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -73,21 +80,37 @@ function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   };
 }
 
-export async function readCustodianTranscript(
-  client: GatewayBrowserClient,
-): Promise<SystemAgentChatHistoryResult["turns"] | null> {
-  try {
-    return (
-      await client.request<SystemAgentChatHistoryResult>(
+export class CustodianTranscriptLoader {
+  status: PanelRefreshStatus = createPanelRefreshStatus();
+
+  begin(): void {
+    this.status = beginPanelRefresh(this.status);
+  }
+
+  reset(): void {
+    this.status = createPanelRefreshStatus();
+  }
+
+  async read(
+    client: GatewayBrowserClient,
+  ): Promise<
+    { ok: true; turns: SystemAgentChatHistoryResult["turns"] } | { ok: false; error: string }
+  > {
+    this.begin();
+    try {
+      const result = await client.request<SystemAgentChatHistoryResult>(
         "openclaw.chat.history",
         {},
-        {
-          timeoutMs: CUSTODIAN_TRANSCRIPT_TIMEOUT_MS,
-        },
-      )
-    ).turns;
-  } catch {
-    return null;
+        { timeoutMs: CUSTODIAN_TRANSCRIPT_TIMEOUT_MS },
+      );
+      return { ok: true, turns: result.turns };
+    } catch (error) {
+      return { ok: false, error: custodianErrorMessage(error) };
+    }
+  }
+
+  finish(result: { ok: true } | { ok: false; error: string }): void {
+    this.status = result.ok ? completePanelRefresh() : failPanelRefresh(this.status, result.error);
   }
 }
 
