@@ -27,6 +27,7 @@ Pick the gate that matches the decision point you need:
 | Plugin permission requests       | A plugin hook or plugin-owned operation must ask before one action runs. | Runtime approval through `plugin.approval.*`.                                                                     |
 | Exec approvals                   | A host command or shell-like tool needs operator approval.               | Host exec policy and durable exec allowlists.                                                                     |
 | Codex native permission requests | Codex asks before native shell, file, MCP, or app-server actions.        | Codex app-server or native hook approval handling, routed through plugin approvals when OpenClaw owns the prompt. |
+| ACP permission requests          | An ACP harness asks through `session/request_permission`.                | The ACPX-owned action, routed through plugin approvals for non-interactive Gateway turns.                         |
 | MCP approval elicitations        | A Codex MCP server requests approval for a tool call.                    | MCP approval responses bridged through OpenClaw plugin approvals.                                                 |
 
 Optional tools are a discovery-time gate. Plugin permission requests are a
@@ -230,6 +231,48 @@ they have different ownership than plugin-authored hooks.
 
 See [Codex harness runtime](/plugins/codex-harness-runtime#native-permissions-and-mcp-elicitations)
 for the Codex-specific behavior and fallback rules.
+
+## ACP harness permissions
+
+Gateway-hosted ACPX sessions have no interactive terminal for native ACP
+permission prompts. With `permissionMode: "approve-reads"` and an explicit
+`nonInteractivePermissions: "plugin"`, ACPX handles
+`session/request_permission` as follows:
+
+- Read and search requests continue through the ACPX read policy without a
+  plugin approval.
+- Execute, edit, delete, fetch, and other side-effect requests create a plugin
+  approval owned by the originating chat turn.
+- The ACP request remains pending until the operator decides, the 10-minute
+  timeout expires, or the owning turn is cancelled.
+- `allow-once` selects the ACP `allow_once` option. `deny` selects a reject
+  option. A missing route, timeout, cancellation, or unsupported option fails
+  closed.
+
+ACPX offers only `allow-once` and `deny` because generic plugin approvals do not
+persist harness trust. `permissionMode: "approve-all"` remains an explicit
+no-prompt option.
+
+Approval delivery uses `approvals.plugin`, not `approvals.exec` or
+channel-specific exec approval settings. For Slack delivery, enable plugin
+approvals and authorize the approver through the channel's plugin approval
+rules. An `execApprovals.approvers` entry alone does not authorize a plugin
+approval.
+
+The request inherits the parent chat session, destination, account, and real
+message thread identifier. This keeps same-chat delivery and
+`approvals.plugin.sessionFilter` or `agentFilter` aligned with the Slack
+conversation that started the ACP child. `plugin.approval.list` remains scoped
+to the requesting/reviewer device, so a different CLI device might not list an
+approval that is visible in Slack.
+
+The approval record is durable, but the waiting ACP RPC belongs to one Gateway
+lifetime and is not resumed after restart. Startup marks an older pending
+approval as cancelled with `gateway-restart`; the ACP action is not allowed and
+must be requested again.
+
+See [ACP agents setup](/tools/acp-agents-setup#permission-configuration) for
+ACPX configuration.
 
 ## Troubleshooting
 

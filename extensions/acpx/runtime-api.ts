@@ -11,6 +11,7 @@ export {
   unregisterAcpRuntimeBackend,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 export type {
+  AcpPermissionHandler,
   AcpRuntime,
   AcpRuntimeCapabilities,
   AcpRuntimeDoctorReport,

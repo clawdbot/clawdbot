@@ -12,6 +12,8 @@ import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
+  sanitizePluginApprovalChannelDisplayText,
+  sanitizePluginApprovalChannelWarningText,
 } from "../../infra/exec-approval-text-sanitize.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
@@ -24,6 +26,7 @@ import {
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   resolvePluginApprovalTimeoutMs,
   truncatePluginApprovalDetail,
+  truncatePluginApprovalDisplayField,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -159,25 +162,17 @@ export function createPluginApprovalHandlers(
 
       // Sanitize once at the creation boundary, like exec command text: the
       // raw record otherwise reaches channel messages, iOS push, and the web
-      // modal unescaped (bidi/invisible spoofing). Escaping expands invisible
-      // chars to \u{...}, so re-check the protocol caps: a spoof-heavy title
-      // must fail loud here, not as a misleading registration throw later.
-      const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
-      const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
-      if (
-        Array.from(sanitizedTitle).length > PLUGIN_APPROVAL_TITLE_MAX_LENGTH ||
-        Array.from(sanitizedDescription).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "approval title or description exceeds the display limit after sanitization",
-          ),
-        );
-        return;
-      }
+      // modal unescaped (bidi/invisible spoofing). Channel escaping can expand
+      // entities (for example `&` -> `&amp;`), so cap by code point after
+      // sanitization instead of rejecting near-limit operator commands.
+      const sanitizedTitle = truncatePluginApprovalDisplayField(
+        sanitizePluginApprovalChannelDisplayText(p.title),
+        PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+      );
+      const sanitizedDescription = truncatePluginApprovalDisplayField(
+        sanitizePluginApprovalChannelWarningText(p.description),
+        PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+      );
       const rawDetail = normalizeTrimmedString(p.detail);
       // Untrusted display metadata gets the same escape as title/description:
       // pluginId/toolName/agentId are interpolated into channel approval text.
@@ -194,7 +189,7 @@ export function createPluginApprovalHandlers(
         detail:
           rawDetail === null
             ? null
-            : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
+            : truncatePluginApprovalDetail(sanitizePluginApprovalChannelWarningText(rawDetail)),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,

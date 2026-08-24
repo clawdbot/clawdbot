@@ -19,6 +19,18 @@ export type AcpSessionUpdateTag =
 
 export type AcpRuntimeControl = "session/set_mode" | "session/set_config_option" | "session/status";
 
+export type AcpToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "fetch"
+  | "switch_mode"
+  | "think"
+  | "other";
+
 /** Stable handle returned by ensureSession and passed back into all ACP runtime operations. */
 export type AcpRuntimeHandle = {
   sessionKey: string;
@@ -98,6 +110,34 @@ export type AcpElicitationHandler = (
   context: AcpElicitationContext,
 ) => Promise<AcpElicitationResponse>;
 
+export type AcpPermissionRequest = {
+  sessionId: string;
+  toolCall: {
+    toolCallId: string;
+    title?: string | null;
+    kind?: AcpToolKind | null;
+    rawInput?: unknown;
+  };
+  options: Array<{
+    optionId: string;
+    name: string;
+    kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
+  }>;
+  inferredKind?: AcpToolKind;
+};
+
+export type AcpPermissionDecision =
+  | { outcome: "allow_once" }
+  | { outcome: "allow_always" }
+  | { outcome: "reject_once" }
+  | { outcome: "reject_always" }
+  | { outcome: "cancel" };
+
+export type AcpPermissionHandler = (
+  request: AcpPermissionRequest,
+  context: { signal: AbortSignal },
+) => Promise<AcpPermissionDecision | undefined>;
+
 /** Per-turn payload delivered to ACP adapters. */
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
@@ -108,6 +148,8 @@ export type AcpRuntimeTurnInput = {
   signal?: AbortSignal;
   /** Handles provider-neutral user input requests owned by this exact turn. */
   onElicitation?: AcpElicitationHandler;
+  /** Resolves ACP permission requests against the host policy for this exact turn. */
+  onPermissionRequest?: AcpPermissionHandler;
 };
 
 export type AcpRuntimeCapabilities = {
@@ -160,17 +202,7 @@ export type AcpRuntimeEvent =
       toolCallId?: string;
       status?: string;
       title?: string;
-      kind?:
-        | "read"
-        | "edit"
-        | "delete"
-        | "move"
-        | "search"
-        | "execute"
-        | "fetch"
-        | "switch_mode"
-        | "think"
-        | "other";
+      kind?: AcpToolKind;
     }
   | {
       type: "done";

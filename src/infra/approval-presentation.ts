@@ -12,12 +12,15 @@ import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-displ
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
+  sanitizePluginApprovalChannelDisplayText,
+  sanitizePluginApprovalChannelWarningText,
 } from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   truncatePluginApprovalDetail,
+  truncatePluginApprovalDisplayField,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
@@ -33,10 +36,6 @@ function normalizeDecisionList(decisions: readonly ApprovalDecision[]): Approval
     result.push("deny");
   }
   return result;
-}
-
-function isWithinCodePointLimit(value: string, maxLength: number): boolean {
-  return Array.from(value).length <= maxLength;
 }
 
 function sanitizeOptionalSingleLine(value: unknown): string | null {
@@ -89,21 +88,21 @@ function buildPluginApprovalPresentation(params: {
   }
   // Plugin text crosses every reviewer surface. Apply the same redaction and
   // spoof-resistant escaping as exec prompts before enforcing wire-size limits.
-  const title = sanitizeExecApprovalDisplayText(rawTitle);
-  const description = sanitizeExecApprovalWarningText(rawDescription);
-  if (
-    !isWithinCodePointLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
-    !isWithinCodePointLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
-  ) {
-    return null;
-  }
+  const title = truncatePluginApprovalDisplayField(
+    sanitizePluginApprovalChannelDisplayText(rawTitle),
+    PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  );
+  const description = truncatePluginApprovalDisplayField(
+    sanitizePluginApprovalChannelWarningText(rawDescription),
+    PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+  );
   const severity =
     request.severity === "info" || request.severity === "warning" || request.severity === "critical"
       ? request.severity
       : "warning";
   const rawDetail = normalizeOptionalString(request.detail);
   const detail = rawDetail
-    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
+    ? truncatePluginApprovalDetail(sanitizePluginApprovalChannelWarningText(rawDetail))
     : null;
   const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
   return {

@@ -20,14 +20,18 @@ import {
   type AcpRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
-  type AcpRuntimeTurnResult,
   type SessionAgentOptions,
 } from "acpx/runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import {
+  AcpRuntimeError,
+  type AcpPermissionHandler,
+  type AcpRuntime,
+  type AcpRuntimeErrorCode,
+} from "../runtime-api.js";
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import {
@@ -52,7 +56,11 @@ type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
 type AcpLoadedSessionRecord = Awaited<ReturnType<AcpSessionStore["load"]>>;
 type BaseAcpxRuntimeTestOptions = ConstructorParameters<typeof BaseAcpxRuntime>[1];
-type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
+type OpenClawAcpxRuntimeOptions = Omit<
+  AcpRuntimeOptions,
+  "nonInteractivePermissions" | "onPermissionRequest"
+> & {
+  nonInteractivePermissions?: "plugin" | AcpRuntimeOptions["nonInteractivePermissions"];
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
@@ -67,6 +75,7 @@ type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
 type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
+type BasePermissionRequest = Parameters<NonNullable<AcpRuntimeOptions["onPermissionRequest"]>>[0];
 
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
@@ -183,6 +192,14 @@ function readRecordCwd(record: unknown): string | undefined {
   }
   const { cwd } = record as { cwd?: unknown };
   return typeof cwd === "string" ? cwd.trim() || undefined : undefined;
+}
+
+function readRecordAcpSessionId(record: unknown): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { acpSessionId } = record as { acpSessionId?: unknown };
+  return typeof acpSessionId === "string" ? acpSessionId.trim() || undefined : undefined;
 }
 
 function readRecordResetOnNextEnsure(record: unknown): boolean {
@@ -821,6 +838,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly processLeaseTransitionTails = new Map<string, Promise<void>>();
   private readonly processLeaseOperationCounts = new Map<string, number>();
   private readonly uncertainProcessLeaseIds = new Set<string>();
+  private readonly activePermissionHandlers = new Map<string, Set<AcpPermissionHandler>>();
   private readonly cwd: string;
 
   constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
@@ -846,15 +864,28 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       scope: this.codexAcpModelOverrideScope,
       leaseCommand: (command) => this.commandWithLaunchLease(command),
     });
-    const sharedOptions = {
+    const pluginPermissionsEnabled =
+      options.nonInteractivePermissions === "plugin" &&
+      (options.permissionMode ?? "approve-reads") === "approve-reads";
+    const sharedOptions: AcpRuntimeOptions = {
       ...options,
+      nonInteractivePermissions:
+        options.nonInteractivePermissions === "plugin" ? "deny" : options.nonInteractivePermissions,
+      ...(pluginPermissionsEnabled
+        ? {
+            onPermissionRequest: async (
+              request: BasePermissionRequest,
+              context: { signal: AbortSignal },
+            ) => await this.handlePermissionRequest(request, context),
+          }
+        : {}),
       sessionStore: this.sessionStore,
       agentRegistry: this.scopedAgentRegistry,
     };
     this.delegateOptions = sharedOptions;
     this.delegateTestOptions = delegateTestOptions as BaseAcpxRuntimeTestOptions;
     this.delegate = new BaseAcpxRuntime(sharedOptions, this.delegateTestOptions);
-    this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
+    this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(sharedOptions)
       ? new BaseAcpxRuntime(
           {
             ...sharedOptions,
@@ -871,6 +902,55 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const useBridgeSafeProbe =
       this.managedToolsMcpBridgeEnabled || shouldUseBridgeSafeDelegateForCommand(probeCommand);
     this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
+  }
+
+  private async handlePermissionRequest(
+    request: BasePermissionRequest,
+    context: { signal: AbortSignal },
+  ) {
+    const handlers = this.activePermissionHandlers.get(request.sessionId);
+    if (handlers?.size !== 1) {
+      return { outcome: "cancel" as const };
+    }
+    const handler = handlers.values().next().value;
+    if (!handler) {
+      return { outcome: "cancel" as const };
+    }
+    return await handler(
+      {
+        sessionId: request.sessionId,
+        toolCall: request.raw.toolCall,
+        options: request.raw.options ?? [],
+        inferredKind: request.inferredKind,
+      },
+      context,
+    );
+  }
+
+  private resolvePermissionSessionId(
+    handle: AcpRuntimeHandle,
+    record: AcpLoadedSessionRecord | null | undefined,
+  ): string | undefined {
+    const recordSessionId = readRecordAcpSessionId(record);
+    return recordSessionId ?? handle.backendSessionId;
+  }
+
+  private bindPermissionHandler(
+    sessionId: string | undefined,
+    handler: AcpPermissionHandler | undefined,
+  ): () => void {
+    if (!sessionId || !handler) {
+      return () => {};
+    }
+    const handlers = this.activePermissionHandlers.get(sessionId) ?? new Set();
+    handlers.add(handler);
+    this.activePermissionHandlers.set(sessionId, handlers);
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) {
+        this.activePermissionHandlers.delete(sessionId);
+      }
+    };
   }
 
   private resolveDelegateForSession(params: {
@@ -1004,10 +1084,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     if (recordCommand !== stableRecordCommand) {
       return undefined;
     }
-    const existingSessionId =
-      typeof existing === "object" && existing !== null
-        ? (existing as { acpSessionId?: unknown }).acpSessionId
-        : undefined;
+    const existingSessionId = readRecordAcpSessionId(existing);
     return !params.resumeSessionId || existingSessionId === params.resumeSessionId
       ? recordCommand
       : undefined;
@@ -1580,6 +1657,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       input.handle.acpxRecordId ?? input.handle.sessionKey,
     );
     const turnLease = await this.prepareProcessLeaseForOperation(input.handle, record);
+    const releasePermissionHandler = this.bindPermissionHandler(
+      this.resolvePermissionSessionId(input.handle, record),
+      input.onPermissionRequest,
+    );
     let command: string | undefined;
     try {
       // Legacy runTurn keeps separate command/delegate loads; startTurn owns the
@@ -1621,6 +1702,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         cause: error,
       });
     } finally {
+      releasePermissionHandler();
       await this.finalizeProcessLeaseForOperation(input.handle, turnLease);
     }
   }
@@ -1638,12 +1720,18 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       async ([snapshot]) => {
         const { command } = snapshot;
         const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
+        const releasePermissionHandler = this.bindPermissionHandler(
+          this.resolvePermissionSessionId(input.handle, snapshot.record),
+          input.onPermissionRequest,
+        );
         try {
           return {
             command,
             turn: delegate.startTurn(withOpenClawManagedTurnTimeout(input)),
+            releasePermissionHandler,
           };
         } catch (error) {
+          releasePermissionHandler();
           if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
             throw error;
           }
@@ -1704,7 +1792,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       result: this.finalizeProcessLeaseAfter(
         input.handle,
         turnLeasePromise,
-        turnPromise.then(async ({ command, turn }): Promise<AcpRuntimeTurnResult> => {
+        turnPromise.then(async ({ command, turn, releasePermissionHandler }) => {
           try {
             const result = await turn.result;
             if (
@@ -1737,6 +1825,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
             throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
               cause: error,
             });
+          } finally {
+            releasePermissionHandler();
           }
         }),
       ),

@@ -136,18 +136,62 @@ describe("buildApprovalPresentation", () => {
       title,
       description,
     });
-    expect(
-      buildPluginPresentation({
-        title: `${title}${String.fromCodePoint(0x1f680)}`,
-        description,
-      }),
-    ).toBeNull();
-    expect(
-      buildPluginPresentation({
-        title,
-        description: `${description}${String.fromCodePoint(0x1f6e1)}`,
-      }),
-    ).toBeNull();
+    const truncatedTitle = buildPluginPresentation({
+      title: `${title}${String.fromCodePoint(0x1f680)}`,
+      description,
+    });
+    expect(truncatedTitle).toMatchObject({
+      kind: "plugin",
+      title: expect.stringMatching(/…$/u),
+    });
+    if (truncatedTitle?.kind !== "plugin") {
+      throw new Error("expected plugin presentation");
+    }
+    expect(Array.from(truncatedTitle.title)).toHaveLength(80);
+    const truncatedDescription = buildPluginPresentation({
+      title,
+      description: `${description}${String.fromCodePoint(0x1f6e1)}`,
+    });
+    expect(truncatedDescription).toMatchObject({
+      kind: "plugin",
+      description: expect.stringMatching(/…$/u),
+    });
+    if (truncatedDescription?.kind !== "plugin") {
+      throw new Error("expected plugin presentation");
+    }
+    expect(Array.from(truncatedDescription.description)).toHaveLength(512);
+  });
+
+  it("does not double-escape channel entities when re-projecting stored plugin copy", () => {
+    const storedTitle = "deploy &amp; ship";
+    const presentation = buildPluginPresentation({
+      title: storedTitle,
+      description: "Command: foo && bar",
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "plugin",
+      title: storedTitle,
+      description: expect.stringContaining("&amp;&amp;"),
+    });
+    expect(JSON.stringify(presentation)).not.toContain("&amp;amp;");
+  });
+
+  it("escapes Slack mrkdwn and mention triggers in plugin presentation text", () => {
+    const presentation = buildPluginPresentation({
+      title: "*Run* @channel",
+      description: "ACP tool kind: execute. Command: `rm -rf /` <https://evil.test|click>",
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "plugin",
+      title: "\u2217Run\u2217 \uff20channel",
+      description: expect.not.stringContaining("@channel"),
+    });
+    const serialized = JSON.stringify(presentation);
+    expect(serialized).not.toContain("*Run*");
+    expect(serialized).not.toContain("@channel");
+    expect(serialized).not.toContain("<https://evil.test|click>");
   });
 
   it("truncates oversized plugin detail without invalidating the presentation", () => {

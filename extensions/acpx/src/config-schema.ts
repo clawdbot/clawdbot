@@ -8,8 +8,8 @@ const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as co
 /** Permission policy applied to interactive ACPX tool requests. */
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 
-const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
-/** Permission policy applied when ACPX cannot ask a human for approval. */
+const ACPX_NON_INTERACTIVE_POLICIES = ["plugin", "deny", "fail"] as const;
+/** Permission policy applied when ACPX cannot present a native terminal prompt. */
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
 /** Default session timeout for ACPX runtime turns. */

@@ -199,3 +199,88 @@ export function sanitizeExecApprovalWarningTextWithStatus(
     oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
   });
 }
+
+/** Neutralizes channel markup and mention triggers in approval display text. */
+export function escapeChannelMarkupForDisplay(value: string): string {
+  // Approval titles/descriptions render as Slack mrkdwn and similar surfaces.
+  // Replace trigger characters with fullwidth lookalikes so untrusted runtime
+  // text cannot inject formatting, links, or @-mentions into operator cards.
+  // Idempotent: gateway-stored copy may be re-projected for durable rows without
+  // turning `&amp;` into `&amp;amp;` or expanding entities a second time.
+  let result = "";
+  for (let i = 0; i < value.length;) {
+    if (value.startsWith("&amp;", i)) {
+      result += "&amp;";
+      i += 5;
+      continue;
+    }
+    if (value.startsWith("&lt;", i)) {
+      result += "&lt;";
+      i += 4;
+      continue;
+    }
+    if (value.startsWith("&gt;", i)) {
+      result += "&gt;";
+      i += 4;
+      continue;
+    }
+    const codePoint = value.codePointAt(i) ?? 0xfffd;
+    const char = String.fromCodePoint(codePoint);
+    i += char.length;
+    switch (char) {
+      case "&":
+        result += "&amp;";
+        break;
+      case "<":
+        result += "&lt;";
+        break;
+      case ">":
+        result += "&gt;";
+        break;
+      case "@":
+        result += "\uff20";
+        break;
+      case "`":
+        result += "\uff40";
+        break;
+      case "[":
+        result += "\uff3b";
+        break;
+      case "]":
+        result += "\uff3d";
+        break;
+      case "(":
+        result += "\uff08";
+        break;
+      case ")":
+        result += "\uff09";
+        break;
+      case "*":
+        result += "\u2217";
+        break;
+      case "_":
+        result += "\uff3f";
+        break;
+      case "~":
+        result += "\uff5e";
+        break;
+      case "|":
+        result += "\uff5c";
+        break;
+      default:
+        result += char;
+        break;
+    }
+  }
+  return result;
+}
+
+/** Sanitizes untrusted plugin approval copy for channel markup surfaces. */
+export function sanitizePluginApprovalChannelDisplayText(text: string): string {
+  return escapeChannelMarkupForDisplay(sanitizeExecApprovalDisplayText(text));
+}
+
+/** Sanitizes untrusted plugin approval warning copy for channel markup surfaces. */
+export function sanitizePluginApprovalChannelWarningText(text: string): string {
+  return escapeChannelMarkupForDisplay(sanitizeExecApprovalWarningText(text));
+}

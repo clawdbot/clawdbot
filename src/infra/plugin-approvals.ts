@@ -61,7 +61,29 @@ export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
 export const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
+const PLUGIN_APPROVAL_DISPLAY_TRUNCATION_SUFFIX = "…";
 const PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX = "…[truncated]";
+
+/** Caps title/description by Unicode code point after channel sanitization expands entities. */
+export function truncatePluginApprovalDisplayField(value: string, maxCodePoints: number): string {
+  const suffix = PLUGIN_APPROVAL_DISPLAY_TRUNCATION_SUFFIX;
+  const suffixLength = Array.from(suffix).length;
+  let codePointCount = 0;
+  let contentCodeUnitLength = 0;
+  for (const char of value) {
+    codePointCount += 1;
+    if (codePointCount <= maxCodePoints - suffixLength) {
+      contentCodeUnitLength += char.length;
+    }
+    if (codePointCount > maxCodePoints) {
+      if (maxCodePoints <= suffixLength) {
+        return truncateUtf16Safe(value, contentCodeUnitLength);
+      }
+      return `${truncateUtf16Safe(value, contentCodeUnitLength)}${suffix}`;
+    }
+  }
+  return value;
+}
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",

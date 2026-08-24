@@ -149,6 +149,13 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
+const hostCapabilityMocks = vi.hoisted(() => ({
+  close: vi.fn(),
+  create: vi.fn(),
+  createPermissionHandler: vi.fn(),
+  permissionHandler: vi.fn(),
+}));
+
 const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
@@ -175,6 +182,15 @@ vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
   emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
   emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
   emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
+}));
+
+vi.mock("../../agents/harness/host-capability.js", () => ({
+  createAgentHarnessHostCapabilities: (params: unknown) => hostCapabilityMocks.create(params),
+}));
+
+vi.mock("./acp-permission-handler.js", () => ({
+  createAcpPermissionHandler: (params: unknown) =>
+    hostCapabilityMocks.createPermissionHandler(params),
 }));
 
 vi.mock("../../acp/policy.js", () => ({
@@ -552,6 +568,17 @@ describe("tryDispatchAcpReplyCore", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     transcriptMocks.persistAcpDispatchTranscript.mockClear();
+    hostCapabilityMocks.close.mockReset();
+    hostCapabilityMocks.create.mockReset();
+    hostCapabilityMocks.create.mockReturnValue({
+      capabilities: { kind: "agent-harness-host-capability", version: 1 },
+      close: hostCapabilityMocks.close,
+    });
+    hostCapabilityMocks.createPermissionHandler.mockReset();
+    hostCapabilityMocks.createPermissionHandler.mockReturnValue(
+      hostCapabilityMocks.permissionHandler,
+    );
+    hostCapabilityMocks.permissionHandler.mockReset();
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
@@ -625,21 +652,57 @@ describe("tryDispatchAcpReplyCore", () => {
     }
   });
 
-  it("passes one turn-scoped elicitation handler and fences it after admission closes", async () => {
+  it("binds turn interactions to the originating routed chat and closes their authority", async () => {
     setReadyAcpResolution();
     let onElicitation: AcpElicitationHandler | undefined;
+    let onPermissionRequest: unknown;
     managerMocks.runTurn.mockImplementationOnce(async (input: unknown) => {
       const turn = input as {
         onElicitation?: typeof onElicitation;
+        onPermissionRequest?: unknown;
         onEvent?: (event: unknown) => Promise<void>;
       };
       onElicitation = turn.onElicitation;
+      onPermissionRequest = turn.onPermissionRequest;
       await turn.onEvent?.({ type: "done" });
     });
 
-    await runDispatch({ bodyForAgent: "ask me" });
+    await runDispatch({
+      bodyForAgent: "ask me",
+      ctxOverrides: {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        To: "synthetic:acp",
+        AccountId: "workspace-1",
+        ParentSessionKey: "agent:main:slack:channel:C123",
+        MessageThreadId: undefined,
+        TransportThreadId: "1724353200.123456",
+      },
+    });
 
     expect(onElicitation).toBeTypeOf("function");
+    expect(onPermissionRequest).toBe(hostCapabilityMocks.permissionHandler);
+    expect(hostCapabilityMocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "acpx",
+        attempt: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:C123",
+          agentId: "main",
+          messageChannel: "slack",
+          currentMessagingTarget: "channel:C123",
+          agentAccountId: "workspace-1",
+          currentThreadTs: "1724353200.123456",
+        }),
+      }),
+    );
+    expect(hostCapabilityMocks.createPermissionHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: { kind: "agent-harness-host-capability", version: 1 },
+      }),
+    );
+    expect(hostCapabilityMocks.close).toHaveBeenCalledOnce();
     const response = await onElicitation!(
       {
         mode: "url",

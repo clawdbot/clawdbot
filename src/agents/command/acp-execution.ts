@@ -1,4 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
+import { createAcpPermissionHandler } from "../../auto-reply/reply/acp-permission-handler.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -13,9 +15,11 @@ import {
   getAdmittedRunDelegatedAuthority,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
+import { resolveAcpApprovalRouting } from "./acp-execution.routing.js";
 import { applyAgentRunAbortMetadata } from "./lifecycle.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import {
@@ -80,6 +84,7 @@ export async function runAcpAgentCommand(params: {
   let stopReason: string | undefined;
   let resultStatus: "completed" | "cancelled" | undefined;
   let terminalOutcome: "blocked" | undefined;
+  let closeAcpHostCapabilities: (() => void) | undefined;
   try {
     const {
       resolveAcpAgentPolicyError,
@@ -146,6 +151,38 @@ export async function runAcpAgentCommand(params: {
       },
       isActive: isElicitationActive,
     });
+    const approvalRouting = resolveAcpApprovalRouting({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      opts: params.opts,
+      sessionAgentId: params.sessionAgentId,
+    });
+    const host = createAgentHarnessHostCapabilities({
+      pluginId: "acpx",
+      attempt: {
+        admittedRunContext,
+        runId: params.runId,
+        agentId: approvalRouting.approvalAgentId,
+        sessionKey: approvalRouting.approvalSessionKey,
+        config: params.cfg,
+        abortSignal: params.opts.abortSignal,
+        messageChannel: approvalRouting.messageChannel,
+        currentMessagingTarget: approvalRouting.currentMessagingTarget,
+        agentAccountId: approvalRouting.agentAccountId,
+        currentThreadTs: approvalRouting.currentThreadTs,
+        approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
+        cwd: params.acpResolution.meta.cwd ?? params.workspaceDir,
+        workspaceDir: params.workspaceDir,
+      },
+    });
+    closeAcpHostCapabilities = host.close;
+    const onPermissionRequest = createAcpPermissionHandler({
+      host: host.capabilities,
+      cwd: normalizeOptionalString(params.acpResolution.meta.cwd) ?? params.workspaceDir,
+    });
     await params.acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
@@ -157,6 +194,7 @@ export async function runAcpAgentCommand(params: {
       requestId: params.runId,
       signal: params.opts.abortSignal,
       onElicitation,
+      onPermissionRequest,
       onBeforePrompt: params.opts.onExecutionStarted,
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
@@ -221,6 +259,8 @@ export async function runAcpAgentCommand(params: {
       ...(terminalOutcome ? { terminalOutcome } : {}),
     });
     throw acpError;
+  } finally {
+    closeAcpHostCapabilities?.();
   }
 
   const finalTextRaw = visibleTextAccumulator.finalizeRaw();
