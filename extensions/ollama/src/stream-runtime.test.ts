@@ -1,8 +1,8 @@
-// Ollama tests cover stream runtime plugin behavior.
-import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
+// Ollama tests cover stream runtime plugin behavior.
+import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -3924,7 +3924,84 @@ describe("createConfiguredOllamaStreamFn", () => {
       const events = await eventsPromise;
 
       expect(events.at(-1)).toMatchObject({ type: "done" });
-      expect(refreshTimeout).toHaveBeenCalledTimes(2);
+      expect(refreshTimeout).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a short request timeout alive during an open terminal tail", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let guardTimer: ReturnType<typeof setTimeout> | undefined;
+      let guardTimedOut = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          controller = streamController;
+        },
+      });
+      const armGuardTimer = () => {
+        if (guardTimer !== undefined) {
+          clearTimeout(guardTimer);
+        }
+        guardTimer = setTimeout(() => {
+          guardTimedOut = true;
+          controller?.error(new Error("guard timeout"));
+        }, 25);
+      };
+      const guardRelease = vi.fn(async () => {
+        if (guardTimer !== undefined) {
+          clearTimeout(guardTimer);
+        }
+      });
+      fetchWithSsrFGuardMock.mockImplementation(async () => {
+        armGuardTimer();
+        return {
+          response: new Response(body, {
+            status: 200,
+            headers: { "Content-Type": "application/x-ndjson" },
+          }),
+          release: guardRelease,
+          refreshTimeout: armGuardTimer,
+        };
+      });
+
+      const eventsPromise = collectStreamEvents(
+        await createManagedOllamaTestStream({
+          baseUrl: "http://provider-host:11434",
+          model: { requestTimeoutMs: 25 },
+          acquire: vi.fn(async () => ({ release: vi.fn() })),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expectDefined(controller, "controlled NDJSON stream").enqueue(
+        encoder.encode(
+          '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}\n',
+        ),
+      );
+
+      let settled = false;
+      void eventsPromise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(settled).toBe(false);
+      expect(guardTimedOut).toBe(false);
+      expectDefined(controller, "controlled NDJSON stream").close();
+      const events = await eventsPromise;
+
+      expect(events.at(-1)).toMatchObject({ type: "done" });
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      expect(guardTimedOut).toBe(false);
+      expect(guardRelease).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
@@ -79,6 +78,46 @@ const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
+
+type OllamaTerminalCompletionTimeoutPolicy = {
+  onTerminalRecord: () => void;
+  cleanup: () => void;
+};
+
+function createOllamaTerminalCompletionTimeoutPolicy(params: {
+  requestTimeoutMs?: number;
+  refreshTimeout?: () => void;
+}): OllamaTerminalCompletionTimeoutPolicy {
+  if (!params.refreshTimeout || params.requestTimeoutMs === undefined) {
+    return {
+      onTerminalRecord: () => undefined,
+      cleanup: () => undefined,
+    };
+  }
+
+  const refreshTimeout = params.refreshTimeout;
+  // The guarded request timeout remains authoritative until a terminal record
+  // is parsed. Once terminal completion starts, keep that guard alive while
+  // the parser applies its separate, bounded tail-validation deadline.
+  const refreshIntervalMs = Math.max(1, Math.min(100, Math.floor(params.requestTimeoutMs / 2)));
+  let refreshInterval: ReturnType<typeof setInterval> | undefined;
+  return {
+    onTerminalRecord() {
+      if (refreshInterval !== undefined) {
+        return;
+      }
+      refreshTimeout();
+      refreshInterval = setInterval(() => refreshTimeout(), refreshIntervalMs);
+    },
+    cleanup() {
+      if (refreshInterval === undefined) {
+        return;
+      }
+      clearInterval(refreshInterval);
+      refreshInterval = undefined;
+    },
+  };
+}
 
 function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -875,6 +914,7 @@ export function buildAssistantMessage(
 
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  options: { onTerminalRecord?: () => void } = {},
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
@@ -930,6 +970,7 @@ export async function* parseNdjsonStream(
           // terminal record, so malformed bytes in later transport chunks
           // would otherwise complete successfully without validation.
           terminalRecord = parsed;
+          options.onTerminalRecord?.();
           terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
           const tail = decodeTerminalTail(decoder, value.subarray(offset), terminalTailBytes);
           terminalTailBytes = tail.totalBytes;
@@ -1199,6 +1240,10 @@ function createRawOllamaStreamFn(
           throw error;
         });
         const { response, release, refreshTimeout } = guardedFetch;
+        const terminalCompletionTimeout = createOllamaTerminalCompletionTimeoutPolicy({
+          requestTimeoutMs,
+          refreshTimeout,
+        });
 
         try {
           await notifyProviderHttpResponse({ options, response, model });
@@ -1352,13 +1397,15 @@ function createRawOllamaStreamFn(
             return resolution.text;
           };
 
-          for await (const chunk of parseNdjsonStream(reader)) {
+          for await (const chunk of parseNdjsonStream(reader, {
+            onTerminalRecord: terminalCompletionTimeout.onTerminalRecord,
+          })) {
             throwIfOllamaStreamAborted(options?.signal);
             if (finalResponse) {
               throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
             }
-            // Keep guarded timeouts tied to inference progress. Once done arrives,
-            // trailing validation stays on the existing bounded request deadline.
+            // Keep the guarded timeout tied to inference progress. Terminal-tail
+            // validation has its own explicit bounded completion policy above.
             refreshTimeout?.();
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {
@@ -1506,6 +1553,7 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
+          terminalCompletionTimeout.cleanup();
           try {
             await release();
           } finally {
