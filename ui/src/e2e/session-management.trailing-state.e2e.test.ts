@@ -374,7 +374,7 @@ suite.define(() => {
             .map((glyph) => glyph.getBoundingClientRect())
             .filter((rect) => rect.width > 0)
             .map((rect) => Math.round((rect.left + rect.width / 2) * 10) / 10)
-            .sort((left, right) => left - right);
+            .toSorted((left, right) => left - right);
         return {
           actions: centres(element, ".session-action svg"),
           endcap: centres(
