@@ -15,6 +15,7 @@ APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
 DEFAULT_APP_STORE_CONNECT_KEYCHAIN_SERVICE = "openclaw-app-store-connect-key"
 DEFAULT_SNAPSHOT_DEVICE_FAMILIES = [
   {
+    key: "iphone",
     label: "iPhone",
     patterns: [
       /\AiPhone .* Pro Max\z/,
@@ -23,6 +24,7 @@ DEFAULT_SNAPSHOT_DEVICE_FAMILIES = [
     ]
   },
   {
+    key: "ipad-13",
     label: "13-inch iPad",
     patterns: [
       /\AiPad Pro 13-inch/,
@@ -170,8 +172,16 @@ end
 
 def default_snapshot_devices
   names = available_simulator_devices.map { |device| device["name"].to_s }.reject(&:empty?).uniq
+  requested_family = ENV["OPENCLAW_SNAPSHOT_DEVICE_FAMILY"].to_s.strip
+  families = DEFAULT_SNAPSHOT_DEVICE_FAMILIES
+  unless requested_family.empty?
+    family = families.find { |candidate| candidate.fetch(:key) == requested_family }
+    supported = families.map { |candidate| candidate.fetch(:key) }.join(", ")
+    UI.user_error!("Unsupported screenshot device family '#{requested_family}'. Expected one of: #{supported}.") if family.nil?
+    families = [family]
+  end
 
-  DEFAULT_SNAPSHOT_DEVICE_FAMILIES.map do |family|
+  families.map do |family|
     match = family.fetch(:patterns).filter_map do |pattern|
       names.find { |name| name.match?(pattern) }
     end.first
@@ -2155,11 +2165,13 @@ platform :ios do
     # evidence in build/ so Deliver sees only locale directories during validation.
     FileUtils.rm_rf(File.join(output_directory, "test_output"))
 
-    watch_screenshot(
-      release_version: release_version,
-      app_store_revision: app_store_revision,
-      build_number: build_number
-    )
+    unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
+      watch_screenshot(
+        release_version: release_version,
+        app_store_revision: app_store_revision,
+        build_number: build_number
+      )
+    end
   end
 
   desc "Generate deterministic Apple Watch screenshot for App Store metadata"
