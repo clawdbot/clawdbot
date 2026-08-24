@@ -24,7 +24,7 @@ function isResettableContinuationFlow(flow: TaskFlowRecord): boolean {
 }
 
 /** Terminalize durable continuation work owned by one reset session. */
-export function cancelSessionContinuations(sessionKey: string): number {
+export function cancelSessionContinuations(sessionKey: string): void {
   const flows = listTaskFlowsForOwnerKey(sessionKey).filter(isResettableContinuationFlow);
   const endedAt = Date.now();
   for (const flow of flows) {
@@ -49,5 +49,4 @@ export function cancelSessionContinuations(sessionKey: string): number {
       throw new SessionContinuationResetError(flow.flowId, result.reason);
     }
   }
-  return flows.length;
 }
