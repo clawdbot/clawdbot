@@ -44,8 +44,15 @@ export class AcpSessionNewOrdering {
   private readonly pendingNewSessionRequestIds = new Set<string>();
   /**
    * Set when a `session/new` arrived that could not be correlated, meaning a response
-   * this boundary will not recognize is in flight. Cleared once the tracked
-   * correlations drain, which is the first point where recognition is provable again.
+   * this boundary will never recognize is in flight.
+   *
+   * It is never cleared. An uncorrelated creation is by definition invisible here, so
+   * there is no point at which its absence is provable: the tracked set emptying says
+   * only that the tracked requests finished. Clearing on that would let a later
+   * tracked creation drain an overflowed session's update ahead of its own result,
+   * which is the failure this boundary exists to prevent. Once correlation has
+   * overflowed the boundary stays failed open, trading ordering for a guarantee it
+   * can still honour.
    */
   private correlationSaturated = false;
 
@@ -110,9 +117,6 @@ export class AcpSessionNewOrdering {
       ? readRequestId(messageObject?.id)
       : undefined;
     if (responseId !== undefined && this.pendingNewSessionRequestIds.delete(responseId)) {
-      if (this.pendingNewSessionRequestIds.size === 0) {
-        this.correlationSaturated = false;
-      }
       // The response to `session/new` always goes out first; it is what introduces
       // the session ID to the client. A failed creation carries no ID to establish.
       emit(message);

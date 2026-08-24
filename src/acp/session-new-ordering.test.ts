@@ -208,28 +208,6 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([overflow]);
   });
 
-  it("resumes ordering once the saturated correlations drain", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const steps: Step[] = [];
-    for (let id = 1; id <= 65; id += 1) {
-      steps.push({ inbound: newSessionRequest(id) });
-    }
-    const settled: AnyMessage[] = [];
-    for (let id = 1; id <= 64; id += 1) {
-      const response = newSessionResponse(id, `s${id}`);
-      settled.push(response);
-      steps.push({ outbound: response });
-    }
-    // Correlations are never evicted to make room, so every tracked request still
-    // resolves; once they all have, the boundary is provably able to correlate
-    // again and buffering resumes.
-    const update = sessionUpdate("s100");
-    const created = newSessionResponse(100, "s100");
-    steps.push({ inbound: newSessionRequest(100) }, { outbound: update }, { outbound: created });
-
-    await expect(runSteps(ordering, steps)).resolves.toEqual([...settled, created, update]);
-  });
-
   it("releases an established session ID when the session closes", async () => {
     const ordering = new AcpSessionNewOrdering();
     const created = newSessionResponse(2, "closing-session");
@@ -318,6 +296,32 @@ describe("AcpSessionNewOrdering", () => {
     // a1, a2, b1 here, which reorders b1 against a2 on the wire even though this
     // boundary promises arrival order.
     expect(output).toEqual([failA, failB, a1, b1, a2]);
+  });
+
+  it("stays failed open while an overflowed creation overlaps a later tracked one", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const steps: Step[] = [];
+    for (let id = 1; id <= 65; id += 1) {
+      steps.push({ inbound: newSessionRequest(id) });
+    }
+    // Requests 1-64 settle, but request 65 was never recorded and is still out.
+    const settled: AnyMessage[] = [];
+    for (let id = 1; id <= 64; id += 1) {
+      const response = newSessionResponse(id, `s${id}`);
+      settled.push(response);
+      steps.push({ outbound: response });
+    }
+    const overflowed = sessionUpdate("overflowed-session");
+    const tracked = newSessionResponse(66, "tracked-session");
+    steps.push({ inbound: newSessionRequest(66) }, { outbound: overflowed }, { outbound: tracked });
+
+    const output = await runSteps(ordering, steps);
+
+    // The tracked set emptying proves only that requests 1-64 finished. Treating that
+    // as quiescence re-enables queuing, and request 66's result then drains request
+    // 65's update ahead of its own result. Saturation therefore never clears, so the
+    // update is written straight through instead.
+    expect(output).toEqual([...settled, overflowed, tracked]);
   });
 
   it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
