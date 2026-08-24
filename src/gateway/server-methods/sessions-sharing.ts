@@ -85,7 +85,7 @@ function requireManageableTarget(params: {
     );
     return null;
   }
-  const role = resolveSessionSharingRole({ client: params.client, target });
+  const role = resolveSessionSharingRole({ client: params.client, cfg: params.cfg, target });
   if (!canManageSessionSharing(role)) {
     params.respond(
       false,
@@ -116,7 +116,11 @@ function requireCurrentManagedTarget(params: {
   if (!current || current.entry.sessionId !== params.authorized.entry.sessionId) {
     throw new Error("session changed before sharing mutation");
   }
-  const role = resolveSessionSharingRole({ client: params.client, target: current });
+  const role = resolveSessionSharingRole({
+    client: params.client,
+    cfg: params.cfg,
+    target: current,
+  });
   if (!canManageSessionSharing(role)) {
     throw new Error("session ownership changed before sharing mutation");
   }

@@ -37,6 +37,7 @@ import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
+import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
@@ -83,6 +84,9 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
     must never get a second row. */
 export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 
+/** Host-minted role authority; leaf contract re-exported for method handlers. */
+export type { GatewayOperatorRoleActor };
+
 /** Caller identity captured by a built-in agent tool before trusted in-process dispatch. */
 export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
@@ -125,6 +129,8 @@ export type GatewayClient = {
     isLocalClient?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
+    /** Host-owned role authority retained separately from an autonomous run principal. */
+    operatorRoleActor?: GatewayOperatorRoleActor;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
@@ -333,6 +339,7 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  disconnectClientsForUserProfile?: (profileId: string) => void;
   invalidateClientsForDevice?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },

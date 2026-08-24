@@ -2675,7 +2675,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      expect(context.broadcastToConnIds.mock.calls.length).toBe(1);
+      expect(
+        context.broadcastToConnIds.mock.calls.map(
+          ([, payload]) => (payload as { reason?: unknown }).reason,
+        ),
+      ).toEqual(["command-metadata", "chat.run.settled"]);
     });
     const call = mockCallAt(context.broadcastToConnIds, 0);
     const payload = call?.[1] as { ts?: unknown } | undefined;
@@ -2687,6 +2691,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       reason: "command-metadata",
     });
     expect(typeof payload?.ts).toBe("number");
+    expect(mockCallAt(context.broadcastToConnIds, 1)).toEqual([
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        reason: "chat.run.settled",
+        ts: expect.any(Number),
+      }),
+      new Set(["conn-1"]),
+      { agentId: "main", dropIfSlow: true },
+    ]);
     await waitForAssertion(() => {
       expect(context.dedupe.has("chat:idem-command-session-metadata")).toBe(true);
     });

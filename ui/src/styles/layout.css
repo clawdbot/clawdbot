@@ -3912,29 +3912,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   height: 16px;
 }
 
-.sidebar-agent-menu__filter {
-  padding: 2px 8px 6px;
-}
-
-.sidebar-agent-menu__filter input {
-  --control-ui-touch-input-size: var(--control-ui-text-sm);
-
-  width: 100%;
-  padding: 5px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: inherit;
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.sidebar-agent-menu__empty {
-  padding: 6px 8px;
-  font-size: var(--control-ui-text-sm);
-  color: var(--muted);
-}
-
 /* Identity-menu strip: build identity left, theme switch right. */
 .sidebar-identity-menu__footer {
   display: flex;

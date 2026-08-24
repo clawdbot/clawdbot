@@ -17,6 +17,8 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { recordSessionCreated } from "../sessions/session-state-events.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildDashboardSessionKey } from "./session-create-service.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { buildRestartRecoverySuccessorEntry } from "./session-recovery-entry.js";
@@ -58,6 +60,8 @@ export async function recoverGatewaySession(params: {
   cfg: OpenClawConfig;
   commitGuard?: () => void;
   key: string;
+  requestingOperatorProfileId?: string;
+  operatorRoleActor?: GatewayOperatorRoleActor;
   launchContinuation: (params: {
     agentId: string;
     idempotencyKey: string;
@@ -106,6 +110,18 @@ export async function recoverGatewaySession(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, "Session is not recoverable."),
     };
   }
+  if (!recovery.tombstone.recoveredSessionKey) {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg: params.cfg,
+      agentId: sourceTarget.agentId,
+      ...(params.operatorRoleActor
+        ? { actor: params.operatorRoleActor }
+        : { profileId: params.requestingOperatorProfileId }),
+    });
+    if (creationError) {
+      return { ok: false, error: creationError };
+    }
+  }
   const generatedSuccessorKey = buildDashboardSessionKey(sourceTarget.agentId);
   const successorTarget = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
@@ -146,6 +162,18 @@ export async function recoverGatewaySession(params: {
             "Session changed before recovery; refresh and retry.",
           ),
         };
+      }
+      if (!currentSource.mainRestartRecovery?.tombstone?.recoveredSessionKey) {
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: params.cfg,
+          agentId: sourceTarget.agentId,
+          ...(params.operatorRoleActor
+            ? { actor: params.operatorRoleActor }
+            : { profileId: params.requestingOperatorProfileId }),
+        });
+        if (creationError) {
+          return { ok: false as const, error: creationError };
+        }
       }
       if (
         isEmbeddedAgentRunActive(currentSource.sessionId) ||

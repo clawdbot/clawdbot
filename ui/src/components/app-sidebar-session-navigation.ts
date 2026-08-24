@@ -408,8 +408,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       return;
     }
     if (event.metaKey || event.ctrlKey) {
-      event.preventDefault();
-      this.toggleSessionSelected(session.key);
       return;
     }
     if (event.shiftKey) {
@@ -418,6 +416,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       return;
     }
     if (event.altKey) {
+      event.preventDefault();
+      this.toggleSessionSelected(session.key);
       return;
     }
     event.preventDefault();

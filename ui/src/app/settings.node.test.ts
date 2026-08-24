@@ -367,7 +367,6 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatPersistCommentary: true,
-      navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
       sessionsByGateway: {

@@ -294,8 +294,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         }}
       ></openclaw-device-scope-upgrade-banner>`
     : null;
-  // Drawer navigation always opens expanded; the desktop collapse preference
-  // stays persisted for when the viewport returns to the desktop layout.
+  // Drawer navigation always opens expanded; the tab's desktop collapse state
+  // stays in memory for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
   const navCollapsed =
     navigationSnapshot.navCollapsed &&

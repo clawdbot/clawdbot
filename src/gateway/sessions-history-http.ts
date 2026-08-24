@@ -4,6 +4,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -25,14 +30,17 @@ import {
   checkGatewayHttpRequestAuth,
   getHeader,
   resolveSharedSecretHttpOperatorScopes,
+  type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import type { GatewayClient } from "./server-methods/shared-types.js";
 import {
   buildSessionHistorySnapshot,
   resolveCursorSeq,
   resolveSessionHistoryTailReadOptions,
   SessionHistorySseState,
 } from "./session-history-state.js";
+import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
@@ -100,6 +108,30 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function resolveSessionHistoryHttpClient(
+  requestAuth: AuthorizedGatewayHttpRequest,
+  scopes: string[],
+): GatewayClient | null {
+  if (!requestAuth.authenticatedUserProfile) {
+    return null;
+  }
+  return {
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        version: "internal",
+        platform: "node",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      role: "operator",
+      scopes,
+    },
+    authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+  };
+}
+
 /** Handle `/sessions/:sessionKey/history` JSON/SSE requests. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
@@ -142,7 +174,7 @@ export async function handleSessionHistoryHttpRequest(
   if (!authResult) {
     return true;
   }
-  const { cfg } = authResult;
+  const { cfg, requestAuth, operatorScopes } = authResult;
 
   let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
@@ -162,7 +194,12 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  if (!entry?.sessionId) {
+  const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
+  if (
+    !entry?.sessionId ||
+    createSessionListEntryFilter({ cfg, client: historyClient })?.(target.canonicalKey, entry) ===
+      false
+  ) {
     sendJson(res, 404, {
       ok: false,
       error: {
@@ -410,11 +447,38 @@ export async function handleSessionHistoryHttpRequest(
     if (!currentRequestAuth.ok) {
       return false;
     }
+    if (
+      currentRequestAuth.requestAuth.authenticatedUserProfile?.profileId !==
+      requestAuth.authenticatedUserProfile?.profileId
+    ) {
+      return false;
+    }
     const requestedScopes = resolveSharedSecretHttpOperatorScopes(
       req,
       currentRequestAuth.requestAuth,
     );
-    return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
+    if (!authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed) {
+      return false;
+    }
+    const currentClient = resolveSessionHistoryHttpClient(
+      currentRequestAuth.requestAuth,
+      requestedScopes,
+    );
+    if (!currentClient) {
+      return true;
+    }
+    const currentTarget = resolveSessionSharingTarget({
+      cfg: cfgLocal,
+      sessionKey: target.canonicalKey,
+      agentId: target.agentId,
+    });
+    return (
+      currentTarget !== null &&
+      createSessionListEntryFilter({ cfg: cfgLocal, client: currentClient })?.(
+        currentTarget.canonicalKey,
+        currentTarget.entry,
+      ) !== false
+    );
   };
 
   streamResources.heartbeat = setInterval(() => {

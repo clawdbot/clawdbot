@@ -196,29 +196,9 @@ openclaw-session-owner-chip {
   color: var(--accent);
 }
 
-.connect-splash__logo {
-  width: 44px;
-  height: 44px;
-  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
-}
-
-@keyframes connect-splash-wiggle {
-  0%,
-  100% {
-    transform: rotate(-6deg);
-  }
-  50% {
-    transform: rotate(6deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .connect-splash {
     opacity: 1;
-    animation: none;
-  }
-
-  .connect-splash__logo {
     animation: none;
   }
 }

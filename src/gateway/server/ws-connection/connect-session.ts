@@ -41,6 +41,7 @@ import {
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -195,45 +196,24 @@ export async function attachAuthenticatedGatewayConnect(
     ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
-  // Device pairing owns persistent access. Verified identity grants only shape
-  // this connection, after device-less self-declared scopes have been cleared.
-  const effectiveScopes = resolveEffectiveConnectionScopes({
-    role,
-    deviceScopes,
-    verifiedIdentity: authenticatedUserId,
-    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-    upgradeReq: context.handler.upgradeReq,
-  });
-  const scopes = effectiveScopes.scopes;
-  state.scopes = scopes;
-  connectParams.scopes = scopes;
-  if (authenticatedUserId && effectiveScopes.addedIdentityScopes.length > 0) {
-    logGateway.warn(
-      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${effectiveScopes.addedIdentityScopes.join(",")} conn=${connId}`,
-    );
-  }
-
-  if (isClosed()) {
-    await releasePendingNodePairingCleanup();
-    setCloseCause("connect-aborted-before-register", {
-      ...clientMeta,
-      auth: authMethod,
-    });
-    return;
-  }
-
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     requestHeaders: context.handler.upgradeReq.headers,
   });
+  const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
+  const sharedSecretOperatorOwner =
+    role === "operator" && (authMethod === "token" || authMethod === "password");
   let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
-  if (authenticatedUserId && !resolveAuthenticatedGitHubIdentity) {
+  if (authenticatedUserId && (!resolveAuthenticatedGitHubIdentity || rolesConfigured)) {
     try {
-      const profile = authResult.tailscaleIdentity
-        ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
-        : ensureProfileForEmail(authenticatedUserId);
-      const display = getUserProfileDisplay(profile.id);
+      const profile = resolveAuthenticatedGitHubIdentity
+        ? await resolveAuthenticatedGitHubIdentity()
+        : authResult.tailscaleIdentity
+          ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
+          : ensureProfileForEmail(authenticatedUserId);
+      const profileId = "profileId" in profile ? profile.profileId : profile.id;
+      const display = getUserProfileDisplay(profileId);
       // User edits become visible after reconnect; detached provider-avatar adoption refreshes below.
       authenticatedUserProfile = {
         profileId: display.id,
@@ -248,6 +228,49 @@ export async function attachAuthenticatedGatewayConnect(
         `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
       );
     }
+  }
+  // Identity-derived scopes must be capped only after their durable profile is known.
+  // Configured roles fail closed if profile storage or provider verification is unavailable.
+  const effectiveScopes = resolveEffectiveConnectionScopes({
+    role,
+    deviceScopes,
+    verifiedIdentity: authenticatedUserId,
+    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+    upgradeReq: context.handler.upgradeReq,
+  });
+  const rolePolicy =
+    role === "operator" && !sharedSecretOperatorOwner
+      ? resolveOperatorRolePolicyForProfile(
+          authenticatedUserProfile?.profileId,
+          context.configSnapshot,
+        )
+      : undefined;
+  const scopes =
+    role === "operator" && authenticatedUserId && rolesConfigured && !authenticatedUserProfile
+      ? []
+      : rolePolicy
+        ? effectiveScopes.scopes.filter((scope) =>
+            rolePolicy.scopes.some((allowedScope) => allowedScope === scope),
+          )
+        : effectiveScopes.scopes;
+  state.scopes = scopes;
+  connectParams.scopes = scopes;
+  const addedIdentityScopes = effectiveScopes.addedIdentityScopes.filter((scope) =>
+    scopes.includes(scope),
+  );
+  if (authenticatedUserId && addedIdentityScopes.length > 0) {
+    logGateway.warn(
+      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} conn=${connId}`,
+    );
+  }
+
+  if (isClosed()) {
+    await releasePendingNodePairingCleanup();
+    setCloseCause("connect-aborted-before-register", {
+      ...clientMeta,
+      auth: authMethod,
+    });
+    return;
   }
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
@@ -352,13 +375,17 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
   const internal =
-    isLocalClient || isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
+    isLocalClient ||
+    isTrustedApprovalRuntime ||
+    trustedAgentRuntimeIdentity ||
+    sharedSecretOperatorOwner
       ? {
           ...(isLocalClient ? { isLocalClient: true as const } : {}),
           ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
           ...(trustedAgentRuntimeIdentity
             ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }
             : {}),
+          ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
         }
       : undefined;
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>

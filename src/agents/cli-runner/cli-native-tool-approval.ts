@@ -15,9 +15,9 @@ import {
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { callGatewayTool } from "../tools/gateway.js";
 
-type ClaudeNativeToolApprovalPlan = "allow" | "deny" | "prompt";
-type ClaudeNativeToolApprovalDecision = "allow-once" | "allow-always" | "deny";
-type ClaudeNativeToolApprovalOutcome =
+type CliNativeToolApprovalPlan = "allow" | "deny" | "prompt";
+type CliNativeToolApprovalDecision = "allow-once" | "allow-always" | "deny";
+type CliNativeToolApprovalOutcome =
   | { kind: "allow"; grantAlways: boolean }
   | {
       kind: "deny";
@@ -25,30 +25,30 @@ type ClaudeNativeToolApprovalOutcome =
       message?: string;
     };
 
-const CLAUDE_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS = 300;
-const CLAUDE_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS = 80;
-const CLAUDE_NATIVE_TOOL_DESCRIPTION_MAX_CHARS =
-  CLAUDE_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS + CLAUDE_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS;
-const CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS = 10_000;
-const CLAUDE_NATIVE_TOOL_ALLOWED_DECISIONS = [
+const CLI_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS = 300;
+const CLI_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS = 80;
+const CLI_NATIVE_TOOL_DESCRIPTION_MAX_CHARS =
+  CLI_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS + CLI_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS;
+const CLI_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS = 10_000;
+const CLI_NATIVE_TOOL_ALLOWED_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",
-] as const satisfies readonly ClaudeNativeToolApprovalDecision[];
+] as const satisfies readonly CliNativeToolApprovalDecision[];
 // A standing grant must never be minted from a partially displayed input, so
 // oversized inputs offer one-shot decisions only.
-const CLAUDE_NATIVE_TOOL_TRUNCATED_DECISIONS = [
+const CLI_NATIVE_TOOL_TRUNCATED_DECISIONS = [
   "allow-once",
   "deny",
-] as const satisfies readonly ClaudeNativeToolApprovalDecision[];
-// Claude Code's Bash tool is arbitrary shell execution, so a name-wide grant is unrestricted.
+] as const satisfies readonly CliNativeToolApprovalDecision[];
+// Bash is arbitrary shell execution, so a name-wide grant is unrestricted.
 // Bash fails closed when even the reviewer-only detail cannot show the complete input.
-const CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL = "Bash";
+const CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL = "Bash";
 
-export function resolveClaudeNativeToolApprovalPlan(execPermission: {
+export function resolveCliNativeToolApprovalPlan(execPermission: {
   security: ExecSecurity;
   ask: ExecAsk;
-}): ClaudeNativeToolApprovalPlan {
+}): CliNativeToolApprovalPlan {
   if (execPermission.security === "deny") {
     return "deny";
   }
@@ -60,7 +60,7 @@ export function resolveClaudeNativeToolApprovalPlan(execPermission: {
   return "prompt";
 }
 
-type ClaudeNativeToolDescription = { compact: string; text: string; truncated: boolean };
+type CliNativeToolDescription = { compact: string; text: string; truncated: boolean };
 
 /**
  * The gateway caps approval descriptions (PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH),
@@ -69,15 +69,15 @@ type ClaudeNativeToolDescription = { compact: string; text: string; truncated: b
  * view an explicit operator decision. Accepted tradeoff: the middle stays
  * unreviewable; oversized inputs therefore never earn allow-always.
  */
-function formatClaudeNativeToolDescription(
+function formatCliNativeToolDescription(
   toolInput: Record<string, unknown>,
-): ClaudeNativeToolDescription {
+): CliNativeToolDescription {
   const compact = JSON.stringify(toolInput) ?? "{}";
-  if (compact.length <= CLAUDE_NATIVE_TOOL_DESCRIPTION_MAX_CHARS) {
+  if (compact.length <= CLI_NATIVE_TOOL_DESCRIPTION_MAX_CHARS) {
     return { compact, text: compact, truncated: false };
   }
-  const head = truncateUtf16Safe(compact, CLAUDE_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS);
-  const tail = sliceUtf16Safe(compact, compact.length - CLAUDE_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS);
+  const head = truncateUtf16Safe(compact, CLI_NATIVE_TOOL_DESCRIPTION_HEAD_CHARS);
+  const tail = sliceUtf16Safe(compact, compact.length - CLI_NATIVE_TOOL_DESCRIPTION_TAIL_CHARS);
   const hiddenChars = compact.length - head.length - tail.length;
   return {
     compact,
@@ -86,27 +86,30 @@ function formatClaudeNativeToolDescription(
   };
 }
 
-function formatClaudeNativeToolTitle(toolName: string): string {
-  return truncateUtf16Safe(`Claude native tool: ${toolName}`, PLUGIN_APPROVAL_TITLE_MAX_LENGTH);
+function formatCliNativeToolTitle(pluginId: string, toolName: string): string {
+  return truncateUtf16Safe(
+    `${pluginId} native tool: ${toolName}`,
+    PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  );
 }
 
-function resolveClaudeNativeToolAllowedDecisions(params: {
+function resolveCliNativeToolAllowedDecisions(params: {
   ask: ExecAsk;
   toolName: string;
   descriptionTruncated: boolean;
-}): readonly ClaudeNativeToolApprovalDecision[] {
+}): readonly CliNativeToolApprovalDecision[] {
   return params.ask === "always" ||
-    params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL ||
+    params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL ||
     params.descriptionTruncated
-    ? CLAUDE_NATIVE_TOOL_TRUNCATED_DECISIONS
-    : CLAUDE_NATIVE_TOOL_ALLOWED_DECISIONS;
+    ? CLI_NATIVE_TOOL_TRUNCATED_DECISIONS
+    : CLI_NATIVE_TOOL_ALLOWED_DECISIONS;
 }
 
 function toAbortError(reason: unknown): Error {
-  return reason instanceof Error ? reason : new Error("Claude native tool approval aborted");
+  return reason instanceof Error ? reason : new Error("CLI native tool approval aborted");
 }
 
-async function raceClaudeNativeToolApprovalAbort<T>(
+async function raceCliNativeToolApprovalAbort<T>(
   promise: Promise<T>,
   abortSignal: AbortSignal | undefined,
 ): Promise<T> {
@@ -131,25 +134,25 @@ async function raceClaudeNativeToolApprovalAbort<T>(
   }
 }
 
-function waitForClaudeNativeToolApproval(params: {
+function waitForCliNativeToolApproval(params: {
   id: string;
   gatewayTimeoutMs: number;
   abortSignal?: AbortSignal;
 }): Promise<{ id?: string; decision?: unknown }> {
-  return raceClaudeNativeToolApprovalAbort(
+  return raceCliNativeToolApprovalAbort(
     callGatewayTool(
       "plugin.approval.waitDecision",
       { timeoutMs: params.gatewayTimeoutMs },
       { id: params.id },
       // Abort must reach the RPC too, or the gateway keeps the approval prompt
-      // live for its full timeout after the Claude run already ended.
+      // live for its full timeout after the admitted CLI run already ended.
       { signal: params.abortSignal },
     ),
     params.abortSignal,
   );
 }
 
-export async function requestClaudeNativeToolApproval(params: {
+export async function requestCliNativeToolApproval(params: {
   toolName: string;
   toolInput: Record<string, unknown>;
   pluginId: string;
@@ -159,23 +162,23 @@ export async function requestClaudeNativeToolApproval(params: {
   cwd?: string;
   abortSignal?: AbortSignal;
   ask: ExecAsk;
-}): Promise<ClaudeNativeToolApprovalOutcome> {
+}): Promise<CliNativeToolApprovalOutcome> {
   try {
     const timeoutMs = DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
     const gatewayTimeoutMs =
-      addTimerTimeoutGraceMs(timeoutMs, CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS) ??
-      timeoutMs + CLAUDE_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS;
-    const description = formatClaudeNativeToolDescription(params.toolInput);
+      addTimerTimeoutGraceMs(timeoutMs, CLI_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS) ??
+      timeoutMs + CLI_NATIVE_TOOL_APPROVAL_GATEWAY_GRACE_MS;
+    const description = formatCliNativeToolDescription(params.toolInput);
     const detail = truncatePluginApprovalDetail(description.compact);
     const detailSanitization =
-      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL
+      params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL
         ? sanitizeExecApprovalWarningTextWithStatus(description.compact)
         : null;
     // Sanitization escapes control/bidi characters into longer visible
     // sequences, so a short raw command can still overflow the 512-char
     // description bound after sanitization and get truncated at render time.
     const summarySanitization =
-      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL
+      params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL
         ? sanitizeExecApprovalWarningTextWithStatus(description.text)
         : null;
     // Approvals resolve from summary-only surfaces (channel text, push), which
@@ -183,7 +186,7 @@ export async function requestClaudeNativeToolApproval(params: {
     // resolving surface could see less than the complete command: a truncated
     // description, sanitization-altered display, or post-sanitization overflow.
     if (
-      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
+      params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
       (description.truncated ||
         detailSanitization?.truncated === true ||
         detailSanitization?.oversized === true ||
@@ -195,12 +198,12 @@ export async function requestClaudeNativeToolApproval(params: {
       return { kind: "deny", reason: "policy-oversized" };
     }
     const bashCommand =
-      params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
+      params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
       typeof params.toolInput.command === "string"
         ? params.toolInput.command
         : undefined;
     let mutableFileBinding: SystemRunMutableFileBinding | undefined;
-    if (params.toolName === CLAUDE_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL) {
+    if (params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL) {
       // Bind script bytes before the out-of-band approval wait. Text-identical
       // Bash input can otherwise execute a rewritten file after approval.
       const prepared = await prepareSystemRunMutableFileBinding({
@@ -212,7 +215,7 @@ export async function requestClaudeNativeToolApproval(params: {
       }
       mutableFileBinding = prepared.binding.operands.length > 0 ? prepared.binding : undefined;
     }
-    const allowedDecisions = resolveClaudeNativeToolAllowedDecisions({
+    const allowedDecisions = resolveCliNativeToolAllowedDecisions({
       ask: params.ask,
       toolName: params.toolName,
       descriptionTruncated: description.truncated,
@@ -220,7 +223,7 @@ export async function requestClaudeNativeToolApproval(params: {
     const requestResult: {
       id?: string;
       decision?: unknown;
-    } = await raceClaudeNativeToolApprovalAbort(
+    } = await raceCliNativeToolApprovalAbort(
       callGatewayTool(
         "plugin.approval.request",
         { timeoutMs: gatewayTimeoutMs },
@@ -230,7 +233,7 @@ export async function requestClaudeNativeToolApproval(params: {
           toolCallId: params.toolCallId,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
-          title: formatClaudeNativeToolTitle(params.toolName),
+          title: formatCliNativeToolTitle(params.pluginId, params.toolName),
           description: description.text,
           detail,
           severity: "warning",
@@ -250,7 +253,7 @@ export async function requestClaudeNativeToolApproval(params: {
     if (Object.hasOwn(requestResult ?? {}, "decision")) {
       decision = requestResult.decision;
     } else {
-      const waitResult = await waitForClaudeNativeToolApproval({
+      const waitResult = await waitForCliNativeToolApproval({
         id,
         gatewayTimeoutMs,
         abortSignal: params.abortSignal,
@@ -261,7 +264,7 @@ export async function requestClaudeNativeToolApproval(params: {
       return { kind: "deny", reason: "unavailable" };
     }
     if ((decision === "allow-once" || decision === "allow-always") && mutableFileBinding) {
-      // This control response is OpenClaw's last boundary before Claude owns
+      // This control response is OpenClaw's last boundary before the CLI owns
       // spawn, so reject bytes that changed during the approval wait.
       const binding = await revalidateSystemRunMutableFileBinding({
         binding: mutableFileBinding,

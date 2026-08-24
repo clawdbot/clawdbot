@@ -1329,6 +1329,62 @@ describe("parseNdjsonStream", () => {
     expect(ollamaStreamWarnMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "corrupted bytes inside an NDJSON record",
+      bytes: new Uint8Array([
+        ...new TextEncoder().encode('{"message":{"role":"assistant","content":"'),
+        0xff,
+        ...new TextEncoder().encode('"},"done":false}\n'),
+      ]),
+    },
+    {
+      name: "an incomplete UTF-8 sequence after the terminal record",
+      bytes: new Uint8Array([
+        ...new TextEncoder().encode(
+          '{"message":{"role":"assistant","content":"ok"},"done":true}\n',
+        ),
+        0xc3,
+      ]),
+    },
+  ])("rejects $name", async ({ bytes }) => {
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }).getReader();
+
+    await expect(async () => {
+      for await (const chunk of parseNdjsonStream(reader)) {
+        // Drain the response so decoder finalization runs at real EOF.
+        void chunk;
+      }
+    }).rejects.toThrow(/utf-8/i);
+  });
+
+  it("preserves valid UTF-8 characters split across transport chunks", async () => {
+    const bytes = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"héllo"},"done":true}\n',
+    );
+    const split = bytes.indexOf(0xc3) + 1;
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      },
+    }).getReader();
+    const chunks = [];
+
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.message.content).toBe("héllo");
+  });
+
   it.each(["null", "[]", "42"])("rejects non-object NDJSON records: %s", async (record) => {
     await expect(expectNoParsedChunks(mockNdjsonReader([record]))).rejects.toThrow(
       "OpenClaw transport error: malformed_streaming_fragment",

@@ -99,7 +99,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.get": async ({ params, respond, client }) => {
+    "exec.approval.get": async ({ params, respond, client, context }) => {
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
@@ -108,6 +108,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: p.id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         exposeAmbiguousPrefixError: true,
       });
       if (!resolved.ok) {
@@ -132,10 +133,15 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
-    "exec.approval.list": async ({ respond, client }) => {
+    "exec.approval.list": async ({ respond, client, context }) => {
       respond(
         true,
-        listVisiblePendingApprovalRequests({ manager, client, approvalKind: "exec" }),
+        listVisiblePendingApprovalRequests({
+          manager,
+          client,
+          approvalKind: "exec",
+          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        }),
         undefined,
       );
     },
@@ -470,6 +476,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: (params as { id?: string }).id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);

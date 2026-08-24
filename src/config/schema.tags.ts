@@ -43,6 +43,7 @@ const TAG_PRIORITY: Record<ConfigTag, number> = {
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   cloudWorkers: ["network", "automation"],
+  "gateway.roles": ["security", "auth", "access", "advanced"],
   "gateway.auth.token": ["security", "auth", "access", "network"],
   "gateway.auth.password": ["security", "auth", "access", "network"],
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
@@ -81,6 +82,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
   { prefix: "cloudworkers.", tags: ["network", "automation"] },
+  { prefix: "gateway.roles.", tags: ["security", "auth", "access"] },
   { prefix: "channels.", tags: ["channels", "network"] },
   { prefix: "tools.", tags: ["tools"] },
   { prefix: "gateway.", tags: ["network"] },

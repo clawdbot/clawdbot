@@ -7,6 +7,7 @@ import type {
   ApprovalChannelReviewer,
   ValidationError,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
@@ -234,6 +235,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: unknown;
   client?: GatewayClient | null;
+  cfg?: OpenClawConfig;
   respond: RespondFn;
   resolveTerminalReason?: WaitReasonResolver<TPayload>;
 }): Promise<void> {
@@ -248,6 +250,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     !isApprovalRecordVisibleToClient({
       record: snapshot,
       client: params.client ?? null,
+      ...(params.cfg ? { cfg: params.cfg } : {}),
     })
   ) {
     params.respond(

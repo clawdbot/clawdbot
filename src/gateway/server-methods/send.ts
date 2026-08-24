@@ -75,6 +75,7 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
@@ -994,6 +995,24 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (sourceReplyOwner && !sourceReplyOwner.ok) {
             return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
           }
+          // Default-agent resolution may fail, so role-free sends must not enter this policy path.
+          if (request.action === "send" && cfg.gateway?.roles) {
+            const actionAgent =
+              agentId ?? sourceReplyOwner?.agentId ?? resolveRequestedSessionAgentId(cfg, "main");
+            if (typeof actionAgent !== "string" && !actionAgent.ok) {
+              return { ok: false, error: actionAgent.error, meta: { channel } };
+            }
+            const actionAgentId =
+              typeof actionAgent === "string" ? actionAgent : actionAgent.agentId;
+            const agentAccessError = authorizeGatewaySessionCreation({
+              cfg,
+              client,
+              agentId: actionAgentId,
+            });
+            if (agentAccessError) {
+              return { ok: false, error: agentAccessError, meta: { channel } };
+            }
+          }
           if (accountId) {
             request.params.accountId = accountId;
           }
@@ -1360,6 +1379,16 @@ export const sendHandlers: GatewayRequestHandlers = {
               : derivedRoute
             : null;
           const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+          if (outboundSessionKey) {
+            const agentAccessError = authorizeGatewaySessionCreation({
+              cfg,
+              client,
+              agentId: effectiveAgentId,
+            });
+            if (agentAccessError) {
+              return { ok: false, error: agentAccessError, meta: { channel } };
+            }
+          }
           if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
             const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
             const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
