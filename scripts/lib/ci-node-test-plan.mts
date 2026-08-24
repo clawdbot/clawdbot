@@ -1560,13 +1560,16 @@ function createToolingSplitShards(): NodeTestSplitShard[] {
       stripeFileWeight,
     ).map((includePatterns, index) => {
       const pretestBuildMode = resolvePretestBuildMode(includePatterns);
-      return {
+      const shard: NodeTestSplitShard = {
         shardName: `core-tooling-${index + 1}`,
         configs: [TOOLING_CONFIG],
         includePatterns,
-        ...(pretestBuildMode ? { pretestBuildMode } : {}),
         requiresDist: false,
       };
+      if (pretestBuildMode) {
+        shard.pretestBuildMode = pretestBuildMode;
+      }
+      return shard;
     }),
     {
       shardName: "core-tooling-isolated",
