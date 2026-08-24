@@ -516,6 +516,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       await dispatch;
     } finally {
       await dispatchErrorLifecycle.finalize();
+      // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
+      emitSessionsChanged(context, { sessionKey, agentId, reason: "chat.run.settled" });
       if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
         // A blocked turn persists only the redacted block reason — no media
         // markers — so the prepared inbound media stays unreferenced forever

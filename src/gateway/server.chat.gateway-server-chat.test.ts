@@ -9,7 +9,11 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  claimAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -2515,11 +2519,41 @@ describe("gateway server chat", () => {
   test("agent.wait ignores lifecycle completion while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
-      const releaseBlockedReply = mockBlockedChatReply();
+      const blockedReply = createDeferred();
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        opts?.onAgentRunStart?.(runId);
+        const runtimeOwner = claimAgentRunContext(
+          runId,
+          {
+            agentId: "main",
+            projectSessionActive: true,
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+          },
+          { ownsContext: true, trackOwner: true },
+        );
+        expect(runtimeOwner).toBeDefined();
+        try {
+          await blockedReply.promise;
+        } finally {
+          releaseAgentRunContext(runId, runtimeOwner);
+        }
+      });
 
       try {
+        const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+        expect(subscribeRes.ok).toBe(true);
         await sendChatAndExpectStarted(runId, "hold chat run open");
 
+        const terminalSessionChange = onceMessage(
+          ws,
+          (event) =>
+            event.type === "event" &&
+            event.event === "sessions.changed" &&
+            event.payload?.phase === "end" &&
+            event.payload?.runId === runId,
+          8_000,
+        );
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -2531,16 +2565,34 @@ describe("gateway server chat", () => {
           data: { phase: "end", startedAt: 1, endedAt: 2 },
         });
 
+        expect((await terminalSessionChange).payload?.activeRunIds).toBeNull();
         const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
           runId,
           timeoutMs: 40,
         });
         expectAgentWaitTimeout(waitWhileChatActive);
 
-        releaseBlockedReply();
+        const settledSessionChange = onceMessage(
+          ws,
+          (event) =>
+            event.type === "event" &&
+            event.event === "sessions.changed" &&
+            event.payload?.reason === "chat.run.settled" &&
+            event.payload?.sessionKey === "agent:main:main",
+          8_000,
+        );
+        blockedReply.resolve();
         await waitForAgentRunOk(runId);
+        const settledEvent = await settledSessionChange.catch(() => {
+          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup");
+        });
+        expectRecordFields(settledEvent.payload, {
+          activeRunIds: [],
+          hasActiveRun: false,
+          lastRunId: runId,
+        });
       } finally {
-        releaseBlockedReply();
+        blockedReply.resolve();
       }
     });
   });

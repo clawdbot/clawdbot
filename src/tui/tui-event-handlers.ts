@@ -402,12 +402,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!matchesSelectedTuiSession(state, evt)) {
       return;
     }
-
+    const matchesCurrentSessionId =
+      typeof evt.sessionId !== "string" ||
+      !state.currentSessionId ||
+      evt.sessionId === state.currentSessionId;
     if (evt.phase === "message") {
-      const matchesCurrentSessionId =
-        typeof evt.sessionId !== "string" ||
-        !state.currentSessionId ||
-        evt.sessionId === state.currentSessionId;
       if (
         !matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true }) ||
         !matchesCurrentSessionId ||
@@ -436,6 +435,13 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       flushPendingHistoryRefreshIfIdle();
       return;
+    }
+    if (
+      matchesCurrentSessionId &&
+      Array.isArray(evt.activeRunIds) &&
+      evt.activeRunIds.length === 0
+    ) {
+      clearStaleStreamingIfNoTrackedRunRemains(true);
     }
     if (evt.reason !== "new" && evt.reason !== "reset") {
       return;

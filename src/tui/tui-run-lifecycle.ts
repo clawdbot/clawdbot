@@ -231,15 +231,24 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     return true;
   };
 
-  const clearStaleStreamingIfNoTrackedRunRemains = () => {
-    const activeRunId = state.activeChatRunId;
-    const activeRunIsStillTracked = activeRunId ? sessionRuns.has(activeRunId) : false;
-    if (state.activityStatus !== "streaming" || activeRunIsStillTracked || sessionRuns.size > 0) {
+  const clearStaleStreamingIfNoTrackedRunRemains = (authoritativeIdle = false) => {
+    if (!authoritativeIdle && (state.activityStatus !== "streaming" || sessionRuns.size > 0)) {
       return;
     }
+    if (authoritativeIdle) {
+      for (const runId of sessionRuns.keys()) {
+        runCoordinator.dropSessionRun(runId);
+      }
+      if (state.activeChatRunId) {
+        chatLog.dismissPendingSystem(state.activeChatRunId);
+      }
+      reconnectPendingRunId = null;
+    }
     state.activeChatRunId = null;
-    state.activityStatus = "idle";
-    setActivityStatus("idle");
+    if (!hasPendingSubmit(state)) {
+      state.activityStatus = "idle";
+    }
+    setActivityStatus(state.activityStatus);
     clearStreamingWatchdog();
     flushPendingHistoryRefreshIfIdle();
   };
