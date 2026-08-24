@@ -9,9 +9,9 @@ import {
 import { APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE } from "../../infra/system-run-approval-binding.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
-  requestClaudeNativeToolApproval,
-  resolveClaudeNativeToolApprovalPlan,
-} from "./claude-live-tool-approval.js";
+  requestCliNativeToolApproval,
+  resolveCliNativeToolApprovalPlan,
+} from "./cli-native-tool-approval.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -25,7 +25,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("resolveClaudeNativeToolApprovalPlan", () => {
+describe("resolveCliNativeToolApprovalPlan", () => {
   it.each([
     ["deny", "off", "deny"],
     ["deny", "on-miss", "deny"],
@@ -38,18 +38,18 @@ describe("resolveClaudeNativeToolApprovalPlan", () => {
     ["full", "on-miss", "prompt"],
     ["full", "always", "prompt"],
   ] as const)("resolves security=%s ask=%s to %s", (security, ask, expected) => {
-    expect(resolveClaudeNativeToolApprovalPlan({ security, ask })).toBe(expected);
+    expect(resolveCliNativeToolApprovalPlan({ security, ask })).toBe(expected);
   });
 });
 
-describe("requestClaudeNativeToolApproval", () => {
+describe("requestCliNativeToolApproval", () => {
   it("registers and waits for a matching approval decision", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-1", status: "pending" })
       .mockResolvedValueOnce({ id: "approval-1", decision: "allow-once" });
 
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: "ls" },
         pluginId: "claude-cli",
@@ -71,7 +71,7 @@ describe("requestClaudeNativeToolApproval", () => {
         toolCallId: "tool-1",
         agentId: "main",
         sessionKey: "agent:main:main",
-        title: "Claude native tool: Bash",
+        title: "claude-cli native tool: Bash",
         description: '{"command":"ls"}',
         detail: '{"command":"ls"}',
         severity: "warning",
@@ -97,7 +97,7 @@ describe("requestClaudeNativeToolApproval", () => {
     });
 
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "WebFetch",
         toolInput: { url: "https://example.com" },
         pluginId: "claude-cli",
@@ -107,13 +107,34 @@ describe("requestClaudeNativeToolApproval", () => {
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
   });
 
+  it("identifies the owning backend when another provider requests native approval", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-other-provider",
+      decision: "allow-once",
+    });
+
+    await expect(
+      requestCliNativeToolApproval({
+        toolName: "Read",
+        toolInput: { file_path: "/tmp/example.txt" },
+        pluginId: "gemini-cli",
+        ask: "on-miss",
+      }),
+    ).resolves.toEqual({ kind: "allow", grantAlways: false });
+
+    expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      pluginId: "gemini-cli",
+      title: "gemini-cli native tool: Read",
+    });
+  });
+
   it("fails closed when the approval wait times out", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-3" })
       .mockRejectedValueOnce(new Error("gateway timeout"));
 
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: "ls" },
         pluginId: "claude-cli",
@@ -126,7 +147,7 @@ describe("requestClaudeNativeToolApproval", () => {
     mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
 
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: "ls" },
         pluginId: "claude-cli",
@@ -140,7 +161,7 @@ describe("requestClaudeNativeToolApproval", () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-4" })
       .mockImplementationOnce(() => new Promise(() => {}));
-    const approval = requestClaudeNativeToolApproval({
+    const approval = requestCliNativeToolApproval({
       toolName: "Bash",
       toolInput: { command: "ls" },
       pluginId: "claude-cli",
@@ -156,7 +177,7 @@ describe("requestClaudeNativeToolApproval", () => {
   it("fails closed when the run aborts while registering the approval", async () => {
     const abortController = new AbortController();
     mockCallGatewayTool.mockImplementationOnce(() => new Promise(() => {}));
-    const approval = requestClaudeNativeToolApproval({
+    const approval = requestCliNativeToolApproval({
       toolName: "Bash",
       toolInput: { command: "ls" },
       pluginId: "claude-cli",
@@ -175,7 +196,7 @@ describe("requestClaudeNativeToolApproval", () => {
     const content = `safe-prefix ${"x".repeat(500)} destructive-tail`;
 
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Write",
         toolInput: { file_path: "/tmp/output.txt", content },
         pluginId: "claude-cli",
@@ -200,7 +221,7 @@ describe("requestClaudeNativeToolApproval", () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-5b", decision: "allow-always" });
 
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: "ls" },
         pluginId: "claude-cli",
@@ -216,7 +237,7 @@ describe("requestClaudeNativeToolApproval", () => {
   });
 
   it("checks Bash script drift before rejecting an unexpected allow-always", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-always-drift-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-always-drift-"));
     const script = path.join(cwd, "script.sh");
     try {
       fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
@@ -226,7 +247,7 @@ describe("requestClaudeNativeToolApproval", () => {
       });
 
       await expect(
-        requestClaudeNativeToolApproval({
+        requestCliNativeToolApproval({
           toolName: "Bash",
           toolInput: { command: "sh script.sh" },
           pluginId: "claude-cli",
@@ -247,7 +268,7 @@ describe("requestClaudeNativeToolApproval", () => {
     // Channel/push approvers never see the reviewer detail, so a Bash command
     // hidden by description truncation must not be approvable from anywhere.
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: `echo ${"x".repeat(500)}; rm -rf /tmp/example` },
         pluginId: "claude-cli",
@@ -259,7 +280,7 @@ describe("requestClaudeNativeToolApproval", () => {
 
   it("denies Bash input beyond the reviewer detail limit without calling the gateway", async () => {
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) },
         pluginId: "claude-cli",
@@ -273,7 +294,7 @@ describe("requestClaudeNativeToolApproval", () => {
     // ~70 bidi override chars stay under the raw description budget but escape
     // to \u{202E} sequences that overflow the 512-char channel summary.
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: `echo ${"‮".repeat(70)}; rm -rf /tmp/example` },
         pluginId: "claude-cli",
@@ -285,7 +306,7 @@ describe("requestClaudeNativeToolApproval", () => {
 
   it("denies Bash when reviewer sanitization would hide the command tail", async () => {
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: `# ${"\u202e".repeat(3_000)}\necho destructive-tail` },
         pluginId: "claude-cli",
@@ -299,7 +320,7 @@ describe("requestClaudeNativeToolApproval", () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-5c", decision: "deny" });
 
     await expect(
-      requestClaudeNativeToolApproval({
+      requestCliNativeToolApproval({
         toolName: "WebFetch",
         toolInput: { url: "https://example.com" },
         pluginId: "claude-cli",
@@ -315,7 +336,7 @@ describe("requestClaudeNativeToolApproval", () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-6", decision: "deny" });
     const toolName = `mcp__claude-in-chrome__${"long-tool-segment-".repeat(6)}`;
 
-    await requestClaudeNativeToolApproval({
+    await requestCliNativeToolApproval({
       toolName,
       toolInput: {},
       pluginId: "claude-cli",
@@ -326,14 +347,14 @@ describe("requestClaudeNativeToolApproval", () => {
       | { title?: unknown; toolName?: unknown }
       | undefined;
     expect(requestPayload?.title).toHaveLength(80);
-    expect(requestPayload?.title).toMatch(/^Claude native tool: /u);
+    expect(requestPayload?.title).toMatch(/^claude-cli native tool: /u);
     expect(requestPayload?.toolName).toBe(toolName);
   });
 
   it("uses an object fallback when JSON serialization returns undefined", async () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-7", decision: "deny" });
 
-    await requestClaudeNativeToolApproval({
+    await requestCliNativeToolApproval({
       toolName: "WebFetch",
       toolInput: { toJSON: () => undefined },
       pluginId: "claude-cli",

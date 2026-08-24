@@ -179,7 +179,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         var platformOptions = PlatformOptions()
         platformOptions.qualityOfService = .userInitiated
         let processConfiguration = Subprocess.Configuration(
-            .path(.init("/usr/bin/ssh")),
+            executable: .path(.init("/usr/bin/ssh")),
             arguments: Arguments(args),
             environment: ManagedProcess.environment(from: CommandResolver.sshEnvironment()),
             platformOptions: platformOptions)

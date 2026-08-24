@@ -4266,7 +4266,9 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Codex diagnostics were already sent for this account or channel recently. Try again in 60s.",
+      text: expect.stringMatching(
+        /^Codex diagnostics were already sent for this account or channel recently\. Try again in (?:[1-9]|[1-5]\d|60)s\.$/,
+      ),
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
@@ -6128,13 +6130,13 @@ describe("codex command", () => {
       expectedPermissionMode: "full",
     },
     {
-      name: "resets to default for an owner without admin scope",
+      name: "persists explicit guarded default for an owner without admin scope",
       mode: "default",
       senderIsOwner: true,
       gatewayClientScopes: ["operator.write"],
       initialPermissionMode: "full",
       expectedText: "Codex permissions set to default.",
-      expectedPermissionMode: undefined,
+      expectedPermissionMode: "guarded",
     },
   ] as const)("$name", async (testCase) => {
     const sessionKey = `agent:main:test:permissions-${testCase.mode}`;
@@ -6145,6 +6147,7 @@ describe("codex command", () => {
       entry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
+        sessionRoot: tempDir,
         ...(testCase.initialPermissionMode
           ? { permissionMode: testCase.initialPermissionMode }
           : {}),
@@ -6167,8 +6170,13 @@ describe("codex command", () => {
         sessionKey,
         storePath,
         readConsistency: "latest",
-      })?.permissionMode,
-    ).toBe(testCase.expectedPermissionMode);
+      }),
+    ).toMatchObject({
+      ...(testCase.expectedPermissionMode
+        ? { permissionMode: testCase.expectedPermissionMode }
+        : {}),
+      sessionRoot: tempDir,
+    });
   });
 
   it("rejects model and binding replacement commands for a locked supervised session", async () => {

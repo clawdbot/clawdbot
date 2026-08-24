@@ -2,7 +2,10 @@ import type { Attachment, SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  readNonEmptyStringPreservingWhitespace as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCopilotAssistantUsage, type CopilotUsageSnapshot } from "./usage-bridge.js";
 
 export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -54,7 +57,7 @@ export function buildAssistantMessage(params: {
   }
   for (const request of toolRequests) {
     content.push({
-      arguments: request.arguments ?? {},
+      arguments: asNonArrayRecord(request.arguments),
       id: request.toolCallId,
       name: request.name,
       type: "toolCall",

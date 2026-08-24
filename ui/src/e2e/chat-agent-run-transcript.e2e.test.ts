@@ -20,7 +20,7 @@ function transcriptMessage(
     role,
     content,
     timestamp: Date.UTC(2026, 7, 19, 12, 0, seq),
-    __openclaw: { id, idempotencyKey: runId, seq },
+    __openclaw: role === "user" ? { id, idempotencyKey: runId, seq } : { id, runId, seq },
   };
 }
 
@@ -68,7 +68,6 @@ suite.define(() => {
           ),
           toolCallId: "call-read",
           toolName: "read",
-          runId: firstRunId,
         },
         transcriptMessage(
           "assistant",
@@ -103,7 +102,6 @@ suite.define(() => {
           ),
           toolCallId: "call-render",
           toolName: "exec",
-          runId: firstRunId,
         },
         transcriptMessage(
           "assistant",
@@ -131,7 +129,6 @@ suite.define(() => {
           ),
           toolCallId: "call-tool-only",
           toolName: "read",
-          runId: toolOnlyRunId,
         },
         transcriptMessage(
           "user",
@@ -157,7 +154,6 @@ suite.define(() => {
           ),
           toolCallId: "call-commentary-tool-only",
           toolName: "read",
-          runId: commentaryToolRunId,
         },
       ],
     });
@@ -166,21 +162,17 @@ suite.define(() => {
     const transcript = page.locator(".chat-thread-inner");
     await transcript.getByText("Caption ready for the second run.", { exact: true }).waitFor();
 
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-      await page.screenshot({
-        path: path.join(artifactDir, "agent-run-transcript.png"),
-        fullPage: true,
-      });
-    }
-
     const assistantGroups = page.locator(".chat-group.assistant");
     expect(await assistantGroups.count()).toBe(4);
     const firstRun = assistantGroups.filter({
       hasText: "I’ll create the launch card and check the existing style first.",
     });
     expect(await firstRun.count()).toBe(1);
+    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await firstRun.screenshot({ path: path.join(artifactDir, "agent-run-transcript.png") });
+    }
     expect(await firstRun.locator(".chat-sender-name").count()).toBe(1);
     expect(await firstRun.locator(".chat-group-footer-actions").count()).toBe(1);
     expect(await firstRun.locator(".chat-message-actions-row").count()).toBe(0);

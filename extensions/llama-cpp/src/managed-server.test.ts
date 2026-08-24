@@ -38,21 +38,67 @@ afterEach(async () => {
 
 describe("managed llama-server", () => {
   it.each([
-    ["darwin", "arm64", "metal", "tar.gz"],
-    ["darwin", "x64", "cpu", "tar.gz"],
-    ["linux", "arm64", "cpu", "tar.gz"],
-    ["linux", "x64", "cpu", "tar.gz"],
-    ["win32", "arm64", "cpu", "zip"],
-    ["win32", "x64", "cpu", "zip"],
-  ] as const)("selects the pinned %s/%s asset", (platform, arch, backend, archive) => {
-    expect(selectLlamaServerAsset(platform, arch)).toMatchObject({
-      platform,
-      arch,
-      backend,
-      archive,
-      sha256: expect.stringMatching(/^[a-f\d]{64}$/u),
-    });
-  });
+    [
+      "darwin",
+      "arm64",
+      "metal",
+      "tar.gz",
+      "llama-b10453-bin-macos-arm64.tar.gz",
+      "f1531b1c520f8b473d83352c5eec2f4f43bd0a54f9ca1366a6f202211cfbc098",
+    ],
+    [
+      "darwin",
+      "x64",
+      "cpu",
+      "tar.gz",
+      "llama-b10453-bin-macos-x64.tar.gz",
+      "ac13f6f6c90c193765921bf52dd5ecf2a9d506ee9c3eadd2d6fd49ca7a5de25d",
+    ],
+    [
+      "linux",
+      "arm64",
+      "cpu",
+      "tar.gz",
+      "llama-b10453-bin-ubuntu-arm64.tar.gz",
+      "b164e72dfb69c711275178e0d0fae54748042f039e4fe7386f1c0ea7019c109c",
+    ],
+    [
+      "linux",
+      "x64",
+      "cpu",
+      "tar.gz",
+      "llama-b10453-bin-ubuntu-x64.tar.gz",
+      "550eb155a09c3051c7add5becf6d0badc3a4c33416807985963036b27b859fb4",
+    ],
+    [
+      "win32",
+      "arm64",
+      "cpu",
+      "zip",
+      "llama-b10453-bin-win-cpu-arm64.zip",
+      "a8b984d478700777d4671cf33eccfddae42c1fd871e78efd43fee090131eec1f",
+    ],
+    [
+      "win32",
+      "x64",
+      "cpu",
+      "zip",
+      "llama-b10453-bin-win-cpu-x64.zip",
+      "70c07211d0027305f0be09cd755d79641ebb0bb646590ff3d498c66b22df29b0",
+    ],
+  ] as const)(
+    "selects the pinned %s/%s asset",
+    (platform, arch, backend, archive, name, sha256) => {
+      expect(selectLlamaServerAsset(platform, arch)).toMatchObject({
+        platform,
+        arch,
+        backend,
+        archive,
+        name,
+        sha256,
+      });
+    },
+  );
 
   it("fails unsupported platforms with an actionable manual path", () => {
     expect(() => selectLlamaServerAsset("freebsd", "x64")).toThrow(

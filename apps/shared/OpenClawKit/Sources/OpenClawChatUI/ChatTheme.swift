@@ -172,6 +172,33 @@ enum OpenClawChatTheme {
         .white
     }
 
+    /// Readable ink for text rendered on a host-supplied user accent. Mirrors the
+    /// Control UI accent contract (ui/src/app/control-ui-presentation.ts): WCAG
+    /// relative luminance, black/white reach equal contrast at 0.179. Without it,
+    /// light accents like #fbbf24 render unreadable fixed-white user text.
+    static func userText(on accent: Color?) -> Color {
+        guard let accent else { return self.userText }
+        return self.relativeLuminance(of: accent) > 0.179 ? .black : .white
+    }
+
+    static func relativeLuminance(of color: Color) -> Double {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        #if os(macOS)
+        guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return 0 }
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        #else
+        guard UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return 0 }
+        #endif
+        func linear(_ channel: CGFloat) -> Double {
+            let c = Double(channel)
+            return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+
     static var assistantText: Color {
         #if os(macOS)
         Color(nsColor: .labelColor)

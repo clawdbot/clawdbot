@@ -537,7 +537,7 @@ describe("managed npm root", () => {
     const expectedOverrides = workspace.overrides ?? {};
 
     expect(expectedOverrides).toMatchObject({
-      axios: "1.18.1",
+      axios: "1.19.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
     await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);

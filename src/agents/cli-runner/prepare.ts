@@ -129,12 +129,12 @@ import {
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { getClaudeGeneration } from "./claude-live-registry.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   resolveBundledCliBackendAuthPolicy,
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
+import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
@@ -146,7 +146,6 @@ import {
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type {
   CliReusableSession,
   CliSecretInput,
@@ -199,7 +198,7 @@ const defaultPrepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
-  getClaudeGeneration,
+  getCliLiveSessionGeneration,
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
   loadManifestModelCatalog,
@@ -1340,9 +1339,7 @@ export async function prepareCliRunContext(
       thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
       authProfileId: effectiveAuthProfileId,
       executionMode,
-      toolAvailability: params.cliToolAvailability
-        ? buildCliBackendToolAvailability(params.cliToolAvailability)
-        : undefined,
+      toolAvailability: params.cliToolAvailability,
       env: preparedBackend.env,
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
     const privatePrepareExecutionContext = params.isolatedCompletion
@@ -1451,11 +1448,24 @@ export async function prepareCliRunContext(
             backendId: backendResolved.id,
             skillsSnapshot: params.skillsSnapshot,
           });
+    let claudeSkillsPluginClaimed = false;
+    const claimLiveSessionResources =
+      claudeSkillsPlugin.args.length > 0
+        ? () => {
+            if (claudeSkillsPluginClaimed) {
+              return undefined;
+            }
+            claudeSkillsPluginClaimed = true;
+            return claudeSkillsPlugin.cleanup;
+          }
+        : undefined;
     const preparedCleanup =
       preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
         ? async () => {
             try {
-              await claudeSkillsPlugin.cleanup();
+              if (!claudeSkillsPluginClaimed) {
+                await claudeSkillsPlugin.cleanup();
+              }
             } finally {
               await preparedBackendCleanup?.();
             }
@@ -1493,6 +1503,8 @@ export async function prepareCliRunContext(
       ...(preparedBackendBeforeExecution
         ? { beforeExecution: preparedBackendBeforeExecution }
         : {}),
+      ...(claimLiveSessionResources ? { claimLiveSessionResources } : {}),
+      ...(preparedExecution?.execute ? { execute: preparedExecution.execute } : {}),
       ...(preparedExecution?.secretInput ? { secretInput: preparedExecution.secretInput } : {}),
       ...(mcpClientGrantCapture ? { mcpClientGrantCapture } : {}),
       ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
@@ -1557,7 +1569,7 @@ export async function prepareCliRunContext(
       preparedBackendFinal.backend.liveSession === "claude-stdio" &&
       preparedBackendFinal.backend.output === "jsonl" &&
       preparedBackendFinal.backend.input === "stdin" &&
-      prepareDeps.getClaudeGeneration({
+      prepareDeps.getCliLiveSessionGeneration({
         backendId: backendResolved.id,
         agentAccountId: params.agentAccountId,
         agentId: workspaceResolution.agentId,
