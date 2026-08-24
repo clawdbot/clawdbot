@@ -15,3 +15,15 @@
   orphaned only the public re-export in `session-transcript-readers.ts`.
 - Commit `63e2dd0536a` removes exactly that one orphaned export. This is a
   candidate-caused, behavior-neutral cure, not unrelated upstream cleanup.
+
+## §5 — direct provenance-head reproof
+
+- Gate 2 passed 40/40 primitive-core invariants with three tombstones, zero
+  failures, and zero empty patterns.
+- Canonical-19d Gate 2.7 examined 946 files while this journal is tracked:
+  640 GENUINE, 300 SAFE-NEW, the canonical six MIXED-CLOBBER rows, and zero
+  FROZEN-STALE.
+- A fresh isolated Knip installation resolved exactly version 6.8.0. All five
+  direct scans passed with zero findings: production exports, full exports,
+  script exports, production unused files, and full unused files.
+- Delegated execution remains excluded from the proof record.
