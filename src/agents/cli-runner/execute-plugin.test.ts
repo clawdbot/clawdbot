@@ -1,3 +1,4 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -190,6 +191,7 @@ afterEach(() => {
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
     const { context } = await createExecution();
+    context.systemPrompt = `  Follow host policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}Keep credentials private.  `;
     const output: string[] = [];
     let observedExecution: CliBackendExecuteContext | undefined;
     const execute: CliBackendExecute = async function* (execution) {
@@ -212,7 +214,7 @@ describe("plugin-owned CLI execution host boundary", () => {
         cwd: "/tmp",
         prompt: "hello",
         modelId: "claude-sonnet-4-6",
-        systemPrompt: "Follow host policy.",
+        systemPrompt: "Follow host policy.\nKeep credentials private.",
         sessionId: "sdk-session",
         useResume: false,
         env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
@@ -738,6 +740,37 @@ describe("plugin-owned CLI execution host boundary", () => {
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
   });
 
+  it("keeps the overall deadline authoritative while a native approval is outstanding", async () => {
+    vi.useFakeTimers();
+    const { context } = await createExecution({
+      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      nativeTools: ["WebFetch"],
+      timeoutMs: 150,
+    });
+    const approval = createDeferred<{ id: string; decision: "allow-once" }>();
+    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        await requestNativeTool(execution, "WebFetch", { url: "https://example.com/slow" });
+        yield SUCCESS_RESULT;
+      },
+      { noOutputTimeoutMs: 100 },
+    );
+    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
+    const approvalSignal = mockCallGatewayTool.mock.calls[0]?.[3]?.signal;
+
+    await vi.advanceTimersByTimeAsync(150);
+
+    await expect(run).resolves.toMatchObject({
+      reason: "overall-timeout",
+      timedOut: true,
+      noOutputTimedOut: false,
+    });
+    expect(approvalSignal?.aborted).toBe(true);
+    approval.resolve({ id: "late-approval", decision: "allow-once" });
+  });
+
   it("keeps tracked background work alive beyond the ordinary no-output watchdog", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution();
@@ -769,6 +802,34 @@ describe("plugin-owned CLI execution host boundary", () => {
     backgroundFinished.resolve();
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
     expect(received.map((event) => JSON.parse(event))).toHaveLength(3);
+  });
+
+  it("keeps the overall deadline authoritative while background work remains active", async () => {
+    vi.useFakeTimers();
+    const { context } = await createExecution({ timeoutMs: 150 });
+    const received: string[] = [];
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        yield {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
+        };
+        await waitUntilAborted(execution);
+        yield SUCCESS_RESULT;
+      },
+      { noOutputTimeoutMs: 100, consumeStdout: received.push.bind(received) },
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    await vi.advanceTimersByTimeAsync(150);
+
+    await expect(run).resolves.toMatchObject({
+      reason: "overall-timeout",
+      timedOut: true,
+      noOutputTimedOut: false,
+    });
   });
 
   it("propagates caller cancellation and closes the active plugin iterator", async () => {

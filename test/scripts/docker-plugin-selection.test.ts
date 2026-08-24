@@ -14,12 +14,19 @@ function writePlugin(
   dirName: string,
   manifestId?: string,
   dependencies?: Record<string, string>,
+  requiredPlatformPackages?: string[],
 ) {
   const pluginDir = path.join(extensionsRoot, dirName);
   fs.mkdirSync(pluginDir, { recursive: true });
   fs.writeFileSync(
     path.join(pluginDir, "package.json"),
-    `${JSON.stringify({ name: dirName, ...(dependencies && { dependencies }) })}\n`,
+    `${JSON.stringify({
+      name: dirName,
+      ...(dependencies && { dependencies }),
+      ...(requiredPlatformPackages && {
+        openclaw: { install: { requiredPlatformPackages } },
+      }),
+    })}\n`,
   );
   if (manifestId) {
     fs.writeFileSync(
@@ -29,10 +36,17 @@ function writePlugin(
   }
 }
 
-function runSelector(extensionsRoot: string, selection: string, rootPackagePath?: string) {
+function runSelector(
+  extensionsRoot: string,
+  selection: string,
+  rootPackagePath?: string,
+  requiredPlatformPackages = false,
+) {
   const args = [selectorScript, extensionsRoot, selection];
   if (rootPackagePath) {
     args.push("--required-bundled", rootPackagePath);
+  } else if (requiredPlatformPackages) {
+    args.push("--required-platform-packages");
   }
   return spawnSync(process.execPath, args, {
     encoding: "utf8",
@@ -51,7 +65,11 @@ describe("Docker plugin selection", () => {
     );
     writePlugin(extensionsRoot, "bundled-provider", "bundled", { "provider-sdk": "1.0.0" });
     writePlugin(extensionsRoot, "bundled-without-deps", "without-deps");
-    writePlugin(extensionsRoot, "optional-provider", "optional", { "optional-sdk": "1.0.0" });
+    writePlugin(extensionsRoot, "optional-provider", "optional", { "optional-sdk": "1.0.0" }, [
+      "optional-native-linux-arm64",
+      "optional-native-darwin-arm64",
+      "optional-native-linux-arm64",
+    ]);
 
     const required = runSelector(extensionsRoot, "", rootPackagePath);
     expect(required.status).toBe(0);
@@ -65,6 +83,13 @@ describe("Docker plugin selection", () => {
     const selected = runSelector(extensionsRoot, "optional");
     expect(selected.status).toBe(0);
     expect(selected.stdout).toBe("optional-provider\n");
+
+    const platformPackages = runSelector(extensionsRoot, "optional", undefined, true);
+    expect(platformPackages.status).toBe(0);
+    expect(platformPackages.stdout).toBe(
+      "optional-native-darwin-arm64\noptional-native-linux-arm64\n",
+    );
+    expect(runSelector(extensionsRoot, "", undefined, true).stdout).toBe("");
   });
 
   it("resolves manifest ids and source directory names deterministically", () => {

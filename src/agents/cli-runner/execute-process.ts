@@ -416,9 +416,7 @@ export async function executeCliProcess(params: {
         const stallNotice = [
           `CLI agent (${runParams.provider}) produced no output for ${timeoutSeconds}s and was terminated.`,
           "It may have been waiting for interactive input or an approval prompt.",
-          ...(params.nodePlacement
-            ? ["Check the node's Claude permission settings for pending prompts."]
-            : ["For Claude Code, prefer --permission-mode bypassPermissions --print."]),
+          "Check CLI permission settings and OpenClaw approval prompts.",
         ].join(" ");
         const routing = resolveEventSessionRoutingPolicy({
           cfg: runParams.config,

@@ -100,6 +100,19 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
           ...collectRequiredBundledPluginDirs({ ...params, rootPackagePath: process.argv[5] }),
         ]),
       ].toSorted((left, right) => left.localeCompare(right));
+    } else if (process.argv[4] === "--required-platform-packages") {
+      resolved = [
+        ...new Set(
+          resolved.flatMap((dirName) => {
+            const packageJsonPath = path.join(params.extensionsRoot, dirName, "package.json");
+            if (!fs.existsSync(packageJsonPath)) {
+              return [];
+            }
+            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+            return packageJson.openclaw?.install?.requiredPlatformPackages ?? [];
+          }),
+        ),
+      ].toSorted((left, right) => left.localeCompare(right));
     }
     if (resolved.length > 0) {
       process.stdout.write(`${resolved.join("\n")}\n`);

@@ -15,6 +15,7 @@ import type {
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "openclaw/plugin-sdk/cli-backend";
+import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] satisfies NonNullable<
@@ -46,6 +47,7 @@ const CLAUDE_VALUE_FLAGS = new Set([
   "--disallowedTools",
   "--disallowed-tools",
   "--tools",
+  "--add-dir",
   "--permission-mode",
   "--effort",
   "--mcp-config",
@@ -53,6 +55,14 @@ const CLAUDE_VALUE_FLAGS = new Set([
   "--max-turns",
   "--plugin-dir",
   "--plugin-dir-no-mcp",
+]);
+const CLAUDE_VARIADIC_VALUE_FLAGS = new Set([
+  "--allowedTools",
+  "--allowed-tools",
+  "--disallowedTools",
+  "--disallowed-tools",
+  "--tools",
+  "--add-dir",
 ]);
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
@@ -96,16 +106,39 @@ function splitClaudeToolNames(value: string): string[] {
     .filter(Boolean);
 }
 
-function spawnClaudeAgentSdkCredentialProcess(
+function spawnClaudeAgentSdkProcess(
   options: ClaudeAgentSdkSpawnOptions,
-  secretInput: ClaudeAgentSdkSecretInput,
+  secretInput?: ClaudeAgentSdkSecretInput,
 ): ClaudeAgentSdkSpawnedProcess {
   const child = spawn(options.command, options.args, {
     cwd: options.cwd,
+    detached: process.platform !== "win32",
     env: options.env,
     signal: options.signal,
-    stdio: ["pipe", "pipe", "pipe", process.platform === "win32" ? "overlapped" : "pipe"],
+    stdio: secretInput
+      ? ["pipe", "pipe", "pipe", process.platform === "win32" ? "overlapped" : "pipe"]
+      : ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   });
+  // The SDK only drains stderr for its built-in spawner; unread custom pipes
+  // fill at 64 KiB and deadlock credential-backed Claude processes.
+  child.stderr.resume();
+  const killChild = child.kill.bind(child);
+  child.kill = (signal?: NodeJS.Signals | number) => {
+    if (!child.pid || (signal !== undefined && signal !== "SIGTERM" && signal !== "SIGKILL")) {
+      return killChild(signal);
+    }
+    // Windows must enumerate descendants before the root disappears; POSIX
+    // children own a detached group so cancellation never reaches the host.
+    killProcessTree(child.pid, {
+      detached: process.platform !== "win32",
+      ...(signal === "SIGKILL" ? { force: true } : {}),
+    });
+    return true;
+  };
+  if (!secretInput) {
+    return child;
+  }
   let credential: Buffer | undefined;
   try {
     const descriptor = child.stdio[secretInput.fd];
@@ -177,6 +210,7 @@ function resolveClaudeAgentSdkOptions(
     pathToClaudeCodeExecutable: context.command,
     permissionMode: "default",
     settingSources: ["user"],
+    spawnClaudeCodeProcess: (spawnOptions) => spawnClaudeAgentSdkProcess(spawnOptions, secretInput),
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
@@ -235,11 +269,6 @@ function resolveClaudeAgentSdkOptions(
     },
   };
 
-  if (secretInput) {
-    options.spawnClaudeCodeProcess = (spawnOptions) =>
-      spawnClaudeAgentSdkCredentialProcess(spawnOptions, secretInput);
-  }
-
   if (context.useResume && context.sessionId) {
     options.resume = context.sessionId;
   } else if (context.sessionId) {
@@ -269,6 +298,13 @@ function resolveClaudeAgentSdkOptions(
       value = next;
       index += 1;
     }
+    const values = [value];
+    if (CLAUDE_VARIADIC_VALUE_FLAGS.has(argument) && inlineValue === undefined) {
+      while (index + 1 < context.args.length && !context.args[index + 1]?.startsWith("-")) {
+        values.push(context.args[index + 1] ?? "");
+        index += 1;
+      }
+    }
     if (CLAUDE_STREAM_PROTOCOL_VALUE_FLAGS.has(argument)) {
       continue;
     }
@@ -286,19 +322,24 @@ function resolveClaudeAgentSdkOptions(
         // SDK allowedTools grants automatic approval; native tools must always
         // remain behind the closure-bound OpenClaw permission callback.
         allowedTools.push(
-          ...splitClaudeToolNames(value).filter((toolName) =>
-            toolName.startsWith("mcp__openclaw__"),
-          ),
+          ...values
+            .flatMap(splitClaudeToolNames)
+            .filter((toolName) => toolName.startsWith("mcp__openclaw__")),
         );
         break;
       }
       case "--disallowedTools":
       case "--disallowed-tools": {
-        disallowedTools.push(...splitClaudeToolNames(value));
+        disallowedTools.push(...values.flatMap(splitClaudeToolNames));
         break;
       }
       case "--tools": {
-        options.tools = splitClaudeToolNames(value);
+        options.tools = values.flatMap(splitClaudeToolNames);
+        break;
+      }
+      case "--add-dir": {
+        options.additionalDirectories ??= [];
+        options.additionalDirectories.push(...values);
         break;
       }
       case "--permission-mode": {

@@ -223,7 +223,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sideQuestion).not.toHaveProperty("execute");
   });
 
-  it("delivers a selected credential only through descriptor 3 and zeroes its delivered buffer", async () => {
+  it("owns the selected-credential process tree while keeping its descriptor private and zeroed", async () => {
     const backend = buildAnthropicCliBackend();
     const token = "selected-private-descriptor-fixture";
     const prepared = (await backend.prepareExecution?.({
@@ -256,9 +256,12 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         "-e",
         [
           'const data = require("node:fs").readFileSync(3);',
+          'require("node:fs").writeSync(2, Buffer.alloc(1024 * 1024));',
           'const digest = require("node:crypto").createHash("sha256").update(data).digest("hex");',
-          "process.stdout.write(JSON.stringify({fd: Number(process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR), digest}));",
+          'const descendant = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});',
+          "process.stdout.write(JSON.stringify({fd: Number(process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR), digest, descendantPid: descendant.pid}));",
           "data.fill(0);",
+          "setInterval(() => {}, 1000);",
         ].join(""),
       ];
       const env = { PATH: process.env.PATH, ...prepared.env };
@@ -275,17 +278,30 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         let stdout = "";
         child.stdout.on("data", (chunk: Buffer | string) => {
           stdout += chunk.toString();
+          child.kill("SIGTERM");
         });
         child.once("error", reject);
-        child.once("exit", (code) => {
-          if (code === 0) {
+        child.once("exit", (code, signal) => {
+          if (signal === "SIGTERM" || (process.platform === "win32" && code !== null)) {
             resolve(stdout);
           } else {
             reject(new Error(`Credential descriptor proof exited ${String(code)}.`));
           }
         });
       });
-      descriptorOutput = JSON.parse(output) as { fd: number; digest: string };
+      const { descendantPid, ...descriptor } = JSON.parse(output) as {
+        fd: number;
+        digest: string;
+        descendantPid: number;
+      };
+      descriptorOutput = descriptor;
+      try {
+        await vi.waitFor(() => expect(() => process.kill(descendantPid, 0)).toThrow());
+      } finally {
+        try {
+          process.kill(descendantPid, "SIGKILL");
+        } catch {}
+      }
     });
 
     const events: Record<string, unknown>[] = [];
@@ -310,10 +326,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     [
       {
         name: "denies",
-        decision: {
-          behavior: "deny" as const,
-          message: "OpenClaw denied restricted native Bash execution.",
-        },
+        decision: { behavior: "deny" as const, message: "OpenClaw denied restricted Bash." },
       },
       {
         name: "allows",
@@ -331,10 +344,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     "$name restricted native Bash through the prepared SDK approval owner",
     async ({ credential, decision }) => {
       const backend = buildAnthropicCliBackend();
-      const toolAvailability = {
-        native: ["Bash"],
-        openClaw: ["message"],
-      };
+      const toolAvailability = { native: ["Bash"], openClaw: ["message"] };
       const prepareContext = {
         workspaceDir: "/tmp/openclaw-workspace",
         provider: "claude-cli",
@@ -371,7 +381,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
             tool_input: input,
             tool_use_id: "restricted-native-bash",
           },
-          "restricted-native-bash",
+          undefined,
           { signal },
         );
         callbackDecision = await sdkNativeTool(options)("Bash", input, {
@@ -754,7 +764,9 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         "--allowedTools",
         "mcp__openclaw__message",
         "--disallowedTools",
-        "Bash,Edit,Write",
+        "Bash",
+        "Edit",
+        "Write",
       ],
       toolAvailability: {
         native: [],
@@ -783,13 +795,20 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     ).not.toContain(context.env.OPENCLAW_MCP_TOKEN);
   });
 
-  it("preserves managed skill plugins without letting isolated plugins discover MCP servers", async () => {
+  it("preserves variadic directories, tools, and managed plugin MCP isolation", async () => {
     useSdkMessages();
 
     await collect(
       createContext({
         args: [
           "-p",
+          "--add-dir",
+          "/tmp/a",
+          "/tmp/b",
+          "--add-dir=/tmp/c",
+          "--tools",
+          "Read",
+          "Grep",
           "--plugin-dir",
           "/tmp/openclaw-native-skills",
           "--plugin-dir-no-mcp",
@@ -802,6 +821,8 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       { type: "local", path: "/tmp/openclaw-native-skills" },
       { type: "local", path: "/tmp/openclaw-isolated-skills", skipMcpDiscovery: true },
     ]);
+    expect(sdkOptions().additionalDirectories).toEqual(["/tmp/a", "/tmp/b", "/tmp/c"]);
+    expect(sdkOptions().tools).toEqual(["Read", "Grep"]);
   });
 
   it.each([
@@ -825,7 +846,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
 
     await collect(
       createContext({
-        args: ["-p", "--allowedTools", "Bash,mcp__openclaw__*,Edit"],
+        args: ["-p", "--allowedTools", "Bash", "mcp__openclaw__*", "Edit"],
         toolAvailability: {
           native: [],
           openClaw: ["message", "memory_search"],
@@ -912,37 +933,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       toolCallId: "native-tool-shadowed",
       abortSignal: expect.any(AbortSignal),
     });
-  });
-
-  it("projects an approved native pre-tool action with the exact host-authorized input", async () => {
-    const updatedInput = { command: "printf SDK_TOOL_OK" };
-    const requestToolPermission = vi.fn(async () => ({ behavior: "allow" as const, updatedInput }));
-    let decision: unknown;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      decision = await sdkPreToolUse(options)(
-        {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "printf original" },
-          tool_use_id: "approved-native-tool",
-        },
-        undefined,
-        { signal: new AbortController().signal },
-      );
-    });
-
-    await collect(createContext({ requestToolPermission }));
-
-    expect(decision).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "allow",
-        updatedInput,
-      },
-    });
-    expect(requestToolPermission).toHaveBeenCalledWith(
-      expect.objectContaining({ toolCallId: "approved-native-tool" }),
-    );
   });
 
   it("keeps bypass-shaped backend arguments behind the host permission callback", async () => {

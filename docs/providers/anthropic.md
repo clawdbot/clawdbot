@@ -655,6 +655,19 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Claude CLI OAuth session expired or could not be refreshed">
+    Run these commands as the Gateway user on the Gateway host:
+
+    ```bash
+    claude auth status --text
+    claude auth login
+    openclaw gateway restart
+    ```
+
+    Claude Code owns its login and refresh lifecycle; do not copy an OAuth token into OpenClaw.
+
+  </Accordion>
+
   <Accordion title="401 errors / token suddenly invalid">
     Anthropic token auth expires and can be revoked. For new setups, use an Anthropic API key instead.
   </Accordion>

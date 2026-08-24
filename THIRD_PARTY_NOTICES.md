@@ -4,15 +4,6 @@ This file records third-party notices for code or substantial implementation
 portions incorporated into OpenClaw source, beyond normal package-manager
 dependency metadata.
 
-## Anthropic Claude Agent SDK
-
-The bundled Anthropic provider incorporates the official Claude Agent SDK.
-
-- Upstream: https://github.com/anthropics/claude-agent-sdk-typescript
-- Package: `@anthropic-ai/claude-agent-sdk`
-- License: https://code.claude.com/docs/en/legal-and-compliance
-- Copyright: © Anthropic PBC. All rights reserved.
-
 ## Pi / pi-mono
 
 Portions of OpenClaw were adapted from Pi / pi-mono, and OpenClaw also depends

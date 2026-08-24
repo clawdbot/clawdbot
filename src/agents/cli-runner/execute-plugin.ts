@@ -1,3 +1,4 @@
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toErrorObject } from "../../infra/errors.js";
@@ -14,14 +15,14 @@ import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
 import {
-  requestClaudeNativeToolApproval,
-  resolveClaudeNativeToolApprovalPlan,
-} from "./claude-live-tool-approval.js";
-import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
   getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
+import {
+  requestCliNativeToolApproval,
+  resolveCliNativeToolApprovalPlan,
+} from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -69,7 +70,7 @@ function createPluginToolPermissionHandler(params: {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
-    const plan = resolveClaudeNativeToolApprovalPlan(permission);
+    const plan = resolveCliNativeToolApprovalPlan(permission);
     if (plan === "deny") {
       return denyTool(
         `OpenClaw exec policy denied native tool use (security=${permission.security}, ask=${permission.ask}).`,
@@ -82,9 +83,9 @@ function createPluginToolPermissionHandler(params: {
     }
 
     params.onPendingApproval(1);
-    let outcome: Awaited<ReturnType<typeof requestClaudeNativeToolApproval>>;
+    let outcome: Awaited<ReturnType<typeof requestCliNativeToolApproval>>;
     try {
-      outcome = await requestClaudeNativeToolApproval({
+      outcome = await requestCliNativeToolApproval({
         toolName,
         toolInput: request.toolInput,
         pluginId: params.context.backendResolved.id,
@@ -300,7 +301,7 @@ export async function executePluginOwnedProcess(params: {
       env: params.env,
       prompt: params.prompt,
       modelId: params.context.normalizedModel,
-      systemPrompt: params.context.systemPrompt.trim(),
+      systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       useResume: params.useResume,
       abortSignal: signal,

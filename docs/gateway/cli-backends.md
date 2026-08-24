@@ -25,7 +25,7 @@ Use it as a safety net for "always works" text responses, not a primary path. Fo
 The bundled Anthropic plugin registers a default `claude-cli` backend, so it works with no config beyond having Claude Code installed and logged in:
 
 ```bash
-openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-4-6
+openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-5
 ```
 
 `main` is the default agent id when no explicit agent list is configured; swap in your own agent id otherwise.
@@ -48,11 +48,11 @@ Add the CLI backend to your fallback list so it only runs when primary models fa
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["claude-cli/claude-sonnet-4-6"],
+        fallbacks: ["claude-cli/claude-sonnet-5"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "claude-cli/claude-sonnet-4-6": {},
+        "claude-cli/claude-sonnet-5": {},
       },
     },
   },

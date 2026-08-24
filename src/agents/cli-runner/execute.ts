@@ -135,6 +135,9 @@ export async function executePreparedCliRun(
   }
   const backend = context.preparedBackend.backend;
   const nodePlacement = resolveNodeClaudeTarget(context);
+  const usePluginOwnedExecution = Boolean(
+    context.preparedBackend.execute && !nodePlacement && params.controlOperation !== "compact",
+  );
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,
@@ -152,7 +155,7 @@ export async function executePreparedCliRun(
     systemPromptArg &&
     (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume);
   const systemPromptFile =
-    !nodePlacement && shouldSendSystemPrompt
+    !nodePlacement && !usePluginOwnedExecution && shouldSendSystemPrompt
       ? await executeDeps.writeCliSystemPromptFile({ backend, systemPrompt: systemPromptArg })
       : undefined;
   const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
@@ -242,7 +245,7 @@ export async function executePreparedCliRun(
     baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
-    systemPrompt: nodePlacement ? undefined : systemPromptArg,
+    systemPrompt: nodePlacement || usePluginOwnedExecution ? undefined : systemPromptArg,
     systemPromptFilePath: systemPromptFile?.filePath,
     imagePaths: imagePayload.imagePaths,
     promptArg: argsPrompt,
@@ -270,9 +273,6 @@ export async function executePreparedCliRun(
   });
   // Plugin-owned transports own their child/session lifecycle; their MCP grant
   // still needs the per-turn capture key used by other non-live executions.
-  const usePluginOwnedExecution = Boolean(
-    context.preparedBackend.execute && !nodePlacement && params.controlOperation !== "compact",
-  );
   const useManagedClaudeLiveSession =
     usePluginOwnedExecution && acceptsCliLiveSession(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
