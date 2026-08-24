@@ -364,7 +364,7 @@ function validateConfigObjectWithPluginsBase(
       );
       // Ownership must land on the plugin activation would run, or a valid config is checked
       // against a schema the runtime never applies.
-      for (const entry of configuredChannelSchemas(info.registry, ensureCompatConfig(), opts.env)) {
+      for (const entry of configuredChannelSchemas(info.registry, config, opts.env)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
