@@ -384,6 +384,50 @@ describe("SessionHistorySseState", () => {
     expect(oldest.nextCursor).toBeUndefined();
   });
 
+  test("keeps commentary fallback rows reachable across cursor pages and SSE state", () => {
+    const rawMessages = [
+      userTextMessage("check the workspace", 1),
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "text" as const,
+            text: "Checking the workspace before answering.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg_commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+      assistantTextMessage("Done.", 3),
+    ];
+
+    const newest = buildSessionHistorySnapshot({ rawMessages, limit: 1 }).history;
+    expect(newest.nextCursor).toBe("3");
+
+    const middle = newState(rawMessages, { limit: 1, cursor: newest.nextCursor }).snapshot();
+    expect(middle.hasMore).toBe(true);
+    expect(middle.nextCursor).toBe("2");
+    expect(middle.messages).toMatchObject([
+      {
+        content: [{ text: "Checking the workspace before answering." }],
+        openclawStreamFallback: { itemId: "msg_commentary" },
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    const oldest = buildSessionHistorySnapshot({
+      rawMessages,
+      limit: 1,
+      cursor: middle.nextCursor,
+    }).history;
+    expect(oldest.messages).toEqual([userTextMessage("check the workspace", 1)]);
+    expect(oldest.hasMore).toBe(false);
+  });
+
   test("does not coerce partial cursor values", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],

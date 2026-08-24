@@ -575,13 +575,18 @@ suite.define(() => {
         await card.waitFor({ state: "visible" });
         const firstBounds = await first.boundingBox();
         expect(firstBounds).not.toBeNull();
+        const cardBounds = await card.boundingBox();
+        expect(cardBounds).not.toBeNull();
         await pointer(first, "pointerout", {
           clientX: (firstBounds?.x ?? 0) + (firstBounds?.width ?? 0),
           clientY: (firstBounds?.y ?? 0) + (firstBounds?.height ?? 0) / 2,
         });
         await page.waitForTimeout(150);
         expect(await card.count()).toBe(1);
-        await card.hover();
+        await page.mouse.move(
+          (cardBounds?.x ?? 0) + (cardBounds?.width ?? 0) / 2,
+          (cardBounds?.y ?? 0) + (cardBounds?.height ?? 0) / 2,
+        );
         expect(await card.count()).toBe(1);
         await page.mouse.move(900, 800);
         await page.waitForTimeout(50);

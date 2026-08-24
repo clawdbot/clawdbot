@@ -106,6 +106,67 @@ describe("buildCompactAnnounceStatsLine", () => {
       }),
     ).resolves.toBe("Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)");
   });
+
+  it("reports unknown token usage when the session entry carries no usage data", async () => {
+    testing.setDepsForTest({
+      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
+      // No inputTokens/outputTokens/totalTokens: usage never landed on the entry.
+      readSubagentSessionEntry: (() => ({
+        sessionId: "child-session",
+        updatedAt: 0,
+      })) as ReadSessionEntry,
+      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
+      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+    });
+
+    await expect(
+      buildCompactAnnounceStatsLine({
+        sessionKey: "agent:main:subagent:child",
+      }),
+    ).resolves.toBe("Stats: runtime n/a • tokens unknown");
+  });
+
+  it("keeps a genuine zero-usage reading distinct from absent usage data", async () => {
+    testing.setDepsForTest({
+      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
+      // Fields present and zero: the child really did make no model call.
+      readSubagentSessionEntry: (() => ({
+        sessionId: "child-session",
+        updatedAt: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      })) as ReadSessionEntry,
+      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
+      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+    });
+
+    await expect(
+      buildCompactAnnounceStatsLine({
+        sessionKey: "agent:main:subagent:child",
+      }),
+    ).resolves.toBe("Stats: runtime n/a • tokens 0 (in 0 / out 0)");
+  });
+
+  it("reports a fresh total without inventing directional token counts", async () => {
+    testing.setDepsForTest({
+      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
+      readSubagentSessionEntry: (() => ({
+        sessionId: "child-session",
+        updatedAt: 0,
+        totalTokens: 500,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      })) as ReadSessionEntry,
+      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
+      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+    });
+
+    await expect(
+      buildCompactAnnounceStatsLine({
+        sessionKey: "agent:main:subagent:child",
+      }),
+    ).resolves.toBe("Stats: runtime n/a • tokens 500 prompt/cache");
+  });
 });
 
 describe("readSubagentOutput", () => {
@@ -120,6 +181,17 @@ describe("readSubagentOutput", () => {
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
     expect(deps.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { phase: "commentary", expected: undefined },
+    { phase: "final_answer", expected: "Visible subagent answer" },
+  ])("respects the phase of scalar $phase output", async ({ phase, expected }) => {
+    installOutputDeps({
+      messages: [{ role: "assistant", phase, content: "Visible subagent answer" }],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(expected);
   });
 
   it.each([

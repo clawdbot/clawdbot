@@ -721,9 +721,3 @@
 .sidebar-approval-row__message--error {
   color: var(--danger);
 }
-
-.exec-approval-description {
-  overflow-wrap: anywhere;
-  color: var(--muted-strong);
-  line-height: 1.4;
-}

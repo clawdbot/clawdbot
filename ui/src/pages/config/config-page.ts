@@ -938,7 +938,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   ) {
     switch (key) {
       case "theme":
-        this.customThemeImportOwner.recordActivation(null);
         this.settings = resetServerUiPref(
           "theme",
           this.currentThemePref(),
@@ -981,13 +980,16 @@ export class ConfigPage extends OpenClawLightDomElement {
     theme: ThemeName,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
-    this.customThemeImportOwner.recordActivation(theme);
+    const preference = this.currentThemePref();
+    const reset = preference.overridden && theme === preference.resetValue;
+    this.customThemeImportOwner.recordActivation(reset ? null : theme);
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
       currentTheme,
       nextTheme: resolveTheme(theme, this.settings.themeMode),
       context,
-      applyTheme: () => this.applySettings({ theme }),
+      applyTheme: () =>
+        reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({ theme }),
     });
   }
 
@@ -995,12 +997,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     mode: ThemeMode,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
+    const preference = this.currentThemeModePref();
+    const reset = preference.overridden && mode === preference.resetValue;
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
       currentTheme,
       nextTheme: resolveTheme(this.settings.theme, mode),
       context,
-      applyTheme: () => this.applySettings({ themeMode: mode }),
+      applyTheme: () =>
+        reset
+          ? this.resetSyncedAppearancePref("themeMode")
+          : this.applySettings({ themeMode: mode }),
     });
   }
 
@@ -1248,11 +1255,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onLocaleChange: (locale) => this.setLocale(locale),
       resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
-      resetTheme: () => this.resetSyncedAppearancePref("theme"),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
-      resetThemeMode: () => this.resetSyncedAppearancePref("themeMode"),
-      setAccent: (accent) => this.applySettings({ accent }),
-      resetAccent: () => this.resetSyncedAppearancePref("accent"),
+      setAccent: (accent) =>
+        accent === undefined
+          ? this.resetSyncedAppearancePref("accent")
+          : this.applySettings({ accent }),
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label ?? null,
       customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,
@@ -1267,8 +1274,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.customThemeImportOwner.open(),
       textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: this.settings.textScale !== undefined,
-      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
-      resetTextScale: () => this.setSetting("textScale", undefined),
+      setTextScale: (value) =>
+        this.setSetting(
+          "textScale",
+          value === UI_APPEARANCE_DEFAULTS.textScale ? undefined : normalizeTextScale(value),
+        ),
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),

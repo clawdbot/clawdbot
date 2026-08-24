@@ -2280,6 +2280,155 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
   });
 
+  it("preserves accepted rich plain-fallback chunks when a later chunk is rejected", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 41, chat: { id: "123" } })
+      .mockRejectedValueOnce(createChunkRejection("second fallback rejected"));
+    const bot = createBot({ sendMessage });
+    Object.assign(bot.api.raw, {
+      sendRichMessage: vi.fn().mockRejectedValue(createRichEntityInvalidError("URL")),
+    });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    const cfg = { session: { store: "/tmp/telegram-rich-fallback-partial.json" } } as const;
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ text: "A".repeat(4500) }],
+        cfg,
+        runtime,
+        bot,
+        richMessages: true,
+        textLimit: 32_768,
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["41"]);
+    expect(observed.deliveryResult.visibleReplySent).toBe(true);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(observer).toHaveBeenCalledWith({ messageId: 41, text: "A".repeat(4000) });
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 41, cfg);
+  });
+
+  it("reports each rich plain-fallback acceptance before attempting the next chunk", async () => {
+    const runtime = createRuntime();
+    const acceptedMessageIds: number[] = [];
+    const sendMessage = vi.fn(async (_chatId: string, _text: string) => {
+      if (acceptedMessageIds.length === 0) {
+        return { message_id: 51, message_thread_id: 42, chat: { id: "123" } };
+      }
+      expect(acceptedMessageIds).toEqual([51]);
+      return { message_id: 52, message_thread_id: 42, chat: { id: "123" } };
+    });
+    const bot = createBot({ sendMessage });
+    Object.assign(bot.api.raw, {
+      sendRichMessage: vi.fn().mockRejectedValue(createRichEntityInvalidError("URL")),
+    });
+    const replyMarkup = { inline_keyboard: [[{ text: "Allow", callback_data: "allow" }]] };
+
+    const messageId = await sendTelegramText(bot, "123", "A".repeat(4500), runtime, {
+      richMessages: true,
+      replyToMessageId: 17,
+      replyMarkup,
+      thread: { id: 42, scope: "forum" },
+      onAcceptedMessage: (acceptedId) => {
+        acceptedMessageIds.push(acceptedId);
+      },
+    });
+
+    expect(messageId).toBe(51);
+    expect(acceptedMessageIds).toEqual([51, 52]);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(mockCallArg(sendMessage, 0, 2)).toEqual(
+      expect.objectContaining({ message_thread_id: 42, reply_to_message_id: 17 }),
+    );
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_markup");
+    expect(mockCallArg(sendMessage, 1, 2)).toEqual(
+      expect.objectContaining({ message_thread_id: 42, reply_markup: replyMarkup }),
+    );
+    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("stops rich plain fallback as soon as an accepted chunk lands in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 61,
+        message_thread_id: 43,
+        chat: { id: "123", type: "supergroup" },
+      })
+      .mockResolvedValueOnce({
+        message_id: 62,
+        message_thread_id: 42,
+        chat: { id: "123", type: "supergroup" },
+      });
+    const bot = createBot({ sendMessage });
+    Object.assign(bot.api.raw, {
+      sendRichMessage: vi.fn().mockRejectedValue(createRichEntityInvalidError("URL")),
+    });
+
+    let observed: unknown;
+    try {
+      await sendTelegramText(bot, "123", "A".repeat(4500), runtime, {
+        richMessages: true,
+        thread: { id: 42, scope: "forum" },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      kind: "rich",
+      text: "Rich reply",
+      error: "RICH_MESSAGE_URL_INVALID",
+      options: { richMessages: true },
+    },
+    {
+      kind: "HTML",
+      text: "<b>HTML reply</b>",
+      error: "can't parse entities",
+      options: { textMode: "html" as const },
+    },
+  ])(
+    "does not plain-fallback after accepted $kind bookkeeping fails",
+    async ({ kind, text, error, options }) => {
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 71, chat: { id: "123" } });
+      const bot = createBot({ sendMessage });
+      const sendRichMessage = vi.fn().mockResolvedValue({ message_id: 72, chat: { id: "123" } });
+      Object.assign(bot.api.raw, { sendRichMessage });
+      const bookkeepingFailure = new Error(error);
+
+      await expect(
+        sendTelegramText(bot, "123", text, createRuntime(), {
+          ...options,
+          onAcceptedMessage: () => {
+            throw bookkeepingFailure;
+          },
+        }),
+      ).rejects.toBe(bookkeepingFailure);
+
+      expect(sendRichMessage).toHaveBeenCalledTimes(kind === "rich" ? 1 : 0);
+      expect(sendMessage).toHaveBeenCalledTimes(kind === "rich" ? 0 : 1);
+    },
+  );
+
   it("does not plain-fallback after Telegram accepts a rich message in the wrong topic", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();

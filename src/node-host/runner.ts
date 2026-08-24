@@ -1,5 +1,6 @@
 /** CLI runner for node-host stdin/stdout command dispatch. */
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -29,6 +30,7 @@ import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
 } from "./gateway-cloudflare-access.js";
+import { resolveNodeHostGatewayPlatformIdentity } from "./gateway-platform-identity.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -56,32 +58,6 @@ type NodeHostRunOptions = {
   displayName?: string;
   installedAppsSharing?: boolean;
 };
-
-function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
-  switch (platform) {
-    case "darwin":
-      return "macos";
-    case "win32":
-      return "windows";
-    case "linux":
-      return "linux";
-    default:
-      return "unknown";
-  }
-}
-
-function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
-  switch (platform) {
-    case "darwin":
-      return "Mac";
-    case "win32":
-      return "Windows";
-    case "linux":
-      return "Linux";
-    default:
-      return undefined;
-  }
-}
 
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
@@ -295,6 +271,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     forceWorkerRuns: opts.forceWorkerRuns,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
+  let workerHostingEnabled = preparedRuntime.workerHostingEnabled;
+  if (preparedRuntime.workerHostingDisabledReason) {
+    writeStderrLine(
+      `node host worker hosting disabled: ${preparedRuntime.workerHostingDisabledReason}`,
+    );
+  }
   const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({
@@ -305,6 +287,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
   let workerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let gatewayHelloReceived = false;
+  let consecutivePermanentGatewayRejections = 0;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
   let gatewaySupportsBundleRetention = false;
@@ -520,7 +503,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost:
-          preparedRuntime.workerHostingEnabled && workerCapacity
+          workerHostingEnabled && workerCapacity
             ? {
                 enabled: true,
                 capacity: workerCapacity,
@@ -562,8 +545,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
       clientDisplayName: displayName,
       clientVersion: VERSION,
-      platform: resolveNodeHostGatewayPlatform(process.platform),
-      deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
+      ...resolveNodeHostGatewayPlatformIdentity(process.platform),
       mode: GATEWAY_CLIENT_MODES.NODE,
       role: "node",
       scopes: [],
@@ -600,6 +582,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       }
     },
     onHelloOk: (hello, url, tlsFingerprint, cloudflareAccess) => {
+      consecutivePermanentGatewayRejections = 0;
       writeStderrLine(`node host gateway connected: ${url}`);
       activeRuntime.updateGatewayConnection({
         url,
@@ -625,8 +608,30 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       publishInventory();
     },
     onConnectError: (error) => {
-      // keep retrying (handled by GatewayClient)
       writeStderrLine(`node host gateway connect failed: ${error.message}`);
+      const rejection =
+        error instanceof GatewayClientRequestError && isRecord(error.details)
+          ? error.details
+          : undefined;
+      if (
+        rejection?.reason !== "websocket-upgrade-rejected" ||
+        rejection.httpStatus !== 403 ||
+        rejection.gatewayErrorType !== "proxy_attribution_required"
+      ) {
+        consecutivePermanentGatewayRejections = 0;
+        return;
+      }
+      if (++consecutivePermanentGatewayRejections < 3) {
+        return;
+      }
+      const remediation =
+        typeof rejection.gatewayErrorMessage === "string"
+          ? rejection.gatewayErrorMessage
+          : error.message;
+      writeStderrLine(
+        `node host gateway permanently rejected connection (${rejection.gatewayErrorType}): ${remediation}; exiting`,
+      );
+      void finish(1);
     },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info, {
@@ -654,6 +659,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onRunnerCapacityChanged: (capacity) => {
       workerCapacity = capacity;
+      publishRunnerInventory();
+    },
+    onWorkerHostingDisabled: (reason) => {
+      workerHostingEnabled = false;
+      writeStderrLine(`node host worker hosting disabled: ${reason}`);
       publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {

@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -68,6 +69,44 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
         .getValue("title")
         .jsonPrimitive.content,
     )
+  }
+
+  @Test
+  fun handleCalendarAdd_omitsExplicitJsonNullFields() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """
+        {"title":"Standup","startISO":"2026-02-28T10:00:00Z","endISO":"2026-02-28T11:00:00Z",
+         "location":null,"notes":null,"calendarTitle":null,"calendarId":null,"isAllDay":null}
+        """.trimIndent(),
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals("Standup", request.title)
+    assertNull(request.location)
+    assertNull(request.notes)
+    assertNull(request.calendarTitle)
+    assertNull(request.calendarId)
+    assertFalse(request.isAllDay)
+  }
+
+  @Test
+  fun handleCalendarAdd_rejectsExplicitJsonNullTitle() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":null,"startISO":"2026-02-28T10:00:00Z","endISO":"2026-02-28T11:00:00Z"}""",
+      )
+
+    assertFalse(result.ok)
+    assertEquals("CALENDAR_INVALID", result.error?.code)
+    assertNull(source.addedRequest)
   }
 
   @Test

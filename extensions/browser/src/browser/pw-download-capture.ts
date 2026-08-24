@@ -1,7 +1,6 @@
 /** Shared Playwright download capture and output handling. */
 import crypto from "node:crypto";
 import path from "node:path";
-import type { Page } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -9,6 +8,11 @@ import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 type BrowserDownloadCaptureState = {
   downloadWaiterDepth: number;
+};
+
+type BrowserDownloadPage = {
+  on(event: "download", handler: (download: unknown) => void): unknown;
+  off(event: "download", handler: (download: unknown) => void): unknown;
 };
 
 export type BrowserDownloadCaptureOptions = {
@@ -21,6 +25,7 @@ export type BrowserDownloadCaptureOptions = {
 };
 
 export type PlaywrightDownload = {
+  cancel?: () => Promise<void>;
   url?: () => string;
   suggestedFilename?: () => string;
   saveAs?: (outPath: string) => Promise<void>;
@@ -36,6 +41,7 @@ function buildManagedDownloadPath(rootDir: string, fileName: string): string {
 export async function saveBrowserDownload(
   download: PlaywrightDownload,
   opts: BrowserDownloadCaptureOptions = {},
+  onReadyToPublish?: () => void,
 ): Promise<BrowserDownloadResult> {
   const suggestedFilename = download.suggestedFilename?.() || "download.bin";
   const candidate: BrowserDownloadCandidate = {
@@ -43,6 +49,7 @@ export async function saveBrowserDownload(
     suggestedFilename,
   };
   await opts.beforeSave?.(candidate);
+  opts.signal?.throwIfAborted();
   const saveAs = download.saveAs?.bind(download);
   if (!saveAs) {
     throw new Error("Download cannot be saved");
@@ -55,6 +62,8 @@ export async function saveBrowserDownload(
     path: managedPath,
     write: async (tempPath) => {
       await saveAs(tempPath);
+      opts.signal?.throwIfAborted();
+      onReadyToPublish?.();
     },
   });
   return { ...candidate, path: savedPath };
@@ -62,7 +71,7 @@ export async function saveBrowserDownload(
 
 /** Arm one page download while maintaining explicit/passive ownership depth. */
 export function createDownloadCaptureForPage(
-  page: Page,
+  page: BrowserDownloadPage,
   state: BrowserDownloadCaptureState,
   timeoutMs: number,
   opts: BrowserDownloadCaptureOptions = {},
@@ -83,24 +92,26 @@ export function createDownloadCaptureForPage(
 
   state.downloadWaiterDepth += 1;
   let done = false;
-  let depthReleased = false;
   let timer: NodeJS.Timeout | undefined;
   let handler: ((download: unknown) => void) | undefined;
+  let activeDownload: PlaywrightDownload | undefined;
   let abort = () => {};
 
-  const cleanup = () => {
-    if (!depthReleased) {
-      depthReleased = true;
+  const releaseWaiter = () => {
+    if (handler) {
       state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
+      page.off("download", handler);
+      handler = undefined;
     }
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
     }
-    if (handler) {
-      page.off("download", handler as never);
-      handler = undefined;
-    }
+  };
+
+  const cleanup = () => {
+    done = true;
+    releaseWaiter();
     opts.signal?.removeEventListener("abort", abort);
   };
 
@@ -109,17 +120,22 @@ export function createDownloadCaptureForPage(
       if (done) {
         return;
       }
-      done = true;
-      cleanup();
-      void saveBrowserDownload(download as PlaywrightDownload, opts).then(resolve, reject);
+      activeDownload = download as PlaywrightDownload;
+      releaseWaiter();
+      void saveBrowserDownload(activeDownload, opts, () => {
+        // Atomic publication cannot be revoked, so a later abort must not
+        // report cancellation while its completed file is being published.
+        opts.signal?.removeEventListener("abort", abort);
+      })
+        .finally(cleanup)
+        .then(resolve, reject);
     };
-    page.on("download", handler as never);
+    page.on("download", handler);
     timer = setTimeout(
       () => {
         if (done) {
           return;
         }
-        done = true;
         cleanup();
         reject(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
       },
@@ -130,8 +146,8 @@ export function createDownloadCaptureForPage(
       if (done) {
         return;
       }
-      done = true;
       cleanup();
+      void activeDownload?.cancel?.().catch(() => {});
       const reason = opts.signal?.reason;
       reject(reason instanceof Error ? reason : new Error("Download wait was cancelled"));
     };
@@ -145,10 +161,9 @@ export function createDownloadCaptureForPage(
     armed: true,
     promise,
     cancel: () => {
-      if (done) {
+      if (done || activeDownload) {
         return;
       }
-      done = true;
       cleanup();
     },
   };

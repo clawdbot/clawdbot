@@ -196,29 +196,9 @@ openclaw-session-owner-chip {
   color: var(--accent);
 }
 
-.connect-splash__logo {
-  width: 44px;
-  height: 44px;
-  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
-}
-
-@keyframes connect-splash-wiggle {
-  0%,
-  100% {
-    transform: rotate(-6deg);
-  }
-  50% {
-    transform: rotate(6deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .connect-splash {
     opacity: 1;
-    animation: none;
-  }
-
-  .connect-splash__logo {
     animation: none;
   }
 }
@@ -5835,7 +5815,24 @@ td.data-table-key-col {
    aside stacks transient state, relative time, and management actions in one
    grid cell, so hovering swaps state for actions without any layout shift. */
 .session-row-host {
+  /* One size and one stroke for every glyph the row draws. Seven different
+     values used to land on the same line, which read as broken alignment.
+     The row-scoped SVG rule below leaves other surfaces at their own sizes. */
+  /* One grid for everything in the trailing column. The 24px action target sets
+     the desktop pitch; 14px endcap glyphs use the remaining 10px as their gap
+     so both lines share one trailing axis. */
+  --row-action-size: 24px;
+  --row-glyph-gap: 10px;
+
+  /* What the title gives up so the actions have somewhere to land: both boxes
+     plus a hair of clearance from the ellipsis. */
+  --row-actions-reserve: calc(var(--row-action-size) * 2 + 3px);
+
   position: relative;
+}
+
+.session-row-host[data-session-row-action-count="1"] {
+  --row-actions-reserve: calc(var(--row-action-size) + 3px);
 }
 
 .session-row-host--draft {
@@ -5907,14 +5904,19 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
+/* Sized to its glyphs. The old 24px box matched the action button this used to
+   trade places with, which padded a 7px unread dot with 8.5px a side and broke
+   the endcap's even 6px rhythm. Nothing trades now, so it sizes to content. */
 .session-row-state {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 24px;
-  min-height: 24px;
-  transition: opacity var(--duration-fast) ease;
+  gap: var(--row-glyph-gap, 6px);
+  /* The ring and the unread dot are bare shapes, not icons in a box, so
+     right-flush they hung 2-4px past the icon column above them. One glyph-wide
+     floor plus the centring above puts whatever the row is showing on the same
+     axis as the icons. */
+  min-width: 14px;
   pointer-events: none;
 }
 
@@ -5938,7 +5940,7 @@ td.data-table-key-col {
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--row-glyph-gap, 6px);
   flex: 0 0 auto;
 }
 
@@ -5948,7 +5950,8 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--attention {
+.session-row-badge--attention,
+.session-row-badge--approval {
   gap: 2px;
   color: var(--warn);
   font-size: 10px;
@@ -5964,13 +5967,8 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--approval {
-  display: inline-flex;
-  align-items: center;
-  color: var(--warn);
-}
-
-.session-row-badge--cloud[data-placement-state="failed"] {
+.session-row-badge--cloud[data-placement-state="failed"],
+.session-row-badge--cloud[data-disk-space-status="critical"] {
   color: var(--danger);
 }
 
@@ -5985,16 +5983,9 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts] {
-  color: var(--warn);
-}
-
+.session-row-badge--cloud[data-workspace-conflicts],
 .session-row-badge--cloud[data-disk-space-status="warning"] {
   color: var(--warn);
-}
-
-.session-row-badge--cloud[data-disk-space-status="critical"] {
-  color: var(--danger);
 }
 
 .session-row-badge svg {
@@ -6009,16 +6000,14 @@ td.data-table-key-col {
 
 .session-row-actions {
   display: inline-flex;
-  align-items: center;
-  gap: 1px;
 }
 
 .session-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--row-action-size);
+  height: var(--row-action-size);
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -6026,13 +6015,9 @@ td.data-table-key-col {
   color: var(--muted);
   opacity: 0;
   pointer-events: none;
-  transition:
-    opacity var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
 }
 
-.session-action svg {
+.session-row-host svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -6065,13 +6050,20 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-.session-row-host:is(:hover, :focus-within) :is(.session-row-trail, .session-row-state) {
-  opacity: 0;
-}
+/* Nothing in the row trades places with the actions any more. Two-line rows put
+   them on the title line; single-line rows reserve their width in the text
+   column, which slides the endcap clear. Fading state here used to prevent an
+   overlap that no longer happens, and it took the unread dot with it the moment
+   the pointer arrived — while the badges beside it stayed, which read as a
+   glitch rather than a deliberate swap. */
 
 /* Sidebar rows are now the direct management surface after removing the
    duplicate picker; touch users need pin/menu controls without hover. */
 @media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session.session-row-host {
+    --row-action-size: 44px;
+  }
+
   .sidebar-recent-session .session-action {
     opacity: 1;
     pointer-events: auto;
@@ -6079,22 +6071,6 @@ td.data-table-key-col {
 
   .sidebar-recent-session .session-action:disabled {
     opacity: 0.35;
-  }
-
-  .sidebar-recent-session .session-row-trail {
-    opacity: 0;
-  }
-
-  .sidebar-recent-session .session-row-aside:has(> .session-row-state) {
-    column-gap: 1px;
-  }
-
-  .sidebar-recent-session .session-row-state {
-    grid-area: 1 / 1;
-  }
-
-  .sidebar-recent-session .session-row-actions {
-    grid-area: 1 / 2;
   }
 }
 
@@ -6105,8 +6081,8 @@ td.data-table-key-col {
 .session-run-spinner {
   box-sizing: border-box;
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   flex: 0 0 auto;
   border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
   border-top-color: var(--run);

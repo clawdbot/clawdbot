@@ -311,7 +311,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
         toolAvailability: {
           native: [],
           openClaw: ["openclaw"],
-          mcp: ["mcp__openclaw__openclaw"],
         },
       }),
     ).toEqual([
@@ -387,7 +386,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
         toolAvailability: {
           native: [],
           openClaw: ["message"],
-          mcp: ["mcp__openclaw__message"],
         },
       }),
     ).toEqual([
@@ -451,7 +449,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "mcp__other__*",
         ],
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
       }),
     ).toEqual([
       "-p",
@@ -721,13 +719,6 @@ describe("normalizeClaudeBackendConfig", () => {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     });
-    expect(backend.liveSessionRequirement).toEqual({
-      capability: "msg_lifecycle_v1",
-      minimumVersion: "2.1.206",
-      versionArgs: ["--version"],
-      updateCommand: "claude update",
-    });
-
     const normalized = normalizeConfig?.({
       ...backend.config,
       args: ["-p", "--output-format", "stream-json", "--verbose"],
@@ -1016,16 +1007,20 @@ describe("normalizeClaudeBackendConfig", () => {
     ).toThrow("Selected Claude CLI OAuth credential is expired or invalid");
   });
 
-  it("keeps native Claude login when no compatible profile is selected", () => {
+  it("runs native Claude login through the official Agent SDK without forwarding credentials", () => {
     const backend = buildAnthropicCliBackend();
 
-    expect(
-      backend.prepareExecution?.({
-        workspaceDir: "/tmp/openclaw-claude-cli",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-      }),
-    ).toBeUndefined();
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-7",
+      executionMode: "agent",
+    });
+
+    expect(prepared).toEqual(expect.objectContaining({ execute: expect.any(Function) }));
+    expect(prepared).not.toHaveProperty("secretInput");
+    expect(prepared).not.toHaveProperty("env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR");
+    expect(prepared).not.toHaveProperty("env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR");
   });
 
   it("forwards a selected API-key profile through Claude's private descriptor", async () => {

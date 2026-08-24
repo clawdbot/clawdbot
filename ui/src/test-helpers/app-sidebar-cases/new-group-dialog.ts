@@ -19,8 +19,8 @@ describe("AppSidebar new group dialog", () => {
         "sessions.groups.put",
         "sessions.patchMany",
       ]);
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { altKey: true });
       await sidebar.updateComplete;
       openContextMenu(sidebar, "agent:main:a");
       await sidebar.updateComplete;
@@ -69,8 +69,8 @@ describe("AppSidebar new group dialog", () => {
           landCatalogWrite = () => resolve("completed");
         }),
       );
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { altKey: true });
       await sidebar.updateComplete;
       openContextMenu(sidebar, "agent:main:a");
       await sidebar.updateComplete;
@@ -122,8 +122,8 @@ describe("AppSidebar new group dialog", () => {
           landCatalogWrite = () => resolve("completed");
         }),
       );
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { altKey: true });
       await sidebar.updateComplete;
       openContextMenu(sidebar, "agent:main:a");
       await sidebar.updateComplete;

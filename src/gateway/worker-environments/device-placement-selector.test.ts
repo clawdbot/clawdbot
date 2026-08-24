@@ -111,6 +111,47 @@ describe("paired-device automatic placement selection", () => {
     });
   });
 
+  it("ranks current worker capacity instead of stale environment snapshots", async () => {
+    const environments = [
+      nodeEnvironment("alpha", 9),
+      nodeEnvironment("bravo", 1),
+      nodeEnvironment("charlie", 5),
+    ];
+    const liveCapacity = new Map([
+      ["alpha", 2],
+      ["bravo", 4],
+      ["charlie", 2],
+    ]);
+    const currentNodes = new Map(
+      environments.map((environment) => {
+        const node = nodeProof(environment);
+        return [
+          node.nodeId,
+          {
+            ...node,
+            workerHost: {
+              ...node.workerHost,
+              capacity: { total: 9, available: liveCapacity.get(node.nodeId) ?? 0 },
+            },
+          },
+        ] as const;
+      }),
+    );
+
+    const result = await selectNodes(environments, {
+      availability: async (deviceId) => ({ available: true, node: currentNodes.get(deviceId) }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      candidates: [
+        { deviceId: "bravo", availableSlots: 4 },
+        { deviceId: "alpha", availableSlots: 2 },
+        { deviceId: "charlie", availableSlots: 2 },
+      ],
+    });
+  });
+
   it("breaks equal-capacity ties by device identity, independently of catalog order", async () => {
     const result = await selectNodes([
       nodeEnvironment("charlie", 2),

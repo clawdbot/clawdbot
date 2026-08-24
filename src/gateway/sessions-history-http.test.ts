@@ -1449,13 +1449,22 @@ describe("session history HTTP endpoints", () => {
         sessionKey?: string;
         messages?: Array<{
           content?: Array<{ text?: string }>;
+          openclawStreamFallback?: { itemId?: string; replacementText?: string; source?: string };
           __openclaw?: { id?: string; seq?: number };
         }>;
       };
       expect(body.sessionKey).toBe("agent:main:main");
-      expect(body.messages).toHaveLength(1);
-      expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
-      expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
+      expect(body.messages).toHaveLength(2);
+      expect(body.messages?.[0]).toMatchObject({
+        content: [{ type: "text", text: "internal reasoning" }],
+        openclawStreamFallback: {
+          itemId: "item_commentary",
+          replacementText: "internal reasoning",
+          source: "segment",
+        },
+      });
+      expect(body.messages?.[1]?.content?.[0]?.text).toBe("Done.");
+      expectOpenClawMetadata(body.messages?.[1]?.["__openclaw"], {
         id: visibleMessageId,
         seq: 2,
       });

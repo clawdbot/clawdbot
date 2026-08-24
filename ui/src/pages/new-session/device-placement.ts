@@ -119,7 +119,12 @@ export function resolveAutomaticDevicePlacementDisabledReason(
       .map((environment) => environment.id),
   );
   if (sessionHostIds.size === 0) {
-    return t("newSession.noSessionHosts");
+    const outdated = (environments ?? []).find((environment) =>
+      environment.issues?.some((issue) => issue.code === "update-required"),
+    );
+    return outdated
+      ? unavailableReason(outdated, DEFAULT_DEVICE_PLACEMENT)
+      : t("newSession.noSessionHosts");
   }
   return devices.some((device) => device.selectable)
     ? undefined

@@ -10,7 +10,7 @@ import type { ThemeName } from "../../app/theme.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderDocsLink,
-  renderSettingsDefaultState,
+  renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsSegmented,
   renderSettingsStatus,
@@ -148,39 +148,21 @@ export function renderAppearanceSection(
         : t("configView.appearance.importHint"),
     },
   ];
-  const themeDefaultState = renderSettingsDefaultState({
-    value:
-      themeOptions.find((option) => option.id === props.themeResetValue)?.label ??
-      t("configView.themes.claw.label"),
-    overridden: props.themeOverridden,
-    onReset: props.resetTheme,
-  });
-  const themeModeDefaultState = renderSettingsDefaultState({
-    value:
-      props.themeModeResetValue === "light"
-        ? t("common.light")
-        : props.themeModeResetValue === "dark"
-          ? t("common.dark")
-          : t("common.system"),
-    overridden: props.themeModeOverridden,
-    onReset: props.resetThemeMode,
-  });
-  const accentDefaultState = renderSettingsDefaultState({
-    value: t("configView.appearance.accents.default"),
-    overridden: props.accentOverridden,
-    onReset: props.resetAccent,
-  });
+  const themeDefault =
+    themeOptions.find((option) => option.id === props.themeResetValue)?.label ??
+    t("configView.themes.claw.label");
+  const themeModeDefault =
+    props.themeModeResetValue === "light"
+      ? t("common.light")
+      : props.themeModeResetValue === "dark"
+        ? t("common.dark")
+        : t("common.system");
   const themeProvenance = serverUiPrefProvenanceHint(props.themeProvenance);
   const themeModeProvenance = serverUiPrefProvenanceHint(props.themeModeProvenance);
   const accentProvenance = serverUiPrefProvenanceHint(props.accentProvenance);
   const customAccentSelected = Boolean(
     props.accent && !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
   );
-  const textScaleDefaultState = renderSettingsDefaultState({
-    value: `${UI_APPEARANCE_DEFAULTS.textScale}%`,
-    overridden: props.textScaleOverridden,
-    onReset: props.resetTextScale,
-  });
   return html`
     <div class="settings-page">
       <p class="settings-page__intro">
@@ -191,10 +173,10 @@ export function renderAppearanceSection(
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
-          <div class="settings-section__actions">${themeDefaultState.action}</div>
         </div>
         <p class="settings-section__desc">
-          ${t("configView.appearance.chooseTheme")} ${themeDefaultState.description}
+          ${t("configView.appearance.chooseTheme")}
+          ${renderSettingsDefaultDescription(themeDefault, props.themeOverridden)}
           ${themeProvenance}
         </p>
         <div class="settings-group">
@@ -216,7 +198,10 @@ export function renderAppearanceSection(
                         props.onOpenCustomThemeImport?.();
                         return;
                       }
-                      if (opt.id !== props.theme) {
+                      if (
+                        opt.id !== props.theme ||
+                        (opt.id === props.themeResetValue && props.themeOverridden)
+                      ) {
                         const context: ThemeTransitionContext = {
                           element: (e.currentTarget as HTMLElement) ?? undefined,
                         };
@@ -238,21 +223,27 @@ export function renderAppearanceSection(
           </div>
           ${renderSettingsRow({
             title: t("common.colorMode"),
-            description: html`${themeModeDefaultState.description} ${themeModeProvenance}`,
+            description: html`${renderSettingsDefaultDescription(
+              themeModeDefault,
+              props.themeModeOverridden,
+            )}
+            ${themeModeProvenance}`,
             stacked: true,
-            control: html`
-              ${themeModeDefaultState.action}
-              ${renderSettingsSegmented({
-                value: props.themeMode,
-                options: [
-                  { value: "system", label: t("common.system") },
-                  { value: "light", label: t("common.light") },
-                  { value: "dark", label: t("common.dark") },
-                ],
-                ariaLabel: t("common.colorMode"),
-                onChange: (mode, element) => props.setThemeMode(mode, { element }),
-              })}
-            `,
+            control: renderSettingsSegmented({
+              value: props.themeMode,
+              options: [
+                { value: "system", label: t("common.system") },
+                { value: "light", label: t("common.light") },
+                { value: "dark", label: t("common.dark") },
+              ],
+              ariaLabel: t("common.colorMode"),
+              onChange: (mode, element) => props.setThemeMode(mode, { element }),
+              onReselect: (mode, element) => {
+                if (props.themeModeOverridden && mode === props.themeModeResetValue) {
+                  props.setThemeMode(mode, { element });
+                }
+              },
+            }),
           })}
           <div class="settings-row settings-row--stacked">
             ${showCustomThemeImport
@@ -337,10 +328,13 @@ export function renderAppearanceSection(
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
-          <div class="settings-section__actions">${accentDefaultState.action}</div>
         </div>
         <p class="settings-section__desc">
-          ${t("configView.appearance.accentHint")} ${accentDefaultState.description}
+          ${t("configView.appearance.accentHint")}
+          ${renderSettingsDefaultDescription(
+            t("configView.appearance.accents.default"),
+            props.accentOverridden,
+          )}
           ${accentProvenance}
         </p>
         <div class="settings-group">
@@ -368,8 +362,7 @@ export function renderAppearanceSection(
                     aria-label=${label}
                     aria-pressed=${String(selected)}
                     title=${label}
-                    @click=${() =>
-                      preset.hex === undefined ? props.resetAccent() : props.setAccent(preset.hex)}
+                    @click=${() => props.setAccent(preset.hex)}
                   >
                     ${selected
                       ? html`<span class="settings-accent-swatch__check" aria-hidden="true"
@@ -399,10 +392,13 @@ export function renderAppearanceSection(
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.textSize")}</h2>
-          <div class="settings-section__actions">${textScaleDefaultState.action}</div>
         </div>
         <p class="settings-section__desc">
-          ${textScaleDefaultState.description} ${t("quickSettings.personal.browserOnly")}
+          ${renderSettingsDefaultDescription(
+            `${UI_APPEARANCE_DEFAULTS.textScale}%`,
+            props.textScaleOverridden,
+          )}
+          ${t("quickSettings.personal.browserOnly")}
         </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">

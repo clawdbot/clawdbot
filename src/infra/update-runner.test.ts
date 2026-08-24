@@ -2935,162 +2935,219 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
   });
 
-  it("rebuilds and verifies the original runtime before allowing restart after rollback", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
-    const beforeSha = "a".repeat(40);
-    const targetSha = "b".repeat(40);
-    const stableTag = "v1.0.1-1";
-    let currentHead = beforeSha;
-    let buildCount = 0;
-    const calls: string[] = [];
-    const doctorNodePath = await resolveStableNodePath(process.execPath);
-    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
-    const writeRuntime = async (head: string) => {
-      const distRoot = path.join(tempDir, "dist");
-      await fs.mkdir(path.join(distRoot, "control-ui"), { recursive: true });
-      await Promise.all([
-        fs.writeFile(path.join(distRoot, "entry.js"), "export {};\n", "utf8"),
-        fs.writeFile(
-          path.join(distRoot, "build-info.json"),
-          `${JSON.stringify({ commit: head })}\n`,
-          "utf8",
-        ),
-        fs.writeFile(path.join(distRoot, ".buildstamp"), `${JSON.stringify({ head })}\n`, "utf8"),
-        fs.writeFile(
-          path.join(distRoot, ".runtime-postbuildstamp"),
-          `${JSON.stringify({ head })}\n`,
-          "utf8",
-        ),
-        fs.writeFile(path.join(distRoot, "control-ui", "index.html"), "<html></html>", "utf8"),
-      ]);
-    };
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
-        return toCommandResult({ stdout: tempDir });
-      }
-      if (key === `git -C ${tempDir} rev-parse HEAD`) {
-        return toCommandResult({ stdout: `${currentHead}\n` });
-      }
-      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
-        return toCommandResult({ stdout: "main\n" });
-      }
-      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+  it.each([
+    { bundle: "complete", missingRollbackStartupAsset: false, serviceRestartSafe: true },
+    { bundle: "incomplete", missingRollbackStartupAsset: true, serviceRestartSafe: false },
+  ])(
+    "allows rollback restart only with a $bundle startup bundle",
+    async ({ missingRollbackStartupAsset, serviceRestartSafe }) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      const beforeSha = "a".repeat(40);
+      const targetSha = "b".repeat(40);
+      const stableTag = "v1.0.1-1";
+      let currentHead = beforeSha;
+      let buildCount = 0;
+      const calls: string[] = [];
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+      const writeRuntime = async (head: string) => {
+        const distRoot = path.join(tempDir, "dist");
+        const startupAsset = path.join(distRoot, "control-ui", "assets", "startup.js");
+        await fs.mkdir(path.dirname(startupAsset), { recursive: true });
+        if (missingRollbackStartupAsset && head === beforeSha) {
+          await fs.rm(startupAsset, { force: true });
+        } else {
+          await fs.writeFile(startupAsset, "export {};\n", "utf8");
+        }
+        await Promise.all([
+          fs.writeFile(path.join(distRoot, "entry.js"), "export {};\n", "utf8"),
+          fs.writeFile(
+            path.join(distRoot, "build-info.json"),
+            `${JSON.stringify({ commit: head })}\n`,
+            "utf8",
+          ),
+          fs.writeFile(path.join(distRoot, ".buildstamp"), `${JSON.stringify({ head })}\n`, "utf8"),
+          fs.writeFile(
+            path.join(distRoot, ".runtime-postbuildstamp"),
+            `${JSON.stringify({ head })}\n`,
+            "utf8",
+          ),
+          fs.writeFile(
+            path.join(distRoot, "control-ui", "index.html"),
+            '<script type="module" src="./assets/startup.js"></script>',
+            "utf8",
+          ),
+        ]);
+      };
+      const runCommand = async (argv: string[]) => {
+        const key = argv.join(" ");
+        calls.push(key);
+        if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+          return toCommandResult({ stdout: tempDir });
+        }
+        if (key === `git -C ${tempDir} rev-parse HEAD`) {
+          return toCommandResult({ stdout: `${currentHead}\n` });
+        }
+        if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+          return toCommandResult({ stdout: "main\n" });
+        }
+        if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+          return toCommandResult();
+        }
+        if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+          return toCommandResult();
+        }
+        if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
+          return toCommandResult({ stdout: `${stableTag}\n` });
+        }
+        if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
+          currentHead = targetSha;
+          return toCommandResult();
+        }
+        if (key === `git -C ${tempDir} checkout --force main`) {
+          return toCommandResult();
+        }
+        if (key === `git -C ${tempDir} reset --hard ${beforeSha}`) {
+          currentHead = beforeSha;
+          return toCommandResult();
+        }
+        if (key === "pnpm install") {
+          return toCommandResult();
+        }
+        if (key === "pnpm build") {
+          buildCount += 1;
+          await writeRuntime(currentHead);
+          return toCommandResult();
+        }
+        if (key === doctorCommand) {
+          return toCommandResult({ code: 1, stderr: "doctor failed after build" });
+        }
         return toCommandResult();
-      }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
-        return toCommandResult();
-      }
-      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
-        return toCommandResult({ stdout: `${stableTag}\n` });
-      }
-      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
-        currentHead = targetSha;
-        return toCommandResult();
-      }
-      if (key === `git -C ${tempDir} checkout --force main`) {
-        return toCommandResult();
-      }
-      if (key === `git -C ${tempDir} reset --hard ${beforeSha}`) {
-        currentHead = beforeSha;
-        return toCommandResult();
-      }
-      if (key === "pnpm install") {
-        return toCommandResult();
-      }
-      if (key === "pnpm build") {
-        buildCount += 1;
-        await writeRuntime(currentHead);
-        return toCommandResult();
-      }
-      if (key === doctorCommand) {
-        return toCommandResult({ code: 1, stderr: "doctor failed after build" });
-      }
-      return toCommandResult();
-    };
+      };
 
-    const result = await runWithCommand(runCommand, { channel: "stable" });
+      const result = await runWithCommand(runCommand, { channel: "stable" });
 
-    expect(result).toMatchObject({
-      status: "error",
-      reason: "doctor-failed",
-      recovery: { serviceRestartSafe: true },
-    });
-    expect(buildCount).toBe(2);
-    expect(currentHead).toBe(beforeSha);
-    expect(
-      JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
-    ).toMatchObject({ commit: beforeSha });
-    expect(result.steps.at(-1)).toMatchObject({
-      name: "git rollback runtime verify",
-      exitCode: 0,
-    });
-    expect(calls.indexOf(doctorCommand)).toBeLessThan(
-      calls.lastIndexOf(`git -C ${tempDir} rev-parse HEAD`),
-    );
-    expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
-  });
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "doctor-failed",
+        recovery: serviceRestartSafe
+          ? { serviceRestartSafe: true }
+          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      });
+      expect(buildCount).toBe(2);
+      expect(currentHead).toBe(beforeSha);
+      expect(
+        JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
+      ).toMatchObject({ commit: beforeSha });
+      expect(result.steps.at(-1)).toMatchObject({
+        name: "git rollback runtime verify",
+        exitCode: serviceRestartSafe ? 0 : 1,
+      });
+      expect(calls.indexOf(doctorCommand)).toBeLessThan(
+        calls.lastIndexOf(`git -C ${tempDir} rev-parse HEAD`),
+      );
+      expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
+    },
+  );
 
-  it("repairs UI assets when doctor run removes control-ui files", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
-    const uiIndexPath = await setupUiIndex();
+  it.each(["missing", "incomplete"] as const)(
+    "repairs %s Control UI assets left by the doctor pass",
+    async (doctorBundle) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      const uiIndexPath = await setupUiIndex();
+      const startupAsset = path.join(path.dirname(uiIndexPath), "assets", "startup.js");
 
-    const stableTag = "v1.0.1-1";
-    const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
-      stableTag,
-      uiIndexPath,
-      onUiBuild: async (count) => {
+      const stableTag = "v1.0.1-1";
+      const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
+        stableTag,
+        uiIndexPath,
+        onUiBuild: async () => {
+          await fs.mkdir(path.dirname(startupAsset), { recursive: true });
+          await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
+          await fs.writeFile(startupAsset, "export {};\n", "utf-8");
+        },
+        onDoctor: async () => {
+          if (doctorBundle === "missing") {
+            await removeControlUiAssets();
+          } else {
+            await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
+          }
+        },
+      });
+
+      const result = await runWithCommand(runCommand, { channel: "stable" });
+
+      expect(result.status).toBe("ok");
+      expect(getUiBuildCount()).toBe(1);
+      expect(await pathExists(uiIndexPath)).toBe(true);
+      expect(calls).toContain(doctorKey);
+      expect(calls.indexOf("pnpm ui:build")).toBeGreaterThan(calls.indexOf(doctorKey));
+    },
+  );
+
+  it.each(["missing", "incomplete"] as const)(
+    "repairs a %s checkout startup bundle before the doctor pass",
+    async (checkoutBundle) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
+      const startupAsset = path.join(path.dirname(uiIndexPath), "assets", "startup.js");
+      if (checkoutBundle === "incomplete") {
         await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-        await fs.writeFile(uiIndexPath, `<html>${count}</html>`, "utf-8");
-      },
-      onDoctor: removeControlUiAssets,
-    });
+        await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
+      }
+      const stableTag = "v1.0.1-1";
+      const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
+        stableTag,
+        uiIndexPath,
+        onUiBuild: async () => {
+          await fs.mkdir(path.dirname(startupAsset), { recursive: true });
+          await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
+          await fs.writeFile(startupAsset, "export {};\n", "utf-8");
+        },
+      });
 
-    const result = await runWithCommand(runCommand, { channel: "stable" });
+      const result = await runWithCommand(runCommand, { channel: "stable" });
 
-    expect(result.status).toBe("ok");
-    expect(getUiBuildCount()).toBe(1);
-    expect(await pathExists(uiIndexPath)).toBe(true);
-    expect(calls).toContain(doctorKey);
-  });
+      expect(result.status).toBe("ok");
+      expect(getUiBuildCount()).toBe(1);
+      expect(calls.indexOf("pnpm ui:build")).toBeLessThan(calls.indexOf(doctorKey));
+    },
+  );
 
-  it("builds Control UI separately only when the checkout build omitted it", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    const stableTag = "v1.0.1-1";
-    const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
-      stableTag,
-      uiIndexPath,
-      onUiBuild: async () => {
-        await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-        await fs.writeFile(uiIndexPath, "<html>built</html>", "utf-8");
-      },
-    });
+  it.each(["missing", "incomplete"] as const)(
+    "fails when the post-doctor repair leaves a %s startup bundle",
+    async (repairedBundle) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      const uiIndexPath = await setupUiIndex();
 
-    const result = await runWithCommand(runCommand, { channel: "stable" });
+      const stableTag = "v1.0.1-1";
+      const { runCommand } = await createStableTagRunner({
+        stableTag,
+        uiIndexPath,
+        onDoctor: removeControlUiAssets,
+        onUiBuild: async () => {
+          if (repairedBundle === "incomplete") {
+            await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
+            await fs.writeFile(uiIndexPath, '<script src="./assets/startup.js"></script>', "utf-8");
+          }
+        },
+      });
 
-    expect(result.status).toBe("ok");
-    expect(getUiBuildCount()).toBe(1);
-    expect(calls.indexOf("pnpm ui:build")).toBeLessThan(calls.indexOf(doctorKey));
-  });
+      const result = await runWithCommand(runCommand, { channel: "stable" });
 
-  it("fails when UI assets are still missing after post-doctor repair", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
-    const uiIndexPath = await setupUiIndex();
-
-    const stableTag = "v1.0.1-1";
-    const { runCommand } = await createStableTagRunner({
-      stableTag,
-      uiIndexPath,
-      onDoctor: removeControlUiAssets,
-    });
-
-    const result = await runWithCommand(runCommand, { channel: "stable" });
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("ui-assets-missing");
-    expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
-  });
+      expect(result.status).toBe("error");
+      expect(result.reason).toBe("ui-assets-missing");
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "ui assets verify",
+          exitCode: 1,
+          stderrTail: expect.stringContaining(
+            repairedBundle === "incomplete" ? "assets/startup.js" : uiIndexPath,
+          ),
+        }),
+      );
+      expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

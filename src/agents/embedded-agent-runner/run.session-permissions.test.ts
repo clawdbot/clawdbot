@@ -26,4 +26,26 @@ describe("embedded run session permissions", () => {
       }),
     );
   });
+
+  it("shares the final plugin-clamped exec mode with the outer run", async () => {
+    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    const execOverrides = {};
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
+      expect(attempt.execOverrides).toBe(execOverrides);
+      expect(attempt.execOverrides?.mode).toBe("full");
+      attempt.permissionMode = "workspace";
+      attempt.execOverrides!.mode = "auto";
+      return makeAttemptResult({ assistantTexts: ["OK"] });
+    });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      permissionMode: "full",
+      sessionRoot: "/tmp/openclaw-plugin-session-root",
+      execOverrides,
+      runId: "run-plugin-clamped-session-permissions",
+    });
+
+    expect(execOverrides).toEqual({ mode: "auto" });
+  });
 });

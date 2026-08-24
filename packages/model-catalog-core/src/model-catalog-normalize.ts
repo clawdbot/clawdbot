@@ -126,10 +126,6 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
   return inputs.length > 0 ? inputs : undefined;
 }
 
-function normalizeStringOrNumber(value: unknown): string | number | undefined {
-  return normalizeOptionalString(value) ?? normalizeFiniteNumber(value);
-}
-
 function normalizePositiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
@@ -198,55 +194,37 @@ function normalizeOpenRouterPrice(value: unknown): ModelCatalogOpenRouterRouting
   if (!isRecord(value)) {
     return undefined;
   }
-  const maxPrice = {
-    ...(normalizeStringOrNumber(value.prompt) !== undefined
-      ? { prompt: normalizeStringOrNumber(value.prompt) }
-      : {}),
-    ...(normalizeStringOrNumber(value.completion) !== undefined
-      ? { completion: normalizeStringOrNumber(value.completion) }
-      : {}),
-    ...(normalizeStringOrNumber(value.image) !== undefined
-      ? { image: normalizeStringOrNumber(value.image) }
-      : {}),
-    ...(normalizeStringOrNumber(value.audio) !== undefined
-      ? { audio: normalizeStringOrNumber(value.audio) }
-      : {}),
-    ...(normalizeStringOrNumber(value.request) !== undefined
-      ? { request: normalizeStringOrNumber(value.request) }
-      : {}),
-  } satisfies NonNullable<ModelCatalogOpenRouterRouting["max_price"]>;
-  return Object.keys(maxPrice).length > 0 ? maxPrice : undefined;
-}
-
-function normalizeOpenRouterPercentileCutoffs(
-  value: unknown,
-):
-  | NonNullable<Exclude<ModelCatalogOpenRouterRouting["preferred_min_throughput"], number>>
-  | undefined {
-  if (!isRecord(value)) {
-    return undefined;
+  const maxPrice: NonNullable<ModelCatalogOpenRouterRouting["max_price"]> = {};
+  for (const field of ["prompt", "completion", "image", "audio", "request"] as const) {
+    const candidate = value[field];
+    const normalized = normalizeOptionalString(candidate) ?? normalizeFiniteNumber(candidate);
+    if (normalized !== undefined) {
+      maxPrice[field] = normalized;
+    }
   }
-  const normalized = {
-    ...(normalizeFiniteNumber(value.p50) !== undefined
-      ? { p50: normalizeFiniteNumber(value.p50) }
-      : {}),
-    ...(normalizeFiniteNumber(value.p75) !== undefined
-      ? { p75: normalizeFiniteNumber(value.p75) }
-      : {}),
-    ...(normalizeFiniteNumber(value.p90) !== undefined
-      ? { p90: normalizeFiniteNumber(value.p90) }
-      : {}),
-    ...(normalizeFiniteNumber(value.p99) !== undefined
-      ? { p99: normalizeFiniteNumber(value.p99) }
-      : {}),
-  };
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  return Object.keys(maxPrice).length > 0 ? maxPrice : undefined;
 }
 
 function normalizeOpenRouterMetricPreference(
   value: unknown,
 ): ModelCatalogOpenRouterRouting["preferred_min_throughput"] {
-  return normalizeFiniteNumber(value) ?? normalizeOpenRouterPercentileCutoffs(value);
+  const numeric = normalizeFiniteNumber(value);
+  if (numeric !== undefined) {
+    return numeric;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: NonNullable<
+    Exclude<ModelCatalogOpenRouterRouting["preferred_min_throughput"], number>
+  > = {};
+  for (const field of ["p50", "p75", "p90", "p99"] as const) {
+    const cutoff = normalizeFiniteNumber(value[field]);
+    if (cutoff !== undefined) {
+      normalized[field] = cutoff;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function normalizeOpenRouterSort(value: unknown): ModelCatalogOpenRouterRouting["sort"] {
@@ -271,7 +249,7 @@ function normalizeOpenRouterRouting(value: unknown): ModelCatalogOpenRouterRouti
   if (!isRecord(value)) {
     return undefined;
   }
-  const routing = {
+  const routing: ModelCatalogOpenRouterRouting = {
     ...(typeof value.allow_fallbacks === "boolean"
       ? { allow_fallbacks: value.allow_fallbacks }
       : {}),
@@ -285,33 +263,27 @@ function normalizeOpenRouterRouting(value: unknown): ModelCatalogOpenRouterRouti
     ...(typeof value.enforce_distillable_text === "boolean"
       ? { enforce_distillable_text: value.enforce_distillable_text }
       : {}),
-    ...(normalizeOptionalTrimmedStringList(value.order)
-      ? { order: normalizeOptionalTrimmedStringList(value.order) }
-      : {}),
-    ...(normalizeOptionalTrimmedStringList(value.only)
-      ? { only: normalizeOptionalTrimmedStringList(value.only) }
-      : {}),
-    ...(normalizeOptionalTrimmedStringList(value.ignore)
-      ? { ignore: normalizeOptionalTrimmedStringList(value.ignore) }
-      : {}),
-    ...(normalizeOptionalTrimmedStringList(value.quantizations)
-      ? { quantizations: normalizeOptionalTrimmedStringList(value.quantizations) }
-      : {}),
-    ...(normalizeOpenRouterSort(value.sort) ? { sort: normalizeOpenRouterSort(value.sort) } : {}),
-    ...(normalizeOpenRouterPrice(value.max_price)
-      ? { max_price: normalizeOpenRouterPrice(value.max_price) }
-      : {}),
-    ...(normalizeOpenRouterMetricPreference(value.preferred_min_throughput) !== undefined
-      ? {
-          preferred_min_throughput: normalizeOpenRouterMetricPreference(
-            value.preferred_min_throughput,
-          ),
-        }
-      : {}),
-    ...(normalizeOpenRouterMetricPreference(value.preferred_max_latency) !== undefined
-      ? { preferred_max_latency: normalizeOpenRouterMetricPreference(value.preferred_max_latency) }
-      : {}),
-  } satisfies ModelCatalogOpenRouterRouting;
+  };
+  for (const field of ["order", "only", "ignore", "quantizations"] as const) {
+    const normalized = normalizeOptionalTrimmedStringList(value[field]);
+    if (normalized) {
+      routing[field] = normalized;
+    }
+  }
+  const sort = normalizeOpenRouterSort(value.sort);
+  if (sort) {
+    routing.sort = sort;
+  }
+  const maxPrice = normalizeOpenRouterPrice(value.max_price);
+  if (maxPrice) {
+    routing.max_price = maxPrice;
+  }
+  for (const field of ["preferred_min_throughput", "preferred_max_latency"] as const) {
+    const normalized = normalizeOpenRouterMetricPreference(value[field]);
+    if (normalized !== undefined) {
+      routing[field] = normalized;
+    }
+  }
   return Object.keys(routing).length > 0 ? routing : undefined;
 }
 
@@ -321,14 +293,13 @@ function normalizeVercelGatewayRouting(
   if (!isRecord(value)) {
     return undefined;
   }
-  const routing = {
-    ...(normalizeOptionalTrimmedStringList(value.only)
-      ? { only: normalizeOptionalTrimmedStringList(value.only) }
-      : {}),
-    ...(normalizeOptionalTrimmedStringList(value.order)
-      ? { order: normalizeOptionalTrimmedStringList(value.order) }
-      : {}),
-  } satisfies ModelCatalogVercelGatewayRouting;
+  const routing: ModelCatalogVercelGatewayRouting = {};
+  for (const field of ["only", "order"] as const) {
+    const normalized = normalizeOptionalTrimmedStringList(value[field]);
+    if (normalized) {
+      routing[field] = normalized;
+    }
+  }
   return Object.keys(routing).length > 0 ? routing : undefined;
 }
 

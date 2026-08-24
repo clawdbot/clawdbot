@@ -4,7 +4,7 @@ import type {
 } from "../../plugins/computer-use-contract.js";
 
 const COMPUTER_USE_GUIDANCE_PROFILE = {
-  sourceTag: "cua-driver-rs-v0.19.3",
+  sourceTag: "cua-driver-rs-v0.20.0",
   elementActions: [
     "left_click",
     "right_click",

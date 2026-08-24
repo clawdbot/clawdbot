@@ -2,6 +2,7 @@
 summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for camera/screen/device/notifications/system and the macOS widget panel"
 read_when:
   - Pairing iOS/watchOS/Android nodes to a gateway
+  - Enabling isolated OpenClaw session hosting on a paired node
   - Using node camera or screen capture for agent context
   - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
@@ -558,6 +559,79 @@ failed provider or placement cleanup.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
+
+#### Isolate hosted worker sessions in containers
+
+By default, hosted OpenClaw worker sessions run directly on the paired node.
+Set `nodeHost.workerRuns.isolation` to `"container"` on that node to run each
+worker inside its own container instead:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      isolation: "container",
+      // Optional: use a digest-pinned, private-registry, or preloaded image.
+      // containerImage: "registry.example.com/openclaw/node:22-slim",
+    },
+  },
+}
+```
+
+Restart the node host after changing either setting. Isolation defaults to
+`"none"`, preserving the existing direct-process behavior. This setting is
+enforced locally on the node; the Gateway cannot silently disable it or fall
+back to an unisolated worker.
+
+Container isolation is supported on Linux and macOS node hosts; Windows is
+unsupported because native Windows paths cannot be mounted at their original
+paths inside the container. The node must have a working Docker-compatible
+container engine. OpenClaw tries the `docker` CLI first, including Docker-backed
+OrbStack installations, and then `podman`. The selected engine and daemon are
+checked when the node host starts and again before each container is created.
+If the platform is unsupported, neither engine works, or the daemon changes,
+session hosting or the affected launch fails visibly instead of falling back to
+an unisolated worker. Install or start the engine, verify `docker version` or
+`podman version`, and restart the node host.
+
+The default image is `node:22-slim`; the engine pulls it on first use when it
+is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
+digest-pinned image, a private-registry image, or an image already available
+to the engine. The image must provide a working Node.js 22 or newer runtime on
+its standard executable search path. If the image cannot be pulled, is
+inaccessible, or does not provide a suitable Node.js runtime, that session
+launch fails visibly; it never retries as a bare host process. Preload the
+image or configure registry access before hosting sessions on an offline or
+restricted node.
+
+Each worker container receives only two host bind mounts: its verified worker
+bundle root is read-only, and its assigned session workspace is read-write.
+Both are mounted at their original absolute host paths so the sealed bundle
+and workspace descriptor remain valid; the session workspace is also the
+container working directory. OpenClaw passes only the existing frozen,
+non-secret worker environment allowlist and adds no other host mounts.
+Container isolation protects the rest of the host filesystem and separates
+the worker process, but the worker can still modify its assigned workspace
+and connect to the Gateway.
+
+The container uses the engine's normal outbound networking and must be able
+to reach the Gateway worker WebSocket endpoint. A Gateway address such as
+`127.0.0.1` or `localhost` that works on the node host points back into the
+container when used by the worker; configure a Gateway address reachable from
+the container network instead. If a Gateway requires a custom certificate
+authority, `NODE_EXTRA_CA_CERTS` must point to a certificate already inside
+the mounted bundle or session workspace; OpenClaw will not mount another host
+path for it. Browser assignments that require access to host-only browser
+state are not supported in container-isolated sessions.
+
+Cancellation and fencing terminate the container itself rather than only the
+container-engine client. The node host records the container's durable engine
+and container identity, checks that identity during restart reconciliation,
+and removes orphaned worker containers labeled for the same Gateway. If the
+node-host process exits unexpectedly, a running container can survive until
+the next node-host startup; keep the node host under a restarting service if
+that cleanup window must remain short.
 
 ### OpenCode and Pi sessions
 

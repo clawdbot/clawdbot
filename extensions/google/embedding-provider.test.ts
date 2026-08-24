@@ -55,6 +55,10 @@ function requireFirstFetchInput(fetchMock: ReturnType<typeof vi.fn>): RequestInf
   return call[0] as RequestInfo | URL;
 }
 
+function axisVector(length: number, index = 0, value = 1): number[] {
+  return Array.from({ length }, (_, offset) => (offset === index ? value : 0));
+}
+
 describe("Gemini embedding provider", () => {
   const providerBaseUrl = "https://provider.example.test/v1beta";
   const config = {
@@ -144,19 +148,22 @@ describe("Gemini embedding provider", () => {
   it.each(["models/", "gemini/", "google/"])(
     "normalizes the %s model prefix through the provider request",
     async (prefix) => {
-      const fetchMock = installFetchMock(() => ({ embedding: { values: [1, 0] } }));
+      const fetchMock = installFetchMock(() => ({
+        embedding: { values: axisVector(768) },
+      }));
       const { provider } = await createGeminiEmbeddingProvider({
         config: {} as never,
         provider: "gemini",
         remote: { apiKey: "placeholder" },
-        model: `${prefix}gemini-embedding-2-preview`,
+        model: `${prefix}gemini-embedding-2`,
+        outputDimensionality: 768,
         fallback: "none",
       });
 
       await provider.embedQuery("query");
 
       expect(requireFirstFetchInput(fetchMock)).toBe(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent",
       );
     },
   );
@@ -167,7 +174,7 @@ describe("Gemini embedding provider", () => {
         config: {} as never,
         provider: "gemini",
         remote: { apiKey: "placeholder" },
-        model: "gemini-embedding-2-preview",
+        model: "gemini-embedding-2",
         outputDimensionality: 1024,
         fallback: "none",
       }),
@@ -180,17 +187,23 @@ describe("Gemini embedding provider", () => {
       return url.endsWith(":batchEmbedContents")
         ? {
             embeddings: Array.from({ length: 2 }, () => ({
-              values: [0, 0, 5],
+              values: axisVector(768, 2, 5),
             })),
           }
-        : { embedding: { values: [3, 4, 0] } };
+        : {
+            embedding: {
+              values: Array.from({ length: 768 }, (_, index) =>
+                index === 0 ? 3 : index === 1 ? 4 : 0,
+              ),
+            },
+          };
     });
 
     const { provider } = await createGeminiEmbeddingProvider({
       config: {} as never,
       provider: "gemini",
       remote: { apiKey: "test-key" },
-      model: "gemini-embedding-2-preview",
+      model: "gemini-embedding-2",
       outputDimensionality: 768,
       taskType: "SEMANTIC_SIMILARITY",
       fallback: "none",
@@ -198,7 +211,9 @@ describe("Gemini embedding provider", () => {
 
     await expect(provider.embedQuery("   ")).resolves.toStrictEqual([]);
     await expect(provider.embedBatch([])).resolves.toStrictEqual([]);
-    await expect(provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8, 0]);
+    const queryEmbedding = await provider.embedQuery("test query");
+    expect(queryEmbedding).toHaveLength(768);
+    expect(queryEmbedding.slice(0, 3)).toEqual([0.6, 0.8, 0]);
 
     const structuredBatch = await provider.embedBatchInputs?.([
       {
@@ -216,41 +231,38 @@ describe("Gemini embedding provider", () => {
         ],
       },
     ]);
-    expect(structuredBatch).toEqual([
-      [0, 0, 1],
-      [0, 0, 1],
-    ]);
+    expect(structuredBatch).toHaveLength(2);
+    expect(structuredBatch?.[0]).toHaveLength(768);
+    expect(structuredBatch?.[0]?.slice(0, 4)).toEqual([0, 0, 1, 0]);
+    expect(structuredBatch?.[1]).toEqual(structuredBatch?.[0]);
 
     expect(requireFirstFetchInput(fetchMock)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent",
     );
     expect(fetchJsonBody(fetchMock, 0)).toEqual({
       outputDimensionality: 768,
-      taskType: "SEMANTIC_SIMILARITY",
-      content: { parts: [{ text: "test query" }] },
+      content: { parts: [{ text: "task: sentence similarity | query: test query" }] },
     });
     expect(fetchJsonBody(fetchMock, 1)).toEqual({
       requests: [
         {
-          model: "models/gemini-embedding-2-preview",
+          model: "models/gemini-embedding-2",
           content: {
             parts: [
               { text: "Image file: diagram.png" },
               { inlineData: { mimeType: "image/png", data: "img" } },
             ],
           },
-          taskType: "SEMANTIC_SIMILARITY",
           outputDimensionality: 768,
         },
         {
-          model: "models/gemini-embedding-2-preview",
+          model: "models/gemini-embedding-2",
           content: {
             parts: [
               { text: "Audio file: note.wav" },
               { inlineData: { mimeType: "audio/wav", data: "aud" } },
             ],
           },
-          taskType: "SEMANTIC_SIMILARITY",
           outputDimensionality: 768,
         },
       ],
@@ -302,6 +314,119 @@ describe("Gemini embedding provider", () => {
 
     await expect(provider.embedBatch(["one", "two"])).rejects.toThrow(
       "gemini embeddings failed: malformed JSON response",
+    );
+  });
+
+  it("keeps the preview identifier compatible during migration", async () => {
+    const fetchMock = installFetchMock(() => ({
+      embedding: { values: axisVector(768) },
+    }));
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 768,
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test query")).resolves.toHaveLength(768);
+    expect(requireFirstFetchInput(fetchMock)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
+    );
+    expect(fetchJsonBody(fetchMock, 0)).toEqual({
+      content: { parts: [{ text: "test query" }] },
+      taskType: "RETRIEVAL_QUERY",
+      outputDimensionality: 768,
+    });
+  });
+
+  it("formats stable Gemini retrieval requests without unsupported task types", async () => {
+    const fetchMock = installFetchMock((input) => {
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      return url.endsWith(":batchEmbedContents")
+        ? { embeddings: [{ values: axisVector(768) }] }
+        : { embedding: { values: axisVector(768) } };
+    });
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-2",
+      outputDimensionality: 768,
+      fallback: "none",
+    });
+
+    await provider.embedQuery("find this");
+    await provider.embedBatch(["remember this"]);
+
+    expect(fetchJsonBody(fetchMock, 0)).toEqual({
+      content: { parts: [{ text: "task: search result | query: find this" }] },
+      outputDimensionality: 768,
+    });
+    expect(fetchJsonBody(fetchMock, 1)).toEqual({
+      requests: [
+        {
+          content: { parts: [{ text: "title: none | text: remember this" }] },
+          model: "models/gemini-embedding-2",
+          outputDimensionality: 768,
+        },
+      ],
+    });
+  });
+
+  it.each([
+    ["QUESTION_ANSWERING", "question answering"],
+    ["FACT_VERIFICATION", "fact checking"],
+  ] as const)("keeps %s query and document instructions asymmetric", async (taskType, task) => {
+    const fetchMock = installFetchMock((input) => {
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      return url.endsWith(":batchEmbedContents")
+        ? { embeddings: [{ values: axisVector(768) }] }
+        : { embedding: { values: axisVector(768) } };
+    });
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-2",
+      outputDimensionality: 768,
+      taskType,
+      fallback: "none",
+    });
+
+    await provider.embedQuery("find this");
+    await provider.embedBatch(["remember this"]);
+
+    expect(fetchJsonBody(fetchMock, 0)).toMatchObject({
+      content: { parts: [{ text: `task: ${task} | query: find this` }] },
+    });
+    expect(fetchJsonBody(fetchMock, 1)).toMatchObject({
+      requests: [{ content: { parts: [{ text: "title: none | text: remember this" }] } }],
+    });
+  });
+
+  it("rejects Gemini 2 responses that drift from the requested dimensions", async () => {
+    installFetchMock((input) => {
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      return url.endsWith(":batchEmbedContents")
+        ? { embeddings: [{ values: axisVector(3072) }] }
+        : { embedding: { values: axisVector(3072) } };
+    });
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-2",
+      outputDimensionality: 768,
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test query")).rejects.toThrow(
+      "gemini embeddings failed: expected 768 dimensions, received 3072",
+    );
+    await expect(provider.embedBatch(["test document"])).rejects.toThrow(
+      "gemini embeddings failed: expected 768 dimensions, received 3072",
     );
   });
 });

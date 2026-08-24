@@ -16,6 +16,10 @@ import {
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -30,6 +34,7 @@ import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
+  KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
@@ -43,13 +48,11 @@ import {
   NAV_WIDTH_MIN,
   loadSettings,
   normalizeCatalogOpenTarget,
+  normalizeChatSendShortcut,
 } from "./settings.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
-  ? "⌘K"
-  : "Ctrl K";
 const SCOPE_UPGRADE_SURFACE_ELEMENT = {
   tagName: "openclaw-device-scope-upgrade-banner",
   label: t("connection.scopeUpgrade.status"),
@@ -291,8 +294,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         }}
       ></openclaw-device-scope-upgrade-banner>`
     : null;
-  // Drawer navigation always opens expanded; the desktop collapse preference
-  // stays persisted for when the viewport returns to the desktop layout.
+  // Drawer navigation always opens expanded; the tab's desktop collapse state
+  // stays in memory for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
   const navCollapsed =
     navigationSnapshot.navCollapsed &&
@@ -453,6 +456,11 @@ export function renderApplicationShell(host: ShellViewHost) {
     ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
       ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
       : nothing}
+    ${isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
+      ? html`<openclaw-keyboard-shortcuts-dialog
+          .sendShortcut=${normalizeChatSendShortcut(uiSettings.chatSendShortcut)}
+        ></openclaw-keyboard-shortcuts-dialog>`
+      : nothing}
     <div
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
         ? "shell--nav-collapsed"
@@ -495,7 +503,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ? html`
             <div class="shell-chrome-controls">
               <openclaw-tooltip
-                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (⌘B)`}
+                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
               >
                 <button
                   type="button"
@@ -527,7 +535,9 @@ export function renderApplicationShell(host: ShellViewHost) {
                     </button>
                   </openclaw-tooltip>`
                 : nothing}
-              <openclaw-tooltip .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}>
+              <openclaw-tooltip
+                .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+              >
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__search"

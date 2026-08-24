@@ -41,7 +41,7 @@ bash /tmp/openclaw-source/scripts/install-cli.sh \
   --version "$OPENCLAW_SOURCE_SHA" \
   --no-git-update \
   --prefix /tmp/openclaw-prefix \
-  --node-version 24.15.0 \
+  --node-version 24.19.0 \
   --no-onboard
 
 prefix_node=/tmp/openclaw-prefix/tools/node/bin/node

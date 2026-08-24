@@ -127,8 +127,8 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "0f9e678e239b45db46d2bd930b7983203580df78";
-    const legacyKovaRef = "0f9e678e239b45db46d2bd930b7983203580df78";
+    const canonicalKovaRef = "dfafaff9dcd49b9c76788c6260f1f72dd2ced593";
+    const legacyKovaRef = "dfafaff9dcd49b9c76788c6260f1f72dd2ced593";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -457,7 +457,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(workflow.jobs?.kova?.needs).toBe("resolve_target");
     expect(workflow.jobs?.source_performance?.needs).toBe("resolve_target");
-    expect(targetCheckout.uses).toBe("actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10");
+    expect(targetCheckout.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
     expect(targetCheckout.with?.ref).toBe("${{ inputs.target_ref || github.sha }}");
     expect(targetCheckout.with?.path).toBe(".artifacts/performance-target");
     expect(targetCheckout.with?.["sparse-checkout-cone-mode"]).toBe(false);

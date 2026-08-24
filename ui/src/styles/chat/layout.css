@@ -429,6 +429,12 @@ openclaw-chat-page {
   content-visibility: auto;
 }
 
+/* Message context can extend above its row. Release paint containment only
+   while it is open so the popover stays visible without giving up idle skips. */
+.chat-virtual-row:has(details.msg-meta[open]) {
+  content-visibility: visible;
+}
+
 .chat-virtual-row--first > :first-child {
   margin-top: 0 !important;
 }
@@ -3149,6 +3155,24 @@ button.chat-pr__diff {
 .agent-chat__input-btn:hover:not(:disabled) {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+.agent-chat__input-btn--selected:not(:disabled) {
+  position: relative;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.agent-chat__input-btn--selected::after {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--bg);
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
 }
 
 .agent-chat__input-btn:disabled {

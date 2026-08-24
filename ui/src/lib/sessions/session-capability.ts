@@ -126,6 +126,7 @@ export type SessionGateway = {
     hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
+    selfUser?: { readonly id: string } | null;
   };
   subscribe: (listener: (snapshot: SessionGateway["snapshot"]) => void) => () => void;
   subscribeEvents: (listener: (event: GatewayEventFrame) => void) => () => void;

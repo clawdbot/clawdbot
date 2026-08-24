@@ -125,7 +125,6 @@ const {
   scheduleGatewayPostReadyMaintenance,
   startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
-  startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
 describe("server-runtime-services", () => {
@@ -174,32 +173,25 @@ describe("server-runtime-services", () => {
     resetGatewayWorkAdmission();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", () => {
-    const services = startGatewayRuntimeServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
+  it("starts channel health without activating scheduled services", () => {
+    startGatewayChannelHealthMonitor({
       channelManager: {
         getRuntimeSnapshot: vi.fn(),
         isHealthMonitorEnabled: vi.fn(),
         isManuallyStopped: vi.fn(),
       } as never,
-      log: createLog(),
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.startSessionUpstreamMonitor).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
-
-    services.heartbeatRunner.stop();
-    expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
 
   it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
     "keeps channel health recovery disabled when %s suppresses startup",
     (envKey) => {
       const monitor = startGatewayChannelHealthMonitor({
-        cfg: {} as never,
         channelManager: {} as never,
         env: { [envKey]: "1" },
       });

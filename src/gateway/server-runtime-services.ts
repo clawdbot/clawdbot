@@ -37,7 +37,6 @@ import {
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export {
   startGatewayChannelHealthMonitor,
-  startGatewayRuntimeServices,
   type GatewayChannelManager,
 } from "./server-runtime-startup-services.js";
 
@@ -77,7 +76,7 @@ export function startGatewayCronWithLogging(params: {
   }).catch((err: unknown) => params.logCron.error(`failed to enter start root: ${String(err)}`));
 }
 
-async function clearGatewayMaintenanceHandles(
+export async function clearGatewayMaintenanceHandles(
   maintenance: GatewayMaintenanceHandles | null,
 ): Promise<void> {
   if (!maintenance) {

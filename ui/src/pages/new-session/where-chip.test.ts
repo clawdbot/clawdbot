@@ -189,7 +189,25 @@ describe("Where chip", () => {
     expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });
 
-  it("disables automatic selection with an actionable reason when no paired device hosts sessions", () => {
+  it.each([
+    {
+      name: "no paired device hosts sessions",
+      issues: undefined,
+      reason: /no session hosts are paired/i,
+    },
+    {
+      name: "a paired node must be updated before it can advertise session hosting",
+      issues: [
+        {
+          code: "update-required",
+          action: "update-and-reconnect",
+          updateCommand: "openclaw update",
+          headlessReconnectCommand: "openclaw node restart",
+        } as const,
+      ],
+      reason: /openclaw update.*openclaw node restart/i,
+    },
+  ])("disables automatic selection with an actionable reason when $name", ({ issues, reason }) => {
     const state = resolveWhereChip({
       environments: [
         {
@@ -198,6 +216,7 @@ describe("Where chip", () => {
           label: "MacBook",
           status: "available",
           sessionHost: false,
+          ...(issues ? { issues } : {}),
         },
       ],
       cloudProfiles: [],
@@ -231,7 +250,8 @@ describe("Where chip", () => {
 
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
     expect(automatic?.disabled).toBe(true);
-    expect(automatic?.title).toMatch(/no session hosts are paired/i);
+    expect(automatic?.title).toMatch(reason);
+    expect(automatic?.textContent).toMatch(reason);
   });
 
   it.each([

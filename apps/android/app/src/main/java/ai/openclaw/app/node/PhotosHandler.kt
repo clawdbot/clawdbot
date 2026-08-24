@@ -113,7 +113,8 @@ private object SystemPhotosDataSource : PhotosDataSource {
         MediaStore.Images.Media.DATE_ADDED,
       )
     val sortOrder =
-      "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC"
+      "COALESCE(NULLIF(${MediaStore.Images.Media.DATE_TAKEN}, 0), " +
+        "${MediaStore.Images.Media.DATE_ADDED} * 1000) DESC, ${MediaStore.Images.Media._ID} DESC"
     val args =
       Bundle().apply {
         putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
@@ -182,10 +183,8 @@ private object SystemPhotosDataSource : PhotosDataSource {
     maxWidth: Int,
   ): Int {
     var sample = 1
-    var candidate = width
-    while (candidate > maxWidth && sample < 64) {
+    while (width / sample / 2 >= maxWidth) {
       sample *= 2
-      candidate = width / sample
     }
     return sample
   }
