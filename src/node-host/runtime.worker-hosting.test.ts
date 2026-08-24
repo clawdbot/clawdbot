@@ -218,6 +218,29 @@ describe("node-host worker manifest", () => {
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
   });
 
+  it("disables a retrying container supervisor when a later attempt finds a context mismatch", async () => {
+    const mismatch = new NodeWorkerContainerContextMismatchError(
+      "node worker launch launch-1 belongs to a different docker engine or daemon; restore its original engine context before enabling worker hosting",
+    );
+    mocks.initializeWorkerSupervisor
+      .mockRejectedValueOnce(new Error("launch journal temporarily unavailable"))
+      .mockRejectedValueOnce(mismatch);
+
+    const prepared = await prepareWorkerRuntime("container");
+
+    expect(prepared.workerHostingEnabled).toBe(true);
+    const onWorkerHostingDisabled = vi.fn();
+    const runtime = prepared.start({ client, onWorkerHostingDisabled });
+
+    await vi.waitFor(() =>
+      expect(onWorkerHostingDisabled).toHaveBeenCalledExactlyOnceWith(mismatch.message),
+    );
+    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledTimes(2);
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+    await runtime.close();
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+  });
+
   it("retries non-container reconciliation after a bounded delay before publishing capacity", async () => {
     vi.useFakeTimers();
     mocks.initializeWorkerSupervisor

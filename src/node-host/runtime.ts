@@ -69,6 +69,7 @@ type PreparedNodeHostRuntime = {
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
     onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+    onWorkerHostingDisabled?: (reason: string) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -387,7 +388,13 @@ export async function prepareNodeHostRuntime(params?: {
     workerHostingEnabled: workerRunsEnabled,
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged, onRunnerCapacityChanged }) {
+    start({
+      client,
+      onInventoryChanged,
+      onManifestChanged,
+      onRunnerCapacityChanged,
+      onWorkerHostingDisabled,
+    }) {
       const mcpAbort = new AbortController();
       let closing = false;
       let closePromise: Promise<void> | undefined;
@@ -398,7 +405,7 @@ export async function prepareNodeHostRuntime(params?: {
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
-      const workerSupervisor =
+      let workerSupervisor =
         preparedContainerSupervisor ??
         (workerRunsEnabled
           ? createNodeWorkerSupervisor({
@@ -415,12 +422,21 @@ export async function prepareNodeHostRuntime(params?: {
         }
       }
       const initializeWorkerSupervisor = () => {
-        if (!workerSupervisor || closing) {
+        const supervisor = workerSupervisor;
+        if (!supervisor || closing) {
           return;
         }
-        void workerSupervisor.initialize().catch((error: unknown) => {
+        void supervisor.initialize().catch(async (error: unknown) => {
           logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
-          if (closing) {
+          if (closing || workerSupervisor !== supervisor) {
+            return;
+          }
+          if (error instanceof NodeWorkerContainerContextMismatchError) {
+            workerSupervisor = undefined;
+            onWorkerHostingDisabled?.(error.message);
+            await supervisor.close().catch((closeError: unknown) => {
+              logDebug(`node-host: worker supervisor cleanup failed: ${String(closeError)}`);
+            });
             return;
           }
           initializationRetry = setTimeout(() => {
