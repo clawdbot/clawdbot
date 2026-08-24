@@ -1322,12 +1322,10 @@ describe("Slack live QA runtime helpers", () => {
       throw new Error("missing Slack chart scenario verifier");
     }
     const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
-    const history = vi.fn(async (request: { limit: number }) => ({
-      // Shared-channel concurrency can push the earlier chart beyond the old
-      // 50-message observation window before the final marker arrives.
-      messages:
-        request.limit >= 200
-          ? [
+    const history = vi.fn(async (request: { cursor?: string }) =>
+      request.cursor === "page-2"
+        ? {
+            messages: [
               {
                 blocks: [
                   {
@@ -1357,9 +1355,13 @@ describe("Slack live QA runtime helpers", () => {
                 ts: "2.000000",
                 user: "U999999999",
               },
-            ]
-          : [],
-    }));
+            ],
+          }
+        : {
+            messages: [],
+            response_metadata: { next_cursor: "page-2" },
+          },
+    );
 
     await expect(
       afterReply(
@@ -1372,8 +1374,15 @@ describe("Slack live QA runtime helpers", () => {
         } as never,
       ),
     ).resolves.toBe("verified native data_visualization block and deterministic accessible text");
-    expect(history).toHaveBeenCalledWith({
+    expect(history).toHaveBeenNthCalledWith(1, {
       channel: "C123456789",
+      inclusive: true,
+      limit: 200,
+      oldest: "1.000000",
+    });
+    expect(history).toHaveBeenNthCalledWith(2, {
+      channel: "C123456789",
+      cursor: "page-2",
       inclusive: true,
       limit: 200,
       oldest: "1.000000",

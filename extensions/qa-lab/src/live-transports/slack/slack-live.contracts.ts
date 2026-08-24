@@ -330,6 +330,11 @@ export type SlackMessage = Omit<z.infer<typeof slackHistoryMessageSchema>, "ts">
 export const slackHistorySchema = z.object({
   ok: z.boolean().optional(),
   messages: z.array(slackHistoryMessageSchema).optional(),
+  response_metadata: z
+    .object({
+      next_cursor: z.string().optional(),
+    })
+    .optional(),
 });
 
 export const slackRepliesSchema = z.object({

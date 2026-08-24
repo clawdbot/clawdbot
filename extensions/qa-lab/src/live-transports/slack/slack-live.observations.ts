@@ -26,9 +26,10 @@ import {
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
-// Isolated Slack flows share one live QA channel. Presentation sends precede
-// their final markers, so retain enough history to survive concurrent traffic.
-const SLACK_QA_CHANNEL_HISTORY_LIMIT = 200;
+// Isolated flows share one channel, so presentation sends can move across pages
+// before their final markers arrive. Cap traversal to bound each polling pass.
+const SLACK_QA_CHANNEL_HISTORY_PAGE_LIMIT = 200;
+const SLACK_QA_CHANNEL_HISTORY_MAX_PAGES = 5;
 
 export async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
   const { createSlackWebClient } = loadSlackQaRuntime();
@@ -71,15 +72,25 @@ export async function listSlackMessages(params: {
   client: WebClient;
   oldestTs: string;
 }) {
-  const history = slackHistorySchema.parse(
-    await params.client.conversations.history({
-      channel: params.channelId,
-      inclusive: true,
-      limit: SLACK_QA_CHANNEL_HISTORY_LIMIT,
-      oldest: params.oldestTs,
-    }),
-  );
-  return history.messages ?? [];
+  const messages: SlackMessage[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < SLACK_QA_CHANNEL_HISTORY_MAX_PAGES; page += 1) {
+    const history = slackHistorySchema.parse(
+      await params.client.conversations.history({
+        ...(cursor ? { cursor } : {}),
+        channel: params.channelId,
+        inclusive: true,
+        limit: SLACK_QA_CHANNEL_HISTORY_PAGE_LIMIT,
+        oldest: params.oldestTs,
+      }),
+    );
+    messages.push(...(history.messages ?? []));
+    cursor = history.response_metadata?.next_cursor?.trim() || undefined;
+    if (!cursor) {
+      break;
+    }
+  }
+  return messages;
 }
 
 export async function listSlackThreadMessages(params: {
