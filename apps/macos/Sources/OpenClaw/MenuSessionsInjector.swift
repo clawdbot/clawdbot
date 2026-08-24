@@ -66,6 +66,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         self.originalDelegate?.menuWillOpen?(menu)
+        // Repainting tracked rows can re-enter this callback without closing the menu.
+        // Keep refresh and retry state scoped to one closed-to-open transition.
+        guard !self.isMenuOpen else { return }
         self.isMenuOpen = true
         self.menuOpenWidth = self.currentMenuWidth(for: menu)
 

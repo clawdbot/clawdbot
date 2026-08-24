@@ -231,6 +231,52 @@ struct MenuSessionsInjectorTests {
         #expect(injector.testingUsageCacheUpdatedAt == nil)
     }
 
+    @Test func `open menu repaint does not restart exhausted usage retries`() async {
+        let injector = MenuSessionsInjector()
+        injector.setTestingControlChannelConnected(true)
+        injector.setTestingUsageRetryInterval(0)
+        injector.setTestingSnapshot(
+            SessionStoreSnapshot(
+                storePath: "/tmp/sessions.json",
+                defaults: SessionDefaults(model: "anthropic/claude-opus-4-6", contextTokens: 200_000),
+                rows: []),
+            errorText: nil)
+        injector.setTestingCostUsageSummary(nil, errorText: nil)
+        injector.setTestingUsageSummary(
+            GatewayUsageSummary(updatedAt: 0, providers: [], refreshing: false))
+        let events = UsageLoadEvents()
+        injector.setTestingUsageLoadDidFinish { events.finished() }
+        injector.setTestingUsageRetryDidExhaust { events.exhausted() }
+        var calls = 0
+        injector.setTestingUsageLoader {
+            calls += 1
+            return GatewayUsageSummary(updatedAt: 1, providers: [], refreshing: true)
+        }
+
+        let menu = Self.makeMenuShell()
+        injector.menuWillOpen(menu)
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+        await injector.refreshUsageCacheForTesting(force: true)
+        #expect(await events.waitFor(count: 4))
+        #expect(await events.waitForExhaustion())
+
+        // AppKit asks the delegate to update the still-open menu after its rows
+        // change. That repaint belongs to the same retry lifecycle.
+        injector.menuWillOpen(menu)
+        for _ in 0..<10000 {
+            await Task.yield()
+        }
+
+        #expect(calls == 4)
+        injector.menuDidClose(menu)
+        injector.menuWillOpen(menu)
+        #expect(await events.waitFor(count: 8))
+        #expect(calls == 8)
+        injector.menuDidClose(menu)
+    }
+
     @Test func `rejected usage retries preserve a visible stalled section`() async {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
