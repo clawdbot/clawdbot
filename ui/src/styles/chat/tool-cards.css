@@ -2254,7 +2254,6 @@ openclaw-tooltip.chat-tasks-status__preview {
 }
 
 @media (pointer: coarse) {
-  .chat-tool-msg-summary,
   .chat-activity-group__summary {
     padding-top: 8px;
     padding-bottom: 8px;
