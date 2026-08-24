@@ -29,7 +29,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
-import { withTempDir } from "../../test-utils/temp-dir.js";
+import { withTestDir } from "../../test-utils/temp-dir.js";
 import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
@@ -4627,7 +4627,7 @@ describe("message tool boot-echo guard", () => {
         );
       }
     });
-    await withTempDir("openclaw-boot-echo-", async (workspaceDir) => {
+    await withTestDir("openclaw-boot-echo-", async (workspaceDir) => {
       await fs.writeFile(`${workspaceDir}/BOOT.md`, bootText);
       const { runBootOnce } = await import("../../gateway/boot.js");
       await expect(
