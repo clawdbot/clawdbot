@@ -13,7 +13,6 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
-import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -51,28 +50,6 @@ function createRunner(responses: Record<string, CommandResponse>) {
     return toCommandResult(responses[key]);
   };
   return { runner, calls };
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 2_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) {
-      return true;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-  return !isProcessAlive(pid);
 }
 
 describe("resolveUpdateDoctorExecutionPolicy", () => {
@@ -197,53 +174,38 @@ describe("runGatewayUpdate", () => {
     await fs.writeFile(path.join(tempDir, "package.json"), JSON.stringify(pkg), "utf-8");
   }
 
-  it.runIf(process.platform !== "win32")(
-    "kills nested updater subprocesses when a default command times out",
-    { timeout: 10_000 },
-    async () => {
-      await setupGitCheckout();
-      const fakeBinDir = path.join(tempDir, "fake-bin");
-      const fakeCommandName = "openclaw-update-timeout-fixture.cjs";
-      const fakeCommandPath = path.join(fakeBinDir, fakeCommandName);
-      const childPidPath = path.join(tempDir, "nested-child.pid");
-      await fs.mkdir(fakeBinDir, { recursive: true });
-      await fs.writeFile(
-        fakeCommandPath,
-        "#!/usr/bin/env node\n" +
-          `const { spawn } = require("node:child_process");\n` +
-          `const fs = require("node:fs");\n` +
-          `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });\n` +
-          `fs.writeFileSync(process.env.OPENCLAW_UPDATE_TEST_CHILD_PID_PATH, String(child.pid));\n` +
-          `setInterval(() => {}, 1000);\n`,
-        "utf-8",
-      );
-      await fs.chmod(fakeCommandPath, 0o755);
-      let childPid: number | null = null;
-      let childExited = false;
-      try {
-        const { runCommand } = await buildUpdateCommandRunner();
-        const result = await runCommand([process.execPath, fakeCommandPath], {
-          timeoutMs: 500,
-          env: {
-            ...process.env,
-            NODE_OPTIONS: "",
-            OPENCLAW_UPDATE_TEST_CHILD_PID_PATH: childPidPath,
-          },
-        });
-        expect(result.termination).toBe("timeout");
-        expect(await pathExists(childPidPath)).toBe(true);
-        childPid = Number.parseInt(await fs.readFile(childPidPath, "utf-8"), 10);
-        expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
-        childExited = await waitForProcessExit(childPid);
-      } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-      }
+  it("owns default updater subprocess trees", async () => {
+    const runCommandWithTimeoutMock = vi.fn(async () => ({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      killed: false,
+      signal: null,
+    }));
+    vi.resetModules();
+    vi.doMock("../process/exec.js", () => ({ runCommandWithTimeout: runCommandWithTimeoutMock }));
+    vi.doMock("./update-global.js", () => ({
+      createGlobalInstallEnv: async () => ({ OPENCLAW_UPDATE_TEST_ENV: "1" }),
+    }));
 
-      expect(childExited).toBe(true);
-    },
-  );
+    try {
+      const { buildUpdateCommandRunner } = await import("./update-runner-command.js");
+      const { runCommand } = await buildUpdateCommandRunner();
+
+      await runCommand(["pnpm", "install"], { cwd: tempDir, timeoutMs: 500 });
+
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["pnpm", "install"], {
+        cwd: tempDir,
+        env: { OPENCLAW_UPDATE_TEST_ENV: "1" },
+        killProcessTree: true,
+        timeoutMs: 500,
+      });
+    } finally {
+      vi.doUnmock("../process/exec.js");
+      vi.doUnmock("./update-global.js");
+      vi.resetModules();
+    }
+  });
 
   it.runIf(process.platform !== "win32")(
     "classifies a prepared pnpm 11 project by its canonical package root",
