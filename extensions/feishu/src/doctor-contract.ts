@@ -124,6 +124,9 @@ function hasAllowFromWildcard(value: unknown): boolean {
 }
 
 function hasInvalidOpenDmAccount(entry: Record<string, unknown>, parent: Record<string, unknown>) {
+  if (parent.enabled === false || entry.enabled === false) {
+    return false;
+  }
   const effectivePolicy = entry.dmPolicy ?? parent.dmPolicy ?? "pairing";
   const effectiveAllowFrom = entry.allowFrom ?? parent.allowFrom;
   return effectivePolicy === "open" && !hasAllowFromWildcard(effectiveAllowFrom);
