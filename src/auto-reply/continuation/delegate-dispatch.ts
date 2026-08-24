@@ -18,6 +18,7 @@ import {
   removeUnacceptedDelegateArtifactPolicy,
 } from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
+import { isSpawnSubagentAdmissionCancelledError } from "../../agents/subagents/spawn/subagent-spawn-contract.js";
 import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagents/spawn/subagent-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -679,6 +680,12 @@ export async function dispatchToolDelegates(
         rejected++;
       }
     } catch (err) {
+      if (isSpawnSubagentAdmissionCancelledError(err)) {
+        removeRejectedArtifactPolicy(delegate);
+        dispatchSpan?.setStatus("ERROR", err.message);
+        rejected++;
+        continue;
+      }
       if (err instanceof DelegateTerminalChainStatePersistError) {
         const message = formatErrorMessage(err.originalError);
         dispatchSpan?.recordException(err.originalError);

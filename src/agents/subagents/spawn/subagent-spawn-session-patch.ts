@@ -10,7 +10,10 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
-import type { SpawnSubagentAdmissionAuthority } from "./subagent-spawn-contract.js";
+import {
+  isSpawnSubagentAdmissionCancelledError,
+  type SpawnSubagentAdmissionAuthority,
+} from "./subagent-spawn-contract.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
@@ -177,6 +180,9 @@ export async function createInitialSubagentSession(params: {
     );
     return { status: "ok", entry: entry ?? undefined };
   } catch (err) {
+    if (isSpawnSubagentAdmissionCancelledError(err)) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
     return { status: "error", error: `child session patch failed: ${message}` };
   }

@@ -7,6 +7,10 @@ import {
   listTaskFlowsForOwnerKey,
   updateFlowRecordByIdExpectedRevision,
 } from "../../tasks/task-flow-runtime-internal.js";
+import {
+  isPostCompactionDelegateFlow,
+  readAcceptedDelegateChildSessionKey,
+} from "./delegate-flow-store.js";
 import { isContinuationWorkFlow } from "./work-flow-state.js";
 
 export class SessionContinuationResetError extends Error {
@@ -17,9 +21,13 @@ export class SessionContinuationResetError extends Error {
 }
 
 function isResettableContinuationFlow(flow: TaskFlowRecord): boolean {
+  const handedOffPostCompaction =
+    flow.status === "succeeded" &&
+    isPostCompactionDelegateFlow(flow) &&
+    readAcceptedDelegateChildSessionKey(flow) === undefined;
   return (
     (isContinuationWorkFlow(flow) || isContinuationDelegateFlow(flow)) &&
-    (flow.status === "queued" || flow.status === "running")
+    (flow.status === "queued" || flow.status === "running" || handedOffPostCompaction)
   );
 }
 

@@ -16,6 +16,7 @@ import {
   isTerminalDelegateFlow,
   listQueuedPendingFlows,
   listRecoverablePendingFlows,
+  readAcceptedDelegateChildSessionKey,
   rejectCorruptDelegateFlow,
   resetDelegateFlowDiagnosticsForTests,
   scrubCancellationRequestedDelegateFlowState,
@@ -245,9 +246,12 @@ export function markPendingDelegateSpawnAccepted(
     return false;
   }
   const current = delegateFlowRecords.get(delegate.flowId);
-  const currentDelegate = (current && decodeDelegateFlow(current)) ?? { task: delegate.task };
-  const now = Date.now();
   const expectedRevision = delegate.expectedRevision;
+  const now = Date.now();
+  if (current && isSucceededDelegateFlow(current)) {
+    return recordAcceptedSucceededDelegate(current, expectedRevision, childSessionKey, now);
+  }
+  const currentDelegate = (current && decodeDelegateFlow(current)) ?? { task: delegate.task };
   const finished = delegateFlowRecords.finish({
     flowId: delegate.flowId,
     expectedRevision,
@@ -259,7 +263,12 @@ export function markPendingDelegateSpawnAccepted(
   });
   if (!finished.applied) {
     if (finished.current && isSucceededDelegateFlow(finished.current)) {
-      return true;
+      return recordAcceptedSucceededDelegate(
+        finished.current,
+        expectedRevision,
+        childSessionKey,
+        now,
+      );
     }
     const message = `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${expectedRevision} acceptance was not committed`;
     log.warn(message);
@@ -268,6 +277,37 @@ export function markPendingDelegateSpawnAccepted(
     }
   }
   return finished.applied;
+}
+
+function recordAcceptedSucceededDelegate(
+  flow: DelegateFlowRecord,
+  expectedRevision: number,
+  childSessionKey: string,
+  now: number,
+): boolean {
+  const accepted = decodeDelegateFlow(flow);
+  const acceptedChildSessionKey = readAcceptedDelegateChildSessionKey(flow);
+  if (acceptedChildSessionKey === childSessionKey) {
+    return true;
+  }
+  const canRecordHandedOffChild =
+    isPostCompactionDelegateFlow(flow) &&
+    acceptedChildSessionKey === undefined &&
+    (flow.revision === expectedRevision ||
+      isDurablyHandedOffPostCompactionFlow(flow, expectedRevision));
+  if (!canRecordHandedOffChild) {
+    return false;
+  }
+  return delegateFlowRecords.update({
+    flowId: flow.flowId,
+    expectedRevision: flow.revision,
+    fallbackDelegate: accepted,
+    changes: { childSessionKey },
+    patch: {
+      currentStep: "Accepted by continuation subagent",
+      updatedAt: now,
+    },
+  }).applied;
 }
 
 export function markPendingDelegateFailed(

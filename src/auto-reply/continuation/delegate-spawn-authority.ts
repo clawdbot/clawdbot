@@ -44,7 +44,7 @@ export function registerContinuationDelegateDispatchClaim(params: {
   release: () => void;
 } {
   const { flowId, expectedRevision } = params.delegate;
-  if (!flowId || expectedRevision === undefined) {
+  if ((flowId === undefined) !== (expectedRevision === undefined)) {
     throw new SpawnSubagentAdmissionCancelledError(
       "Continuation delegate source metadata is incomplete.",
     );
@@ -63,9 +63,11 @@ export function registerContinuationDelegateDispatchClaim(params: {
     ) {
       throw new SpawnSubagentAdmissionCancelledError("Continuation delegate admission closed.");
     }
-    const fence = revalidatePendingDelegateForSpawn(params.delegate, params.controller);
-    if (!fence.allowed) {
-      throw new SpawnSubagentAdmissionCancelledError(fence.summary);
+    if (flowId !== undefined) {
+      const fence = revalidatePendingDelegateForSpawn(params.delegate, params.controller);
+      if (!fence.allowed) {
+        throw new SpawnSubagentAdmissionCancelledError(fence.summary);
+      }
     }
     if (ownerIdentity) {
       const currentOwner = params.loadOwnerSessionEntry();
@@ -81,8 +83,7 @@ export function registerContinuationDelegateDispatchClaim(params: {
       signal: activeClaim.controller.signal,
       source: {
         ownerSessionKey: params.ownerSessionKey,
-        flowId,
-        expectedRevision,
+        ...(flowId !== undefined ? { flowId, expectedRevision } : {}),
       },
       assertCurrent,
     },

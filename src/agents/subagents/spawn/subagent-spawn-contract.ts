@@ -15,17 +15,29 @@ export type SpawnSubagentAdmissionAuthority = {
   signal: AbortSignal;
   source: {
     ownerSessionKey: string;
-    flowId: string;
-    expectedRevision: number;
+    flowId?: string;
+    expectedRevision?: number;
   };
   assertCurrent(boundary: SpawnSubagentAdmissionBoundary): void;
 };
 
 export class SpawnSubagentAdmissionCancelledError extends Error {
+  readonly code = "CONTINUATION_DELEGATE_ADMISSION_CANCELLED";
+
   constructor(message: string) {
     super(message);
     this.name = "SpawnSubagentAdmissionCancelledError";
   }
+}
+
+export function isSpawnSubagentAdmissionCancelledError(
+  error: unknown,
+): error is SpawnSubagentAdmissionCancelledError {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CONTINUATION_DELEGATE_ADMISSION_CANCELLED"
+  );
 }
 
 export type SpawnSubagentParams = {

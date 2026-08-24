@@ -115,7 +115,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
         attachments,
         attachMountPath: "handoff",
       }),
-      spawnCtx,
+      expect.objectContaining({
+        ...spawnCtx,
+        continuationDelegateAdmission: expect.any(Object),
+      }),
     );
     expect(mockState.spawnSubagentDirect.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -139,7 +142,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
     expect(result).toMatchObject({ dispatched: 1, failed: 0, dispatchedFlowIds: [] });
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
       expect.objectContaining({ traceparent }),
-      { agentSessionKey: sessionKey },
+      expect.objectContaining({
+        agentSessionKey: sessionKey,
+        continuationDelegateAdmission: expect.any(Object),
+      }),
     );
   });
 
@@ -231,7 +237,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
             expect.objectContaining({
               task: expect.stringContaining(ROLE_MARKED_DELEGATE_TASK),
             }),
-            { agentSessionKey: sessionKey },
+            expect.objectContaining({
+              agentSessionKey: sessionKey,
+              continuationDelegateAdmission: expect.any(Object),
+            }),
           );
         },
       },
@@ -253,7 +262,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
             expect.objectContaining({
               task: expect.stringContaining(ROLE_MARKED_DELEGATE_TASK),
             }),
-            { agentSessionKey: sessionKey },
+            expect.objectContaining({
+              agentSessionKey: sessionKey,
+              continuationDelegateAdmission: expect.any(Object),
+            }),
           );
         },
       },
@@ -287,7 +299,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledTimes(1);
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
       expect.objectContaining({ task: expect.stringContaining("first post-compaction delegate") }),
-      { agentSessionKey: sessionKey },
+      expect.objectContaining({
+        agentSessionKey: sessionKey,
+        continuationDelegateAdmission: expect.any(Object),
+      }),
     );
     expect(mockState.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining("maxDelegatesPerTurn exceeded (1)"),
@@ -476,7 +491,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
         task: expect.stringContaining("[continuation:chain-hop:1]"),
         continuationChainState: expect.objectContaining({ count: 1, tokens: 25 }),
       }),
-      { agentSessionKey: sessionKey },
+      expect.objectContaining({
+        agentSessionKey: sessionKey,
+        continuationDelegateAdmission: expect.any(Object),
+      }),
     );
   });
 

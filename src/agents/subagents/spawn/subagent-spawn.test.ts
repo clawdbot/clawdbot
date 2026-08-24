@@ -13,6 +13,11 @@ import {
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
+  SpawnSubagentAdmissionCancelledError,
+  type SpawnSubagentAdmissionAuthority,
+  type SpawnSubagentAdmissionBoundary,
+} from "./subagent-spawn-contract.js";
+import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
   installSessionStoreCaptureMock,
@@ -87,6 +92,33 @@ function expectNoChildSpawnSideEffects(): void {
   expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
+}
+
+function createDelegateAdmissionAuthority(): {
+  authority: SpawnSubagentAdmissionAuthority;
+  boundaries: SpawnSubagentAdmissionBoundary[];
+  controller: AbortController;
+} {
+  const controller = new AbortController();
+  const boundaries: SpawnSubagentAdmissionBoundary[] = [];
+  return {
+    controller,
+    boundaries,
+    authority: {
+      signal: controller.signal,
+      source: {
+        ownerSessionKey: "agent:main:main",
+        flowId: "delegate-flow",
+        expectedRevision: 1,
+      },
+      assertCurrent(boundary) {
+        boundaries.push(boundary);
+        if (controller.signal.aborted) {
+          throw new SpawnSubagentAdmissionCancelledError("delegate reset");
+        }
+      },
+    },
+  };
 }
 
 type InheritedSpawnPreferenceCase = {
@@ -253,6 +285,90 @@ describe("spawnSubagentDirect seam flow", () => {
   afterEach(() => {
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
+  });
+
+  it("admits no child side effect when delegate authority closes after planning", async () => {
+    let releaseCatalog!: () => void;
+    let catalogReached!: () => void;
+    const reachedCatalog = new Promise<void>((resolve) => {
+      catalogReached = resolve;
+    });
+    const catalogBarrier = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    hoisted.loadPreparedModelCatalogMock.mockImplementationOnce(async () => {
+      catalogReached();
+      await catalogBarrier;
+      return [];
+    });
+    const admission = createDelegateAdmissionAuthority();
+
+    const spawn = spawnSubagentDirect(
+      { task: "cancel before child admission", model: "openai/gpt-5.4" },
+      {
+        agentSessionKey: "agent:main:main",
+        continuationDelegateAdmission: admission.authority,
+      },
+    );
+    await reachedCatalog;
+    admission.controller.abort("session-reset");
+    releaseCatalog();
+
+    await expect(spawn).resolves.toMatchObject({
+      status: "cancelled",
+      error: "delegate reset",
+    });
+    expect(admission.boundaries).toEqual(["child-session"]);
+    expectNoChildSpawnSideEffects();
+  });
+
+  it("rolls back an accepted Gateway child when delegate authority closes before registration", async () => {
+    let releaseGateway!: () => void;
+    let gatewayReached!: () => void;
+    const reachedGateway = new Promise<void>((resolve) => {
+      gatewayReached = resolve;
+    });
+    const gatewayBarrier = new Promise<void>((resolve) => {
+      releaseGateway = resolve;
+    });
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        gatewayReached();
+        await gatewayBarrier;
+        return { runId: "late-child-run" };
+      }
+      if (request.method === "chat.abort") {
+        return { ok: true, aborted: true, runIds: ["late-child-run"] };
+      }
+      return { ok: true };
+    });
+    const admission = createDelegateAdmissionAuthority();
+
+    const spawn = spawnSubagentDirect(
+      { task: "cancel after Gateway acceptance" },
+      {
+        agentSessionKey: "agent:main:main",
+        continuationDelegateAdmission: admission.authority,
+      },
+    );
+    await reachedGateway;
+    admission.controller.abort("session-reset");
+    releaseGateway();
+
+    await expect(spawn).resolves.toMatchObject({
+      status: "cancelled",
+      childSessionKey: expect.any(String),
+      runId: "late-child-run",
+    });
+    expect(admission.boundaries).toEqual([
+      "child-session",
+      "gateway-dispatch",
+      "registry-acceptance",
+    ]);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
+    expect(gatewayRequestRecords().map((request) => request.method)).toContain("chat.abort");
+    expect(gatewayRequestRecords().map((request) => request.method)).toContain("sessions.delete");
   });
 
   it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
@@ -1502,6 +1618,7 @@ describe("spawnSubagentDirect seam flow", () => {
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    const admission = createDelegateAdmissionAuthority();
 
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       operations.push(`gateway:${request.method ?? "unknown"}`);
@@ -1533,6 +1650,7 @@ describe("spawnSubagentDirect seam flow", () => {
         agentTo: "user-1",
         agentThreadId: 42,
         workspaceDir: "/tmp/requester-workspace",
+        continuationDelegateAdmission: admission.authority,
       },
     );
 
@@ -1582,6 +1700,12 @@ describe("spawnSubagentDirect seam flow", () => {
       parentSessionKey: "agent:main:main",
       label: undefined,
     });
+    expect(admission.boundaries).toEqual([
+      "child-session",
+      "gateway-dispatch",
+      "registry-acceptance",
+      "lifecycle-publication",
+    ]);
 
     expectPersistedRuntimeModel({
       persistedStore,

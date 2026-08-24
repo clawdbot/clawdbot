@@ -391,6 +391,7 @@ export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDel
   if (!state) {
     return undefined;
   }
+
   let mode: PendingContinuationDelegate["mode"];
   if (state.postCompaction === true) {
     mode = "post-compaction";
@@ -438,6 +439,10 @@ export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDel
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
+}
+
+export function readAcceptedDelegateChildSessionKey(flow: TaskFlowRecord): string | undefined {
+  return decodeDelegateState(flow)?.childSessionKey;
 }
 
 export function isPendingDelegateFlow(flow: TaskFlowRecord): boolean {

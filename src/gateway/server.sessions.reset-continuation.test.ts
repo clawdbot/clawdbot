@@ -1,4 +1,8 @@
 import { afterEach, expect, test } from "vitest";
+import {
+  registerContinuationDispatchClaim,
+  resetContinuationDispatchClaimsForTests,
+} from "../auto-reply/continuation/continuation-dispatch-claims.js";
 import { enqueuePendingDelegate } from "../auto-reply/continuation/delegate-store.js";
 import { enqueuePendingWork } from "../auto-reply/continuation/work-store.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -15,6 +19,7 @@ import {
 const { seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
+  resetContinuationDispatchClaimsForTests();
   resetTaskFlowRegistryForTests();
   closeOpenClawStateDatabaseForTest();
 });
@@ -75,6 +80,17 @@ test("sessions.reset reports durable continuation cancellation failures", async 
   if (!work) {
     throw new Error("expected durable continuation work");
   }
+  const delegate = enqueuePendingDelegate("agent:main:main", {
+    task: "remain claimable after failed reset",
+    delayMs: 60_000,
+  });
+  if (!delegate) {
+    throw new Error("expected durable continuation delegate");
+  }
+  const activeDelegate = registerContinuationDispatchClaim({
+    sessionKey: "agent:main:main",
+    flowId: delegate.flowId,
+  });
   configureTaskFlowRegistryRuntime({
     store: {
       loadSnapshot: () => ({ flows: new Map() }),
@@ -96,4 +112,8 @@ test("sessions.reset reports durable continuation cancellation failures", async 
     "sess-main",
   );
   expect(listTaskFlowRecords().find((flow) => flow.flowId === work.flowId)?.status).toBe("queued");
+  expect(listTaskFlowRecords().find((flow) => flow.flowId === delegate.flowId)?.status).toBe(
+    "queued",
+  );
+  expect(activeDelegate.controller.signal.aborted).toBe(false);
 });

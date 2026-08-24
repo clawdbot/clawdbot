@@ -229,6 +229,10 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
 import {
+  abortContinuationDispatchClaims,
+  resetContinuationDispatchClaimsForTests,
+} from "./continuation-dispatch-claims.js";
+import {
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
   requeueAwaitingNextCompactionDelegates,
@@ -243,6 +247,7 @@ import {
 } from "./delegate-store-post-compaction.js";
 import { cancelPendingDelegates, enqueuePendingDelegate } from "./delegate-store.js";
 import { dispatchStagedPostCompactionDelegates } from "./post-compaction-staged-dispatch.js";
+import { cancelSessionContinuations } from "./session-reset.js";
 import { hasLiveContinuationTimerRefs, resetContinuationStateForTests } from "./state.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 
@@ -334,6 +339,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetContinuationDispatchClaimsForTests();
   resetDelegateDispatchHedgesForTests();
   resetContinuationStateForTests();
   clearRuntimeConfigSnapshot();
@@ -378,6 +384,62 @@ const splitLintUse = [
 void splitLintUse;
 
 describe("managed artifact pre-spawn lifecycle", () => {
+  it("closes post-fence delegate admission when reset durably cancels the source", async () => {
+    const sessionKey = "agent:main:delegate-reset-after-fence";
+    const delegate = enqueuePendingDelegate(sessionKey, { task: "must not spawn after reset" });
+    if (!delegate) {
+      throw new Error("expected durable delegate");
+    }
+    let releaseSpawn!: () => void;
+    let spawnReached!: () => void;
+    const reachedSpawn = new Promise<void>((resolve) => {
+      spawnReached = resolve;
+    });
+    const spawnBarrier = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    spawnSubagentDirectMock.mockImplementationOnce(
+      async (
+        _params,
+        context: {
+          continuationDelegateAdmission: {
+            assertCurrent(boundary: "child-session"): void;
+          };
+        },
+      ) => {
+        spawnReached();
+        await spawnBarrier;
+        context.continuationDelegateAdmission.assertCurrent("child-session");
+        return { status: "accepted", childSessionKey: "unexpected-child" };
+      },
+    );
+
+    const dispatch = dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 8,
+      config: continuationConfig({ enabled: true, crossSessionTargeting: "enabled" }),
+    });
+    await reachedSpawn;
+    cancelSessionContinuations(sessionKey);
+    abortContinuationDispatchClaims(sessionKey);
+    releaseSpawn();
+
+    await expect(dispatch).resolves.toMatchObject({ dispatched: 0, rejected: 1 });
+    expect(mockFlows.get(delegate.flowId!)?.status).toBe("cancelled");
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(acceptedChildSessionKeys.size).toBe(0);
+
+    await recoverPendingContinuationDelegates();
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get(delegate.flowId!)?.status).toBe("cancelled");
+  });
+
   it("fails and scrubs a delegate cancelled after claim without spawning", async () => {
     const sessionKey = "agent:main:managed-cancelled-after-claim";
     setRuntimeConfigSnapshot({

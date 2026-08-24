@@ -55,7 +55,7 @@ import type {
   SpawnSubagentParams as BaseSpawnSubagentParams,
   SpawnSubagentResult as BaseSpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { SpawnSubagentAdmissionCancelledError } from "./subagent-spawn-contract.js";
+import { isSpawnSubagentAdmissionCancelledError } from "./subagent-spawn-contract.js";
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import {
   buildSubagentExecutionSessionSpawnContext,
@@ -483,7 +483,7 @@ export async function spawnSubagentDirect(
         // the run's row, and registration is what delivers it. A register failure
         // means no owner ever recorded the run, so abort the run the gateway
         // already accepted instead of leaving it executing unrecorded.
-        const admissionCancelled = error instanceof SpawnSubagentAdmissionCancelledError;
+        const admissionCancelled = isSpawnSubagentAdmissionCancelledError(error);
         if (
           phase === "register" &&
           acceptedChildRunId &&
@@ -635,12 +635,11 @@ export async function spawnSubagentDirect(
           ? (pipelineResult.error as { spawnStatus?: unknown }).spawnStatus
           : undefined;
       return {
-        status:
-          pipelineResult.error instanceof SpawnSubagentAdmissionCancelledError
-            ? "cancelled"
-            : spawnStatus === "forbidden"
-              ? "forbidden"
-              : "error",
+        status: isSpawnSubagentAdmissionCancelledError(pipelineResult.error)
+          ? "cancelled"
+          : spawnStatus === "forbidden"
+            ? "forbidden"
+            : "error",
         error:
           pipelineResult.phase === "register" && spawnStatus !== "forbidden"
             ? `Failed to register subagent run: ${summarizeSpawnError(pipelineResult.error)}`
@@ -693,7 +692,7 @@ export async function spawnSubagentDirect(
       attachments: attachmentsReceipt,
     };
   } catch (error) {
-    if (error instanceof SpawnSubagentAdmissionCancelledError) {
+    if (isSpawnSubagentAdmissionCancelledError(error)) {
       return { status: "cancelled", error: error.message };
     }
     throw error;
