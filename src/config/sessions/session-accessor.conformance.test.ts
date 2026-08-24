@@ -1277,7 +1277,7 @@ describe("sqlite session normalization", () => {
     });
   });
 
-  it("marks identity-only row updates pending validation", async () => {
+  it("keeps identity-only row updates valid after trigger retirement", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:identity-update";
     await replaceSessionEntry(
@@ -1293,7 +1293,7 @@ describe("sqlite session normalization", () => {
       database.db
         .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
         .get(sessionKey),
-    ).toEqual({ entry_valid: 0 });
+    ).toEqual({ entry_valid: 1 });
   });
 
   it("writes a valid session beside an unrelated malformed legacy row", async () => {

@@ -113,7 +113,7 @@ function migratedConversation(
 }
 
 /** The retired session_nodes entry-validity write-triggers (see ensureSessionEntryValidityProjection). */
-export const SESSION_NODE_ENTRY_VALID_TRIGGER_NAMES = [
+const SESSION_NODE_ENTRY_VALID_TRIGGER_NAMES = [
   "session_nodes_entry_valid_after_insert",
   "session_nodes_entry_valid_after_entry_update",
   "session_nodes_entry_valid_after_identity_update",

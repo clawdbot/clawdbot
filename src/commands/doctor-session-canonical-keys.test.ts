@@ -205,7 +205,7 @@ describe("doctor canonical session-key repair", () => {
         database.db
           .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
           .get("agent:main:main"),
-      ).toEqual({ entry_valid: 0 });
+      ).toEqual({ entry_valid: 1 });
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
         removedRows: 0,
