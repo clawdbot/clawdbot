@@ -12,6 +12,7 @@ import type { ClawCronGateway } from "./cron.js";
 import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
 import { applyClawMcpUpdate, ClawMcpUpdateError } from "./mcp-update.js";
 import { ClawUpdateMutationError, runOwnedUpdateSteps } from "./owned-update-steps.js";
+import { coercePluginVersionConflictForUpdate } from "./package-preflight-coercion.js";
 import {
   applyClawPackageUpdate,
   ClawPackageUpdateError,
@@ -194,26 +195,14 @@ export async function applyClawUpdatePlan(
               code: "package_install_unavailable",
               message: "Package preflight is unavailable.",
             };
-        const action = fresh.actions.find(
-          (candidate) => candidate.kind === "package" && candidate.id === `${pkg.kind}:${pkg.ref}`,
+        return coercePluginVersionConflictForUpdate(preflight, pkg, (candidate) =>
+          fresh.actions.some(
+            (action) =>
+              action.kind === "package" &&
+              action.id === `${candidate.kind}:${candidate.ref}` &&
+              action.action === "change",
+          ),
         );
-        return !preflight.ok &&
-          pkg.kind === "plugin" &&
-          preflight.code === "plugin_version_conflict" &&
-          action?.action === "change"
-          ? {
-              ok: true,
-              action: "install" as const,
-              ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
-              ...(preflight.installId ? { installId: preflight.installId } : {}),
-              ...(preflight.warning ? { warning: preflight.warning } : {}),
-              ...(preflight.requirements ? { requirements: preflight.requirements } : {}),
-              ...(preflight.detectedFormat ? { detectedFormat: preflight.detectedFormat } : {}),
-              ...(preflight.mapped ? { mapped: preflight.mapped } : {}),
-              ...(preflight.unavailable ? { unavailable: preflight.unavailable } : {}),
-              ...(preflight.adapterIdentity ? { adapterIdentity: preflight.adapterIdentity } : {}),
-            }
-          : preflight;
       },
     },
   });
