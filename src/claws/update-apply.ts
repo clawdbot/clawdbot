@@ -53,6 +53,7 @@ type ClawUpdateResult = {
   previousClaw: NonNullable<ClawUpdatePlan["currentClaw"]>;
   targetClaw: NonNullable<ClawUpdatePlan["targetClaw"]>;
   appliedActions: ClawUpdateAction[];
+  skippedActions?: ClawUpdateAction[];
   installRecord: PersistedClawInstall;
 };
 
@@ -96,6 +97,7 @@ export async function applyClawUpdatePlan(
     config: OpenClawConfig;
     sourceMcpServers: Record<string, Record<string, unknown>>;
     consentPlanIntegrity: string | undefined;
+    skipManual?: boolean;
     packagePreflight?: ClawAddPlanContext["packagePreflight"];
     runtime?: RuntimeEnv;
     commitConfig?: ConfigCommit;
@@ -116,7 +118,11 @@ export async function applyClawUpdatePlan(
       "Consent does not match the current Claw update plan; run update --dry-run again.",
     );
   }
-  if (!plan.found || plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
+  if (
+    !plan.found ||
+    plan.blockers.length > 0 ||
+    (!options.skipManual && plan.actions.some((action) => action.blocked))
+  ) {
     throw new ClawUpdateMutationError(
       "update_blocked",
       "The Claw update plan contains blockers or manual actions.",
@@ -145,7 +151,10 @@ export async function applyClawUpdatePlan(
     );
   }
 
-  const actionable = fresh.actions.filter((action) => action.action !== "unchanged");
+  const appliedActions = options.skipManual
+    ? fresh.actions.filter((action) => !action.blocked)
+    : fresh.actions;
+  const actionable = appliedActions.filter((action) => action.action !== "unchanged");
   const unsupported = actionable.filter(
     (action) =>
       action.kind !== "agent" &&
@@ -220,7 +229,7 @@ export async function applyClawUpdatePlan(
       "The target Claw cannot be safely materialized for update.",
     );
   }
-  for (const action of fresh.actions.filter(
+  for (const action of appliedActions.filter(
     (candidate) => candidate.kind === "package" && candidate.action === "unchanged",
   )) {
     const addAction = targetAddPlan.actions.find(
@@ -234,7 +243,7 @@ export async function applyClawUpdatePlan(
     }
   }
   const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
-  for (const action of fresh.actions.filter(
+  for (const action of appliedActions.filter(
     (candidate) =>
       candidate.kind === "package" &&
       candidate.action !== "unchanged" &&
@@ -266,7 +275,7 @@ export async function applyClawUpdatePlan(
   }
 
   const applyPackage = options.applyPackage ?? applyClawPackageUpdate;
-  const requirementActions = fresh.actions.filter(
+  const requirementActions = appliedActions.filter(
     (action) =>
       action.kind === "package" &&
       action.action !== "unchanged" &&
@@ -274,7 +283,7 @@ export async function applyClawUpdatePlan(
       action.action !== "remove" &&
       targetPackages.get(action.id)?.kind === "plugin",
   );
-  const remainingPackageActions = fresh.actions.filter(
+  const remainingPackageActions = appliedActions.filter(
     (action) =>
       action.kind === "package" &&
       action.action !== "unchanged" &&
@@ -344,7 +353,11 @@ export async function applyClawUpdatePlan(
       {
         name: "workspace",
         apply: async () => {
-          const execution = await applyWorkspace(fresh, targetAddPlan, options);
+          const execution = await applyWorkspace(
+            { ...fresh, actions: appliedActions },
+            targetAddPlan,
+            options,
+          );
           return { appliedIds: execution.appliedPaths, rollback: execution.rollback };
         },
         onError: (error, { retainedRequirements }) =>
@@ -364,7 +377,11 @@ export async function applyClawUpdatePlan(
       {
         name: "mcp",
         apply: async () => {
-          const execution = await applyMcp(fresh, params.targetManifest, options);
+          const execution = await applyMcp(
+            { ...fresh, actions: appliedActions },
+            params.targetManifest,
+            options,
+          );
           return { appliedIds: execution.appliedNames, rollback: execution.rollback };
         },
         rollbackAfter: ["workspace"],
@@ -445,7 +462,11 @@ export async function applyClawUpdatePlan(
       {
         name: "cron",
         apply: async () => {
-          const execution = await applyCron(fresh, params.targetManifest, options);
+          const execution = await applyCron(
+            { ...fresh, actions: appliedActions },
+            params.targetManifest,
+            options,
+          );
           return { appliedIds: execution.appliedIds, rollback: execution.rollback };
         },
         rollbackAfter: ["agent", "package", "mcp", "workspace"],
@@ -521,6 +542,9 @@ export async function applyClawUpdatePlan(
     previousClaw: fresh.currentClaw,
     targetClaw: fresh.targetClaw,
     appliedActions: actionable,
+    ...(options.skipManual
+      ? { skippedActions: fresh.actions.filter((action) => action.blocked) }
+      : {}),
     installRecord,
   };
 }

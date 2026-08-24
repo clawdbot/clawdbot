@@ -179,7 +179,8 @@ export async function runClawsUpdateCommand(
     packagePreflight: preflightClawPackage,
     diagnostics: loaded.diagnostics,
   });
-  if (opts.dryRun || plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
+  const blockedActions = plan.actions.filter((action) => action.blocked);
+  if (opts.dryRun || plan.blockers.length > 0 || (blockedActions.length > 0 && !opts.skipManual)) {
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
@@ -190,7 +191,7 @@ export async function runClawsUpdateCommand(
       runtime.log(`Plan integrity: ${plan.planIntegrity}`);
       logClawUpdatePlanSummary(plan, runtime);
     }
-    if (plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
+    if (plan.blockers.length > 0 || (blockedActions.length > 0 && !opts.skipManual)) {
       runtime.exit(1);
     }
     return;
@@ -209,6 +210,7 @@ export async function runClawsUpdateCommand(
         config,
         sourceMcpServers: listedMcpServers.mcpServers,
         consentPlanIntegrity: opts.planIntegrity,
+        skipManual: opts.skipManual,
         packagePreflight: preflightClawPackage,
         runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
@@ -225,6 +227,11 @@ export async function runClawsUpdateCommand(
     logExperimentalWarning(runtime);
     runtime.log(`Updated agent: ${result.agentId}`);
     runtime.log(`Claw version: ${result.previousClaw.version} -> ${result.targetClaw.version}`);
+    if (result.skippedActions && result.skippedActions.length > 0) {
+      runtime.log(
+        `Skipped ${result.skippedActions.length} manual action(s) (drift preserved): ${result.skippedActions.map((action) => `${action.kind}:${action.id}`).join(", ")}`,
+      );
+    }
   } catch (error) {
     const code = error instanceof ClawUpdateMutationError ? error.code : "update_failed";
     const message = error instanceof Error ? error.message : String(error);

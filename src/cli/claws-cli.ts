@@ -32,6 +32,7 @@ export type ClawsUpdateOptions = {
   yes?: boolean;
   planIntegrity?: string;
   json?: boolean;
+  skipManual?: boolean;
 };
 export type ClawsRemoveOptions = {
   dryRun?: boolean;
@@ -142,6 +143,11 @@ export function registerClawsCli(program: Command) {
     .option("--dry-run", "Preview update actions without mutating state", false)
     .option("--yes", "Confirm the exact supported update plan", false)
     .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
+    .option(
+      "--skip-manual",
+      "Apply supported actions while preserving locally drifted or blocked state",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
       const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
