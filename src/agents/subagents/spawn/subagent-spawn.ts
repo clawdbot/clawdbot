@@ -31,6 +31,8 @@ import {
   persistInitialChildRuntimeState,
   type ContinuationSpawnParams,
 } from "../announce/subagent-announce.runtime.js";
+import { getSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { rollbackSubagentRunRegistration } from "../registry/subagent-registry.js";
 import { removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
@@ -81,6 +83,26 @@ export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-s
 export type SpawnSubagentParams = BaseSpawnSubagentParams & ContinuationSpawnParams;
 export type SpawnSubagentContext = BaseSpawnSubagentContext;
 export type SpawnSubagentResult = BaseSpawnSubagentResult;
+
+export async function rollbackAcceptedSubagentChild(params: {
+  childSessionKey: string;
+  runId?: string;
+}): Promise<boolean> {
+  const registered = getSubagentRunByChildSessionKey(params.childSessionKey);
+  const runId = registered?.runId ?? params.runId;
+  if (!runId) {
+    return false;
+  }
+  rollbackSubagentRunRegistration({
+    runId,
+    childSessionKey: params.childSessionKey,
+  });
+  return await terminateAcceptedCollectorRun({
+    childSessionKey: params.childSessionKey,
+    gatewayRunId: runId,
+    retry: false,
+  });
+}
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
@@ -605,6 +627,8 @@ export async function spawnSubagentDirect(
       },
       assertRegistrationAdmission: () =>
         ctx.continuationDelegateAdmission?.assertCurrent("registry-acceptance"),
+      assertPostPublicationAdmission: () =>
+        ctx.continuationDelegateAdmission?.assertCurrent("final-acceptance"),
       publishRegistration: () => {
         ctx.continuationDelegateAdmission?.assertCurrent("lifecycle-publication");
         if (initialSession.entry) {
@@ -625,6 +649,17 @@ export async function spawnSubagentDirect(
           reason: "create",
           parentSessionKey: requesterInternalKey,
           label: label || undefined,
+        });
+      },
+      afterRegistration: params.collect
+        ? undefined
+        : async (_state, runId) => {
+            await emitSpawnLifecycleHooks(runId);
+          },
+      rollbackRegistration: (registration) => {
+        rollbackSubagentRunRegistration({
+          runId: registration.runId,
+          childSessionKey: registration.childSessionKey,
         });
       },
     });
@@ -669,8 +704,6 @@ export async function spawnSubagentDirect(
       });
       swarmReservationPending = false;
       collectorSessionKey = childSessionKey;
-    } else {
-      await emitSpawnLifecycleHooks(childRunId);
     }
 
     const acceptedNote = resolveSubagentSpawnAcceptedNote({
@@ -689,6 +722,7 @@ export async function spawnSubagentDirect(
         : acceptedNote,
       ...resolvedModelMetadata,
       modelApplied: resolvedModel ? modelApplied : undefined,
+      rollbackAccepted: pipelineResult.rollbackAccepted,
       attachments: attachmentsReceipt,
     };
   } catch (error) {

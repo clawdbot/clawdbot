@@ -484,6 +484,7 @@ export async function dispatchToolDelegates(
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
     let spawnAttempted = false;
+    let rollbackAcceptedSpawn: (() => Promise<void>) | undefined;
     const activeDispatch = registerContinuationDelegateDispatchClaim({
       controller: "pending",
       delegate,
@@ -521,11 +522,16 @@ export async function dispatchToolDelegates(
           { markPlannedChainState: true, markerKind: "advanced" },
         );
         try {
-          markPendingDelegateSpawnAccepted(
+          const committed = markPendingDelegateSpawnAccepted(
             acceptedDelegate,
             childSessionKey,
             params.persistChainState ? { requireWriteSuccess: true } : {},
           );
+          if (!committed) {
+            dispatchSpan.setStatus("ERROR", "delegate source acceptance became stale");
+            rejected++;
+            continue;
+          }
         } catch (err) {
           const errorMessage = formatErrorMessage(err);
           log.warn(
@@ -595,6 +601,7 @@ export async function dispatchToolDelegates(
       );
 
       if (result.status === "accepted") {
+        rollbackAcceptedSpawn = result.rollbackAccepted;
         // INFO-level on EVERY successful spawn — observability parity.
         log.info(
           `[continuation:delegate-spawned] hop=${nextHop}/${maxChainLength} mode=${delegate.mode ?? "normal"} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
@@ -609,17 +616,25 @@ export async function dispatchToolDelegates(
           plannedTerminalChainState,
           { markPlannedChainState: true, markerKind: "advanced" },
         );
+        activeDispatch.authority.assertCurrent("final-acceptance", null);
         if (acceptedChildSessionKey) {
           try {
-            markPendingDelegateSpawnAccepted(
+            const committed = markPendingDelegateSpawnAccepted(
               acceptedDelegate,
               acceptedChildSessionKey,
               params.persistChainState ? { requireWriteSuccess: true } : {},
             );
+            if (!committed) {
+              await result.rollbackAccepted?.();
+              dispatchSpan.setStatus("ERROR", "delegate source acceptance became stale");
+              rejected++;
+              continue;
+            }
           } catch (err) {
+            await result.rollbackAccepted?.();
             const errorMessage = formatErrorMessage(err);
             log.warn(
-              `[continuation:delegate-accept-finalize-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
+              `[continuation:delegate-accept-finalize-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} accepted child rolled back: ${errorMessage}`,
             );
             dispatchSpan.setStatus("ERROR", errorMessage);
             rejected++;
@@ -675,6 +690,7 @@ export async function dispatchToolDelegates(
         rejected++;
       }
     } catch (err) {
+      await rollbackAcceptedSpawn?.();
       if (isSpawnSubagentAdmissionCancelledError(err)) {
         removeRejectedArtifactPolicy(delegate);
         dispatchSpan?.setStatus("ERROR", err.message);

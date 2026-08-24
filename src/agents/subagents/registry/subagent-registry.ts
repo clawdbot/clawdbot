@@ -540,6 +540,7 @@ export const recordAcceptedSubagentSteerDispatch =
 export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubagentRunAfterSteer;
 export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
+export const rollbackSubagentRunRegistration = subagentRunManager.rollbackSubagentRunRegistration;
 export const registerSubagentRun: (params: RegisterSubagentRunParams) => void =
   subagentRunManager.registerSubagentRun;
 export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;

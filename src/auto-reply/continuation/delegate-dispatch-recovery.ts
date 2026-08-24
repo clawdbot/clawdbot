@@ -330,26 +330,16 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     const result = await dispatchStagedPostCompactionDelegates(delegates, sessionKey, spawnCtx, {
       chainState,
       holdPendingWhileDisabled: true,
-    });
-    dispatched += result.dispatched;
-    failed += result.failed;
-    // Finalize ONLY the rows whose spawn was accepted. Deterministic policy/cap
-    // rejections (including spawn-forbidden) were failed by
-    // dispatchStagedPostCompactionDelegates; transient spawn failures keep
-    // `running` status and unchanged updatedAt (at/before this boot cutoff), so
-    // the next restart recovers them again — never a silent drop or premature
-    // finish.
-    if (result.dispatchedFlowIds.length > 0) {
-      try {
+      finalizeAcceptedFlow: async ({ flowId, chainState: acceptedChainState }) => {
         const updated = await updateSessionEntry(
           { sessionKey, storePath },
           (sessionEntry) => {
             persistContinuationChainState({
               sessionEntry,
-              count: result.chainState.currentChainCount,
-              startedAt: result.chainState.chainStartedAt,
-              tokens: result.chainState.accumulatedChainTokens,
-              ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
+              count: acceptedChainState.currentChainCount,
+              startedAt: acceptedChainState.chainStartedAt,
+              tokens: acceptedChainState.accumulatedChainTokens,
+              ...(acceptedChainState.chainId ? { chainId: acceptedChainState.chainId } : {}),
             });
             return sessionEntry;
           },
@@ -358,26 +348,23 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
         if (!updated) {
           throw new Error(`session entry disappeared during recovery: ${sessionKey}`);
         }
-      } catch (err) {
-        postCompactionRecoveryLog.warn(
-          `[continuation:post-compaction-recovery-chain-persist-failed] session=${sessionKey} leaving accepted rows recoverable: ${formatErrorMessage(err)}`,
-        );
-        continue;
-      }
-      persistContinuationChainState({
-        sessionEntry: entry,
-        count: result.chainState.currentChainCount,
-        startedAt: result.chainState.chainStartedAt,
-        tokens: result.chainState.accumulatedChainTokens,
-        ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
-      });
-      const finalized = finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
-      assertStagedPostCompactionFinalizationComplete({
-        flowIds: result.dispatchedFlowIds,
-        finalized,
-        context: `post-compaction startup recovery for ${sessionKey}`,
-      });
-    }
+        persistContinuationChainState({
+          sessionEntry: entry,
+          count: acceptedChainState.currentChainCount,
+          startedAt: acceptedChainState.chainStartedAt,
+          tokens: acceptedChainState.accumulatedChainTokens,
+          ...(acceptedChainState.chainId ? { chainId: acceptedChainState.chainId } : {}),
+        });
+        const finalized = finalizeStagedPostCompactionDelegates([flowId]);
+        assertStagedPostCompactionFinalizationComplete({
+          flowIds: [flowId],
+          finalized,
+          context: `post-compaction startup recovery for ${sessionKey}`,
+        });
+      },
+    });
+    dispatched += result.dispatched;
+    failed += result.failed;
   }
   return { sessions: recoveredSessions, dispatched, failed };
 }

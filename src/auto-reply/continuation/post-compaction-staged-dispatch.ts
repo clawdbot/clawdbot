@@ -7,7 +7,11 @@ import {
   removeUnacceptedDelegateArtifactPolicy,
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
-import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
+import { deriveContinuationDelegateChildRunId } from "../../agents/subagent-continuation-ids.js";
+import {
+  rollbackAcceptedSubagentChild,
+  spawnSubagentDirect,
+} from "../../agents/subagents/spawn/subagent-spawn.js";
 import {
   emitContinuationDisabledSpan,
   resolveContinuationTraceparent,
@@ -87,6 +91,7 @@ export async function dispatchStagedPostCompactionDelegates(
     chainState?: ChainState;
     /** Startup recovery leaves valid pending rows running while disabled. */
     holdPendingWhileDisabled?: boolean;
+    finalizeAcceptedFlow?: (params: { flowId: string; chainState: ChainState }) => Promise<void>;
   },
 ): Promise<{
   dispatched: number;
@@ -243,6 +248,26 @@ export async function dispatchStagedPostCompactionDelegates(
     const nextHop = currentChainCount + 1;
     const dispatchChainId = currentChainId ?? generateChainId();
     if (acceptedChildAlreadyKnown) {
+      if (delegate.flowId && options?.finalizeAcceptedFlow) {
+        const acceptedChildSessionKey = acceptedChildSessionKeysByFlowId.get(delegate.flowId)!;
+        try {
+          await options.finalizeAcceptedFlow({
+            flowId: delegate.flowId,
+            chainState: {
+              currentChainCount: nextHop,
+              chainStartedAt,
+              accumulatedChainTokens,
+              chainId: dispatchChainId,
+            },
+          });
+        } catch (error) {
+          await rollbackAcceptedSubagentChild({
+            childSessionKey: acceptedChildSessionKey,
+            runId: deriveContinuationDelegateChildRunId(delegate.flowId),
+          });
+          throw error;
+        }
+      }
       currentChainCount = nextHop;
       currentChainId = dispatchChainId;
       dispatched++;
@@ -323,6 +348,8 @@ export async function dispatchStagedPostCompactionDelegates(
       loadOwnerSessionEntry: createContinuationOwnerSessionLoader(sessionKey),
       ownerSessionKey: sessionKey,
     });
+    let rollbackAcceptedSpawn: (() => Promise<void>) | undefined;
+    let acceptedSpawn = false;
     try {
       const spawnTraceparent = resolveContinuationTraceparent(delegate.traceparent);
       if (
@@ -385,6 +412,21 @@ export async function dispatchStagedPostCompactionDelegates(
         },
       );
       if (spawnResult.status === "accepted") {
+        acceptedSpawn = true;
+        rollbackAcceptedSpawn = spawnResult.rollbackAccepted;
+        const acceptedChainState: ChainState = {
+          currentChainCount: nextHop,
+          chainStartedAt,
+          accumulatedChainTokens,
+          chainId: dispatchChainId,
+        };
+        if (delegate.flowId && options?.finalizeAcceptedFlow) {
+          await options.finalizeAcceptedFlow({
+            flowId: delegate.flowId,
+            chainState: acceptedChainState,
+          });
+          activeDispatch.authority.assertCurrent("final-acceptance", null);
+        }
         currentChainCount = nextHop;
         currentChainId = dispatchChainId;
         dispatched++;
@@ -416,6 +458,10 @@ export async function dispatchStagedPostCompactionDelegates(
         noteTransientFailure(delegate);
       }
     } catch (err) {
+      await rollbackAcceptedSpawn?.();
+      if (acceptedSpawn) {
+        throw err;
+      }
       if (
         err instanceof MissingDelegateArtifactPolicyError ||
         err instanceof UnavailableDelegateArtifactPolicyError

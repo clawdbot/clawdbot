@@ -447,6 +447,41 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     });
   });
 
+  it("rolls back an accepted recovery child when source finalization fails", async () => {
+    const sessionKey = "agent:main:subagent:pc-finalization-race";
+    stagePostCompactionTaskFlowDelegate(sessionKey, {
+      task: "recover exact child",
+      stagedAt: Date.now(),
+    });
+    const claimed = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
+    const flowId = claimed[0]?.flowId;
+    expect(flowId).toBeDefined();
+    const rollbackAccepted = vi.fn(async () => undefined);
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:pc-finalization-child",
+      runId: "pc-finalization-run",
+      rollbackAccepted,
+    });
+
+    await expect(
+      dispatchStagedPostCompactionDelegates(
+        claimed,
+        sessionKey,
+        { agentSessionKey: sessionKey },
+        {
+          finalizeAcceptedFlow: async () => {
+            mockFlows.get(flowId!)!.status = "cancelled";
+            throw new Error("source reset during finalization");
+          },
+        },
+      ),
+    ).rejects.toThrow("source reset during finalization");
+
+    expect(rollbackAccepted).toHaveBeenCalledOnce();
+    expect(mockFlows.get(flowId!)).toMatchObject({ status: "cancelled" });
+  });
+
   it("requeues awaiting-next-compaction running rows on startup recovery", async () => {
     const sessionKey = "agent:main:subagent:pc-next-seam-startup-requeue";
     stagePostCompactionTaskFlowDelegate(sessionKey, {
@@ -746,21 +781,16 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     spawnSubagentDirectMock.mockResolvedValue({ status: "accepted" });
     updateSessionStoreForRecoveryShouldThrow = true;
 
-    const first = await recoverAndReleaseStagedPostCompactionDelegates({
-      runningUpdatedAtOrBefore: Date.now(),
-    });
+    await expect(
+      recoverAndReleaseStagedPostCompactionDelegates({
+        runningUpdatedAtOrBefore: Date.now(),
+      }),
+    ).rejects.toThrow("store write failed");
 
-    expect(first).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(updateSessionStoreForRecoveryOptions).toContainEqual({ requireWriteSuccess: true });
     expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
     expect(findPersistedRecoveryEntry(sessionKey)).toBeUndefined();
-    expect(loggerRecords).toContainEqual(
-      expect.objectContaining({
-        level: "warn",
-        message: expect.stringContaining("post-compaction-recovery-chain-persist-failed"),
-      }),
-    );
 
     const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
     acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);

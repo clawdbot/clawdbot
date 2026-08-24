@@ -524,6 +524,7 @@ export async function coordinateSubagentContinuation(params: {
         loadOwnerSessionEntry: createContinuationOwnerSessionLoader(params.childSessionKey),
         ownerSessionKey: params.childSessionKey,
       });
+      let rollbackAcceptedSpawn: (() => Promise<void>) | undefined;
       try {
         if (
           await rejectCrossSessionTargeting({
@@ -598,8 +599,9 @@ export async function coordinateSubagentContinuation(params: {
           },
         );
         if (spawnResult.status === "accepted") {
+          rollbackAcceptedSpawn = spawnResult.rollbackAccepted;
           if (delegate.flowId) {
-            markPendingDelegateSpawnAccepted(
+            const committed = markPendingDelegateSpawnAccepted(
               delegate,
               spawnResult.childSessionKey ??
                 deriveContinuationDelegateChildSessionKeyFromParent(
@@ -607,6 +609,15 @@ export async function coordinateSubagentContinuation(params: {
                   delegate.flowId,
                 ),
             );
+            if (!committed) {
+              await spawnResult.rollbackAccepted?.();
+              markPendingDelegateFailed(
+                delegate,
+                "Tool delegate source acceptance became stale.",
+                "Delegate cancelled",
+              );
+              continue;
+            }
           }
           toolHopBase = nextHop;
         } else if (spawnResult.status !== "cancelled") {
@@ -621,6 +632,7 @@ export async function coordinateSubagentContinuation(params: {
           );
         }
       } catch (error) {
+        await rollbackAcceptedSpawn?.();
         markPendingDelegateFailed(delegate, `Tool delegate spawn failed: ${String(error)}`);
         defaultRuntime.log(
           `[subagent-chain-hop] Tool delegate spawn failed from ${params.childSessionKey}: ${String(error)}`,

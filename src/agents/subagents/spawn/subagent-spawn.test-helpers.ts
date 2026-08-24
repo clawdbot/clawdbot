@@ -144,6 +144,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
   registerSubagentRunMock?: MockFn;
+  rollbackSubagentRunRegistrationMock?: MockFn;
   getSubagentRunByRunIdMock?: MockFn;
   startQueuedSubagentRunMock?: MockFn;
   settleFailedQueuedSubagentLaunchMock?: MockFn;
@@ -406,6 +407,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.getSubagentRunByRunIdMock ?? vi.fn(() => ({ execution: { status: "queued" } })),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun: registerSubagentRunImpl,
+    rollbackSubagentRunRegistration:
+      params.rollbackSubagentRunRegistrationMock ?? vi.fn(() => true),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
       params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),

@@ -26,7 +26,12 @@ type SpawnProgressOrigin = {
 };
 
 type SpawnPipelineResult<TState> =
-  | { ok: true; state: TState; runId: string }
+  | {
+      ok: true;
+      state: TState;
+      runId: string;
+      rollbackAccepted: () => Promise<void>;
+    }
   | {
       ok: false;
       phase: SpawnPipelinePhase;
@@ -46,7 +51,10 @@ type SpawnPipelineParams<TState> = {
       historical completion-owner key; do not collapse them. */
   progressSessionKey: string;
   assertRegistrationAdmission?: () => void;
+  assertPostPublicationAdmission?: () => void;
   publishRegistration?: (registration: RegisterSubagentRunInput) => void;
+  afterRegistration?: (state: TState, runId: string) => Promise<void>;
+  rollbackRegistration?: (registration: RegisterSubagentRunInput) => void;
 };
 
 export async function runSpawnPipeline<TState>(
@@ -78,17 +86,39 @@ async function executeSpawnPipeline<TState>(
     return { ok: false, phase: "dispatch", state, error };
   }
 
-  let registration: RegisterSubagentRunInput;
+  let registration!: RegisterSubagentRunInput;
+  let registrationActive = false;
+  let rollbackPromise: Promise<void> | undefined;
+  const rollbackAccepted = (
+    error: unknown = new Error("Accepted subagent registration rolled back."),
+  ): Promise<void> => {
+    if (!registrationActive) {
+      return rollbackPromise ?? Promise.resolve();
+    }
+    registrationActive = false;
+    params.rollbackRegistration?.(registration);
+    rollbackPromise = params.adapter.cleanupOnFailure({
+      phase: "register",
+      state,
+      error,
+    });
+    return rollbackPromise;
+  };
   try {
     // Keep construction and registration in one synchronous section so callers
     // can revalidate shared admission state without an interleaving await.
     registration = params.buildRegistration(state, runId);
     params.assertRegistrationAdmission?.();
     registerSubagentRun(registration);
+    registrationActive = true;
     params.publishRegistration?.(registration);
     // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
     params.admissionReservation?.release();
   } catch (error) {
+    if (registrationActive) {
+      registrationActive = false;
+      params.rollbackRegistration?.(registration);
+    }
     await params.adapter.cleanupOnFailure({ phase: "register", state, error });
     return { ok: false, phase: "register", state, runId, error };
   }
@@ -111,7 +141,23 @@ async function executeSpawnPipeline<TState>(
     } catch {
       // Presentation hooks are best-effort after the run is durably registered.
     }
+    try {
+      params.assertPostPublicationAdmission?.();
+    } catch (error) {
+      await rollbackAccepted(error);
+      return { ok: false, phase: "register", state, runId, error };
+    }
   }
 
-  return { ok: true, state, runId };
+  if (params.afterRegistration) {
+    try {
+      await params.afterRegistration(state, runId);
+      params.assertPostPublicationAdmission?.();
+    } catch (error) {
+      await rollbackAccepted(error);
+      return { ok: false, phase: "register", state, runId, error };
+    }
+  }
+
+  return { ok: true, state, runId, rollbackAccepted: () => rollbackAccepted() };
 }

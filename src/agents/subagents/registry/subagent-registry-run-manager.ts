@@ -33,6 +33,29 @@ export { markSubagentRunPausedAfterYield } from "./subagent-registry-run-wait.js
 const log = createSubsystemLogger("agents/subagent-registry");
 
 class SubagentRunManager extends SubagentLaunchManager {
+  readonly rollbackSubagentRunRegistration = (params: {
+    runId: string;
+    childSessionKey: string;
+  }): boolean => {
+    const entry = this.options.runs.get(params.runId);
+    if (!entry || entry.childSessionKey !== params.childSessionKey) {
+      return false;
+    }
+    this.options.runs.delete(params.runId);
+    try {
+      this.options.persistOrThrow(params.runId);
+    } catch (error) {
+      this.options.runs.set(params.runId, entry);
+      throw error;
+    }
+    this.options.clearPendingLifecycleError(params.runId);
+    clearGatewayContextResolver(entry);
+    if (this.options.runs.size === 0) {
+      this.options.stopSweeper();
+    }
+    return true;
+  };
+
   readonly releaseSubagentRun = (runId: string): void => {
     const entry = this.options.runs.get(runId);
     if (!entry) {

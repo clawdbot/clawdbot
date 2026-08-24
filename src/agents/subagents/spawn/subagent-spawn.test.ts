@@ -33,6 +33,7 @@ const hoisted = vi.hoisted(() => ({
   resolveProviderRefOwnershipMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
+  rollbackSubagentRunRegistrationMock: vi.fn(),
   getSubagentRunByRunIdMock: vi.fn(),
   startQueuedSubagentRunMock: vi.fn(),
   settleFailedQueuedSubagentLaunchMock: vi.fn(),
@@ -222,6 +223,7 @@ describe("spawnSubagentDirect seam flow", () => {
       resolveProviderRefOwnershipMock: hoisted.resolveProviderRefOwnershipMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      rollbackSubagentRunRegistrationMock: hoisted.rollbackSubagentRunRegistrationMock,
       getSubagentRunByRunIdMock: hoisted.getSubagentRunByRunIdMock,
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
       settleFailedQueuedSubagentLaunchMock: hoisted.settleFailedQueuedSubagentLaunchMock,
@@ -250,6 +252,7 @@ describe("spawnSubagentDirect seam flow", () => {
     });
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.rollbackSubagentRunRegistrationMock.mockReset().mockReturnValue(true);
     hoisted.getSubagentRunByRunIdMock
       .mockReset()
       .mockReturnValue({ execution: { status: "queued" } });
@@ -371,6 +374,48 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
     expect(gatewayRequestRecords().map((request) => request.method)).toContain("chat.abort");
     expect(gatewayRequestRecords().map((request) => request.method)).toContain("sessions.delete");
+  });
+
+  it("rolls back an accepted child when reset lands after lifecycle publication", async () => {
+    const admission = createDelegateAdmissionAuthority();
+    hoisted.emitSessionLifecycleEventMock.mockImplementationOnce(() => {
+      admission.controller.abort("session-reset");
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "cancel after publication" },
+      {
+        agentSessionKey: "agent:main:main",
+        continuationDelegateAdmission: admission.authority,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      childSessionKey: expect.any(String),
+      runId: "run-1",
+    });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledOnce();
+    const registered = firstRegisteredSubagentRun();
+    expect(hoisted.rollbackSubagentRunRegistrationMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      childSessionKey: registered.childSessionKey,
+    });
+    expect(gatewayRequestRecords()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "chat.abort",
+          params: expect.objectContaining({ runId: "run-1" }),
+        }),
+      ]),
+    );
+    expect(admission.boundaries).toEqual([
+      "child-session",
+      "gateway-dispatch",
+      "registry-acceptance",
+      "lifecycle-publication",
+      "final-acceptance",
+    ]);
   });
 
   it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
@@ -1707,6 +1752,7 @@ describe("spawnSubagentDirect seam flow", () => {
       "gateway-dispatch",
       "registry-acceptance",
       "lifecycle-publication",
+      "final-acceptance",
     ]);
 
     expectPersistedRuntimeModel({

@@ -243,11 +243,12 @@ function createDeliveryDeps(params: {
 }) {
   const enqueueSystemEvent = vi.fn();
   const log = vi.fn();
+  const rollbackAccepted = vi.fn(async () => undefined);
   const spawnSubagentDirect = vi.fn(async () => {
     if (params.spawnError) {
       throw params.spawnError;
     }
-    return { status: params.spawnStatus ?? "accepted" };
+    return { status: params.spawnStatus ?? "accepted", rollbackAccepted };
   });
   const loadSessionEntry = vi.fn(({ storePath, sessionKey }) =>
     sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
@@ -294,6 +295,7 @@ function createDeliveryDeps(params: {
     markPendingDelegateSpawnAccepted,
     reserveAcceptedPostCompactionChainHop,
     revalidatePendingDelegateForSpawn,
+    rollbackAccepted,
     spawnSubagentDirect,
   };
 }
@@ -435,10 +437,15 @@ describe("post-compaction delegate dispatch extraction", () => {
     await withTestDir({ prefix: "openclaw-post-compaction-source-flow-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
-      const { deps, enqueueSystemEvent, markPendingDelegateSpawnAccepted, spawnSubagentDirect } =
-        createDeliveryDeps({
-          storePath,
-        });
+      const {
+        deps,
+        enqueueSystemEvent,
+        markPendingDelegateSpawnAccepted,
+        rollbackAccepted,
+        spawnSubagentDirect,
+      } = createDeliveryDeps({
+        storePath,
+      });
       markPendingDelegateSpawnAccepted.mockReturnValue(false);
 
       await expect(
@@ -455,6 +462,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       ).rejects.toThrow("post-compaction-source-accept-not-committed");
 
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      expect(rollbackAccepted).toHaveBeenCalledOnce();
       expect(markPendingDelegateSpawnAccepted).toHaveBeenCalledWith(
         {
           flowId: "pc-flow-source",

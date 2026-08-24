@@ -49,13 +49,16 @@ export function registerContinuationDelegateDispatchClaim(params: {
       "Continuation delegate source metadata is incomplete.",
     );
   }
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const ownerIdentity = params.loadOwnerSessionEntry();
   const activeClaim = registerContinuationDispatchClaim({
     sessionKey: params.ownerSessionKey,
     flowId,
   });
-  const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const ownerIdentity = params.loadOwnerSessionEntry();
-  const assertCurrent = (): void => {
+  const assertCurrent = (
+    _boundary?: string,
+    source: DelegateClaim | null = params.delegate,
+  ): void => {
     if (
       activeClaim.controller.signal.aborted ||
       !activeClaim.isActive() ||
@@ -63,8 +66,8 @@ export function registerContinuationDelegateDispatchClaim(params: {
     ) {
       throw new SpawnSubagentAdmissionCancelledError("Continuation delegate admission closed.");
     }
-    if (flowId !== undefined) {
-      const fence = revalidatePendingDelegateForSpawn(params.delegate, params.controller);
+    if (flowId !== undefined && source) {
+      const fence = revalidatePendingDelegateForSpawn(source, params.controller);
       if (!fence.allowed) {
         throw new SpawnSubagentAdmissionCancelledError(fence.summary);
       }

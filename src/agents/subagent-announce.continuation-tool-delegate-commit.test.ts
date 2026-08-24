@@ -73,7 +73,7 @@ vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   enqueuePendingDelegate: vi.fn(),
   hasRecoverablePendingDelegate: vi.fn(() => false),
   markPendingDelegateFailed: vi.fn(),
-  markPendingDelegateSpawnAccepted: vi.fn(),
+  markPendingDelegateSpawnAccepted: vi.fn(() => true),
   peekEarliestQueuedDelegateDueAt: vi.fn(() => undefined),
   revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true })),
 }));
@@ -179,7 +179,7 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     mockedConsumePendingDelegates.mockReturnValue([]);
     dispatchToolDelegatesMock.mockClear();
     mockedMarkPendingDelegateFailed.mockClear();
-    mockedMarkPendingDelegateSpawnAccepted.mockClear();
+    mockedMarkPendingDelegateSpawnAccepted.mockReset().mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -269,5 +269,33 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     expect(mockedMarkPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
     expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back an accepted child and preserves the hop when source acceptance is stale", async () => {
+    const rollbackAccepted = vi.fn(async () => undefined);
+    mockedConsumePendingDelegates.mockReturnValueOnce([
+      { task: "continue stale step", flowId: "flow-tool-stale", expectedRevision: 2 },
+    ]);
+    failSharedDelegateDispatchOnce();
+    spawnSpy.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:stale-child",
+      runId: "run-stale-child",
+      rollbackAccepted,
+    });
+    mockedMarkPendingDelegateSpawnAccepted.mockReturnValueOnce(false);
+
+    await runSubagentAnnounceFlow(buildToolDelegateParams());
+    await vi.waitFor(() => {
+      expect(rollbackAccepted).toHaveBeenCalledOnce();
+    });
+
+    expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "flow-tool-stale" }),
+      "Tool delegate source acceptance became stale.",
+      "Delegate cancelled",
+    );
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledOnce();
+    expect(dispatchToolDelegatesMock.mock.calls[0]?.[0].chainState.currentChainCount).toBe(0);
   });
 });

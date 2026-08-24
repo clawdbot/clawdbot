@@ -651,6 +651,7 @@ export async function deliverQueuedPostCompactionDelegate(
       deps.loadSessionEntry({ storePath, sessionKey: params.entry.sessionKey }),
     ownerSessionKey: params.entry.sessionKey,
   });
+  let rollbackAcceptedSpawn: (() => Promise<void>) | undefined;
   try {
     const spawnFence = deps.revalidatePendingDelegateForSpawn(
       {
@@ -730,6 +731,7 @@ export async function deliverQueuedPostCompactionDelegate(
       }
       throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);
     }
+    rollbackAcceptedSpawn = spawnResult.rollbackAccepted;
     // Charge the chain only now that a child is actually accepted. Everything
     // above this line — artifact policy, spawn fence, attachment materialization,
     // spawn rejection — leaves the persisted depth untouched, so a retry after any
@@ -746,6 +748,7 @@ export async function deliverQueuedPostCompactionDelegate(
       ...(sessionEntry ? { sessionEntry } : {}),
       storePath,
     });
+    activeDispatch.authority.assertCurrent("final-acceptance", null);
     if (params.entry.sourceFlowId && params.entry.sourceExpectedRevision !== undefined) {
       const spawnedChildSessionKey = spawnResult.childSessionKey ?? acceptedChildSessionKey;
       const committed = deps.markPendingDelegateSpawnAccepted(
@@ -770,6 +773,9 @@ export async function deliverQueuedPostCompactionDelegate(
         ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
       },
     );
+  } catch (error) {
+    await rollbackAcceptedSpawn?.();
+    throw error;
   } finally {
     activeDispatch.release();
   }
