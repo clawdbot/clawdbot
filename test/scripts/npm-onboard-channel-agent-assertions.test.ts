@@ -298,7 +298,7 @@ describe("npm onboard channel agent assertions", () => {
     }
   });
 
-  it("rejects a fresh install that recreates the retired main-agent auth database", () => {
+  it("permits an unrelated main-agent database", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
     const legacyAgentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
 
@@ -319,8 +319,8 @@ describe("npm onboard channel agent assertions", () => {
 
       const result = runOnboardAssert(tempDir);
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("onboard created the retired main-agent auth database");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

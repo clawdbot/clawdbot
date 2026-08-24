@@ -494,7 +494,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect((body.components as Array<{ type?: number }>).length).toBeGreaterThan(0);
   });
 
-  it("preserves an explicit component attachment name before MIME fallback", async () => {
+  it("preserves an explicit component attachment name before inferred filename and MIME fallback", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
       type: ChannelType.GuildText,
@@ -504,6 +504,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
       buffer: Buffer.from("png"),
       contentType: "image/png",
+      fileName: "report.pdf",
     });
 
     await sendDiscordComponentMessage(
