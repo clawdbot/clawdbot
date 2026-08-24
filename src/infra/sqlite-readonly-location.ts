@@ -12,8 +12,8 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
+  resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -48,6 +48,16 @@ type PreparedSqliteReadOnlyLocation = {
 type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; message: string };
 
 class SqliteSourceChangedError extends Error {}
+
+function sqliteSnapshotStagingError(tempDir: string, cause: unknown): Error {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const errcode = cause instanceof Error && "errcode" in cause ? cause.errcode : undefined;
+  const sqliteCode = typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : "";
+  return new Error(
+    `${message}${sqliteCode}; snapshot staging root ${path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`,
+    { cause },
+  );
+}
 
 function statIfPresent(pathname: string): BigIntStats | undefined {
   try {
@@ -382,7 +392,9 @@ function createStableReadOnlyCopyInTempDirectory(
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
-    throw error;
+    throw error instanceof SqliteSourceChangedError
+      ? error
+      : sqliteSnapshotStagingError(tempDir, error);
   }
 }
 
@@ -391,7 +403,7 @@ async function createStableReadOnlyCopy(
   journalMode: Exclude<SourceJournalMode, "unknown">,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePreferredOpenClawTmpDir(),
+    resolvePrivateSqliteSnapshotStagingRoot(),
     `openclaw-sqlite-readonly-${process.pid}-`,
   );
   return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
@@ -402,7 +414,7 @@ function createStableReadOnlyCopySync(
   journalMode: Exclude<SourceJournalMode, "unknown">,
 ): PreparedSqliteReadOnlyLocation {
   const tempDir = createPrivateSqliteTempDirectorySync(
-    resolvePreferredOpenClawTmpDir(),
+    resolvePrivateSqliteSnapshotStagingRoot(),
     `openclaw-sqlite-readonly-${process.pid}-`,
   );
   return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
@@ -412,7 +424,7 @@ async function createOnlineReadOnlyBackup(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePreferredOpenClawTmpDir(),
+    resolvePrivateSqliteSnapshotStagingRoot(),
     `openclaw-sqlite-readonly-${process.pid}-`,
   );
   const snapshotPath = path.join(tempDir, "database.sqlite");
@@ -449,7 +461,7 @@ async function createOnlineReadOnlyBackup(
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
-    throw error;
+    throw sqliteSnapshotStagingError(tempDir, error);
   }
 }
 

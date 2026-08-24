@@ -4,7 +4,9 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveRequiredOsHomeDir } from "./home-dir.js";
 import { resolveSystemBin } from "./resolve-system-bin.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { decodeWindowsOutputBuffer } from "./windows-encoding.js";
 import {
   buildEncodedPowerShellArgs,
@@ -204,6 +206,19 @@ function createPrivateSqliteDirectorySync(directoryPath: string): void {
   } catch (error) {
     throw privateDirectoryError(directoryPath, error);
   }
+}
+
+export function resolvePrivateSqliteSnapshotStagingRoot(): string {
+  const configuredRoot = process.env.XDG_CACHE_HOME?.trim();
+  const defaultRoot = process.platform === "darwin" ? "Library/Caches" : ".cache";
+  const cacheRoot =
+    configuredRoot && path.isAbsolute(configuredRoot)
+      ? configuredRoot
+      : path.join(resolveRequiredOsHomeDir(), defaultRoot);
+  return resolvePreferredOpenClawTmpDir({
+    preferredDir: path.join(cacheRoot, "openclaw"),
+    tmpdir: () => cacheRoot,
+  });
 }
 
 export async function createPrivateSqliteTempDirectory(
