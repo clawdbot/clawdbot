@@ -14,14 +14,18 @@ import { VERSION } from "../../version.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
-  getRuntimeAuthForModel: vi.fn(),
-  resolveApiKeyForProvider: vi.fn(),
+  getRuntimeAuthForModelCore: vi.fn(),
+  resolveProviderRuntimeApiKey: vi.fn(),
 }));
 const sandboxContextMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
 }));
 
-vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+vi.mock("./runtime-model-auth.runtime.js", () => ({
+  getApiKeyForModel: runtimeModelAuthMocks.getApiKeyForModel,
+  getRuntimeAuthForModelCore: runtimeModelAuthMocks.getRuntimeAuthForModelCore,
+  resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveProviderRuntimeApiKey,
+}));
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
 import { createPluginRuntime } from "./index.js";
@@ -102,8 +106,8 @@ describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();
-    runtimeModelAuthMocks.getRuntimeAuthForModel.mockReset();
-    runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
+    runtimeModelAuthMocks.getRuntimeAuthForModelCore.mockReset();
+    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockReset();
     sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();
   });
@@ -341,12 +345,10 @@ describe("plugin runtime command execution", () => {
         });
         expectFunctionKeys(runtime.agent as Record<string, unknown>, [
           "runEmbeddedAgent",
-          "runEmbeddedPiAgent",
           "normalizeThinkingLevel",
           "resolveThinkingPolicy",
           "resolveAgentDir",
         ]);
-        expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
           "createSessionEntry",
           "getSessionEntry",
@@ -407,7 +409,7 @@ describe("plugin runtime command execution", () => {
     // The wrappers should not forward agentDir or store from plugin callers.
     // We verify this by checking the wrapper functions exist and are not the
     // raw implementations (they are wrapped, not direct references).
-    const { getApiKeyForModel: rawGetApiKey } = await import("../../agents/model-auth.js");
+    const { getApiKeyForModelCore: rawGetApiKey } = await import("../../agents/model-auth.js");
     const runtime = createPluginRuntime();
     // Wrappers should NOT be the same reference as the raw functions
     expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
@@ -427,7 +429,7 @@ describe("plugin runtime command execution", () => {
       source: "workspace cloud credentials",
       mode: "api-key",
     });
-    runtimeModelAuthMocks.resolveApiKeyForProvider.mockResolvedValue({
+    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockResolvedValue({
       apiKey: "provider-key",
       source: "workspace cloud credentials",
       mode: "api-key",
@@ -456,7 +458,7 @@ describe("plugin runtime command execution", () => {
       cfg,
       workspaceDir: "/tmp/workspace",
     });
-    expect(runtimeModelAuthMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+    expect(runtimeModelAuthMocks.resolveProviderRuntimeApiKey).toHaveBeenCalledWith({
       provider: "workspace-cloud",
       cfg,
       workspaceDir: "/tmp/workspace",
@@ -466,6 +468,14 @@ describe("plugin runtime command execution", () => {
   it("keeps subagent unavailable by default", () => {
     const runtime = createPluginRuntime();
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });
+  });
+
+  it("exposes a node duplex capability even when Gateway access is unavailable", () => {
+    const nodes = createPluginRuntime().nodes;
+    expect(nodes).toHaveProperty("openDuplex", expect.any(Function));
+    expect(() => nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
+      "only available inside the Gateway",
+    );
   });
 
   it("uses an explicit subagent runtime", async () => {
@@ -486,6 +496,7 @@ describe("plugin runtime command execution", () => {
     const nodes = {
       list: vi.fn().mockResolvedValue({ nodes: [] }),
       invoke: vi.fn().mockResolvedValue({ ok: true }),
+      openDuplex: vi.fn().mockResolvedValue({ closed: Promise.resolve({ ok: true }) }),
     };
     const runtime = createPluginRuntime({ nodes });
 
@@ -495,5 +506,9 @@ describe("plugin runtime command execution", () => {
     ).resolves.toEqual({ ok: true });
     expect(nodes.list).toHaveBeenCalledWith({ connected: true });
     expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
+    await expect(
+      runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+    ).resolves.toMatchObject({ closed: expect.any(Promise) });
+    expect(nodes.openDuplex).toHaveBeenCalledWith({ nodeId: "node-1", command: "image.bridge" });
   });
 });

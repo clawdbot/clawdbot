@@ -1,7 +1,6 @@
 // Update gateway methods run self-update flows, report status, write restart
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
-import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   validateUpdateHoldParams,
@@ -19,7 +18,6 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
-import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import {
@@ -32,8 +30,9 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus } from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
+import { devUpdateTargetFromGitCampaign } from "../../infra/update-dev-target.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   buildManagedServiceHandoffUnavailableMessage,
   formatManagedServiceUpdateCommand,
@@ -49,10 +48,16 @@ import {
   normalizeControlPlaneUpdateResult,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
-import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
+import {
+  resolveUpdateInstallSurface,
+  runGatewayUpdate,
+  runGatewayUpdatePreflight,
+} from "../../infra/update-runner.js";
 import {
   getUpdateAvailable,
+  getUpdateEffectiveChannel,
   getUpdateSchedule,
+  initializeGatewayUpdateStatus,
   refreshGatewayUpdateStatus,
 } from "../../infra/update-startup.js";
 import { VERSION } from "../../version.js";
@@ -76,38 +81,22 @@ function formatUpdateRunErrorMessage(err: unknown): string {
   return String(err);
 }
 
-function tryResolveProcessCwd(): string | undefined {
-  try {
-    return process.cwd();
-  } catch {
-    return undefined;
-  }
-}
+// Explicit callers share only active checkout work for the exact config snapshot.
+// Reloaded config must never join work started under an older snapshot.
+const updateStatusCheckoutRefreshes = new WeakMap<OpenClawConfig, Promise<void>>();
 
-async function resolveGatewayEffectiveUpdateChannel(
-  configChannel: ReturnType<typeof normalizeUpdateChannel>,
-) {
-  const invocationCwd = tryResolveProcessCwd();
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    ...(invocationCwd ? { cwd: invocationCwd } : {}),
-  });
-  const status = await checkUpdateStatus({
-    root,
-    timeoutMs: 2500,
-    fetchGit: false,
-    includeRegistry: false,
-  });
-  if (status.installKind === "unknown") {
-    return null;
+function refreshUpdateStatusCheckout(config: OpenClawConfig): Promise<void> {
+  const current = updateStatusCheckoutRefreshes.get(config);
+  if (current) {
+    return current;
   }
-  return resolveEffectiveUpdateChannel({
-    configChannel,
-    currentVersion: VERSION,
-    installKind: status.installKind,
-    git: status.git,
-  }).channel;
+  const refresh = refreshGatewayUpdateStatus(config).finally(() => {
+    if (updateStatusCheckoutRefreshes.get(config) === refresh) {
+      updateStatusCheckoutRefreshes.delete(config);
+    }
+  });
+  updateStatusCheckoutRefreshes.set(config, refresh);
+  return refresh;
 }
 
 async function readPreUpdateConfigForPostCoreFinalize(): Promise<
@@ -180,22 +169,28 @@ export const updateHandlers: GatewayRequestHandlers = {
       );
       sentinel = getLatestUpdateRestartSentinel();
     }
-    const configChannel = context?.getRuntimeConfig
-      ? normalizeUpdateChannel(context.getRuntimeConfig().update?.channel)
-      : null;
-    if (context?.getRuntimeConfig) {
+    const config = context?.getRuntimeConfig?.();
+    const configChannel = normalizeUpdateChannel(config?.update?.channel);
+    if (params.refreshCheckout === true && config) {
       try {
-        await refreshGatewayUpdateStatus(context.getRuntimeConfig());
+        await refreshUpdateStatusCheckout(config);
       } catch (err) {
-        context.logGateway?.warn(
+        context?.logGateway?.warn(
           `update.status checkout refresh failed: ${formatUpdateRunErrorMessage(err)}`,
         );
       }
     }
     const schedule = getUpdateSchedule();
-    const effectiveChannel = await resolveGatewayEffectiveUpdateChannel(configChannel).catch(
-      () => null,
-    );
+    let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
+    if (!effectiveChannel) {
+      try {
+        effectiveChannel = await getUpdateEffectiveChannel();
+      } catch (err) {
+        context?.logGateway?.warn(
+          `update.status install identity failed: ${formatUpdateRunErrorMessage(err)}`,
+        );
+      }
+    }
     const result = {
       sentinel,
       updateAvailable: getUpdateAvailable(),
@@ -253,9 +248,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const adoptedCampaign = gatewayUpdateCampaign.adopt();
     const adoptedCampaignId = adoptedCampaign?.campaignId;
-    const adoptedDevTargetRef =
+    const adoptedDevTarget =
       adoptedCampaign?.target.kind === "git"
-        ? adoptedCampaign.target.upstreamSha.trim() || undefined
+        ? devUpdateTargetFromGitCampaign(adoptedCampaign.target)
         : undefined;
     const adoptedPackageTargetVersion =
       adoptedCampaign?.target.kind === "package"
@@ -304,29 +299,18 @@ export const updateHandlers: GatewayRequestHandlers = {
     try {
       const config = context.getRuntimeConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
-      const invocationCwd = tryResolveProcessCwd();
-      const root =
-        (await resolveOpenClawPackageRoot({
-          moduleUrl: import.meta.url,
-          argv1: process.argv[1],
-          ...(invocationCwd ? { cwd: invocationCwd } : {}),
-        })) ??
-        invocationCwd ??
-        os.homedir();
+      const { root, status } = await initializeGatewayUpdateStatus();
       const installSurface = await resolveUpdateInstallSurface({
+        root,
+        installKind: status.installKind,
         timeoutMs,
-        cwd: root,
-        argv1: process.argv[1],
       });
+      const installRoot = installSurface.root;
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
-        installKind:
-          installSurface.kind === "git"
-            ? "git"
-            : installSurface.kind === "global" || installSurface.kind === "package-root"
-              ? "package"
-              : "unknown",
+        installKind: status.installKind,
+        git: status.git,
       }).channel;
       const supervisor = detectRespawnSupervisor(process.env, process.platform);
       const hasHandoffContext = supervisor
@@ -334,14 +318,27 @@ export const updateHandlers: GatewayRequestHandlers = {
         : false;
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
-      if (isGatewayExternallySupervised()) {
-        const beforeVersion = installSurface.root
-          ? await readPackageVersion(installSurface.root)
-          : null;
+      const managedGitPreflightFailure =
+        installSurface.kind === "git" &&
+        effectiveChannel === "dev" &&
+        hasHandoffContext &&
+        !isGatewayExternallySupervised()
+          ? await runGatewayUpdatePreflight(installRoot, timeoutMs, adoptedDevTarget)
+          : undefined;
+      if (installSurface.kind === "missing") {
+        result = {
+          status: "error",
+          mode: "unknown",
+          reason: "not-openclaw-root",
+          steps: [],
+          durationMs: 0,
+        };
+      } else if (isGatewayExternallySupervised()) {
+        const beforeVersion = await readPackageVersion(installSurface.root);
         result = {
           status: "skipped",
           mode: installSurface.mode,
-          ...(installSurface.root ? { root: installSurface.root } : {}),
+          root: installSurface.root,
           reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
           ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
           steps: [],
@@ -372,7 +369,12 @@ export const updateHandlers: GatewayRequestHandlers = {
           steps: [],
           durationMs: 0,
         };
+      } else if (managedGitPreflightFailure) {
+        result = managedGitPreflightFailure;
       } else if (requiresManagedServiceHandoff) {
+        if (!installRoot) {
+          throw new Error("managed update install root is unavailable");
+        }
         const handoffChannel =
           installSurface.kind === "git"
             ? undefined
@@ -386,9 +388,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         });
         if (supervisor && hasHandoffContext) {
           try {
-            const beforeVersion = installSurface.root
-              ? await readPackageVersion(installSurface.root)
-              : null;
+            const beforeVersion = await readPackageVersion(installRoot);
             const startedAt = Date.now();
             const handoffId = randomUUID();
             const managedRestartDelayMs = resolveManagedServiceHandoffRestartDelayMs(
@@ -396,23 +396,17 @@ export const updateHandlers: GatewayRequestHandlers = {
               supervisor,
             );
             sentinelMeta.handoffId = handoffId;
+            sentinelMeta.root = resolveUpdateInstallRoot(installRoot);
             // Managed services update from a detached helper so the running
             // gateway does not replace its own package or git-built dist tree
             // while still serving RPCs.
             const started = await startManagedServiceUpdateHandoff({
-              root,
+              root: installRoot,
               timeoutMs,
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
               ...(handoffChannel ? { channel: handoffChannel } : {}),
               ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
-              ...(adoptedDevTargetRef
-                ? {
-                    env: {
-                      ...process.env,
-                      OPENCLAW_UPDATE_DEV_TARGET_REF: adoptedDevTargetRef,
-                    },
-                  }
-                : {}),
+              ...(adoptedDevTarget ? { devTarget: adoptedDevTarget } : {}),
               restartDelayMs: managedRestartDelayMs,
               meta: sentinelMeta,
               handoffId,
@@ -452,7 +446,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             result = {
               status: "skipped",
               mode: installSurface.mode,
-              root: installSurface.root,
+              root: installRoot,
               reason: ownsManagedServiceHandoff
                 ? CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON
                 : MANAGED_HANDOFF_ALREADY_RUNNING_REASON,
@@ -462,7 +456,7 @@ export const updateHandlers: GatewayRequestHandlers = {
                     {
                       name: "managed-service update handoff",
                       command: started.command,
-                      cwd: root,
+                      cwd: installRoot,
                       durationMs: Date.now() - startedAt,
                       exitCode: null,
                     },
@@ -477,16 +471,14 @@ export const updateHandlers: GatewayRequestHandlers = {
             result = {
               status: "error",
               mode: installSurface.mode,
-              root: installSurface.root,
+              root: installRoot,
               reason: "managed-service-handoff-failed",
               steps: [],
               durationMs: 0,
             };
           }
         } else {
-          const beforeVersion = installSurface.root
-            ? await readPackageVersion(installSurface.root)
-            : null;
+          const beforeVersion = await readPackageVersion(installRoot);
           handoff = {
             status: "unavailable",
             command,
@@ -495,7 +487,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           result = {
             status: "skipped",
             mode: installSurface.mode,
-            root: installSurface.root,
+            root: installRoot,
             reason: "managed-service-handoff-unavailable",
             ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
             steps: [],
@@ -518,8 +510,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         // RPC server before the response and restart sentinel become durable.
         result = await runGatewayUpdate({
           timeoutMs,
-          cwd: root,
-          argv1: process.argv[1],
+          cwd: installSurface.root,
           channel:
             installSurface.kind === "git"
               ? (configChannel ?? undefined)
@@ -527,7 +518,7 @@ export const updateHandlers: GatewayRequestHandlers = {
                 ? effectiveChannel
                 : (configChannel ?? undefined),
           ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
-          ...(adoptedDevTargetRef ? { devTargetRef: adoptedDevTargetRef } : {}),
+          ...(adoptedDevTarget ? { devTarget: adoptedDevTarget } : {}),
           allowGatewayServiceRepair: false,
           allowGatewayActivation: false,
         });

@@ -49,14 +49,11 @@ describe("bundled plugin build entries", () => {
     }
   };
 
-  it("includes manifest-less runtime core support packages in dist build entries", () => {
+  it("includes the manifest-less runtime core support package in dist build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const expectedEntries = {
-      "extensions/image-generation-core/api": "extensions/image-generation-core/api.ts",
       "extensions/image-generation-core/runtime-api":
         "extensions/image-generation-core/runtime-api.ts",
-      "extensions/media-understanding-core/runtime-api":
-        "extensions/media-understanding-core/runtime-api.ts",
     };
 
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
@@ -150,16 +147,12 @@ describe("bundled plugin build entries", () => {
     expect(payload.artifacts).toBeGreaterThan(0);
   });
 
-  it("packs runtime core support packages without requiring plugin manifests", () => {
+  it("packs the runtime core support package without requiring a plugin manifest", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
     expect(artifacts).toContain("dist/extensions/image-generation-core/package.json");
     expect(artifacts).toContain("dist/extensions/image-generation-core/runtime-api.js");
     expect(artifacts).not.toContain("dist/extensions/image-generation-core/openclaw.plugin.json");
-    expect(artifacts).toContain("dist/extensions/media-understanding-core/runtime-api.js");
-    expect(artifacts).not.toContain(
-      "dist/extensions/media-understanding-core/openclaw.plugin.json",
-    );
   });
 
   it("packs the Matrix packaged runtime shim", () => {
@@ -183,7 +176,7 @@ describe("bundled plugin build entries", () => {
       expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
-    for (const pluginId of ["qqbot", "whatsapp"]) {
+    for (const pluginId of ["whatsapp"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
@@ -298,12 +291,11 @@ describe("bundled plugin build entries", () => {
     const selectedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,qqbot",
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp",
       },
     });
 
     expect(selectedEntries).toEqual(baselineEntries);
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/qqbot/");
     expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
   });
 

@@ -4,7 +4,7 @@ import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
@@ -44,7 +44,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         }) ?? {});
   const discovery = params.discovery ?? discoverOpenClawPlugins({ env });
   const pluginIds = new Set(params.pluginIds);
-  const manifestRegistry = loadPluginManifestRegistry({
+  const manifestRegistry = loadPluginManifestRegistryCore({
     config,
     env,
     candidates: discovery.candidates,

@@ -4,13 +4,13 @@ import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-conte
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { resolveUserTranscriptMessages } from "./attempt-history.js";
 import {
   installRuntimeContextMessageForPrompt,
   installModelPromptTransform,
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
-} from "./attempt.llm-boundary.js";
-import { resolveUserTranscriptMessages } from "./attempt.user-message-boundary.js";
+} from "./attempt-llm-boundary.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 describe("normalizeMessagesForLlmBoundary", () => {

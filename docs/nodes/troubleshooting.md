@@ -1,7 +1,7 @@
 ---
 summary: "Troubleshoot node pairing, foreground requirements, permissions, and tool failures"
 read_when:
-  - Node is connected but camera/canvas/screen/exec tools fail
+  - Node is connected but camera/screen/exec tools fail
   - You need the node pairing versus approvals mental model
 title: "Node troubleshooting"
 ---
@@ -70,13 +70,12 @@ Healthy signals:
 
 ## Foreground requirements
 
-`canvas.*`, `camera.*`, and `screen.*` are foreground-only on iOS/Android nodes.
+`camera.*` and `screen.*` are foreground-only on iOS/Android nodes.
 
 Quick check and fix:
 
 ```bash
 openclaw nodes describe --node <idOrNameOrIp>
-openclaw nodes canvas snapshot --node <idOrNameOrIp>
 openclaw logs --follow
 ```
 

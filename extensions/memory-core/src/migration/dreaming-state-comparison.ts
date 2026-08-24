@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
@@ -39,12 +40,6 @@ function targetNamespacesForSource(label: string): string[] {
   return [
     label === "short-term recall" ? SHORT_TERM_RECALL_NAMESPACE : SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   ];
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 async function memoryCoreLegacyTargetHasRows(source: LegacyDreamingSource): Promise<boolean> {
@@ -137,7 +132,7 @@ async function memoryCoreLegacySourceMatchesCanonical(
     const canonical = normalizeShortTermRecallStore(canonicalRaw, updatedAt);
     const fallbackCandidates = new Set([updatedAt]);
     for (const row of entryRows) {
-      const value = asRecord(row.value);
+      const value = asOptionalRecord(row.value);
       for (const key of ["firstRecalledAt", "lastRecalledAt"] as const) {
         if (typeof value?.[key] === "string") {
           fallbackCandidates.add(value[key]);

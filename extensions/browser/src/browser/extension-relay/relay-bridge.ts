@@ -9,16 +9,10 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
-import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import {
   type ExtensionToRelayMessage,
-  PAGE_SHARE_MAX_NOTE_CHARS,
-  PAGE_SHARE_MAX_TITLE_CHARS,
-  PAGE_SHARE_MAX_URL_CHARS,
-  type PageSharePayload,
   parseExtensionMessage,
   type RelayCommandBody,
-  type RelayPageShareResultMessage,
   type RelayTabInfo,
   type RelayToExtensionMessage,
 } from "./relay-protocol.js";
@@ -29,7 +23,6 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 const EXTENSION_COMMAND_TIMEOUT_MS = 15_000;
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
-const PAGE_SHARE_MAX_BODY_CHARS = 300_000;
 
 /** Synthetic targetId for the emulated browser target. */
 const BROWSER_TARGET_ID = "openclaw-extension-relay";
@@ -60,6 +53,8 @@ type TabState = {
   /** Set while chrome.debugger is attached: real CDP targetId + synthetic root sessionId. */
   attached?: { targetId: string; sessionId: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
+  /** Extension loss invalidated attachment work that auto-attach clients still expect restored. */
+  restoreAttachment: boolean;
 };
 
 type CdpClientState = {
@@ -115,16 +110,13 @@ export class ExtensionRelayBridge {
   private pingTimer: NodeJS.Timeout | null = null;
   private missedPongs = 0;
   private readonly onStateChange?: () => void;
-  private readonly onPageShare?: (payload: PageSharePayload) => Promise<void>;
 
   constructor(
     opts: {
       onStateChange?: () => void;
-      onPageShare?: (payload: PageSharePayload) => Promise<void>;
     } = {},
   ) {
     this.onStateChange = opts.onStateChange;
-    this.onPageShare = opts.onPageShare;
   }
 
   /** True once an extension socket completed its hello handshake. */
@@ -271,10 +263,6 @@ export class ExtensionRelayBridge {
         this.syncTabs(msg.tabs);
         return;
       }
-      case "pageShare": {
-        void this.handlePageShare(msg.requestId, msg.payload);
-        return;
-      }
       case "detached": {
         const tab = this.tabs.get(msg.tabId);
         if (tab?.attached) {
@@ -291,54 +279,6 @@ export class ExtensionRelayBridge {
     }
   }
 
-  private async handlePageShare(requestId: number, payload: PageSharePayload): Promise<void> {
-    const validRequestId = Number.isSafeInteger(requestId) && requestId >= 0;
-    const validPayload =
-      payload !== null &&
-      typeof payload === "object" &&
-      typeof payload.url === "string" &&
-      payload.url.length <= PAGE_SHARE_MAX_URL_CHARS &&
-      typeof payload.title === "string" &&
-      payload.title.length <= PAGE_SHARE_MAX_TITLE_CHARS &&
-      typeof payload.content === "string" &&
-      (payload.selection === undefined || typeof payload.selection === "string") &&
-      (payload.note === undefined ||
-        (typeof payload.note === "string" && payload.note.length <= PAGE_SHARE_MAX_NOTE_CHARS)) &&
-      payload.content.length + (payload.selection?.length ?? 0) <= PAGE_SHARE_MAX_BODY_CHARS;
-
-    if (!validRequestId || !validPayload) {
-      this.sendPageShareResult({
-        requestId: validRequestId ? requestId : 0,
-        ok: false,
-        error: "Invalid page-share payload.",
-      });
-      return;
-    }
-    if (!this.onPageShare) {
-      this.sendPageShareResult({ requestId, ok: false, error: PAGE_SHARE_GATEWAY_REQUIRED_ERROR });
-      return;
-    }
-
-    try {
-      await this.onPageShare(payload);
-      this.sendPageShareResult({ requestId, ok: true });
-    } catch (err) {
-      this.sendPageShareResult({
-        requestId,
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  private sendPageShareResult(result: Omit<RelayPageShareResultMessage, "type">): void {
-    try {
-      this.sendToExtension({ type: "pageShareResult", ...result });
-    } catch (err) {
-      log.warn(`failed to send page-share result: ${String(err)}`);
-    }
-  }
-
   private handleExtensionGone(): void {
     this.extension = null;
     this.stopPing();
@@ -347,9 +287,11 @@ export class ExtensionRelayBridge {
       pending.reject(new Error("extension disconnected"));
     }
     this.pendingExtension.clear();
-    // Tell CDP clients their pages are gone; the tab list itself survives so a
-    // reconnecting extension can re-expose the same tabs.
+    // Retire attach work synchronously so a replacement snapshot cannot reuse
+    // a rejected promise. Keep the tab list so the same ids can be re-exposed.
     for (const [tabId, tab] of this.tabs) {
+      tab.restoreAttachment ||= tab.attached !== undefined || tab.attaching !== undefined;
+      tab.attaching = undefined;
       if (tab.attached) {
         this.emitDetachedFromTarget(tabId, tab.attached.sessionId, tab.attached.targetId);
         tab.attached = undefined;
@@ -418,6 +360,7 @@ export class ExtensionRelayBridge {
 
   private syncTabs(tabs: RelayTabInfo[]): void {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
+    const shouldAutoAttach = [...this.clients].some((client) => client.autoAttach);
     for (const [tabId, tab] of this.tabs) {
       if (!nextIds.has(tabId)) {
         if (tab.attached) {
@@ -428,21 +371,20 @@ export class ExtensionRelayBridge {
     }
     for (const info of tabs) {
       const existing = this.tabs.get(info.tabId);
+      const shouldAttach = !existing || existing.restoreAttachment;
       if (existing) {
         existing.info = info;
       } else {
-        this.tabs.set(info.tabId, { info });
-        // Newly accessible tabs must reach auto-attach clients immediately;
-        // an access-mode or pause change may happen mid-session.
-        if ([...this.clients].some((client) => client.autoAttach)) {
-          void this.ensureTabAttached(info.tabId)
-            .then(({ targetId, sessionId }) => {
-              this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
-            })
-            .catch((err: unknown) => {
-              log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`);
-            });
-        }
+        this.tabs.set(info.tabId, { info, restoreAttachment: false });
+      }
+      if (shouldAutoAttach && shouldAttach) {
+        void this.ensureTabAttached(info.tabId)
+          .then(({ targetId, sessionId }) => {
+            this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
+          })
+          .catch((err: unknown) => {
+            log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`);
+          });
       }
     }
   }
@@ -475,13 +417,17 @@ export class ExtensionRelayBridge {
         throw new Error(`tab ${tabId} closed during attach`);
       }
       current.attached = attached;
+      current.restoreAttachment = false;
       return attached;
     })();
     tab.attaching = attaching;
     try {
       return await attaching;
     } finally {
-      tab.attaching = undefined;
+      // A replacement extension may already have started a fresh attach for this tab.
+      if (tab.attaching === attaching) {
+        tab.attaching = undefined;
+      }
     }
   }
 
@@ -497,6 +443,24 @@ export class ExtensionRelayBridge {
       attached: true,
       canAccessOpener: false,
     };
+  }
+
+  private enumerateTargetInfos():
+    | { status: "available"; targetInfos: Record<string, unknown>[] }
+    | {
+        status: "unavailable";
+        reason: "extension-disconnected" | "target-identity-unresolved";
+      } {
+    if (!this.extensionConnected) {
+      return { status: "unavailable", reason: "extension-disconnected" };
+    }
+    if ([...this.tabs.values()].some((tab) => !tab.attached)) {
+      return { status: "unavailable", reason: "target-identity-unresolved" };
+    }
+    const targetInfos = [...this.tabs.values()].map((tab) =>
+      this.targetInfoForTab(tab, tab.attached?.targetId ?? ""),
+    );
+    return { status: "available", targetInfos };
   }
 
   private announceAttachedTab(
@@ -826,10 +790,16 @@ export class ExtensionRelayBridge {
         return;
       }
       case "Target.getTargets": {
-        const targetInfos = [...this.tabs.values()]
-          .filter((tab) => tab.attached)
-          .map((tab) => this.targetInfoForTab(tab, tab.attached?.targetId ?? ""));
-        this.respond(client, request, { targetInfos });
+        const enumeration = this.enumerateTargetInfos();
+        if (enumeration.status === "unavailable") {
+          const message =
+            enumeration.reason === "extension-disconnected"
+              ? "Extension is disconnected"
+              : "Target identities are unavailable";
+          this.respondError(client, request, message, -32002);
+          return;
+        }
+        this.respond(client, request, { targetInfos: enumeration.targetInfos });
         return;
       }
       case "Target.attachToBrowserTarget": {
@@ -946,7 +916,10 @@ export class ExtensionRelayBridge {
         }
         const tabId = created.tabId;
         if (!this.tabs.has(tabId)) {
-          this.tabs.set(tabId, { info: { tabId, url, title: "", active: false } });
+          this.tabs.set(tabId, {
+            info: { tabId, url, title: "", active: false },
+            restoreAttachment: false,
+          });
         }
         const attached = await this.ensureTabAttached(tabId);
         // Announce before responding, mirroring Chrome's event-then-result order.

@@ -52,6 +52,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     onAddonChange: vi.fn(),
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
+    canImportMemory: true,
     overview: html`<div class="test-overview"></div>`,
     memories: html`<div class="test-memories"></div>`,
     dreams: html`<div class="test-dreams"></div>`,
@@ -74,6 +75,22 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
+  it("renders the agent scope only for multiple configured agents", () => {
+    const emptyRoster = renderInto(createProps({ activeTab: "overview", agents: [] }));
+    expect(emptyRoster.querySelector(".agent-scope-control")).toBeNull();
+
+    const singleAgent = renderInto(
+      createProps({
+        activeTab: "overview",
+        agents: [{ value: "main", label: "Main" }],
+      }),
+    );
+    expect(singleAgent.querySelector(".agent-scope-control")).toBeNull();
+
+    const multipleAgents = renderInto(createProps({ activeTab: "overview" }));
+    expect(multipleAgents.querySelector(".agent-scope-control")).not.toBeNull();
+  });
+
   it.each(["overview", "memories", "dreams"] as const)(
     "renders the shared header and agent scope on %s",
     (activeTab) => {
@@ -103,6 +120,13 @@ describe("renderMemory", () => {
 
     expect(container.querySelector(".hub-page-header__actions")?.childElementCount).toBe(0);
     expect(container.querySelector("openclaw-agent-select")).toBeNull();
+  });
+
+  it("replaces the memory-import link with an admin-required note", () => {
+    const container = renderInto(createProps({ canImportMemory: false }));
+
+    expect(container.querySelector('a[href="/memory-import"]')).toBeNull();
+    expect(container.textContent).toContain("Memory import requires operator.admin access.");
   });
 
   it("shows the exclusive engine choice as one radio group over installed engines", () => {

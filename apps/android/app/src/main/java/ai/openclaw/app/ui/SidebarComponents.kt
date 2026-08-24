@@ -225,6 +225,7 @@ internal fun SidebarSessionRow(
 ) {
   val sessionStateDescription =
     when {
+      session.status == "queued" -> nativeString("Queued")
       session.hasActiveRun == true -> nativeString("Working")
       session.unread == true -> nativeString("Needs attention")
       selected -> nativeString("Selected")

@@ -2,6 +2,7 @@
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -43,9 +44,7 @@ type EnterpriseTestClient = WebClient & {
 
 const ENTERPRISE_CFG: OpenClawConfig = {
   channels: {
-    slack: {
-      enterpriseOrgInstall: true,
-    },
+    slack: {},
   },
 };
 
@@ -115,79 +114,75 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps ordinary and arbitrarily client-injected Enterprise sends fail closed", async () => {
-    const client = createEnterpriseClient();
-
-    for (const message of ["hello", "NO_REPLY"]) {
-      await expect(
-        sendMessageSlack("channel:C123", message, {
-          cfg: ENTERPRISE_CFG,
-          token: "xoxb-enterprise",
-          client,
-        }),
-      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
-    }
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
-
   it("creates a workspace-scoped client for a qualified detached send", async () => {
     const scopedClient = createEnterpriseClient();
     const injectedClient = createEnterpriseClient();
     getSlackWriteClientMock.mockReturnValue(scopedClient);
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", {
+        cfg: ENTERPRISE_CFG,
+        token: "xoxb-enterprise",
+        client: injectedClient,
+      });
 
-    await sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", {
-      cfg: ENTERPRISE_CFG,
-      token: "xoxb-enterprise",
-      client: injectedClient,
-    });
-
-    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-enterprise", {
-      teamId: "T123",
-    });
-    expect(scopedClient.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "C08GQH53EJM", text: "hello" }),
-    );
-    expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
+      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-enterprise", {
+        teamId: "T123",
+      });
+      expect(scopedClient.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "C08GQH53EJM", text: "hello" }),
+      );
+      expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
-  it("requires an Enterprise account for an event scope", async () => {
-    const client = createEnterpriseClient();
-    await expect(
-      sendMessageSlack("channel:C123", "hello", {
-        ...enterpriseOptions(client),
-        cfg: { channels: { slack: { botToken: "xoxb-workspace" } } },
-      }),
-    ).rejects.toThrow("unexpected_enterprise_slack_listener_scope");
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  it("rejects a bare detached target for an authenticated Enterprise install", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        sendMessageSlack("C08GQH53EJM", "hello", {
+          cfg: ENTERPRISE_CFG,
+          token: "xoxb-enterprise",
+        }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(getSlackWriteClientMock).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
   it("uses the exact listener client without a token or team_id method payload", async () => {
     const client = createEnterpriseClient();
-
-    const result = await sendMessageSlack("channel:c08gqh53ejm", "hello", {
-      ...enterpriseOptions(client),
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-enterprise",
-            enterpriseOrgInstall: true,
-            unfurlLinks: true,
-            unfurlMedia: true,
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      const result = await sendMessageSlack("channel:c08gqh53ejm", "hello", {
+        ...enterpriseOptions(client),
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-enterprise",
+              unfurlLinks: true,
+              unfurlMedia: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(client.chat.postMessage).toHaveBeenCalledOnce();
-    expect(postPayload(client)).toEqual({
-      channel: "C08GQH53EJM",
-      text: "hello",
-      unfurl_links: false,
-      unfurl_media: true,
-    });
-    expect(postPayload(client)).not.toHaveProperty("team_id");
-    expect(client.conversations.open).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ messageId: "123.456", channelId: "C123" });
+      expect(client.chat.postMessage).toHaveBeenCalledOnce();
+      expect(postPayload(client)).toEqual({
+        channel: "C08GQH53EJM",
+        text: "hello",
+        unfurl_links: false,
+        unfurl_media: true,
+      });
+      expect(postPayload(client)).not.toHaveProperty("team_id");
+      expect(client.conversations.open).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ messageId: "123.456", channelId: "C123" });
+    } finally {
+      installationState.release();
+    }
   });
 
   it.each(["U123", "user:U123", "#general", "slack:C123", "team:T123:channel:C08GQH53EJM"])(

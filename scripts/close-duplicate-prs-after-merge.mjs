@@ -1,10 +1,8 @@
 // Finds duplicate PRs after merge and closes overlapping candidates.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function normalizeStringifiedOptionalString(value) {
+import { isRecord } from "./lib/record-shared.mjs";
+function normalizeDuplicatePrListInput(value) {
   if (
     typeof value !== "string" &&
     typeof value !== "number" &&
@@ -31,7 +29,7 @@ each duplicate has either a shared referenced issue or overlapping changed hunks
  * Parses comma-separated PR numbers from CLI/env input.
  */
 export function parsePrNumberList(value) {
-  const text = normalizeStringifiedOptionalString(value) ?? "";
+  const text = normalizeDuplicatePrListInput(value) ?? "";
   return [
     ...new Set(
       text

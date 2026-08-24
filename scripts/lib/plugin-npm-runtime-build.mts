@@ -12,6 +12,7 @@ import {
   listMissingPackageStaticAssetSources,
   runPackageAssetBuild,
 } from "./plugin-npm-runtime-assets.mts";
+import { isRecord } from "./record-shared.mjs";
 import { copyStaticExtensionAssetsForPackage } from "./static-extension-assets.mts";
 
 const env = {
@@ -24,7 +25,7 @@ export type PluginPackageJson = JsonRecord & {
   dependencies?: JsonRecord;
   openclaw?: {
     assetScripts?: { build?: unknown };
-    build?: { openclawVersion?: unknown; runtimeFormat?: unknown };
+    build?: { bundledDist?: unknown; openclawVersion?: unknown; runtimeFormat?: unknown };
     compat?: { pluginApi?: unknown };
     release?: {
       bundleRuntimeDependencies?: unknown;
@@ -96,10 +97,6 @@ function getStringRecord(value: unknown) {
       ([, entryValue]) => typeof entryValue === "string" && entryValue.trim().length > 0,
     ),
   );
-}
-
-function getRecord(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
 
 function createNeverBundleDependencyMatcher(packageJson: PluginPackageJson) {
@@ -298,8 +295,12 @@ function resolvePluginNpmRuntimePackagePeerMetadata(plan: {
     );
   }
   const existingPeerDependencies = getStringRecord(plan.packageJson.peerDependencies);
-  const existingPeerDependenciesMeta = getRecord(plan.packageJson.peerDependenciesMeta);
-  const existingOpenClawMeta = getRecord(existingPeerDependenciesMeta.openclaw);
+  const existingPeerDependenciesMeta = isRecord(plan.packageJson.peerDependenciesMeta)
+    ? plan.packageJson.peerDependenciesMeta
+    : {};
+  const existingOpenClawMeta = isRecord(existingPeerDependenciesMeta.openclaw)
+    ? existingPeerDependenciesMeta.openclaw
+    : {};
   return {
     peerDependencies: {
       ...existingPeerDependencies,

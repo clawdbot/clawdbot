@@ -51,6 +51,19 @@ suite.define(() => {
               ],
             },
             "last-heartbeat": { ageMs: 1250, source: "gateway-heartbeat" },
+            "diagnostics.lanes": {
+              lanes: [
+                {
+                  lane: "main",
+                  queuedCount: 0,
+                  activeCount: 0,
+                  maxConcurrent: 16,
+                  draining: false,
+                  generation: 1,
+                },
+              ],
+              dynamic: null,
+            },
           },
         });
 
@@ -70,10 +83,18 @@ suite.define(() => {
         });
         await expect.poll(() => models.textContent()).toContain("gpt-5.6-luna");
 
-        for (const method of ["status", "health", "models.list", "last-heartbeat"]) {
+        for (const method of [
+          "status",
+          "health",
+          "models.list",
+          "last-heartbeat",
+          "diagnostics.lanes",
+        ]) {
           const requests = await gateway.getRequests(method);
           expect(requests.length).toBeGreaterThanOrEqual(1);
-          expect(requests[0]?.params).toEqual({});
+          expect(requests[0]?.params).toEqual(
+            method === "models.list" ? { agentId: "main", preparedOnly: true } : {},
+          );
         }
 
         if (captureUiProof) {

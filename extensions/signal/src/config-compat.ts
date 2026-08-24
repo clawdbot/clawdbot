@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 // Signal compatibility migration moves shipped flat transport config into account ownership.
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   allocateSignalManagedNativePort,
@@ -77,20 +77,16 @@ function isSignalTransportConfig(value: unknown): value is SignalTransportConfig
   }
 }
 
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function inherited(entry: Record<string, unknown>, parent: Record<string, unknown>, key: string) {
   return Object.hasOwn(entry, key) ? entry[key] : parent[key];
 }
 
 function legacyBaseUrl(entry: Record<string, unknown>, parent: Record<string, unknown>): string {
-  const url = optionalString(inherited(entry, parent, "httpUrl"));
+  const url = normalizeOptionalString(inherited(entry, parent, "httpUrl"));
   if (url) {
     return normalizeSignalTransportUrl(url);
   }
-  const host = optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
+  const host = normalizeOptionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
   const rawPort = inherited(entry, parent, "httpPort");
   const port = typeof rawPort === "number" ? rawPort : 8080;
   return buildSignalTransportHttpUrl(host, port);
@@ -105,11 +101,11 @@ function wasLegacySignalAccountConfigured(
   parent: Record<string, unknown>,
 ): boolean {
   return Boolean(
-    optionalString(inherited(entry, parent, "account")) ||
-    optionalString(inherited(entry, parent, "configPath")) ||
-    optionalString(inherited(entry, parent, "httpUrl")) ||
-    optionalString(inherited(entry, parent, "httpHost")) ||
-    optionalString(inherited(entry, parent, "cliPath")) ||
+    normalizeOptionalString(inherited(entry, parent, "account")) ||
+    normalizeOptionalString(inherited(entry, parent, "configPath")) ||
+    normalizeOptionalString(inherited(entry, parent, "httpUrl")) ||
+    normalizeOptionalString(inherited(entry, parent, "httpHost")) ||
+    normalizeOptionalString(inherited(entry, parent, "cliPath")) ||
     typeof inherited(entry, parent, "httpPort") === "number" ||
     typeof inherited(entry, parent, "autoStart") === "boolean",
   );
@@ -120,7 +116,7 @@ function hasInvalidLegacyHttpUrl(
   parent: Record<string, unknown>,
 ): boolean {
   return entries.some((entry) => {
-    const httpUrl = optionalString(inherited(entry, parent, "httpUrl"));
+    const httpUrl = normalizeOptionalString(inherited(entry, parent, "httpUrl"));
     if (!httpUrl) {
       return false;
     }
@@ -138,14 +134,14 @@ function findInvalidLegacyDerivedEndpoint(
   parent: Record<string, unknown>,
 ): "host" | "port" | undefined {
   for (const entry of entries) {
-    if (optionalString(inherited(entry, parent, "httpUrl"))) {
+    if (normalizeOptionalString(inherited(entry, parent, "httpUrl"))) {
       continue;
     }
     const rawPort = inherited(entry, parent, "httpPort");
     if (rawPort !== undefined && !isValidSignalManagedNativePort(rawPort)) {
       return "port";
     }
-    const host = optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
+    const host = normalizeOptionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1";
     try {
       buildSignalTransportHttpUrl(host, typeof rawPort === "number" ? rawPort : 8080);
     } catch {
@@ -175,7 +171,7 @@ function requiresDetection(
     return false;
   }
   return (
-    Boolean(optionalString(inherited(entry, parent, "httpUrl"))) ||
+    Boolean(normalizeOptionalString(inherited(entry, parent, "httpUrl"))) ||
     !resolveLegacyAutoStart(entry, parent)
   );
 }
@@ -188,20 +184,20 @@ function resolveLegacyAutoStart(
   if (typeof autoStart === "boolean") {
     return autoStart;
   }
-  return !optionalString(inherited(entry, parent, "httpUrl"));
+  return !normalizeOptionalString(inherited(entry, parent, "httpUrl"));
 }
 
 function resolveManagedConnectionUrl(
   entry: Record<string, unknown>,
   parent: Record<string, unknown>,
 ): string | undefined {
-  const httpUrl = optionalString(inherited(entry, parent, "httpUrl"));
+  const httpUrl = normalizeOptionalString(inherited(entry, parent, "httpUrl"));
   if (!httpUrl) {
     return undefined;
   }
   const normalizedUrl = normalizeSignalTransportUrl(httpUrl);
   const endpoint = new URL(normalizedUrl);
-  const bindHost = (optionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1")
+  const bindHost = (normalizeOptionalString(inherited(entry, parent, "httpHost")) ?? "127.0.0.1")
     .replace(/^\[|\]$/g, "")
     .toLowerCase();
   const rawBindPort = inherited(entry, parent, "httpPort");
@@ -222,10 +218,10 @@ function buildManagedNativeTransport(
   parent: Record<string, unknown>,
 ): SignalTransportConfig {
   const value = (key: string) => inherited(entry, parent, key);
-  const configPath = optionalString(value("configPath"));
-  const cliPath = optionalString(value("cliPath"));
+  const configPath = normalizeOptionalString(value("configPath"));
+  const cliPath = normalizeOptionalString(value("cliPath"));
   const url = resolveManagedConnectionUrl(entry, parent);
-  const httpHost = optionalString(value("httpHost"));
+  const httpHost = normalizeOptionalString(value("httpHost"));
   const httpPort = value("httpPort");
   const startupTimeoutMs = value("startupTimeoutMs");
   const receiveMode = value("receiveMode");
@@ -280,7 +276,7 @@ async function resolveLegacyTransport(params: {
   if (resolved) {
     return resolved;
   }
-  const account = optionalString(inherited(params.entry, params.parent, "account"));
+  const account = normalizeOptionalString(inherited(params.entry, params.parent, "account"));
   try {
     const detected = await params.detect?.({
       url: legacyBaseUrl(params.entry, params.parent),
@@ -315,7 +311,7 @@ function hasRootSignalAccount(entries: Record<string, unknown>[]): boolean {
   const root = entries[0];
   return (
     entries.length === 1 ||
-    Boolean(optionalString(root?.account)) ||
+    Boolean(normalizeOptionalString(root?.account)) ||
     isSignalTransportConfig(root?.transport)
   );
 }
@@ -525,8 +521,8 @@ function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): bool
   const defaultEntry = defaultKey ? accounts[defaultKey] : undefined;
   const defaultAccount =
     isRecord(defaultEntry) && defaultEntry.account !== undefined
-      ? optionalString(defaultEntry.account)
-      : optionalString(signal.account);
+      ? normalizeOptionalString(defaultEntry.account)
+      : normalizeOptionalString(signal.account);
   const channelEnabled = signal.enabled !== false;
   const defaultEnabled = !isRecord(defaultEntry) || defaultEntry.enabled !== false;
   if (rootTransport?.kind === "container" && channelEnabled && defaultEnabled && !defaultAccount) {
@@ -550,7 +546,9 @@ function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): bool
       continue;
     }
     const account =
-      entry.account === undefined ? optionalString(signal.account) : optionalString(entry.account);
+      entry.account === undefined
+        ? normalizeOptionalString(signal.account)
+        : normalizeOptionalString(entry.account);
     if (!account) {
       return true;
     }

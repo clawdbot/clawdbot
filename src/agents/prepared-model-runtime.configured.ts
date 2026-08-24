@@ -2,6 +2,10 @@ import {
   collectConfiguredModelRefs,
   type ConfiguredModelRef,
 } from "@openclaw/model-catalog-core/configured-model-refs";
+import {
+  buildModelCatalogMergeKey,
+  parseModelCatalogRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,12 +20,20 @@ import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-
 import type { StaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
+import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
 
 export type PreparedConfiguredRuntimeModel = Readonly<{
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
 }>;
+
+/**
+ * A concrete runtime contract attached to the logical provider/model ref that
+ * selects it. Prepared catalog rows retain this fact after runtime-only rows
+ * are intentionally omitted from the configured view.
+ */
+export type PreparedRuntimeCapabilityModel = PreparedConfiguredRuntimeModel;
 
 /** Collects defaults, global refs, and only the selected agent's overrides. */
 export function collectPreparedModelRuntimeConfiguredRefs(
@@ -55,6 +67,12 @@ export function toStaticCatalogEntry(model: ProviderRuntimeModel): ModelCatalogE
     ...(isCatalogModelApi(model.api) ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+    ...(model.contextWindows
+      ? {
+          contextWindows: model.contextWindows.map((option) => ({ ...option })),
+        }
+      : {}),
+    ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),
     ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
     ...(model.input ? { input: model.input } : {}),
@@ -125,15 +143,12 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
 }): string[] {
   const providerIds = new Set<string>();
   for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
+    const parsed = parseModelCatalogRef(value);
+    if (!parsed) {
       continue;
     }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
+    const { provider, modelId } = parsed;
     if (
-      !provider ||
-      !modelId ||
       hasConfiguredInlineProviderModel(
         params.config,
         provider,
@@ -164,16 +179,12 @@ export function prepareConfiguredRuntimeModels(params: {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
   for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
+    const parsed = parseModelCatalogRef(value);
+    if (!parsed) {
       continue;
     }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
-    if (!provider || !modelId) {
-      continue;
-    }
-    const key = `${provider}\0${modelId.toLowerCase()}`;
+    const { modelId, provider } = parsed;
+    const key = buildModelCatalogMergeKey(provider, modelId);
     if (seen.has(key)) {
       continue;
     }
@@ -200,6 +211,49 @@ export function prepareConfiguredRuntimeModels(params: {
     if (model) {
       prepared.push({ provider, modelId, model });
     }
+  }
+  return prepared;
+}
+
+/** Resolve concrete runtime capabilities once while materializing agent facts. */
+export function prepareRuntimeCapabilityModels(params: {
+  config: OpenClawConfig;
+  agentId?: string;
+  candidates: readonly ModelCatalogEntry[];
+  resolveRuntimeModel: (lookup: {
+    provider: string;
+    modelId: string;
+  }) => ProviderRuntimeModel | undefined;
+}): PreparedRuntimeCapabilityModel[] {
+  const prepared: PreparedRuntimeCapabilityModel[] = [];
+  const seen = new Set<string>();
+  for (const candidate of params.candidates) {
+    const provider = normalizeProviderId(candidate.provider);
+    const modelId = candidate.id.trim();
+    if (!provider || !modelId) {
+      continue;
+    }
+    const runtime = resolveEffectiveAgentRuntime({
+      cfg: params.config,
+      provider,
+      modelId,
+      modelApi: candidate.api,
+      modelBaseUrl: candidate.baseUrl,
+      agentId: params.agentId,
+    });
+    if (runtime === provider || runtime === "openclaw") {
+      continue;
+    }
+    const key = buildModelCatalogMergeKey(provider, modelId);
+    if (seen.has(key)) {
+      continue;
+    }
+    const model = params.resolveRuntimeModel({ provider: runtime, modelId });
+    if (!model) {
+      continue;
+    }
+    seen.add(key);
+    prepared.push({ provider, modelId, model });
   }
   return prepared;
 }

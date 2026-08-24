@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isMetricsRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -17,25 +17,27 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
   "../config/control-ui-startup-budget-baseline.json",
 );
 
-// This absorbs measured local-to-Linux gzip variance, but landed changes can
-// still consume the tolerance. Local zlib emits smaller streams than CI's Linux
-// builder, so baseline updates must use CI bytes via --startup-js-bytes. The
-// fixed JS ceiling bounds cumulative creep.
-export const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1024;
+// Each landed change can consume this much ratchet tolerance, so small increases
+// may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
+const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // 317 KiB preserves headroom after the device-auth upgrade hook and sidebar
-  // session-render extraction (2026-07); the migration UI itself remains lazy.
-  startupJsGzipBytes: 317 * KIB,
+  // 350 KiB maintainer-approved by Vyctor 2026-08-11 for #121686;
+  // #121734 left main 6 B below the prior 319 KiB hard ceiling.
+  startupJsGzipBytes: 350 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 45 * KIB,
+  // Startup CSS stays at 45 KiB; the boot-group consolidation (2026-08,
+  // control-ui-boot chunking) merges boot-path component CSS into one file
+  // that lands just above it, trading ~1 KiB of ceiling for ~95 fewer boot
+  // requests on HTTP/1.1 gateways.
+  largestCssGzipBytes: 47 * KIB,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -146,10 +148,15 @@ export function evaluateControlUiPerformanceBudgets(
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ) {
+  const baselineBytes = startupBudgetBaseline?.startupJsGzipBytes;
+  const startupJsGzipLimit =
+    baselineBytes === undefined
+      ? budgets.startupJsGzipBytes
+      : Math.min(baselineBytes, budgets.startupJsGzipBytes) + startupJsTolerance;
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
-    ["startup JS gzip", metrics.startup.js.gzipBytes, budgets.startupJsGzipBytes, "bytes"],
+    ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsGzipLimit, "bytes"],
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
@@ -157,27 +164,22 @@ export function evaluateControlUiPerformanceBudgets(
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
     actual > limit ? [{ metric, actual, limit, unit }] : [],
   );
-  return startupBudgetBaseline &&
-    metrics.startup.js.gzipBytes > startupBudgetBaseline.startupJsGzipBytes + startupJsTolerance
-    ? [
-        ...violations,
-        {
-          metric: "startup JS gzip vs baseline",
-          actual: metrics.startup.js.gzipBytes,
-          limit: startupBudgetBaseline.startupJsGzipBytes + startupJsTolerance,
-          unit: "bytes" as const,
-          baseline: startupBudgetBaseline.startupJsGzipBytes,
-          tolerance: startupJsTolerance,
-        },
-      ]
-    : violations;
+  if (baselineBytes !== undefined && baselineBytes > budgets.startupJsGzipBytes) {
+    violations.unshift({
+      metric: "startup JS gzip baseline",
+      actual: baselineBytes,
+      limit: budgets.startupJsGzipBytes,
+      unit: "bytes",
+    });
+  }
+  return violations;
 }
 
 type ControlUiPerformanceBudgetViolation = ReturnType<
   typeof evaluateControlUiPerformanceBudgets
 >[number];
 
-export function formatControlUiPerformanceBytes(bytes: number): string {
+function formatControlUiPerformanceBytes(bytes: number): string {
   return bytes < KIB ? `${bytes} B` : `${(bytes / KIB).toFixed(1)} KiB`;
 }
 
@@ -190,9 +192,6 @@ function formatAssetSummary(summary: ReturnType<typeof summarizeAssets>): string
 }
 
 function formatViolation(violation: ControlUiPerformanceBudgetViolation): string {
-  if ("baseline" in violation && "tolerance" in violation) {
-    return `${violation.metric}: ${violation.actual} B exceeds baseline ${violation.baseline} B + tolerance ${violation.tolerance} B (limit ${violation.limit} B); intentionally raise the baseline with node --import tsx scripts/check-control-ui-performance.mts --update-baseline --startup-js-bytes ${violation.actual} --reason "<reason>"`;
-  }
   const actual =
     violation.unit === "bytes"
       ? formatControlUiPerformanceBytes(violation.actual)
@@ -222,11 +221,11 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(budgets.startupJsGzipBytes)} gzip)`,
+    `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupBudgetBaseline ? Math.min(startupBudgetBaseline.startupJsGzipBytes, budgets.startupJsGzipBytes) + startupJsTolerance : budgets.startupJsGzipBytes)} gzip)`,
   ];
   if (startupBudgetBaseline) {
     lines.push(
-      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + tolerance ${startupJsTolerance} B, ceiling ${budgets.startupJsGzipBytes} B)`,
+      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + tolerance ${startupJsTolerance} B, max committed baseline ${budgets.startupJsGzipBytes} B)`,
     );
   }
   lines.push(
@@ -269,18 +268,21 @@ function isIsoDate(value: string): boolean {
 function readControlUiStartupBudgetBaseline(baselinePath: string): ControlUiStartupBudgetBaseline {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
-    const record: Record<string, unknown> = isRecord(parsed) ? parsed : {};
+    const record: Record<string, unknown> = isMetricsRecord(parsed) ? parsed : {};
     const { startupJsGzipBytes, reason, updatedAt } = record;
     if (
       typeof startupJsGzipBytes !== "number" ||
       !Number.isSafeInteger(startupJsGzipBytes) ||
       startupJsGzipBytes < 0 ||
+      startupJsGzipBytes > CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes ||
       typeof reason !== "string" ||
       reason.trim().length === 0 ||
       typeof updatedAt !== "string" ||
       !isIsoDate(updatedAt)
     ) {
-      throw new Error("expected startupJsGzipBytes, non-empty reason, and YYYY-MM-DD updatedAt");
+      throw new Error(
+        `expected startupJsGzipBytes at most ${CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes}, non-empty reason, and YYYY-MM-DD updatedAt`,
+      );
     }
     return { startupJsGzipBytes, reason, updatedAt };
   } catch (error) {
@@ -297,6 +299,9 @@ function writeControlUiStartupBudgetBaseline(
   startupJsGzipBytes: number,
   reason: string,
 ) {
+  if (startupJsGzipBytes > CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes) {
+    throw new Error("startup JS gzip baseline exceeds the committed-baseline cap");
+  }
   const baseline = {
     startupJsGzipBytes,
     reason,

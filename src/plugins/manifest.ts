@@ -261,10 +261,13 @@ export function loadPluginManifest(
     syntheticAuthRefs: normalizeTrimmedStringList(raw.syntheticAuthRefs),
     nonSecretAuthMarkers: normalizeTrimmedStringList(raw.nonSecretAuthMarkers),
     commandAliases: normalizeManifestCommandAliases(raw.commandAliases),
+    cliCommands: setupNormalizers.normalizeManifestCliCommands(raw.cliCommands),
     providerUsageAuthEnvVars: capabilityNormalizers.normalizeStringListRecord(
       raw.providerUsageAuthEnvVars,
     ),
-    providerAuthAliases: capabilityNormalizers.normalizeStringRecord(raw.providerAuthAliases),
+    providerAuthAliases: capabilityNormalizers.normalizeManifestStringRecord(
+      raw.providerAuthAliases,
+    ),
     providerAuthChoices: setupNormalizers.normalizeProviderAuthChoices(raw.providerAuthChoices),
     activation: setupNormalizers.normalizeManifestActivation(raw.activation),
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),

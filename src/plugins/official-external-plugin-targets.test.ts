@@ -11,6 +11,15 @@ describe("official external channel targets", () => {
     ).toBe(true);
   });
 
+  it("detects QQBot credentials from the external channel catalog", () => {
+    expect(
+      hasOfficialExternalChannelTarget({
+        config: {},
+        env: { QQBOT_APP_ID: "app-id" },
+      }),
+    ).toBe(true);
+  });
+
   it("treats any generated all-of variable as a potential repair target", () => {
     expect(
       hasOfficialExternalChannelTarget({

@@ -325,26 +325,63 @@ describe("SessionHistorySseState", () => {
     ).toBe(true);
   });
 
-  test("keeps cursors when a paginated history page starts with a message-tool mirror", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        userTextMessage("reply here", 1),
-        {
-          role: "assistant",
-          content: [messageToolCall("call-message-cursor", "Cursor-visible reply.")],
-          __openclaw: { seq: 2 },
-        },
-        messageToolResult("call-message-cursor", "cursor", 3),
-        assistantTextMessage("NO_REPLY", 4),
-      ],
-      limit: 1,
-    });
+  test("keeps same-sequence projected rows reachable across cursor pages", () => {
+    const rawMessages = [
+      userTextMessage("send both here", 1),
+      {
+        role: "assistant" as const,
+        content: [
+          messageToolCall("call-message-first", "First visible reply."),
+          messageToolCall("call-message-second", "Second visible reply."),
+        ],
+        __openclaw: { seq: 2 },
+      },
+      messageToolResult("call-message-first", "first", 3),
+      messageToolResult("call-message-second", "second", 4),
+      assistantTextMessage("NO_REPLY", 5),
+    ];
 
-    expect(snapshot.history.nextCursor).toBe("3");
-    expect(snapshot.history.messages[0]?.["__openclaw"]?.seq).toBe(3);
-    expect(
-      (snapshot.history.messages[0] as { content?: Array<{ text?: string }> }).content?.[0]?.text,
-    ).toBe("Cursor-visible reply.");
+    const newest = buildSessionHistorySnapshot({ rawMessages, limit: 1 }).history;
+    expect(newest.messages).toMatchObject([
+      { role: "toolResult", toolCallId: "call-message-first", __openclaw: { seq: 3 } },
+      { role: "toolResult", toolCallId: "call-message-second", __openclaw: { seq: 4 } },
+      {
+        role: "assistant",
+        content: [{ text: "First visible reply." }],
+        openclawMessageToolMirror: { toolCallId: "call-message-first" },
+        __openclaw: { seq: 3 },
+      },
+      {
+        role: "assistant",
+        content: [{ text: "Second visible reply." }],
+        openclawMessageToolMirror: { toolCallId: "call-message-second" },
+        __openclaw: { seq: 4 },
+      },
+    ]);
+    expect(newest.nextCursor).toBe("3");
+
+    const middle = buildSessionHistorySnapshot({
+      rawMessages,
+      limit: 1,
+      cursor: newest.nextCursor,
+    }).history;
+    expect(middle.messages).toMatchObject([
+      {
+        role: "assistant",
+        content: [{ id: "call-message-first" }, { id: "call-message-second" }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    expect(middle.nextCursor).toBe("2");
+
+    const oldest = buildSessionHistorySnapshot({
+      rawMessages,
+      limit: 1,
+      cursor: middle.nextCursor,
+    }).history;
+    expect(oldest.messages).toEqual([userTextMessage("send both here", 1)]);
+    expect(oldest.hasMore).toBe(false);
+    expect(oldest.nextCursor).toBeUndefined();
   });
 
   test("does not coerce partial cursor values", () => {

@@ -28,7 +28,7 @@ vi.mock("./session-utils.js", async () => {
     listSessionsFromStore: hoisted.listSessionsFromStoreMock,
     resolveGatewaySessionStoreTargetWithStore:
       hoisted.resolveGatewaySessionStoreTargetWithStoreMock,
-    loadCombinedSessionStoreForGateway: hoisted.loadCombinedSessionStoreForGatewayMock,
+    loadCombinedSessionStoreForGatewayCore: hoisted.loadCombinedSessionStoreForGatewayMock,
   };
 });
 
@@ -58,6 +58,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({
       ok: true,
       key: canonicalKey,
+      agentId: "main",
     });
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   };
@@ -192,6 +193,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({
       ok: true,
       key: acpKey,
+      agentId: "claude",
     });
   });
 
@@ -262,7 +264,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       p: { sessionId: "sess-target", agentId: "main" },
     });
 
-    expect(result).toEqual({ ok: true, key: "agent:main:target" });
+    expect(result).toEqual({ ok: true, key: "agent:main:target", agentId: "main" });
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "main",
     });
@@ -288,7 +290,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "ABCDEF12", agentId: "main" },
       }),
-    ).resolves.toEqual({ ok: true, key });
+    ).resolves.toEqual({ ok: true, key, agentId: "main" });
   });
 
   it("uses a display-name slug only to narrow a short-id tie", async () => {
@@ -307,7 +309,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "12345678", slugHint: "deploy-monitor" },
       }),
-    ).resolves.toEqual({ ok: true, key: deployKey });
+    ).resolves.toEqual({ ok: true, key: deployKey, agentId: "main" });
   });
 
   it("ignores a deleted-agent short-id collision before resolving a unique match", async () => {
@@ -326,7 +328,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: {},
         p: { shortId: "12345678", slugHint: "deleted-session" },
       }),
-    ).resolves.toEqual({ ok: true, key: survivingKey });
+    ).resolves.toEqual({ ok: true, key: survivingKey, agentId: "main" });
   });
 
   it("reports a deleted-agent-only short-id match as missing", async () => {
@@ -373,6 +375,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       ambiguous: true,
       candidates: expectedKeys.map((key, index) => ({
         key,
+        agentId: "main",
         displayName: `Candidate ${index}`,
       })),
     });
@@ -394,7 +397,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
         cfg: { agents: { list: [{ id: "main", default: true }, { id: "work" }] } },
         p: { shortId: "feedface", agentId: "main" },
       }),
-    ).resolves.toEqual({ ok: true, key: mainKey });
+    ).resolves.toEqual({ ok: true, key: mainKey, agentId: "main" });
   });
 
   it("supports allowMissing for short ids", async () => {

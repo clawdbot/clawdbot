@@ -268,7 +268,10 @@ docker_e2e_harness_mount_args() {
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$harness_root/scripts/e2e:/app/scripts/e2e:ro"
     -v "$harness_root/scripts/lib:/app/scripts/lib:ro"
+    -v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"
+    -v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"
     -v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
+    -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"
     -v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$harness_root/test/helpers:/app/test/helpers:ro"
     -v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"

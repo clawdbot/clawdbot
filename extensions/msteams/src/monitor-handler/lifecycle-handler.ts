@@ -53,7 +53,9 @@ function getSenderId(context: MSTeamsTurnContext): string {
 }
 
 function getTeamId(context: MSTeamsTurnContext): string | undefined {
-  return context.activity?.channelData?.team?.id ?? context.activity?.conversation?.tenantId;
+  // Tenant IDs identify the organization, not the Team. Treating one as a Team
+  // ID can select a higher-priority binding owned by a different conversation.
+  return context.activity?.channelData?.team?.id;
 }
 
 function isRemoveInstallationUpdate(context: MSTeamsTurnContext): boolean {

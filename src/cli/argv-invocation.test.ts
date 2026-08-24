@@ -100,4 +100,19 @@ describe("argv-invocation", () => {
       ]).commandPath,
     ).toEqual(["agent", "exec"]);
   });
+
+  it.each([
+    ["separate agent value", ["models", "--agent", "main", "--status-json"]],
+    ["inline agent value", ["models", "--agent=main", "--status-json"]],
+    ["status alias before agent", ["models", "--status-json", "--agent", "main"]],
+  ])("keeps models parent status options on the parent path: %s", (_name, args) => {
+    expect(resolveCliArgvInvocation(["node", "openclaw", ...args]).commandPath).toEqual(["models"]);
+  });
+
+  it("still resolves a models child after parent options", () => {
+    expect(
+      resolveCliArgvInvocation(["node", "openclaw", "models", "--agent", "main", "status"])
+        .commandPath,
+    ).toEqual(["models", "status"]);
+  });
 });

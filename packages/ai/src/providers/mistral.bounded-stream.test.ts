@@ -277,7 +277,11 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
       text: "Safe partial answer",
     });
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBeTruthy();
+    if (fixture.finishReason === null) {
+      expect(result.errorMessage).toBe("Mistral stream ended without a terminal finish reason");
+    } else {
+      expect(result.errorMessage).toBeTruthy();
+    }
     expect(events).not.toContain("toolcall_end");
     expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
     expect(result.content).toContainEqual({ type: "text", text: "Safe partial answer" });
@@ -319,6 +323,18 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
     expect(result.stopReason).toBe("toolUse");
     expect(result.content).toContainEqual(
       expect.objectContaining({ type: "toolCall", arguments: { action: "inspect" } }),
+    );
+    expect(events).toContain("toolcall_end");
+  });
+
+  it("preserves unsafe integers in provider-confirmed tool arguments", async () => {
+    const { result, events } = await streamMistralTerminalFixture({
+      finishReason: "tool_calls",
+      done: true,
+      toolArguments: ['{"target":9223372036854775807}'],
+    });
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", arguments: { target: "9223372036854775807" } }),
     );
     expect(events).toContain("toolcall_end");
   });

@@ -163,28 +163,33 @@ describe("resolveAuthForTarget", () => {
   });
 
   it("does not force remote auth type from local auth mode", async () => {
-    const auth = await resolveAuthForTarget(
-      {
-        gateway: {
-          auth: {
-            mode: "password",
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, // pragma: allowlist secret
+      async () => {
+        const auth = await resolveAuthForTarget(
+          {
+            gateway: {
+              auth: {
+                mode: "password",
+              },
+              remote: {
+                token: "remote-token",
+                password: "remote-password", // pragma: allowlist secret
+              },
+            },
           },
-          remote: {
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
+          {
+            id: "configRemote",
+            kind: "configRemote",
+            url: "wss://remote.example:18789",
+            active: true,
           },
-        },
-      },
-      {
-        id: "configRemote",
-        kind: "configRemote",
-        url: "wss://remote.example:18789",
-        active: true,
-      },
-      {},
-    );
+          {},
+        );
 
-    expect(auth).toEqual({ token: "remote-token", password: undefined });
+        expect(auth).toEqual({ token: "remote-token", password: undefined });
+      },
+    );
   });
 
   it("redacts resolver internals from unresolved SecretRef diagnostics", async () => {

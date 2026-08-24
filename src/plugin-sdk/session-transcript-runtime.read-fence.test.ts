@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -30,7 +30,7 @@ describe("session transcript runtime read fence", () => {
       sessionKey: "agent:main:fenced-raw",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const priorUser = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: { role: "user", content: "same prompt" },
@@ -123,7 +123,7 @@ describe("session transcript runtime read fence", () => {
       sessionKey: "agent:main:fenced-anchor",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const admitted = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: { role: "user", content: "exact admission" },

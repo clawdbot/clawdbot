@@ -35,6 +35,7 @@ function createProps(overrides: Partial<ActivityProps> = {}): ActivityProps {
     error: true,
   };
   return {
+    basePath: "/control",
     entries: [createEntry()],
     filterText: "",
     statusFilters,
@@ -146,5 +147,20 @@ describe("renderActivity", () => {
       (element) => element.textContent?.trim(),
     );
     expect(meta).toContain("2m");
+  });
+
+  it("links the displayed run id to the deep-link inspector", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderActivity(createProps({ entries: [createEntry({ runId: "live run:a/b" })] })),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLAnchorElement>(".activity-entry__run-link")?.getAttribute("href"),
+    ).toBe("/control/activity?view=run&run=live%20run%3Aa%2Fb");
   });
 });

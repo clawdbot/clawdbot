@@ -201,9 +201,15 @@ the repository root does not prepare bundled plugin dependencies.
 
 | Install shape                    | Bundled plugin location               | Dependency owner                                                     |
 | -------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
-| `npm install -g openclaw`        | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
+| Global npm install               | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
 | Git checkout plus `pnpm install` | `extensions/<id>` workspace packages  | The pnpm workspace, including each plugin package's own dependencies |
 | `openclaw plugins install ...`   | Managed npm project/git/ClawHub root  | The plugin install/update flow                                       |
+
+For the global npm row, use
+`npm install -g openclaw --allow-scripts=openclaw` on npm 12 or npm 11.16+.
+On npm 11.15 and earlier, omit `--allow-scripts=openclaw`. Plugin dependency
+convergence remains intentionally script-disabled and continues to use the
+`--ignore-scripts` commands above.
 
 ## Legacy cleanup
 

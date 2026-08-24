@@ -5,11 +5,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   copyStaticExtensionAssets,
+  copyStaticExtensionAssetsForPackage,
   copyStaticExtensionAssetsToRuntimeOverlay,
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mts";
 import {
-  listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
@@ -69,19 +69,27 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
 }
 
 describe("runtime postbuild static assets", () => {
-  it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toEqual([
-      "dist/extensions/acpx/mcp-command-line.mjs",
-      "dist/extensions/acpx/mcp-proxy.mjs",
-      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
-      "dist/extensions/diffs/assets/viewer-runtime.js",
-      "dist/extensions/discord/assets/embedded-app-sdk.mjs",
-      "dist/extensions/onepassword/onepassword-op-path.js",
-      "dist/extensions/onepassword/onepassword-secret-id.js",
-      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
-      "dist/extensions/vault/vault-secret-id.js",
-      "dist/extensions/vault/vault-secret-ref-resolver.js",
-    ]);
+  it("copies bundled hook metadata without replacing compiled handlers", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
+    const sourceHookDir = path.join(rootDir, "src", "hooks", "bundled", "session-memory");
+    const distHookDir = path.join(rootDir, "dist", "bundled", "session-memory");
+    await fs.mkdir(sourceHookDir, { recursive: true });
+    await fs.mkdir(distHookDir, { recursive: true });
+    await fs.writeFile(path.join(sourceHookDir, "HOOK.md"), "---\nname: session-memory\n---\n");
+    await fs.writeFile(path.join(distHookDir, "handler.js"), "export default () => {};\n");
+
+    runRuntimePostBuild({
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+    });
+
+    await expect(fs.readFile(path.join(distHookDir, "HOOK.md"), "utf8")).resolves.toContain(
+      "name: session-memory",
+    );
+    await expect(fs.readFile(path.join(distHookDir, "handler.js"), "utf8")).resolves.toBe(
+      "export default () => {};\n",
+    );
   });
 
   it("discovers repo static asset metadata without scanning extension directories", () => {
@@ -99,6 +107,7 @@ describe("runtime postbuild static assets", () => {
     expect(payload.outputs).toEqual([
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
       "dist/extensions/discord/assets/embedded-app-sdk.mjs",
@@ -111,6 +120,7 @@ describe("runtime postbuild static assets", () => {
     expect(payload.sources).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
+    expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
   });
 
   it("discovers static assets from plugin package metadata", async () => {
@@ -142,6 +152,29 @@ describe("runtime postbuild static assets", () => {
         dest: "dist/extensions/demo/assets/runtime.js",
       },
     ]);
+  });
+
+  it.each([
+    { name: "top-level array", packageJson: [] },
+    { name: "array openclaw section", packageJson: { openclaw: [] } },
+    { name: "array build section", packageJson: { openclaw: { build: [] } } },
+    {
+      name: "non-record asset entries",
+      packageJson: {
+        openclaw: {
+          build: {
+            staticAssets: [[], "asset", null, { source: 42, output: [] }],
+          },
+        },
+      },
+    },
+  ])("ignores malformed $name metadata", async ({ packageJson }) => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-malformed-");
+    const packageDir = path.join(rootDir, "extensions", "demo");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify(packageJson), "utf8");
+
+    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
   });
 
   it("excludes external plugin (bundledDist: false) static assets by default", async () => {
@@ -202,12 +235,13 @@ describe("runtime postbuild static assets", () => {
     ]);
   });
 
-  it("copies declared static assets into dist", async () => {
+  it("copies declared static assets into root and package dist", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const src = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
     const dest = "dist/extensions/acpx/mcp-proxy.mjs";
     const sourcePath = path.join(rootDir, src);
     const destPath = path.join(rootDir, dest);
+    const packageDestPath = path.join(rootDir, "extensions", "acpx", "dist", "mcp-proxy.mjs");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, "proxy-data\n", "utf8");
 
@@ -215,8 +249,16 @@ describe("runtime postbuild static assets", () => {
       rootDir,
       assets: [{ src, dest }],
     });
+    expect(
+      copyStaticExtensionAssetsForPackage({
+        rootDir,
+        pluginDir: "acpx",
+        assets: [{ src, dest }],
+      }),
+    ).toEqual(["dist/mcp-proxy.mjs"]);
 
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
+    expect(await fs.readFile(packageDestPath, "utf8")).toBe("proxy-data\n");
   });
 
   it("stages copied static assets byte-for-byte during the same postbuild run", async () => {

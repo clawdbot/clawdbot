@@ -1,5 +1,6 @@
 /** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
 import { asFiniteNumber as asFiniteTimestamp } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   formatAbandonedLivenessError,
   formatBlockedLivenessError,
@@ -450,17 +451,15 @@ type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
 
 type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> & {
   aborted?: unknown;
+  fallbackExhaustedFailure?: unknown;
   status?: unknown;
 };
+type AgentRunLifecycleInput = { phase?: unknown; data?: Record<string, unknown> };
 
 /** Shared grace window for terminal observations that may still be followed by a retry. */
 export const AGENT_RUN_TERMINAL_RETRY_GRACE_MS = 15_000;
 
 const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 /** True when a timeout phase should be treated as a hard agent-run timeout. */
 function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
@@ -620,6 +619,24 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
     endedAt: input.endedAt ?? data?.endedAt,
   });
   return stopReason && outcome.stopReason !== stopReason ? { ...outcome, stopReason } : outcome;
+}
+
+/** True for lifecycle events that cannot be followed by a same-run retry. */
+export function isDefinitiveRunLifecycle(input: AgentRunLifecycleInput) {
+  if (input.phase === "end") {
+    return true;
+  }
+  if (input.phase !== "error") {
+    return false;
+  }
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: "error",
+    data: input.data,
+  });
+  return (
+    input.data?.fallbackExhaustedFailure === true ||
+    classifyAgentRunTerminalOutcome(outcome) !== "failure"
+  );
 }
 
 function hasNestedAbortReason(value: unknown, matches: (candidate: unknown) => boolean): boolean {

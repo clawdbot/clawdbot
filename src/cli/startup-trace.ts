@@ -28,7 +28,7 @@ function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim());
 }
 
-export function createGatewayStartupTrace(
+export function createGatewayDispatchStartupTrace(
   argv: string[],
   source: GatewayStartupTraceSource,
 ): {
@@ -252,7 +252,7 @@ export function createGatewayStartupTrace(
 }
 
 export async function configureGatewayStartupTraceConsoleFormatting(
-  trace: ReturnType<typeof createGatewayStartupTrace>,
+  trace: ReturnType<typeof createGatewayDispatchStartupTrace>,
 ): Promise<void> {
   if (!trace.enabled) {
     return;

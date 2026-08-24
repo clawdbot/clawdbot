@@ -9,7 +9,7 @@ import type {
   TranscriptTurnAdmission,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { createAttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -18,6 +18,26 @@ const tempDirs: string[] = [];
 
 export type FakeSession = SessionLike & {
   emit: (event: SessionEvent) => void;
+};
+
+type TranscriptRecorder = NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]> & {
+  markBlocked: Mock<NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>["markBlocked"]>;
+  markRuntimePersisted: Mock<
+    NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>["markRuntimePersisted"]
+  >;
+  resolveMessage: Mock<
+    NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>["resolveMessage"]
+  >;
+};
+
+type AttemptTranscriptJournalFixture = {
+  attempt: AttemptParamsLike;
+  bridge: ReturnType<typeof attachEventBridge>;
+  journal: ReturnType<typeof createAttemptTranscriptJournal>;
+  recorder: TranscriptRecorder;
+  session: FakeSession;
+  target: SessionTranscriptTargetParams;
+  tempDir: string;
 };
 
 export function createFakeSession(): FakeSession {
@@ -58,7 +78,7 @@ export function event(
 export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
-) {
+): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-copilot-journal-"),
   );
@@ -106,7 +126,7 @@ export async function createFixture(
     persistApproved: vi.fn(async () => undefined),
     persistBlocked: vi.fn(async () => undefined),
     persistFallback: vi.fn(async () => undefined),
-  } satisfies NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>;
+  } satisfies TranscriptRecorder;
   const attempt = {
     agentId: "main",
     prompt: "inspect both files",

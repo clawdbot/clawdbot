@@ -6,7 +6,6 @@ import type { WebInboundMessage } from "./inbound/types.js";
 import {
   nextMessageId,
   inboundMessage,
-  expectDeprecatedAdmissionAliases,
   installStreamsInboundMessageHooks,
 } from "./monitor-inbox.streams-inbound-messages.test-support.js";
 import {
@@ -25,8 +24,8 @@ describe("web monitor inbox delivery and dedupe", () => {
   it("delivery coordinator streams inbound messages", async () => {
     const onMessage = vi.fn(async (msg) => {
       await msg.platform.sendComposing();
-      await msg.reply("flat reply works");
-      await msg.sendMedia({ text: "flat media works" });
+      await msg.platform.reply("nested reply works");
+      await msg.platform.sendMedia({ text: "nested media works" });
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
@@ -60,7 +59,6 @@ describe("web monitor inbox delivery and dedupe", () => {
         decision: "allow",
       },
     });
-    expectDeprecatedAdmissionAliases(inbound);
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "999@s.whatsapp.net",
@@ -72,10 +70,10 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
     expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "flat reply works",
+      text: "nested reply works",
     });
     expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "flat media works",
+      text: "nested media works",
     });
 
     await listener.close();
@@ -582,6 +580,28 @@ describe("web monitor inbox delivery and dedupe", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1);
 
+    await listener.close();
+  });
+
+  it("delivery coordinator dispatches same-content messages with distinct ids in order", async () => {
+    const onMessage = vi.fn(async (_message: WebInboundMessage) => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+    for (const [index, id] of ["in-2", "in-3"].entries()) {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id,
+          remoteJid: "999@s.whatsapp.net",
+          text: "Done.",
+          timestamp: 1_700_000_000 + index,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, index + 1);
+    }
+
+    expect(onMessage.mock.calls.map(([message]) => message.event.id)).toEqual(["in-2", "in-3"]);
     await listener.close();
   });
 

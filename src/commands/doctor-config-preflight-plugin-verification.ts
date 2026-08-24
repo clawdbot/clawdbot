@@ -97,7 +97,6 @@ export async function runStartupUpgradeConvergence(params: {
         cfg: params.cfg,
         env: params.env,
         compatibilityHostVersion: resolveCompatibilityHostVersion(params.env),
-        baselineInstallRecords: plan.installRecords,
       }),
     params.measure,
   );

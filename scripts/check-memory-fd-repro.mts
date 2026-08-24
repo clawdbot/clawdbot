@@ -8,9 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJson } from "../packages/normalization-core/src/json-coercion.ts";
+import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
+import { asNullableRecord as asRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import { readNonBlankString } from "../packages/normalization-core/src/string-coerce.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
 
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
@@ -51,7 +55,6 @@ type InvokeResponseOptions = { httpOk: boolean; status: number; bodyText: string
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 /**
  * Maximum gateway-ready output tail retained while waiting for startup.
  */
@@ -59,7 +62,7 @@ export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 /**
  * Maximum bytes read from the memory_search HTTP response.
  */
-export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
+const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 /**
  * Probe query expected to hit the synthetic top-level memory file.
  */
@@ -99,7 +102,6 @@ Options:
 `.trim();
 }
 
-const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
 const ARGUMENT_FLAGS = new Set([
   "--allow-non-darwin",
   "--expect-leak",
@@ -124,25 +126,10 @@ function stripPackageManagerSeparatorForKnownFlags(argv: string[]) {
 }
 
 /**
- * Parses a safe non-negative integer option.
- */
-export function readNumber(value: unknown, label: string) {
-  const raw = String(value).trim();
-  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${label} must be a safe integer`);
-  }
-  return parsed;
-}
-
-/**
  * Parses a safe positive integer option.
  */
-export function readPositiveNumber(value: unknown, label: string) {
-  const parsed = readNumber(value, label);
+function readPositiveNumber(value: unknown, label: string) {
+  const parsed = parseNonNegativeInteger(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
   }
@@ -151,7 +138,7 @@ export function readPositiveNumber(value: unknown, label: string) {
 
 function readNumberEnv(name: string, fallback: number) {
   const raw = process.env[name];
-  return raw == null || raw.trim() === "" ? fallback : readNumber(raw, name);
+  return raw == null || raw.trim() === "" ? fallback : parseNonNegativeInteger(raw, name);
 }
 
 function readPositiveNumberEnv(name: string, fallback: number) {
@@ -159,21 +146,16 @@ function readPositiveNumberEnv(name: string, fallback: number) {
   return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
 }
 
-function clampTimerTimeoutMs(valueMs: number, minMs = 1) {
-  const min = Math.max(0, Math.floor(minMs));
-  const value = Number.isFinite(valueMs) ? valueMs : min;
-  return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
-}
-
 function readTimerTimeoutNumber(value: unknown, label: string, minMs = 1) {
-  const parsed = minMs > 0 ? readPositiveNumber(value, label) : readNumber(value, label);
-  return clampTimerTimeoutMs(parsed, minMs);
+  const parsed =
+    minMs > 0 ? readPositiveNumber(value, label) : parseNonNegativeInteger(value, label);
+  return resolveTimerTimeoutMs(parsed, minMs, minMs);
 }
 
 function readTimerTimeoutNumberEnv(name: string, fallback: number, minMs = 1) {
   const raw = process.env[name];
   return raw == null || raw.trim() === ""
-    ? clampTimerTimeoutMs(fallback, minMs)
+    ? resolveTimerTimeoutMs(fallback, minMs, minMs)
     : readTimerTimeoutNumber(raw, name, minMs);
 }
 
@@ -230,7 +212,7 @@ export function parseArgs(argv: string[]) {
         mode = "report";
         break;
       case "--max-workspace-reg-fds":
-        maxWorkspaceRegFds = readNumber(readValue(), "--max-workspace-reg-fds");
+        maxWorkspaceRegFds = parseNonNegativeInteger(readValue(), "--max-workspace-reg-fds");
         break;
       case "--min-leaked-fds":
         minLeakedFds = readPositiveNumber(readValue(), "--min-leaked-fds");
@@ -295,7 +277,7 @@ function logStep(message: string) {
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => {
-    setTimeout(resolve, clampTimerTimeoutMs(ms, 0));
+    setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0));
   });
 }
 
@@ -599,8 +581,6 @@ export async function stopGatewayWithRuntime({
 /**
  * Reads an HTTP response body up to a configured byte limit.
  */
-export { readBoundedResponseText };
-
 function signalChild(child: StoppableGatewayChild, signal: GatewaySignal) {
   try {
     child.kill(signal);
@@ -620,19 +600,6 @@ async function waitForChildExit(
   return hasChildExited(child);
 }
 
-function parseJsonValue(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function readStringProperty(record: Record<string, unknown> | null, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function parseToolTextContent(result: Record<string, unknown> | null) {
   const content = Array.isArray(result?.content) ? result.content : [];
   for (const entry of content) {
@@ -641,7 +608,7 @@ function parseToolTextContent(result: Record<string, unknown> | null) {
     if (!text) {
       continue;
     }
-    const parsed = asRecord(parseJsonValue(text));
+    const parsed = asRecord(safeParseJson(text));
     if (parsed) {
       return parsed;
     }
@@ -657,7 +624,7 @@ export function classifyMemorySearchInvokeResponse({
   status,
   bodyText,
 }: InvokeResponseOptions) {
-  const parsedBody = parseJsonValue(bodyText);
+  const parsedBody = safeParseJson(bodyText);
   const body = asRecord(parsedBody);
   if (!httpOk) {
     const errorRecord = asRecord(body?.error);
@@ -667,8 +634,8 @@ export function classifyMemorySearchInvokeResponse({
       status,
       gatewayOk: body?.ok === true ? true : body?.ok === false ? false : undefined,
       error:
-        readStringProperty(errorRecord, "message") ??
-        readStringProperty(body, "error") ??
+        readNonBlankString(errorRecord?.message) ??
+        readNonBlankString(body?.error) ??
         `memory_search HTTP request failed with status ${status}`,
     };
   }
@@ -690,8 +657,8 @@ export function classifyMemorySearchInvokeResponse({
       status,
       gatewayOk,
       error:
-        readStringProperty(errorRecord, "message") ??
-        readStringProperty(body, "error") ??
+        readNonBlankString(errorRecord?.message) ??
+        readNonBlankString(body.error) ??
         "memory_search gateway invocation failed",
     };
   }
@@ -716,7 +683,7 @@ export function classifyMemorySearchInvokeResponse({
   const resultCount = Array.isArray(payload.results) ? payload.results.length : undefined;
   const toolDisabled = payload.disabled === true;
   const toolUnavailable = payload.unavailable === true;
-  const toolError = readStringProperty(payload, "error");
+  const toolError = readNonBlankString(payload.error);
   const ok = gatewayOk === true && !toolDisabled && !toolUnavailable && !toolError;
 
   return {
@@ -741,7 +708,7 @@ export function classifyMemorySearchInvokeResponse({
 }
 
 export async function invokeMemorySearch({ port, token, timeoutMs }: InvokeOptions) {
-  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   const startedAt = Date.now();

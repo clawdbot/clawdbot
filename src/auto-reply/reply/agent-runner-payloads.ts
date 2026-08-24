@@ -4,6 +4,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -125,7 +126,9 @@ function sanitizeFinalReplyText(
   if (!text) {
     return text;
   }
-  return sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+  return payload.isError
+    ? renderUserFacingText(text, { errorContext: true })
+    : sanitizeUserFacingText(text);
 }
 
 function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {

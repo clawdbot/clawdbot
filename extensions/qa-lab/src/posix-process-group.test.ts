@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  inspectLinuxProcessGroupStats,
-  isQaPosixProcessGroupAlive,
-  signalQaPosixProcessGroup,
-} from "./posix-process-group.js";
+import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
+import { inspectLinuxProcessGroupStats } from "./posix-process-stat.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -35,6 +32,19 @@ describe("POSIX process group inspection", () => {
       alive: null,
       diagnostics: "pgid=123 members=[]",
     });
+  });
+
+  it("bounds process group diagnostics", () => {
+    const stats = Array.from(
+      { length: 300 },
+      (_, index) => `${index + 1} (${`worker-${index}`.padEnd(32, "x")}) S 1 123 123 0 -1 0`,
+    );
+
+    const inspection = inspectLinuxProcessGroupStats(123, stats);
+
+    expect(inspection.alive).toBe(true);
+    expect(inspection.diagnostics.length).toBeLessThanOrEqual(2_048);
+    expect(inspection.diagnostics).toMatch(/\.\.\.$/u);
   });
 
   it("fails closed when the Linux member snapshot is unavailable", () => {

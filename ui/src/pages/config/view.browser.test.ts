@@ -5,6 +5,7 @@ import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
 describe("config view", () => {
@@ -55,6 +56,9 @@ describe("config view", () => {
     themeModeOverridden: false,
     themeModeProvenance: "default" as const,
     themeModeResetValue: "system" as ThemeMode,
+    accent: undefined,
+    accentOverridden: false,
+    accentProvenance: "default" as const,
     systemLocale: "en" as const,
     localeOverride: undefined,
     localeOverridden: false,
@@ -66,6 +70,8 @@ describe("config view", () => {
     resetTheme: vi.fn(),
     setThemeMode: vi.fn(),
     resetThemeMode: vi.fn(),
+    setAccent: vi.fn(),
+    resetAccent: vi.fn(),
     hasCustomTheme: false,
     customThemeLabel: null,
     customThemeSourceUrl: null,
@@ -85,6 +91,7 @@ describe("config view", () => {
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
     hiddenSessionCatalogIds: new Set<string>(),
+    hiddenSessionCatalogLabels: new Map<string, string>(),
     setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
@@ -219,6 +226,38 @@ describe("config view", () => {
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
+
+  it("places a Control UI Browser preference in the same settings group before schema rows", () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          browser: {
+            type: "object",
+            title: "Browser",
+            properties: {
+              enabled: { type: "boolean", title: "Browser Enabled" },
+            },
+          },
+        },
+      },
+      uiHints: { "browser.enabled": { advanced: false } },
+      formValue: { browser: { enabled: true } },
+      activeSection: "browser",
+      sectionPrelude: renderBrowserLinkPreferencesRow({
+        enabled: false,
+        onChange: vi.fn(),
+      }),
+    });
+
+    const groups = container.querySelectorAll("#config-section-browser .settings-group");
+    expect(groups).toHaveLength(1);
+    expect(
+      [...groups[0]!.querySelectorAll(".settings-row__title")].map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(["Open links in Control UI browser", "Browser Enabled"]);
+  });
 
   it("routes restore-default actions through config removal", () => {
     const onFormPatch = vi.fn();
@@ -734,6 +773,48 @@ describe("config view", () => {
     onSectionChange.mockClear();
     selectConfigTab(container, "root");
     expect(onSectionChange).toHaveBeenCalledWith(null);
+  });
+
+  it("exposes accordion category disclosure state and its controlled panel", () => {
+    const overrides: Partial<ConfigProps> = {
+      settingsLayout: "accordion",
+      includeVirtualSections: false,
+      includeSections: ["env"],
+      schema: {
+        type: "object",
+        properties: {
+          env: { type: "object", properties: {} },
+        },
+      },
+    };
+    const collapsed = renderConfigView(overrides);
+    const collapsedHeader = queryRequired(
+      collapsed.container,
+      ".config-accordion-group__header",
+      HTMLButtonElement,
+    );
+    const controlledPanelId = collapsedHeader.getAttribute("aria-controls");
+    const collapsedPanel = queryRequired(
+      collapsed.container,
+      `#${controlledPanelId}`,
+      HTMLDivElement,
+    );
+
+    expect(collapsedHeader.getAttribute("aria-expanded")).toBe("false");
+    expect(controlledPanelId).not.toBeNull();
+    expect(collapsedPanel.hidden).toBe(true);
+
+    const expanded = renderConfigView({ ...overrides, activeSection: "env" });
+    const expandedHeader = queryRequired(
+      expanded.container,
+      ".config-accordion-group__header",
+      HTMLButtonElement,
+    );
+    expect(expandedHeader.getAttribute("aria-expanded")).toBe("true");
+    expect(expandedHeader.getAttribute("aria-controls")).toBe(controlledPanelId);
+    expect(queryRequired(expanded.container, `#${controlledPanelId}`, HTMLDivElement).hidden).toBe(
+      false,
+    );
   });
 
   it("renders the virtual Notifications tab on Notifications settings", () => {
@@ -1550,6 +1631,14 @@ describe("config view", () => {
     ]) {
       expect(text).toContain(expected);
     }
+    const lobsterPreviews = container.querySelectorAll(".lobsterdex__mini");
+    expect(lobsterPreviews).toHaveLength(42);
+    expect([...lobsterPreviews].every((preview) => preview.getAttribute("role") === "img")).toBe(
+      true,
+    );
+    expect(
+      [...lobsterPreviews].every((preview) => Boolean(preview.getAttribute("aria-label")?.trim())),
+    ).toBe(true);
     expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
   });
 
@@ -2121,26 +2210,32 @@ describe("config view", () => {
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
   });
 
-  it("lists hidden session sections and offers to show them", () => {
+  it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
     const setSessionCatalogHidden = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
-      hiddenSessionCatalogIds: new Set(["codex"]),
+      hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
+      hiddenSessionCatalogLabels: new Map([["claude", "Claude Code"]]),
       setSessionCatalogHidden,
     });
 
     const heading = Array.from(container.querySelectorAll("h3")).find(
       (candidate) => candidate.textContent?.trim() === "Hidden session sections",
     );
-    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+    const labeledRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
-        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "codex",
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Claude Code",
+    );
+    const fallbackRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "offline-catalog",
     );
     expect(heading).toBeDefined();
-    expect(row).toBeDefined();
-    row?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(setSessionCatalogHidden).toHaveBeenCalledWith("codex", false);
+    expect(labeledRow).toBeDefined();
+    expect(fallbackRow).toBeDefined();
+    labeledRow?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(setSessionCatalogHidden).toHaveBeenCalledWith("claude", false);
   });
 
   it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {

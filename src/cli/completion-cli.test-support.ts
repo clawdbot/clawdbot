@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
-import { expect, it } from "vitest";
+import { expect, it, type TestAPI } from "vitest";
 import { getCompletionScript } from "./completion-cli.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
@@ -59,7 +59,7 @@ function findFish(): string | null {
 }
 
 const fishPath = findFish();
-export const itWithFish = fishPath ? it : it.skip;
+export const itWithFish: TestAPI["skip"] = fishPath ? it : it.skip;
 
 export function runGeneratedFishCompletion(program: Command, commandLine: string): string[] {
   if (!fishPath) {
@@ -102,7 +102,7 @@ function findPowerShell(): string | null {
 }
 
 const powerShellPath = findPowerShell();
-export const itWithPowerShell = powerShellPath ? it : it.skip;
+export const itWithPowerShell: TestAPI["skip"] = powerShellPath ? it : it.skip;
 
 type PowerShellCompletionResponse =
   | { version: 1; id: string; ok: true; completions: string[] }

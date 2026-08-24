@@ -19,10 +19,7 @@ import {
   registerCommandGroups,
   type CommandGroupEntry,
 } from "./register-command-groups.js";
-import {
-  getSubCliEntries as getSubCliEntryDescriptors,
-  type SubCliDescriptor,
-} from "./subcli-descriptors.js";
+import { getSubCliEntriesCore, type SubCliDescriptor } from "./subcli-descriptors.js";
 
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
@@ -124,10 +121,19 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerPromosCli",
     },
     {
-      commandNames: ["infer", "capability"],
-      loadModule: () => import("../capability-cli.js"),
-      exportName: "registerCapabilityCli",
+      commandNames: ["telemetry"],
+      loadModule: () => import("../telemetry-cli.js"),
+      exportName: "registerTelemetryCli",
     },
+  ]),
+  {
+    commandNames: ["infer", "capability"],
+    register: async (program, argv) => {
+      const mod = await import("../capability-cli.js");
+      await mod.registerCapabilityCli(program, argv);
+    },
+  },
+  ...defineImportedProgramCommandGroupSpecs([
     {
       // exec-approvals is a commander alias on the approvals command; the lazy
       // router only routes names listed here, so the alias must be owned too.
@@ -163,6 +169,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       commandNames: ["node"],
       loadModule: () => import("../node-cli.js"),
       exportName: "registerNodeCli",
+    },
+    {
+      commandNames: ["connect"],
+      loadModule: () => import("../connect-cli.js"),
+      exportName: "registerConnectCli",
     },
     {
       commandNames: ["worker"],
@@ -317,7 +328,7 @@ function resolveSubCliCommandGroups(
   argv: string[],
   context: SubCliRegistrationContext = {},
 ): CommandGroupEntry[] {
-  const descriptors = getSubCliEntryDescriptors();
+  const descriptors = getSubCliEntriesCore();
   const descriptorNames = new Set(descriptors.map((descriptor) => descriptor.name));
   return buildCommandGroupEntries(
     descriptors,
@@ -329,10 +340,10 @@ function resolveSubCliCommandGroups(
 }
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return getSubCliEntryDescriptors();
+  return getSubCliEntriesCore();
 }
 
-export async function registerSubCliByName(
+export async function registerSubCliByNameCore(
   program: Command,
   name: string,
   argv: string[] = process.argv,
@@ -345,7 +356,7 @@ export async function registerSubCliByName(
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);
 }
 
-export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
+export function registerSubCliCommandsCore(program: Command, argv: string[] = process.argv) {
   const { primary } = resolveCliArgvInvocation(argv);
   registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
     eager: shouldEagerRegisterSubcommands(),

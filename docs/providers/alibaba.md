@@ -48,8 +48,10 @@ The bundled `alibaba` plugin registers a video-generation provider for Wan model
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "alibaba/wan2.6-t2v",
+          mediaModels: {
+            video: {
+              primary: "alibaba/wan2.6-t2v",
+            },
           },
         },
       },

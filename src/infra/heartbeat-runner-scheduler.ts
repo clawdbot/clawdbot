@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listDueCommitmentSessionKeys } from "../commitments/store.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -9,13 +8,13 @@ import { createActiveHoursPredicate } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   activeHoursConfigMatch,
-  canHeartbeatDeliverCommitments,
   heartbeatLog,
+  isHeartbeatOwnerUnresolved,
   resolveActiveHoursSchedule,
-  resolveAmbientHeartbeatAgentId,
   resolveHeartbeatAgents,
   resolveHeartbeatForWake,
   resolveHeartbeatSchedulerSeed,
+  tryResolveAmbientHeartbeatAgentId,
   type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
@@ -26,10 +25,7 @@ import {
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
-import {
-  isConfiguredHeartbeatAgent,
-  isTargetedImmediateUnscheduledWake,
-} from "./heartbeat-wake-policy.js";
+import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
@@ -37,7 +33,7 @@ import {
   type HeartbeatWakeHandler,
   type HeartbeatWakeIntent,
   type HeartbeatWakeRequest,
-  isRetryableHeartbeatBusySkipReason,
+  isRetryableHeartbeatSkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 
@@ -270,20 +266,19 @@ export function startHeartbeatRunner(opts: {
     state.cfg = cfg;
     state.agents = nextAgents;
     const nextEnabled = nextAgents.size > 0;
-    if (!initialized) {
-      if (!nextEnabled) {
-        log.info("heartbeat: disabled", { enabled: false });
-      } else {
+    if (!initialized || prevEnabled !== nextEnabled) {
+      if (nextEnabled) {
         log.info("heartbeat: started", { intervalMs: Math.min(...intervals) });
-      }
-      initialized = true;
-    } else if (prevEnabled !== nextEnabled) {
-      if (!nextEnabled) {
-        log.info("heartbeat: disabled", { enabled: false });
       } else {
-        log.info("heartbeat: started", { intervalMs: Math.min(...intervals) });
+        log.info("heartbeat: disabled", { enabled: false });
+        if (isHeartbeatOwnerUnresolved(cfg)) {
+          log.warn(
+            "heartbeat: multi-agent config has no ambient heartbeat owner; set agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId",
+          );
+        }
       }
     }
+    initialized = true;
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
@@ -328,7 +323,7 @@ export function startHeartbeatRunner(opts: {
     const allowsUnscheduledTarget =
       requestedTargetAgentId !== undefined &&
       isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
-      isTargetedImmediateUnscheduledWake({
+      isTargetedUnscheduledWake({
         source: params.source,
         intent,
         reason,
@@ -355,7 +350,7 @@ export function startHeartbeatRunner(opts: {
     // closures are safe to fan out under `Promise.all`.
     type AgentWakeOutcome = {
       ran: boolean;
-      retryableBusySkip?: HeartbeatRunResult;
+      retryableSkip?: HeartbeatRunResult;
       // Terminal per-agent result so targeted callers can report the real
       // skip reason instead of collapsing everything to not-due.
       result?: HeartbeatRunResult;
@@ -393,7 +388,6 @@ export function startHeartbeatRunner(opts: {
           intent,
           reason,
           ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
-          runScope: "global",
           tasks: requestedTasks,
           deps: { runtime: state.runtime },
         });
@@ -410,10 +404,10 @@ export function startHeartbeatRunner(opts: {
         advanceAgentSchedule(agent, now, reason);
         return { ran: false, result: { status: "failed", reason: formatErrorMessage(err) } };
       }
-      if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+      if (res.status === "skipped" && isRetryableHeartbeatSkipReason(res.reason)) {
         // Do not advance the schedule or record run bookkeeping for this
         // agent — its target runtime is busy and the wake layer retries.
-        return { ran: false, retryableBusySkip: res };
+        return { ran: false, retryableSkip: res };
       }
       if (
         params.source === "exec-event" &&
@@ -421,59 +415,20 @@ export function startHeartbeatRunner(opts: {
         res.reason === HEARTBEAT_SKIP_NO_PENDING_EVENT
       ) {
         // Poll already acknowledged the exec completion. This wake owns no
-        // cadence or commitment work, so it must remain a true no-op.
+        // cadence work, so it must remain a true no-op.
         return { ran: false, result: res };
       }
       // Non-retryable outcome — record bookkeeping for cooldown gates.
       recordRunBookkeeping(agent, now);
       advanceAgentSchedule(agent, now, reason);
-      let agentRan = res.status === "ran";
-
-      // Re-read pending commitments after the global turn so a task-preempted
-      // default session gets an isolated follow-up without duplicating sends.
-      const dueSessionKeys = canHeartbeatDeliverCommitments(agent.heartbeat)
-        ? await listDueCommitmentSessionKeys({
-            cfg: wakeConfig,
-            agentId: agent.agentId,
-            nowMs: now,
-            limit: 10,
-          })
-        : [];
-      for (const dueSessionKey of dueSessionKeys) {
-        let commitmentRes: HeartbeatRunResult;
-        try {
-          commitmentRes = await runOnce({
-            cfg: wakeConfig,
-            agentId: agent.agentId,
-            heartbeat: agent.heartbeat,
-            runScope: "commitment-only",
-            sessionKey: dueSessionKey,
-            deps: { runtime: state.runtime },
-          });
-        } catch (err) {
-          const errMsg = formatErrorMessage(err);
-          log.error(`heartbeat runner: commitment runOnce threw unexpectedly: ${errMsg}`, {
-            error: errMsg,
-            agentId: agent.agentId,
-          });
-          continue;
-        }
-        if (
-          commitmentRes.status === "skipped" &&
-          isRetryableHeartbeatBusySkipReason(commitmentRes.reason)
-        ) {
-          return { ran: agentRan, retryableBusySkip: commitmentRes, result: res };
-        }
-        if (commitmentRes.status === "ran") {
-          agentRan = true;
-        }
-      }
-
-      return { ran: agentRan, result: res };
+      return { ran: res.status === "ran", result: res };
     };
 
     if (requestedSessionKey || requestedAgentId) {
-      const targetAgentId = requestedTargetAgentId ?? resolveAmbientHeartbeatAgentId(wakeConfig);
+      const targetAgentId = requestedTargetAgentId ?? tryResolveAmbientHeartbeatAgentId(wakeConfig);
+      if (!targetAgentId) {
+        return { status: "skipped", reason: "disabled" };
+      }
       const targetAgent = state.agents.get(targetAgentId);
       // Task intent wins scheduled-task coalescing, so the cadence payload—not
       // the final intent—proves that the persisted monitor tick joined this turn.
@@ -492,16 +447,16 @@ export function startHeartbeatRunner(opts: {
         !requestedHeartbeat
       ) {
         // Cron monitor tick for one enrolled agent: use the full per-agent
-        // path — including due-commitment sessions — that the broadcast
-        // interval owned before cadence moved to cron. Wakes carrying
+        // path that the broadcast interval owned before cadence moved to cron.
+        // Wakes carrying
         // heartbeat overrides fall through to the targeted merge path.
         // Intentional: interval ticks run on the enrollment snapshot
         // (agent.heartbeat, refreshed by updateConfig), exactly like the
         // replaced broadcast timer — not resolveHeartbeatForWake, which only
         // ever served override-carrying targeted event wakes.
         const outcome = await runOneAgent(targetAgent, authoritativeScheduledTick);
-        if (outcome.retryableBusySkip) {
-          return outcome.retryableBusySkip;
+        if (outcome.retryableSkip) {
+          return outcome.retryableSkip;
         }
         if (outcome.ran) {
           return { status: "ran", durationMs: Date.now() - startedAt };
@@ -541,12 +496,11 @@ export function startHeartbeatRunner(opts: {
           intent,
           reason,
           ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
-          runScope: "global",
           sessionKey: requestedSessionKey,
           tasks: requestedTasks,
           deps: { runtime: state.runtime },
         });
-        if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+        if (res.status === "skipped" && isRetryableHeartbeatSkipReason(res.reason)) {
           // Retryable busy — do NOT record run bookkeeping. The wake layer
           // retries the same reason shortly; if we recorded `lastRunStartedAtMs`
           // here, the retry would falsely defer with `not-due`/`min-spacing`
@@ -594,20 +548,20 @@ export function startHeartbeatRunner(opts: {
         runOneAgent(agent, authoritativeScheduledTick),
       ),
     );
-    let firstRetryableBusy: HeartbeatRunResult | undefined;
+    let firstRetryableSkip: HeartbeatRunResult | undefined;
     for (const outcome of agentOutcomes) {
       if (outcome.ran) {
         ran = true;
       }
-      if (outcome.retryableBusySkip && !firstRetryableBusy) {
-        firstRetryableBusy = outcome.retryableBusySkip;
+      if (outcome.retryableSkip && !firstRetryableSkip) {
+        firstRetryableSkip = outcome.retryableSkip;
       }
     }
-    if (firstRetryableBusy) {
+    if (firstRetryableSkip) {
       // At least one agent's runtime was busy. The wake layer schedules a
       // retry; on retry, agents that already advanced their schedule will
       // defer via cooldown, so only the still-busy agent actually re-runs.
-      return firstRetryableBusy;
+      return firstRetryableSkip;
     }
 
     if (ran) {

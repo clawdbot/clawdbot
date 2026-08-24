@@ -4,6 +4,7 @@
  * This module owns the provider-facing control tool, conservative intent
  * classifier, and user-visible status/queue/cancel messages used by Talk.
  */
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -240,17 +241,17 @@ export function parseRealtimeVoiceAgentControlToolArgs(args: unknown): {
   mode: RealtimeVoiceAgentControlMode;
 } {
   const parsed = parseRealtimeVoiceAgentControlToolArgsRecord(args);
-  const record = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  const record = asNonArrayRecord(parsed);
   const text =
-    normalizeOptionalString((record as Record<string, unknown>).text) ??
-    normalizeOptionalString((record as Record<string, unknown>).message) ??
-    normalizeOptionalString((record as Record<string, unknown>).request) ??
-    normalizeOptionalString((record as Record<string, unknown>).query);
+    normalizeOptionalString(record.text) ??
+    normalizeOptionalString(record.message) ??
+    normalizeOptionalString(record.request) ??
+    normalizeOptionalString(record.query);
   if (!text) {
     throw new Error("text required");
   }
   const mode =
-    normalizeRealtimeVoiceAgentControlMode((record as Record<string, unknown>).mode) ??
+    normalizeRealtimeVoiceAgentControlMode(record.mode) ??
     resolveRealtimeVoiceAgentControlIntent({ text }).mode;
   return { text, mode };
 }

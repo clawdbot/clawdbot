@@ -10,9 +10,6 @@ import { isRecord } from "../utils.js";
 // Activation config carries only operator-controlled enable/allow surfaces into
 // runtime config. Other runtime fields stay canonical to avoid stale activation
 // state overriding live config reloads.
-function hasOwnValue(record: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(record, key);
-}
 
 function mergeChannelActivationSections(params: {
   runtimeConfig: OpenClawConfig;
@@ -29,7 +26,7 @@ function mergeChannelActivationSections(params: {
   let nextChannels: Record<string, unknown> | undefined;
 
   for (const [channelId, activationChannel] of Object.entries(activationChannels)) {
-    if (!isRecord(activationChannel) || !hasOwnValue(activationChannel, "enabled")) {
+    if (!isRecord(activationChannel) || !Object.hasOwn(activationChannel, "enabled")) {
       continue;
     }
     const runtimeChannel = runtimeChannels[channelId];
@@ -74,7 +71,7 @@ function mergePluginActivationSections(params: {
     const runtimeEntries = isRecord(runtimePlugins.entries) ? runtimePlugins.entries : {};
     let nextEntries: Record<string, unknown> | undefined;
     for (const [pluginId, activationEntry] of Object.entries(activationEntries)) {
-      if (!isRecord(activationEntry) || !hasOwnValue(activationEntry, "enabled")) {
+      if (!isRecord(activationEntry) || !Object.hasOwn(activationEntry, "enabled")) {
         continue;
       }
       const runtimeEntry = runtimeEntries[pluginId];

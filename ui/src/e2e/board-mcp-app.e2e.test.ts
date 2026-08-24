@@ -3,7 +3,7 @@ import type { Server as HttpServer } from "node:http";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getFreeGatewayPort } from "../../../src/gateway/test-helpers.e2e.js";
+import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -173,7 +173,7 @@ async function waitForCachedBoardFace(page: Page, face: "chat" | "dashboard"): P
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   beforeAll(async () => {
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getFreeGatewayPort();
+    sandboxPort = await getGatewayE2ePortBlock();
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);

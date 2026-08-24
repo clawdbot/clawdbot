@@ -2,6 +2,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
+  normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
@@ -46,6 +47,13 @@ export const SYNCED_PREFS = {
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
     clearable: true,
     reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
+  }),
+  accent: prefSpec<string>({
+    extract: normalizeAccentColor,
+    local: (settings) => normalizeAccentColor(settings.accent),
+    write: (value) => ({ accent: value }),
+    clearable: true,
+    reset: () => ({ accent: undefined }),
   }),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
@@ -95,6 +103,7 @@ export type SyncedPrefKey = keyof typeof SYNCED_PREFS;
 export type ResettableServerUiPrefKey =
   | "theme"
   | "themeMode"
+  | "accent"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";
@@ -116,6 +125,21 @@ export function prefValuesEqual(left: unknown, right: unknown): boolean {
     return left.length === right.length && left.every((value, index) => value === right[index]);
   }
   return left === right;
+}
+
+function applyChangedSettingsPatch(
+  target: Partial<UiSettings>,
+  settings: UiSettings,
+  source: Partial<UiSettings>,
+): void {
+  const applyKey = <K extends keyof UiSettings>(key: K, value: UiSettings[K] | undefined) => {
+    if (!prefValuesEqual(settings[key], value)) {
+      target[key] = value;
+    }
+  };
+  for (const key of Object.keys(source) as Array<keyof UiSettings>) {
+    applyKey(key, source[key]);
+  }
 }
 
 export function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
@@ -232,13 +256,7 @@ export function serverPrefsLocalPatch(
     if (serverValue === null) {
       const resetPatch = specification.clearable ? specification.reset?.(settings) : undefined;
       if (resetPatch) {
-        for (const [resetKey, resetValue] of Object.entries(resetPatch)) {
-          if (
-            !prefValuesEqual((settings as unknown as Record<string, unknown>)[resetKey], resetValue)
-          ) {
-            (patch as Record<string, unknown>)[resetKey] = resetValue;
-          }
-        }
+        applyChangedSettingsPatch(patch, settings, resetPatch);
       }
       continue;
     }

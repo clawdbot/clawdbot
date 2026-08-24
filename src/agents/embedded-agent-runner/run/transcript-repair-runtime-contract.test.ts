@@ -7,7 +7,7 @@ import {
   textOrphanLeaf,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { describe, expect, it } from "vitest";
-import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
+import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 
 describe("embedded agent transcript repair runtime contract", () => {

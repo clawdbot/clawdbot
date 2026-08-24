@@ -99,27 +99,7 @@ describe("plugin npm runtime build planning", () => {
     }
   });
 
-  it("includes top-level public runtime surfaces and root-build-excluded plugins", () => {
-    const qqbotPlan = resolvePluginNpmRuntimeBuildPlan({
-      repoRoot,
-      packageDir: path.join(repoRoot, "extensions", "qqbot"),
-    });
-    const qqbotRuntimePlan = expectPluginNpmRuntimeBuildPlan(qqbotPlan);
-    expect(qqbotRuntimePlan.entry).toEqual({
-      api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
-      "channel-entry-api": path.join(repoRoot, "extensions", "qqbot", "channel-entry-api.ts"),
-      "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
-      "doctor-contract-api": path.join(repoRoot, "extensions", "qqbot", "doctor-contract-api.ts"),
-      index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
-      "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
-      "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
-      "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
-      "setup-plugin-api": path.join(repoRoot, "extensions", "qqbot", "setup-plugin-api.ts"),
-      "tools-api": path.join(repoRoot, "extensions", "qqbot", "tools-api.ts"),
-    });
-    expect(qqbotRuntimePlan.runtimeExtensions).toEqual(["./dist/index.js"]);
-    expect(qqbotRuntimePlan.runtimeSetupEntry).toBe("./dist/setup-entry.js");
-
+  it("includes top-level public runtime surfaces", () => {
     const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
       repoRoot,
       packageDir: path.join(repoRoot, "extensions", "diffs"),
@@ -240,10 +220,37 @@ describe("plugin npm runtime build planning", () => {
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
 
+  it("plans the Zalo public setup API with its lazy package surface", () => {
+    const packageDir = path.join(repoRoot, "extensions", "zalo");
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir,
+      }),
+    );
+    expect(plan.entry["setup-api"]).toBe(path.join(packageDir, "setup-api.ts"));
+    expect(plan.entry["setup-surface"]).toBe(path.join(packageDir, "setup-surface.ts"));
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
+    expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
+    expect(plan.packageFiles).toContain("dist/**");
+  });
+
   it("keeps published Codex runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
       packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
+  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/llama-cpp",
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);

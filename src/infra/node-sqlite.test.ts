@@ -2,7 +2,11 @@
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openNodeSqliteDatabase, resolveNodeSqliteLocation } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  resolveImmutableSqliteFileUri,
+  resolveNodeSqliteLocation,
+} from "./node-sqlite.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
@@ -125,6 +129,15 @@ describe("node SQLite locations", () => {
     }
     expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size);
     expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size);
+  });
+
+  it("preserves the Windows long-path namespace in immutable SQLite URIs", () => {
+    const pathname = String.raw`C:\deep state\openclaw.sqlite`;
+    const namespacedPath = String.raw`\\?\C:\deep state\openclaw.sqlite`;
+
+    expect(resolveImmutableSqliteFileUri(pathname, "win32")).toBe(
+      `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`,
+    );
   });
 });
 

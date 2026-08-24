@@ -127,3 +127,35 @@ describe("warmMacOSSystemCaOffMainThread", () => {
     );
   });
 });
+
+describe("beginMacOSSystemCaWarmupOnce", () => {
+  it("shares one worker across concurrent and settled calls", async () => {
+    vi.resetModules();
+    const { beginMacOSSystemCaWarmupOnce } = await import("./system-ca-warmup.js");
+    const worker = new FakeWorker();
+    const createWorker = vi.fn(() => worker);
+    const options = { platform: "darwin" as const, env: {}, createWorker };
+
+    const first = beginMacOSSystemCaWarmupOnce(options);
+    const concurrent = beginMacOSSystemCaWarmupOnce(options);
+
+    expect(concurrent).toBe(first);
+    expect(createWorker).toHaveBeenCalledOnce();
+
+    worker.emit("message", { ok: true, certificateCount: 42 });
+    await first;
+
+    expect(beginMacOSSystemCaWarmupOnce(options)).toBe(first);
+    expect(createWorker).toHaveBeenCalledOnce();
+  });
+
+  it("settles without creating a worker outside macOS", async () => {
+    vi.resetModules();
+    const { beginMacOSSystemCaWarmupOnce } = await import("./system-ca-warmup.js");
+    const createWorker = vi.fn(() => new FakeWorker());
+
+    await beginMacOSSystemCaWarmupOnce({ platform: "linux", env: {}, createWorker });
+
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+});

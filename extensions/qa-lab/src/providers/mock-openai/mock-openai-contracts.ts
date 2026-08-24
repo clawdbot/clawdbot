@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { writeJson } from "../shared/http-json.js";
 
@@ -243,6 +244,7 @@ export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+export const QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE = /qa msteams ambiguous gateway timeout/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
 export const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 export const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
@@ -260,6 +262,9 @@ export const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 export const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 export const QA_SLACK_CHART_PRESENTATION_PROMPT_RE =
   /Slack native chart QA check\s+(SLACK_QA_CHART_SUMMARY_[A-Z0-9]+)[\s\S]*?reply with only this exact marker:\s*(SLACK_QA_CHART_DONE_[A-Z0-9]+)/i;
+export const QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE =
+  /message delivery decision suppression qa check/i;
+export const QA_MESSAGE_DECISION_SEND_PROMPT_RE = /message delivery decision send qa check/i;
 export const QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE =
   /Slack MPIM assistant-history seed check[\s\S]*?exact format:\s*(SLACK_QA_MPIM_SEED_[A-Z0-9]+)_BOT_<NONCE>/i;
 export const QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE =
@@ -404,9 +409,7 @@ export function readBody(req: IncomingMessage): Promise<string> {
 export function parseJsonObjectBody(raw: string): Record<string, unknown> | null {
   try {
     const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return asNullableRecord(parsed);
   } catch {
     return null;
   }

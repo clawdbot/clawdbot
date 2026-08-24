@@ -107,6 +107,50 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("does not promise update fields the curated Updates page cannot edit", () => {
+    const updateSchema = {
+      type: "object",
+      properties: {
+        update: {
+          type: "object",
+          properties: {
+            channel: { type: "string", title: "Update Channel" },
+            checkOnStart: { type: "boolean", title: "Update Check on Start" },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "update.channel": { advanced: false },
+      "update.checkOnStart": { advanced: false },
+    };
+
+    // checkOnStart renders nowhere on the Updates page (curated rows only)
+    // and the Advanced page excludes the scoped update section — a search hit
+    // would dead-end. The curated fields still match.
+    expect(
+      findSettingsSearchBlocks({
+        query: "check on start",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([]);
+    expect(
+      findSettingsSearchBlocks({
+        query: "update channel",
+        schema: updateSchema,
+        value: {},
+        uiHints,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        routeId: "updates",
+        search: "?section=update",
+      }),
+    ]);
+  });
+
   it("routes moved static blocks to their dedicated pages", () => {
     const security = findSettingsSearchBlocks({
       query: "exec policy",
@@ -130,6 +174,21 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("omits admin-only static and schema results for non-admin viewers", () => {
+    expect(
+      findSettingsSearchBlocks({
+        query: "security",
+        schema: {
+          type: "object",
+          properties: { security: { type: "object", title: "Security" } },
+        },
+        value: {},
+        uiHints: {},
+        canAdmin: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("routes uncurated schema sections to the Advanced page", () => {
     const matches = findSettingsSearchBlocks({
       query: "secrets",
@@ -144,6 +203,7 @@ describe("findSettingsSearchBlocks", () => {
     });
 
     expect(matches).toEqual([
+      expect.objectContaining({ routeId: "secrets", label: "Secrets" }),
       expect.objectContaining({
         routeId: "advanced",
         search: "?section=secrets&advanced=1",
@@ -299,6 +359,19 @@ describe("findSettingsSearchBlocks", () => {
         label: "Managed Worktrees",
         hash: "",
       }),
+    ]);
+  });
+
+  it("routes team secret-store searches to the dedicated page", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "team store",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({ routeId: "secrets", label: "Secrets", hash: "" }),
     ]);
   });
 

@@ -47,7 +47,7 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 
 ```json5
 {
-  env: { NVIDIA_API_KEY: "nvapi-..." },
+  env: { vars: { NVIDIA_API_KEY: "nvapi-..." } },
   models: {
     providers: {
       nvidia: {

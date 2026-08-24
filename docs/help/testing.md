@@ -168,17 +168,19 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/default release
-checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
-`full` profile forces soak on. `QA-Lab - All Lanes` runs nightly on `main` and
-from manual dispatch with the mock parity lane, live Matrix lane,
-Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks run the catalog-derived Matrix
-selection through the shared live adapter. `OpenClaw Release Checks` runs parity plus the
-reusable Matrix live-adapter lane and Telegram lane before release approval. Release
+`rerun_group=qa-parity` for parity or `rerun_group=qa-live` for live QA.
+The direct `OpenClaw Release Checks` child alone may use `rerun_group=qa` as a
+manual aggregate of both groups. Stable/full, soak-enabled, and explicit
+`qa-live` release checks include the QA-live Matrix and Telegram lanes. Bounded
+beta-publish `all` without soak runs parity but defers those live lanes to
+postpublish-confidence. `QA-Lab - All Lanes` runs
+nightly on `main` and from manual dispatch with the mock parity lane, live
+Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
+lane as parallel jobs. Scheduled QA and selected release checks run the
+catalog-derived Matrix selection through the shared live adapter. Release
 transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
-avoid normal provider-plugin startup. These live transport gateways
-disable memory search; memory behavior stays covered by the QA parity suites.
+avoid normal provider-plugin startup. These live transport gateways disable
+memory search; memory behavior stays covered by the QA parity suites.
 
 Full release live media shards use
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has
@@ -420,7 +422,7 @@ gh workflow run package-acceptance.yml --ref main \
     homeserver. Source-checkout only - packaged installs do not ship
     `qa-lab`.
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
-    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-smoke-lanes).
+    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-live-lane).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the
     driver and SUT bot tokens from env.
@@ -453,22 +455,26 @@ redacted QA report/evidence bundle in a Crabbox desktop browser, records MP4
 evidence, generates a motion-trimmed GIF, uploads the artifact bundle, and
 posts inline PR evidence through the Mantis GitHub App when `pr_number` is
 set. Maintainers can start it from the Actions UI through `Mantis Scenario`
-(`scenario_id: telegram-live`) or directly from a pull request comment:
-
-```text
-@openclaw-mantis telegram
-@openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
-```
+(`scenario_id: telegram-live`).
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper for PR visual proof. Start it from the Actions UI with
 freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a PR comment:
+telegram-desktop-proof`), or from a maintainer PR comment:
 
 ```text
-@openclaw-mantis telegram desktop proof
+@openclaw-mantis
+@openclaw-mantis verify the streamed reply stays visible while it arrives
 ```
+
+ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
+automatically for branches in `openclaw/openclaw`. Fork PRs require the
+maintainer comment. Mantis reacts with 👀 when it accepts a comment, then
+posts the active workflow link in its evidence comment and replaces that same
+comment with the result. Any text after the mention is optional proof guidance.
+Manual requests stop before desktop setup and comment
+`There was nothing visible to test in this PR at all.` when the diff has no
+Telegram-visible behavior.
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves
 the change, runs the real-user Crabbox Telegram Desktop proof lane on
@@ -495,7 +501,7 @@ table through the Mantis GitHub App when `pr_number` is set.
 
 Live transport lanes share one standard contract so new transports do not
 drift; the per-lane coverage matrix lives in
-[QA overview - Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage).
+[QA overview - Live transport coverage](/concepts/qa-e2e-automation#buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference).
 `qa-channel` is the broad synthetic suite and is not part of that matrix.
 
 ### Shared Telegram credentials via Convex (v1)
@@ -694,6 +700,17 @@ Native dependency policy:
       after 5 minutes with no stdout or stderr output. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
+    - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
+      behavior of existing local workflows. Set `OPENCLAW_TSGO_TIMEOUT_MS` to
+      a positive millisecond value to make a wedged compiler fail loudly
+      instead of blocking its caller forever. On expiry the whole tsgo process
+      tree is killed and the run fails. Values above Node's timer
+      ceiling saturate at it instead of collapsing to a 1ms deadline; `0`, a
+      negative, a fraction, or anything above `Number.MAX_SAFE_INTEGER` is
+      rejected and fails the run. Surrounding whitespace is trimmed first;
+      the remaining value must use plain decimal digits without leading zeros,
+      so values such as `1e5` or `007` are rejected. Unset the variable to
+      disable the watchdog.
 
   </Accordion>
 
@@ -781,10 +798,10 @@ Native dependency policy:
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`
 - Runtime defaults:
   - Uses Vitest `threads` with `isolate: false`, matching the rest of the repo.
-  - Uses adaptive workers (CI: up to 2, local: 1 by default).
+  - Uses one worker by default to keep non-isolated gateway state deterministic.
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
-  - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
+  - `OPENCLAW_E2E_WORKERS=<n>` to opt into parallel workers (capped at 16).
   - `OPENCLAW_E2E_VERBOSE=1` to re-enable verbose console output.
 - Scope:
   - Multi-instance gateway end-to-end behavior

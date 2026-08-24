@@ -10,7 +10,12 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const descriptorPath = "src/gateway/methods/core-descriptors.ts";
 
-type MethodSpec = { line: number; name: string; since: string | undefined };
+type MethodSpec = {
+  line: number;
+  name: string;
+  since: string | undefined;
+  compatibilityRestored: boolean;
+};
 
 function runGit(args: string[]): string {
   const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
@@ -83,6 +88,20 @@ function stringProperty(object: ts.ObjectLiteralExpression, key: string): string
   return undefined;
 }
 
+function trueProperty(object: ts.ObjectLiteralExpression, key: string): boolean {
+  return object.properties.some((property) => {
+    if (!ts.isPropertyAssignment(property)) {
+      return false;
+    }
+    const propertyName = property.name;
+    const name =
+      ts.isIdentifier(propertyName) || ts.isStringLiteral(propertyName)
+        ? propertyName.text
+        : undefined;
+    return name === key && property.initializer.kind === ts.SyntaxKind.TrueKeyword;
+  });
+}
+
 function collectMethodSpec(
   element: ts.Expression,
   sourceFile: ts.SourceFile,
@@ -96,7 +115,12 @@ function collectMethodSpec(
         `${fileName}:${line} core method spec names must be string literals so additions can be compared with origin/main.`,
       );
     }
-    return { name, since: stringProperty(element, "since"), line };
+    return {
+      name,
+      since: stringProperty(element, "since"),
+      compatibilityRestored: trueProperty(element, "compatibilityRestored"),
+      line,
+    };
   }
   if (ts.isArrayLiteralExpression(element)) {
     const name = element.elements[0];
@@ -106,7 +130,12 @@ function collectMethodSpec(
         `${fileName}:${line} core method spec rows must use string literal names and vintage metadata.`,
       );
     }
-    return { name: name.text, since: since.text, line };
+    const policy = element.elements[4];
+    const compatibilityRestored =
+      policy !== undefined && ts.isObjectLiteralExpression(policy)
+        ? trueProperty(policy, "compatibilityRestored")
+        : false;
+    return { name: name.text, since: since.text, compatibilityRestored, line };
   }
   throw new Error(
     `${fileName}:${line} core method specs must be inline object literals or labeled rows so vintage metadata can be enforced.`,
@@ -166,22 +195,32 @@ try {
     collectMethodSpecs(baseSource, `${descriptorPath}@${mergeBase}`).map((s) => s.name),
   );
   const added = currentSpecs.filter((spec) => !baseNames.has(spec.name));
-  const violations = added.filter((spec) => spec.since !== train);
+  const restored = added.filter((spec) => spec.compatibilityRestored);
+  const newMethods = added.filter((spec) => !spec.compatibilityRestored);
+  // Restored shipped methods retain their historical vintage so discovery and
+  // generated clients see the original availability contract, not a new API.
+  const violations = added.filter((spec) =>
+    spec.compatibilityRestored ? !spec.since?.startsWith("<=") : spec.since !== train,
+  );
 
   if (violations.length > 0) {
     console.error(`Protocol since guard failed for current train ${train}:`);
     for (const spec of violations) {
-      const problem = spec.since
-        ? `has since ${JSON.stringify(spec.since)}`
-        : "is missing since metadata";
+      const problem = spec.compatibilityRestored
+        ? `is marked compatibilityRestored but has non-historical since ${JSON.stringify(spec.since)}`
+        : spec.since
+          ? `has since ${JSON.stringify(spec.since)}`
+          : "is missing since metadata";
       console.error(
-        `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(train)}.`,
+        spec.compatibilityRestored
+          ? `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; restored compatibility methods must retain <= vintage metadata.`
+          : `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(train)}.`,
       );
     }
     process.exitCode = 1;
   } else {
     console.log(
-      `protocol since guard passed: ${added.length} new core method${added.length === 1 ? "" : "s"} use train ${train}`,
+      `protocol since guard passed: ${newMethods.length} new core method${newMethods.length === 1 ? "" : "s"} use train ${train}; ${restored.length} restored compatibility method${restored.length === 1 ? "" : "s"} retain historical vintage`,
     );
   }
 } catch (error) {

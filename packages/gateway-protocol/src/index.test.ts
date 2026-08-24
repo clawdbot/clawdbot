@@ -36,23 +36,17 @@ import {
   validateTalkClientToolCallParams,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
-  validateTalkSessionCancelTurnParams,
   validateTalkSessionCreateParams,
-  validateTalkSessionJoinParams,
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionSteerParams,
-  validateTalkSessionTurnParams,
   validateWakeParams,
   type ValidationError,
+  type ConfigSchemaLookupParams,
+  type ModelsListParams,
+  type SessionsCatalogListParams,
+  type SessionsCatalogStartTerminalParams,
+  type TalkEvent,
 } from "./index.js";
-import type {
-  ConfigSchemaLookupParams,
-  ModelsListParams,
-  SessionsCatalogListParams,
-  SessionsCatalogStartTerminalParams,
-  TalkEvent,
-} from "./index.js";
-import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
@@ -111,11 +105,9 @@ const talkSession = (overrides: Record<string, unknown>) => ({
 });
 
 describe("protocol export registries", () => {
-  it("re-exports every runtime registry symbol by identity", () => {
-    for (const registry of [schemaExportRegistry, validatorRegistry]) {
-      for (const [name, value] of Object.entries(registry)) {
-        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
-      }
+  it("re-exports every validator registry symbol by identity", () => {
+    for (const [name, value] of Object.entries(validatorRegistry)) {
+      expect((protocol as Record<string, unknown>)[name], name).toBe(value);
     }
   });
 
@@ -129,16 +121,16 @@ describe("protocol export registries", () => {
 
   it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
     expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+      protocol.SkillsProposalEvaluateParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+      protocol.SkillsProposalEvaluateResultSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
-      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+      protocol.SkillsProposalEventsListParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
-      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+      protocol.SkillsProposalEventsListResultSchema,
     );
   });
 });
@@ -174,8 +166,9 @@ describe("lazy protocol validators", () => {
       { archived: false },
       { archived: true },
       { archived: "all" },
+      { involvingMe: true },
     ]);
-    expectRejected(validateSessionsListParams, [{ archived: "archived" }]);
+    expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
 
   it("validates session board face list and patch values", () => {
@@ -214,13 +207,13 @@ describe("lazy protocol validators", () => {
       label: "Label",
       category: "Category",
       boardFace: "dashboard",
-      icon: "name:spark",
       statusNote: "Working",
       attention: "hand",
       ttlMinutes: 30,
       archived: false,
       pinned: true,
       unread: true,
+      contextWindow: "1m",
       thinkingLevel: "high",
       fastMode: "auto",
       toolOverrides: null,
@@ -304,6 +297,7 @@ describe("lazy protocol validators", () => {
     expectRejected(validateConnectParams, [{}]);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
     expectAccepted(validateConnectParams, [connect]);
+    expectAccepted(validateConnectParams, [{ ...connect, computerUse: { version: 2 } }]);
     expect(validateConnectParams.errors).toBeNull();
   });
 
@@ -528,6 +522,27 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it("validates closed worker desktop app launch contracts", () => {
+    expectAccepted(protocol.validateWorkerDesktopLaunchParams, [
+      { environmentId: "worker:one", app: "browser" },
+      { environmentId: "worker:one", app: "terminal" },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopLaunchParams, [
+      { environmentId: "", app: "browser" },
+      { environmentId: "worker:one", app: "editor" },
+      { environmentId: "worker:one", app: "browser", args: [] },
+    ]);
+    expectAccepted(protocol.validateWorkerDesktopLaunchResult, [
+      { app: "browser", status: "ready" },
+      { app: "terminal", status: "ready" },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopLaunchResult, [
+      { app: "editor", status: "ready" },
+      { app: "browser", status: "starting" },
+      { app: "browser", status: "ready", executablePath: "/usr/bin/chromium" },
+    ]);
+  });
+
   it("validates chat sends that suppress command interpretation", () => {
     expectAccepted(validateChatSendParams, [
       {
@@ -556,6 +571,7 @@ describe("lazy protocol validators", () => {
         idempotencyKey: "revision-run-1",
       }),
       proposalRequest({
+        expectedRevisionHash: "a".repeat(64),
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",
@@ -800,14 +816,6 @@ describe("validateTalkSession", () => {
     );
     expectRejected(validateTalkSessionCreateParams, [{ mode: "realtime", language: "de-DE" }]);
   });
-
-  it("accepts managed-room join and turn lifecycle params", () => {
-    expectAccepted(validateTalkSessionJoinParams, [talkSession({ token: "token-1" })]);
-    expectAccepted(validateTalkSessionTurnParams, [talkSession({ turnId: "turn-1" })]);
-    expectAccepted(validateTalkSessionCancelTurnParams, [
-      talkSession({ turnId: "turn-1", reason: "barge-in" }),
-    ]);
-  });
 });
 
 describe("validateTalkClientToolCallParams", () => {
@@ -840,12 +848,11 @@ describe("validateTalkAgentControlParams", () => {
 });
 
 describe("validateTalkSessionRelayParams", () => {
-  it("accepts session audio, cancel, output cancel, and tool result params", () => {
+  it("accepts session audio, output cancel, and tool result params", () => {
     expectAccepted(validateTalkSessionAppendAudioParams, [
       talkSession({ audioBase64: "aGVsbG8=", timestamp: 123 }),
     ]);
-    expectAccepted(validateTalkSessionCancelTurnParams, [talkSession({ reason: "barge-in" })]);
-    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ reason: "barge-in" })]);
+    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ turnId: "turn-7" })]);
     expectAccepted(validateTalkSessionSubmitToolResultParams, [
       talkSession({
         callId: "call-1",
@@ -1000,6 +1007,8 @@ describe("validateModelsListParams", () => {
       { view: "default" },
       { view: "configured" },
       { view: "all" },
+      { view: "configured", preparedOnly: true },
+      { view: "all", refresh: true },
     ]);
   });
 

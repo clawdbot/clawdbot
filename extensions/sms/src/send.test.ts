@@ -1,18 +1,20 @@
 // Sms tests cover send plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSmsAccount } from "./accounts.js";
+import {
+  prepareSmsMediaAttempt,
+  sendPreparedSmsMediaAttempt,
+  sendSmsTextChunks,
+  toSmsPlainText,
+} from "./send.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
 type SendModule = typeof import("./send.js");
 type SendSmsMediaParams = Parameters<SendModule["prepareSmsMediaAttempt"]>[0] &
   Omit<Parameters<SendModule["sendPreparedSmsMediaAttempt"]>[0], "attempt">;
-
-let sendSmsTextChunks: SendModule["sendSmsTextChunks"];
-let prepareSmsMediaAttempt: SendModule["prepareSmsMediaAttempt"];
-let sendPreparedSmsMediaAttempt: SendModule["sendPreparedSmsMediaAttempt"];
-let toSmsPlainText: SendModule["toSmsPlainText"];
-let resolveSmsAccount: (typeof import("./accounts.js"))["resolveSmsAccount"];
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn<typeof sendSmsViaTwilioType>(async ({ to, onPlatformSendDispatch }) => {
@@ -33,8 +35,28 @@ const hostedMediaMocks = vi.hoisted(() => {
 const recordInitialSmsDeliveryResult = vi.hoisted(() => vi.fn(async () => null));
 const deliveryWarn = vi.hoisted(() => vi.fn());
 
-beforeEach(async () => {
-  vi.resetModules();
+vi.mock("./twilio.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./twilio.js")>()),
+  sendSmsViaTwilio,
+}));
+vi.mock("./media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media.js")>()),
+  prepareHostedSmsMedia: hostedMediaMocks.prepare,
+}));
+vi.mock("./delivery-observations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delivery-observations.js")>()),
+  recordInitialSmsDeliveryResult,
+}));
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getSmsRuntime: () => ({
+    logging: {
+      getChildLogger: () => ({ warn: deliveryWarn }),
+    },
+  }),
+}));
+
+beforeEach(() => {
   sendSmsViaTwilio.mockReset();
   sendSmsViaTwilio.mockImplementation(async ({ to, onPlatformSendDispatch }) => {
     await onPlatformSendDispatch?.();
@@ -50,33 +72,9 @@ beforeEach(async () => {
   recordInitialSmsDeliveryResult.mockReset();
   recordInitialSmsDeliveryResult.mockResolvedValue(null);
   deliveryWarn.mockClear();
-  vi.doMock("./twilio.js", () => ({
-    sendSmsViaTwilio,
-    TWILIO_MESSAGE_BODY_MAX_LENGTH: 1600,
-  }));
-  vi.doMock("./media.js", () => ({
-    prepareHostedSmsMedia: hostedMediaMocks.prepare,
-  }));
-  vi.doMock("./delivery-observations.js", () => ({
-    recordInitialSmsDeliveryResult,
-  }));
-  vi.doMock("./runtime.js", () => ({
-    getSmsRuntime: () => ({
-      logging: {
-        getChildLogger: () => ({ warn: deliveryWarn }),
-      },
-    }),
-  }));
-  ({ prepareSmsMediaAttempt, sendPreparedSmsMediaAttempt, sendSmsTextChunks, toSmsPlainText } =
-    await import("./send.js"));
-  ({ resolveSmsAccount } = await import("./accounts.js"));
 });
 
 afterEach(() => {
-  vi.doUnmock("./twilio.js");
-  vi.doUnmock("./media.js");
-  vi.doUnmock("./delivery-observations.js");
-  vi.doUnmock("./runtime.js");
   delete process.env.TWILIO_ACCOUNT_SID;
   delete process.env.TWILIO_AUTH_TOKEN;
   delete process.env.TWILIO_PHONE_NUMBER;
@@ -408,7 +406,6 @@ describe("sendSmsTextChunks", () => {
 
 describe("sendSmsMedia", () => {
   it("preserves existing pre-dispatch proof from hosted-media staging", async () => {
-    const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
     const rejection = new PlatformMessageNotDispatchedError("unsupported hosted media", {
       cause: new Error("unsupported content type"),
       retryable: false,

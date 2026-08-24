@@ -62,7 +62,7 @@ describe("slack outbound shared hook wiring", () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     addTestHook({
       registry: hookRegistry,
-      pluginId: "thread-ownership",
+      pluginId: "test-plugin",
       hookName: "message_sending",
       handler: handler as PluginHookRegistration["handler"],
     });
@@ -125,7 +125,7 @@ describe("slack outbound shared hook wiring", () => {
     const handler = vi.fn().mockResolvedValue({ cancel: true });
     addTestHook({
       registry: hookRegistry,
-      pluginId: "thread-ownership",
+      pluginId: "test-plugin",
       hookName: "message_sending",
       handler: handler as PluginHookRegistration["handler"],
     });

@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import v8 from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type {
@@ -12,7 +13,6 @@ import type {
 } from "../infra/diagnostic-events.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -256,7 +256,7 @@ function readObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function readNumber(value: unknown, label: string): number {
+function readRequiredNumber(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`Invalid stability bundle: ${label} must be a finite number`);
   }
@@ -267,12 +267,12 @@ function readOptionalPositiveInteger(value: unknown, label: string): number | un
   if (value === undefined) {
     return undefined;
   }
-  const parsed = readNumber(value, label);
+  const parsed = readRequiredNumber(value, label);
   return parsed >= 0 ? Math.floor(parsed) : undefined;
 }
 
 function readTimestampMs(value: unknown, label: string): number {
-  const timestamp = readNumber(value, label);
+  const timestamp = readRequiredNumber(value, label);
   if (Number.isNaN(new Date(timestamp).getTime())) {
     throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
   }
@@ -283,10 +283,10 @@ function readOptionalNumber(value: unknown, label: string): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  return readNumber(value, label);
+  return readRequiredNumber(value, label);
 }
 
-function readString(value: unknown, label: string): string {
+function readRequiredString(value: unknown, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`Invalid stability bundle: ${label} must be a string`);
   }
@@ -294,7 +294,7 @@ function readString(value: unknown, label: string): string {
 }
 
 function readTimestampString(value: unknown, label: string): string {
-  const timestamp = readString(value, label);
+  const timestamp = readRequiredString(value, label);
   if (Number.isNaN(new Date(timestamp).getTime())) {
     throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
   }
@@ -302,7 +302,7 @@ function readTimestampString(value: unknown, label: string): string {
 }
 
 function readCodeString(value: unknown, label: string): string {
-  const code = readString(value, label);
+  const code = readRequiredString(value, label);
   if (!SAFE_REASON_CODE.test(code)) {
     throw new Error(`Invalid stability bundle: ${label} must be a safe diagnostic code`);
   }
@@ -313,7 +313,7 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   if (value === undefined) {
     return undefined;
   }
-  const code = readString(value, label);
+  const code = readRequiredString(value, label);
   return SAFE_REASON_CODE.test(code) ? code : undefined;
 }
 
@@ -351,11 +351,11 @@ function assignOptionalCodeString(
 function readMemoryUsage(value: unknown, label: string): DiagnosticMemoryUsage {
   const memory = readObject(value, label);
   return {
-    rssBytes: readNumber(memory.rssBytes, `${label}.rssBytes`),
-    heapTotalBytes: readNumber(memory.heapTotalBytes, `${label}.heapTotalBytes`),
-    heapUsedBytes: readNumber(memory.heapUsedBytes, `${label}.heapUsedBytes`),
-    externalBytes: readNumber(memory.externalBytes, `${label}.externalBytes`),
-    arrayBuffersBytes: readNumber(memory.arrayBuffersBytes, `${label}.arrayBuffersBytes`),
+    rssBytes: readRequiredNumber(memory.rssBytes, `${label}.rssBytes`),
+    heapTotalBytes: readRequiredNumber(memory.heapTotalBytes, `${label}.heapTotalBytes`),
+    heapUsedBytes: readRequiredNumber(memory.heapUsedBytes, `${label}.heapUsedBytes`),
+    externalBytes: readRequiredNumber(memory.externalBytes, `${label}.externalBytes`),
+    arrayBuffersBytes: readRequiredNumber(memory.arrayBuffersBytes, `${label}.arrayBuffersBytes`),
   };
 }
 
@@ -519,7 +519,7 @@ function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | unde
   const files: DiagnosticSessionFileSummary[] = [];
   for (const [index, entry] of value.entries()) {
     const source = readObject(entry, `evidence.memoryPressure.topSessionFiles[${index}]`);
-    const relativePath = readString(
+    const relativePath = readRequiredString(
       source.relativePath,
       `evidence.memoryPressure.topSessionFiles[${index}].relativePath`,
     );
@@ -577,7 +577,7 @@ function readMemoryPressureEvidence(
     memory: readMemoryUsage(pressure.memory, "evidence.memoryPressure.memory"),
     ...(pressure.thresholdBytes !== undefined
       ? {
-          thresholdBytes: readNumber(
+          thresholdBytes: readRequiredNumber(
             pressure.thresholdBytes,
             "evidence.memoryPressure.thresholdBytes",
           ),
@@ -585,14 +585,14 @@ function readMemoryPressureEvidence(
       : {}),
     ...(pressure.rssGrowthBytes !== undefined
       ? {
-          rssGrowthBytes: readNumber(
+          rssGrowthBytes: readRequiredNumber(
             pressure.rssGrowthBytes,
             "evidence.memoryPressure.rssGrowthBytes",
           ),
         }
       : {}),
     ...(pressure.windowMs !== undefined
-      ? { windowMs: readNumber(pressure.windowMs, "evidence.memoryPressure.windowMs") }
+      ? { windowMs: readRequiredNumber(pressure.windowMs, "evidence.memoryPressure.windowMs") }
       : {}),
     ...(heapStatistics ? { heapStatistics } : {}),
     ...(heapSpaces ? { heapSpaces } : {}),
@@ -618,7 +618,7 @@ function readNumberMap(value: unknown, label: string): Record<string, number> {
     if (!SAFE_REASON_CODE.test(key)) {
       continue;
     }
-    result[key] = readNumber(entry, `${label}.${key}`);
+    result[key] = readRequiredNumber(entry, `${label}.${key}`);
   }
   return result;
 }
@@ -637,17 +637,25 @@ function readOptionalMemorySummary(
   return {
     ...(latest ? { latest } : {}),
     ...(memory.maxRssBytes !== undefined
-      ? { maxRssBytes: readNumber(memory.maxRssBytes, "snapshot.summary.memory.maxRssBytes") }
+      ? {
+          maxRssBytes: readRequiredNumber(
+            memory.maxRssBytes,
+            "snapshot.summary.memory.maxRssBytes",
+          ),
+        }
       : {}),
     ...(memory.maxHeapUsedBytes !== undefined
       ? {
-          maxHeapUsedBytes: readNumber(
+          maxHeapUsedBytes: readRequiredNumber(
             memory.maxHeapUsedBytes,
             "snapshot.summary.memory.maxHeapUsedBytes",
           ),
         }
       : {}),
-    pressureCount: readNumber(memory.pressureCount, "snapshot.summary.memory.pressureCount"),
+    pressureCount: readRequiredNumber(
+      memory.pressureCount,
+      "snapshot.summary.memory.pressureCount",
+    ),
   };
 }
 
@@ -659,10 +667,13 @@ function readOptionalPayloadLargeSummary(
   }
   const payloadLarge = readObject(value, "snapshot.summary.payloadLarge");
   return {
-    count: readNumber(payloadLarge.count, "snapshot.summary.payloadLarge.count"),
-    rejected: readNumber(payloadLarge.rejected, "snapshot.summary.payloadLarge.rejected"),
-    truncated: readNumber(payloadLarge.truncated, "snapshot.summary.payloadLarge.truncated"),
-    chunked: readNumber(payloadLarge.chunked, "snapshot.summary.payloadLarge.chunked"),
+    count: readRequiredNumber(payloadLarge.count, "snapshot.summary.payloadLarge.count"),
+    rejected: readRequiredNumber(payloadLarge.rejected, "snapshot.summary.payloadLarge.rejected"),
+    truncated: readRequiredNumber(
+      payloadLarge.truncated,
+      "snapshot.summary.payloadLarge.truncated",
+    ),
+    chunked: readRequiredNumber(payloadLarge.chunked, "snapshot.summary.payloadLarge.chunked"),
     bySurface: readNumberMap(payloadLarge.bySurface, "snapshot.summary.payloadLarge.bySurface"),
   };
 }
@@ -673,7 +684,7 @@ function readStabilityEventRecord(
 ): DiagnosticStabilitySnapshot["events"][number] {
   const record = readObject(value, label);
   const sanitized: DiagnosticStabilitySnapshot["events"][number] = {
-    seq: readNumber(record.seq, `${label}.seq`),
+    seq: readRequiredNumber(record.seq, `${label}.seq`),
     ts: readTimestampMs(record.ts, `${label}.ts`),
     type: readCodeString(
       record.type,
@@ -777,9 +788,9 @@ function readStabilityEventRecord(
   if (record.webhooks !== undefined) {
     const webhooks = readObject(record.webhooks, `${label}.webhooks`);
     sanitized.webhooks = {
-      received: readNumber(webhooks.received, `${label}.webhooks.received`),
-      processed: readNumber(webhooks.processed, `${label}.webhooks.processed`),
-      errors: readNumber(webhooks.errors, `${label}.webhooks.errors`),
+      received: readRequiredNumber(webhooks.received, `${label}.webhooks.received`),
+      processed: readRequiredNumber(webhooks.processed, `${label}.webhooks.processed`),
+      errors: readRequiredNumber(webhooks.errors, `${label}.webhooks.errors`),
     };
   }
   if (record.memory !== undefined) {
@@ -789,22 +800,22 @@ function readStabilityEventRecord(
     const usage = readObject(record.usage, `${label}.usage`);
     sanitized.usage = {
       ...(usage.input !== undefined
-        ? { input: readNumber(usage.input, `${label}.usage.input`) }
+        ? { input: readRequiredNumber(usage.input, `${label}.usage.input`) }
         : {}),
       ...(usage.output !== undefined
-        ? { output: readNumber(usage.output, `${label}.usage.output`) }
+        ? { output: readRequiredNumber(usage.output, `${label}.usage.output`) }
         : {}),
       ...(usage.cacheRead !== undefined
-        ? { cacheRead: readNumber(usage.cacheRead, `${label}.usage.cacheRead`) }
+        ? { cacheRead: readRequiredNumber(usage.cacheRead, `${label}.usage.cacheRead`) }
         : {}),
       ...(usage.cacheWrite !== undefined
-        ? { cacheWrite: readNumber(usage.cacheWrite, `${label}.usage.cacheWrite`) }
+        ? { cacheWrite: readRequiredNumber(usage.cacheWrite, `${label}.usage.cacheWrite`) }
         : {}),
       ...(usage.promptTokens !== undefined
-        ? { promptTokens: readNumber(usage.promptTokens, `${label}.usage.promptTokens`) }
+        ? { promptTokens: readRequiredNumber(usage.promptTokens, `${label}.usage.promptTokens`) }
         : {}),
       ...(usage.total !== undefined
-        ? { total: readNumber(usage.total, `${label}.usage.total`) }
+        ? { total: readRequiredNumber(usage.total, `${label}.usage.total`) }
         : {}),
     };
   }
@@ -812,10 +823,10 @@ function readStabilityEventRecord(
     const context = readObject(record.context, `${label}.context`);
     sanitized.context = {
       ...(context.limit !== undefined
-        ? { limit: readNumber(context.limit, `${label}.context.limit`) }
+        ? { limit: readRequiredNumber(context.limit, `${label}.context.limit`) }
         : {}),
       ...(context.used !== undefined
-        ? { used: readNumber(context.used, `${label}.context.used`) }
+        ? { used: readRequiredNumber(context.used, `${label}.context.used`) }
         : {}),
     };
   }
@@ -826,9 +837,9 @@ function readStabilityEventRecord(
 function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
   const snapshot = readObject(value, "snapshot");
   const generatedAt = readTimestampString(snapshot.generatedAt, "snapshot.generatedAt");
-  const capacity = readNumber(snapshot.capacity, "snapshot.capacity");
-  const count = readNumber(snapshot.count, "snapshot.count");
-  const dropped = readNumber(snapshot.dropped, "snapshot.dropped");
+  const capacity = readRequiredNumber(snapshot.capacity, "snapshot.capacity");
+  const count = readRequiredNumber(snapshot.count, "snapshot.count");
+  const dropped = readRequiredNumber(snapshot.dropped, "snapshot.dropped");
   const firstSeq = readOptionalNumber(snapshot.firstSeq, "snapshot.firstSeq");
   const lastSeq = readOptionalNumber(snapshot.lastSeq, "snapshot.lastSeq");
   if (!Array.isArray(snapshot.events)) {
@@ -870,13 +881,13 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
   return {
     version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
     generatedAt: readTimestampString(bundle.generatedAt, "generatedAt"),
-    reason: normalizeReason(readString(bundle.reason, "reason")),
+    reason: normalizeReason(readRequiredString(bundle.reason, "reason")),
     process: {
-      pid: readNumber(processInfo.pid, "process.pid"),
+      pid: readRequiredNumber(processInfo.pid, "process.pid"),
       platform: readCodeString(processInfo.platform, "process.platform") as NodeJS.Platform,
       arch: readCodeString(processInfo.arch, "process.arch"),
       node: readCodeString(processInfo.node, "process.node"),
-      uptimeMs: readNumber(processInfo.uptimeMs, "process.uptimeMs"),
+      uptimeMs: readRequiredNumber(processInfo.uptimeMs, "process.uptimeMs"),
     },
     host: {
       hostname: REDACTED_HOSTNAME,

@@ -1,4 +1,5 @@
 import { setImmediate as waitForImmediate } from "node:timers/promises";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RawData, type WebSocket, WebSocketServer } from "ws";
@@ -18,15 +19,6 @@ type RequestFrame = {
 
 const clients: GatewayClient[] = [];
 let server: WebSocketServer | undefined;
-
-function rawDataToString(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.isBuffer(data)
-    ? data.toString("utf8")
-    : Buffer.from(new Uint8Array(data)).toString("utf8");
-}
 
 function parseRequest(data: RawData): RequestFrame {
   return JSON.parse(rawDataToString(data)) as RequestFrame;
@@ -278,7 +270,6 @@ describe("GatewayClient transport defaults", () => {
       );
     }
 
-    expect(closeEvents).toHaveLength(expectedDelays.length);
     expect(closeEvents).toEqual(expectedDelays.map(() => ({ code: 1012, reason: "retry" })));
   });
 

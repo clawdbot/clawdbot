@@ -202,7 +202,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     );
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
-    sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
+    sessionStoreMocks.resolveSessionStorePathCore
+      .mockReset()
+      .mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
@@ -656,7 +658,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
-        outcome: "completed",
+        outcome: "skipped",
         reason: "reply_operation_aborted",
       }),
     );
@@ -1093,7 +1095,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
-        outcome: "completed",
+        outcome: "skipped",
         reason: "reply_operation_aborted",
       }),
     );

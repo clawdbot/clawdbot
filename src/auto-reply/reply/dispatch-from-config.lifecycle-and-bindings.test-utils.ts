@@ -48,6 +48,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -1881,15 +1882,20 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyOptions: { abortSignal: abortController.signal },
-      replyResolver,
-    });
+    const { result, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: { abortSignal: abortController.signal },
+        replyResolver,
+      }),
+    );
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    // The aborted skip queues nothing; the sink must name the branch so the
+    // kernel's zero-count warning is attributable to a benign abort.
+    expect(processedOutcome).toEqual({ outcome: "skipped", reason: "reply_operation_aborted" });
     expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();

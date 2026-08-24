@@ -227,6 +227,7 @@ describe("qa-bus client", () => {
         baseUrl: server.baseUrl,
         accountId: "acct-a",
         cursor: 0,
+        acknowledgedCursor: 0,
         timeoutMs: 0,
       }),
     ).rejects.toThrow("qa-bus /v1/poll: malformed JSON response");
@@ -247,6 +248,7 @@ describe("qa-bus client", () => {
         baseUrl: `http://127.0.0.1:${port}`,
         accountId: "acct-a",
         cursor: 0,
+        acknowledgedCursor: 0,
         timeoutMs: 0,
       }),
     ).rejects.toThrow("qa-bus /v1/poll: JSON response exceeds 16777216 bytes");
@@ -281,6 +283,7 @@ describe("qa-bus client", () => {
       baseUrl: `http://127.0.0.1:${address.port}`,
       accountId: "acct-a",
       cursor: 0,
+      acknowledgedCursor: 0,
       timeoutMs: 30_000,
       signal: abort.signal,
     });
@@ -375,6 +378,7 @@ describe("qa-bus client", () => {
         baseUrl: server.baseUrl,
         accountId: "acct-a",
         cursor: 0,
+        acknowledgedCursor: 0,
         timeoutMs: 30_000,
       }),
     ).resolves.toEqual({ cursor: 1, events: [] });

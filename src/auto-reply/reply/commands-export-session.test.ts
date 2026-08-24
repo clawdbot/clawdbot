@@ -48,7 +48,7 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
-  resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
+  resolveSessionFilePathCore: hoisted.resolveSessionFilePathMock,
   resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
 }));
 

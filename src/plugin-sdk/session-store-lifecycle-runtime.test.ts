@@ -181,11 +181,35 @@ describe("session-store lifecycle runtime", () => {
         update: () => ({ updatedAt: 0 }),
       }),
     ).rejects.toThrow("skipped after physical owner release");
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      lifecycleRevision: "original-revision",
+    const newer = getSessionEntry({ sessionKey, storePath });
+    expect(newer).toMatchObject({
       sessionId: "locked-old-session",
       updatedAt: 11,
     });
+    expect(newer?.lifecycleRevision).toMatch(/^reset:/);
+  });
+
+  it("publishes a fresh unlocked row when finalization skips after physical owner release", async () => {
+    const sessionKey = "agent:main:harness:codex:thread";
+    await seedSessionEntry(sessionKey, lockedEntry());
+
+    await expect(
+      resetSessionEntryLifecycle({
+        expectedSessionId: "locked-old-session",
+        expectedUpdatedAt: 10,
+        releasePhysicalOwner: () => {},
+        sessionKey,
+        storePath,
+        update: () => null,
+      }),
+    ).rejects.toThrow("skipped after physical owner release");
+
+    const replacement = getSessionEntry({ sessionKey, storePath });
+    expect(replacement?.sessionId).toBeTruthy();
+    expect(replacement?.sessionId).not.toBe("locked-old-session");
+    expect(replacement?.agentHarnessId).toBeUndefined();
+    expect(replacement?.modelSelectionLocked).toBeUndefined();
+    expect(replacement?.lifecycleRevision).toBeUndefined();
   });
 });
 

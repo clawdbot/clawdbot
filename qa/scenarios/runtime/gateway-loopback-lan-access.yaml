@@ -25,6 +25,7 @@ scenario:
     - test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-loopback-lan-access.ts
     summary: Starts real loopback and LAN Gateway listeners, then probes their HTTP and WebSocket surfaces from loopback and the host's real LAN interface.
     args:

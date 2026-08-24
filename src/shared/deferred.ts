@@ -10,6 +10,6 @@ type PromiseConstructorWithResolvers = PromiseConstructor & {
 
 const promiseWithResolvers = Promise as PromiseConstructorWithResolvers;
 
-export function createDeferred<T = void>(): Deferred<T> {
+export function createDeferredCore<T = void>(): Deferred<T> {
   return promiseWithResolvers.withResolvers<T>();
 }

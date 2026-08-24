@@ -31,7 +31,7 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => {
@@ -651,57 +651,6 @@ describe("resolveDeliveryTarget", () => {
       throw new Error("expected target resolver error");
     }
     expect(result.error.message).toContain("directory auth failed");
-  });
-
-  it("keeps parser-derived explicit thread ids for parser-only cron targets", async () => {
-    setMainSessionEntry(undefined);
-    setSingleOutboundTestPlugin({
-      id: "alpha",
-      outbound: createStubOutbound("Alpha"),
-      messaging: {
-        targetPrefixes: ["alpha"],
-        parseExplicitTarget: ({ raw }) =>
-          raw === "alpha:room-a:topic:77"
-            ? { to: "room-a", threadId: 77, chatType: "group" as const }
-            : null,
-      },
-    });
-
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "alpha",
-      to: "alpha:room-a:topic:77",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("room-a");
-    expect(result.threadId).toBe(77);
-  });
-
-  it("does not treat parser-only target normalization as a parser thread id", async () => {
-    setLastSessionEntry({
-      sessionId: "sess-parser-stale-thread",
-      lastChannel: "alpha",
-      lastTo: "room-a",
-      lastThreadId: "stale-thread",
-    });
-    setSingleOutboundTestPlugin({
-      id: "alpha",
-      outbound: createStubOutbound("Alpha"),
-      messaging: {
-        targetPrefixes: ["alpha"],
-        parseExplicitTarget: ({ raw }) =>
-          raw === "alpha:room-b" ? { to: "room-b", chatType: "group" as const } : null,
-      },
-    });
-
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "alpha",
-      to: "alpha:room-b",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("room-b");
-    expect(result.threadId).toBeUndefined();
   });
 
   it("preserves plugin-canonical targets that begin with the selected channel prefix", async () => {

@@ -1,15 +1,14 @@
 import path from "node:path";
+import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
 ] as const;
-
-const MANAGED_SERVICE_SELECTOR_ENV_KEYS = [
-  ...SERVICE_REFRESH_PATH_ENV_KEYS,
-  "OPENCLAW_PROFILE",
-  "OPENCLAW_GATEWAY_PORT",
+const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
+  "OPENCLAW_HOME",
+  ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ] as const;
 
 function applyManagedServiceSelectorEnv(params: {
@@ -19,7 +18,7 @@ function applyManagedServiceSelectorEnv(params: {
 }): NodeJS.ProcessEnv {
   const resolved = { ...params.baseEnv };
   const selectorEnv = params.selectorEnv ?? params.serviceEnv;
-  for (const key of MANAGED_SERVICE_SELECTOR_ENV_KEYS) {
+  for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
     if (selectorEnv[key]?.trim()) {
       resolved[key] = params.serviceEnv[key];
     } else {

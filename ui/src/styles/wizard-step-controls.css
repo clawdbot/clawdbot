@@ -4,7 +4,13 @@
 }
 
 .wizard-step__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.wizard-step__external-link {
+  justify-self: start;
 }
 
 .wizard-step__device-code {
@@ -35,7 +41,31 @@
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  cursor: pointer;
+  cursor: var(--cursor-action);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.wizard-step__option:has(input:not(:disabled)):hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+}
+
+.wizard-step__option:has(input:focus-visible) {
+  border-color: var(--border-hover);
+  box-shadow: var(--focus-ring);
+}
+
+.wizard-step__option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.wizard-step__form > .input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .wizard-step__option small {
@@ -46,7 +76,13 @@
 
 .wizard-step__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.wizard-step__actions--split {
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .wizard-step__progress {

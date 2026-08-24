@@ -55,7 +55,7 @@ function normalizeVaultAddress() {
   return address;
 }
 
-function normalizeOptionalString(value) {
+function normalizeVaultOptionalString(value) {
   return value?.trim() || undefined;
 }
 
@@ -74,7 +74,7 @@ function readVaultCredentialFile(filePath, label, emptyMessage) {
 }
 
 function resolveVaultAuthMethod() {
-  const method = normalizeOptionalString(process.env.OPENCLAW_VAULT_AUTH_METHOD) ?? "token";
+  const method = normalizeVaultOptionalString(process.env.OPENCLAW_VAULT_AUTH_METHOD) ?? "token";
   if (
     method === "token" ||
     method === "token_file" ||
@@ -95,7 +95,7 @@ function resolveVaultTokenEnv() {
 }
 
 function resolveVaultTokenFile() {
-  const tokenFile = normalizeOptionalString(process.env.VAULT_TOKEN_FILE);
+  const tokenFile = normalizeVaultOptionalString(process.env.VAULT_TOKEN_FILE);
   if (!tokenFile) {
     throw new Error("VAULT_TOKEN_FILE is required.");
   }
@@ -229,7 +229,7 @@ function resolveVaultAuthMount(method) {
 }
 
 function resolveVaultAuthRole(method) {
-  const role = normalizeOptionalString(process.env.OPENCLAW_VAULT_AUTH_ROLE);
+  const role = normalizeVaultOptionalString(process.env.OPENCLAW_VAULT_AUTH_ROLE);
   if (!role) {
     throw new Error(`OPENCLAW_VAULT_AUTH_ROLE is required for ${method} auth.`);
   }
@@ -238,7 +238,7 @@ function resolveVaultAuthRole(method) {
 
 function resolveVaultJwt(method) {
   const jwtFile =
-    normalizeOptionalString(process.env.OPENCLAW_VAULT_JWT_FILE) ??
+    normalizeVaultOptionalString(process.env.OPENCLAW_VAULT_JWT_FILE) ??
     (method === "kubernetes" ? KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH : undefined);
   if (!jwtFile) {
     throw new Error("OPENCLAW_VAULT_JWT_FILE is required for jwt auth.");
@@ -317,7 +317,7 @@ async function classifyVaultClientToken(baseUrl, vaultToken) {
   return "unknown";
 }
 
-function readStringField(payload, parsedId) {
+function readVaultStringField(payload, parsedId) {
   const record = payload;
   const data = resolveKvVersion() === 2 ? record?.data?.data : record?.data;
   const value = data?.[parsedId.field];
@@ -366,7 +366,7 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
     }
     throw new Error(`Vault read failed for "${id}" (${response.status}).`);
   }
-  return readStringField(payload, parsedId);
+  return readVaultStringField(payload, parsedId);
 }
 
 async function resolveFromVault(ids) {

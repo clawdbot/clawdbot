@@ -1,7 +1,7 @@
 /**
  * Runtime helpers for reconciling compaction counts after subscribe events.
  */
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 
 /** Persist the highest observed compaction count after a successful subscribed run. */
@@ -16,7 +16,7 @@ export default async function reconcileSessionStoreCompactionCountAfterSuccess(p
   if (!sessionKey || observedCompactionCount <= 0) {
     return undefined;
   }
-  const storePath = resolveStorePath(configStore, { agentId });
+  const storePath = resolveSessionStorePathCore(configStore, { agentId });
   const nextEntry = await updateSessionEntry({ sessionKey, storePath }, async (entry) => {
     // The live stream and store can both observe compactions. Keep the max so
     // late lower-count updates cannot make future resume labels regress.

@@ -5,6 +5,60 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 
+type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
+  agentId?: string;
+};
+export type TestSessionCatalogProvider = Omit<
+  RegisteredSessionCatalogProvider,
+  "list" | "read" | "continueSession" | "archive" | "openTerminal"
+> & {
+  list: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
+  read: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
+  continueSession?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
+  archive?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
+  openTerminal?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
+};
+
+export function bindTestCatalogOwner(
+  provider: RegisteredSessionCatalogProvider,
+): TestSessionCatalogProvider {
+  return {
+    ...provider,
+    list: (params) => provider.list({ agentId: "main", ...params }),
+    read: (params) => provider.read({ agentId: "main", ...params }),
+    ...(provider.continueSession
+      ? {
+          continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
+        }
+      : {}),
+    ...(provider.archive
+      ? { archive: (params) => provider.archive!({ agentId: "main", ...params }) }
+      : {}),
+    ...(provider.openTerminal
+      ? {
+          openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
+        }
+      : {}),
+  } as TestSessionCatalogProvider;
+}
+
 export async function createPiStoreFixture(
   temporaryDirectories: string[],
   assistantText = "hi",
@@ -92,9 +146,13 @@ export async function installFakePiFixture(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-pi-cli-"),
   );
   temporaryDirectories.push(directory);
-  const executable = path.join(directory, "pi");
-  await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
-  await fs.chmod(executable, 0o755);
+  const bareExecutable = path.join(directory, "pi");
+  await fs.writeFile(bareExecutable, "#!/bin/sh\nexit 0\n");
+  if (process.platform === "win32") {
+    await fs.writeFile(path.join(directory, "pi.cmd"), "@echo off\r\nexit /b 0\r\n");
+  } else {
+    await fs.chmod(bareExecutable, 0o755);
+  }
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
   return directory;
 }
@@ -115,7 +173,7 @@ export function registerPiNodeHostCommands(): Parameters<
 }
 
 export function capturePiContinuationCatalog() {
-  let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
+  let provider: TestSessionCatalogProvider | undefined;
   const entries: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
   const createSessionEntry = vi.fn(
     async (
@@ -166,8 +224,8 @@ export function capturePiContinuationCatalog() {
         },
       },
     },
-    registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-      provider = value;
+    registerSessionCatalog: (value: RegisteredSessionCatalogProvider) => {
+      provider = bindTestCatalogOwner(value);
     },
     registerNodeHostCommand: vi.fn(),
     registerNodeInvokePolicy: vi.fn(),

@@ -17,7 +17,7 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+  sendDurableMessageBatchCore: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
 }));
 
 vi.mock("../utils/message-channel.js", () => ({

@@ -137,6 +137,48 @@ module.exports = {
   );
 }
 
+function writeLegacyRuntimeDoctorPlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+  importedSymbols: readonly string[];
+}): void {
+  fs.mkdirSync(path.join(params.pluginRoot, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      doctorContract: { configRepair: true },
+      configSchema: {},
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "package.json"),
+    JSON.stringify({
+      name: `@openclaw/${params.pluginId}`,
+      version: "2026.7.2-beta.7",
+      type: "module",
+      openclaw: { extensions: ["./dist/index.js"] },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(params.pluginRoot, "dist", "index.js"), "export {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "dist", "doctor-contract-api.js"),
+    `import { ${params.importedSymbols.join(", ")} } from "openclaw/plugin-sdk/runtime-doctor";
+const importedHelpers = [${params.importedSymbols.join(", ")}];
+if (importedHelpers.some((helper) => typeof helper !== "function")) {
+  throw new Error("legacy runtime-doctor helper missing");
+}
+export const legacyConfigRules = [{
+  path: ["plugins", "entries", ${JSON.stringify(params.pluginId)}, "config", "legacyDoctor"],
+  message: ${JSON.stringify(`${params.pluginId} legacy doctor contract loaded`)},
+}];
+`,
+    "utf8",
+  );
+}
+
 function writeLegacyChannelMigrationPlugin(params: {
   pluginRoot: string;
   pluginId: string;
@@ -527,6 +569,48 @@ describe("doctor contract registry load-path plugins", () => {
       {
         path: ["plugins", "entries", pluginId, "config", "distOnly"],
         message: "dist doctor contract warning",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      pluginId: "clickclack-legacy-doctor",
+      importedSymbols: ["asObjectRecord"],
+    },
+    {
+      pluginId: "codex-legacy-doctor",
+      importedSymbols: ["archiveLegacyStateSource", "legacyStateFileExists"],
+    },
+    {
+      pluginId: "discord-legacy-doctor",
+      importedSymbols: [
+        "asObjectRecord",
+        "collectChannelAccountScopes",
+        "collectProviderDangerousNameMatchingScopes",
+        "defineChannelAliasMigration",
+        "defineKeyMoveMigration",
+        "hasLegacyAccountStreamingAliases",
+        "normalizeChannelAccounts",
+        "stripRetiredChannelKeys",
+      ],
+    },
+  ])("loads the preserved $pluginId package contract", ({ pluginId, importedSymbols }) => {
+    const stateDir = tempDirs.make("openclaw-doctor-contract-legacy-package-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-legacy-package-");
+    writeLegacyRuntimeDoctorPlugin({ pluginRoot, pluginId, importedSymbols });
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+
+    expect(
+      listPluginDoctorLegacyConfigRules({
+        config,
+        env: makeHermeticDoctorEnv(stateDir),
+        pluginIds: [pluginId],
+      }),
+    ).toEqual([
+      {
+        path: ["plugins", "entries", pluginId, "config", "legacyDoctor"],
+        message: `${pluginId} legacy doctor contract loaded`,
       },
     ]);
   });

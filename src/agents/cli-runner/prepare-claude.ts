@@ -15,7 +15,7 @@ export const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "fable-5": "claude-fable-5",
 };
 
-export function resolveNodeClaudePlacement(params: {
+export function detectNodeClaudePlacement(params: {
   backendId: string;
   execHost?: string;
   execNode?: string;

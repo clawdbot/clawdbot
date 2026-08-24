@@ -13,12 +13,13 @@ import {
 import {
   addSessionMember,
   listSessionMembers,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   removeSessionMember,
 } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   allowedSessionVisibilities,
   canManageSessionSharing,
@@ -29,7 +30,6 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -63,10 +63,19 @@ function requireManageableTarget(params: {
   agentId?: string;
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"];
 }) {
+  const requestedAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.sessionKey,
+    params.agentId,
+  );
+  if (!requestedAgent.ok) {
+    params.respond(false, undefined, requestedAgent.error);
+    return null;
+  }
   const target = resolveSessionSharingTarget({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    agentId: requestedAgent.agentId,
   });
   if (!target) {
     params.respond(
@@ -76,7 +85,7 @@ function requireManageableTarget(params: {
     );
     return null;
   }
-  const role = resolveSessionSharingRole({ client: params.client, target });
+  const role = resolveSessionSharingRole({ client: params.client, cfg: params.cfg, target });
   if (!canManageSessionSharing(role)) {
     params.respond(
       false,
@@ -107,7 +116,11 @@ function requireCurrentManagedTarget(params: {
   if (!current || current.entry.sessionId !== params.authorized.entry.sessionId) {
     throw new Error("session changed before sharing mutation");
   }
-  const role = resolveSessionSharingRole({ client: params.client, target: current });
+  const role = resolveSessionSharingRole({
+    client: params.client,
+    cfg: params.cfg,
+    target: current,
+  });
   if (!canManageSessionSharing(role)) {
     throw new Error("session ownership changed before sharing mutation");
   }
@@ -131,7 +144,7 @@ function knownSessionIdentities(params: {
     });
   };
   remember(params.actor);
-  for (const entry of Object.values(loadCombinedSessionStoreForGateway(params.cfg).store)) {
+  for (const entry of Object.values(loadCombinedSessionStoreForGatewayCore(params.cfg).store)) {
     remember(entry.createdActor ?? null);
   }
   for (const profile of listProfiles()) {
@@ -216,7 +229,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       // session-id check at the storage boundary so an out-of-band row
       // replacement still cannot inherit this visibility change.
       let sessionChanged = false;
-      await patchSessionEntry(scope, (entry) => {
+      await patchSessionEntryCore(scope, (entry) => {
         if (entry.sessionId !== current.entry.sessionId) {
           sessionChanged = true;
           return null;
@@ -226,28 +239,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       if (sessionChanged) {
         throw new Error("session changed before sharing mutation");
       }
-      invalidateSessionSharingSnapshot(current.canonicalKey);
       const now = Date.now();
       const actor = actorIdentity(client);
-      try {
-        await appendSessionAudit({
-          cfg,
-          target: { ...current, sessionKey: current.storeKey },
-          text: `${actor.label ?? actor.id} changed session visibility from ${previous} to ${visibility}.`,
-          now,
-        });
-      } catch (error) {
-        // Roll back only the exact instance and value we patched; an unexpected
-        // storage-owner replacement must not inherit the old visibility.
-        await patchSessionEntry(scope, (entry) =>
-          entry.sessionId === current.entry.sessionId &&
-          resolveSessionVisibility(entry) === visibility
-            ? { visibility: previous }
-            : null,
-        );
-        invalidateSessionSharingSnapshot(current.canonicalKey);
-        throw error;
-      }
       publishSharingChange({
         context,
         agentId: current.agentId,
@@ -360,17 +353,6 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       if (!added.inserted) {
         return;
       }
-      try {
-        await appendSessionAudit({
-          cfg,
-          target: { ...current, sessionKey: current.storeKey },
-          text: `${actor.label ?? actor.id} added ${params.identityId} as a session member.`,
-          now,
-        });
-      } catch (error) {
-        removeSessionMember(scope, params.identityId, added.member, current.entry.sessionId);
-        throw error;
-      }
       publishSharingChange({
         context,
         agentId: current.agentId,
@@ -431,22 +413,6 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       const now = Date.now();
       const actor = actorIdentity(client);
-      try {
-        await appendSessionAudit({
-          cfg,
-          target: { ...current, sessionKey: current.storeKey },
-          text: `${actor.label ?? actor.id} removed ${params.identityId} from session members.`,
-          now,
-        });
-      } catch (error) {
-        addSessionMember(scope, {
-          identityId: removed.identityId,
-          addedBy: removed.addedBy,
-          addedAt: removed.addedAt,
-          expectedSessionId: current.entry.sessionId,
-        });
-        throw error;
-      }
       publishSharingChange({
         context,
         agentId: current.agentId,

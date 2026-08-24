@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const sharedClientMocks = vi.hoisted(() => ({
@@ -29,7 +29,6 @@ import {
   readCodexComputerUseStatus,
   type CodexComputerUseStatus,
 } from "./computer-use.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 type CodexComputerUseRequest = NonNullable<
   NonNullable<Parameters<typeof ensureCodexComputerUse>[0]>["request"]
@@ -155,6 +154,74 @@ describe("Codex Computer Use setup", () => {
     expect(contenderAcquired).toBe(true);
     expect(client.closeAndRunAfterExit).not.toHaveBeenCalled();
     expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(client);
+  });
+
+  it("releases the install mutation fence before the guarded readiness thread", async () => {
+    const agentDir = "/tmp/openclaw-computer-use-guarded-install-agent";
+    const pluginConfig = {
+      computerUse: { marketplaceName: "desktop-tools", liveTestTimeoutMs: 150 },
+    };
+    const startOptions = resolveCodexAppServerRuntimeOptions({
+      pluginConfig,
+      managedCommandOrder: "desktop-first",
+    }).start;
+    const fenceKey = resolveCodexNativeConfigFenceKey({ startOptions, agentDir });
+    expect(fenceKey).toBeTypeOf("string");
+
+    const harness = createClientHarness();
+    harness.client.setThreadSessionRequestGuard((options) =>
+      acquireCodexNativeConfigFence(fenceKey as string, options),
+    );
+    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
+    const fixture = createComputerUseRequest({ installed: false });
+    let cursor = 0;
+    const readFrame = async (method: string) => {
+      await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(cursor), {
+        timeout: 1_000,
+      });
+      const frame = JSON.parse(harness.writes[cursor++] ?? "{}") as {
+        id: number;
+        method: string;
+        params?: unknown;
+      };
+      expect(frame.method).toBe(method);
+      return frame;
+    };
+    const answerFrame = async (frame: { id: number; method: string; params?: unknown }) => {
+      const result = await fixture(frame.method, frame.params);
+      harness.send({ id: frame.id, result: result ?? null });
+    };
+    const answer = async (method: string) => answerFrame(await readFrame(method));
+
+    const install = installCodexComputerUse({ pluginConfig, agentDir, timeoutMs: 2_000 });
+    void install.catch(() => undefined);
+    await answer("experimentalFeature/enablement/set");
+    await answer("plugin/list");
+    await answer("plugin/read");
+    const mutation = await readFrame("plugin/install");
+    await expect(
+      acquireCodexNativeConfigFence(fenceKey as string, {
+        timeoutMs: 10,
+        timeoutMessage: "mutation fence held",
+      }),
+    ).rejects.toThrow("mutation fence held");
+    await answerFrame(mutation);
+    await answer("config/mcpServer/reload");
+    await answer("plugin/read");
+    await answer("mcpServerStatus/list");
+    await answer("thread/start");
+    await answer("mcpServer/tool/call");
+    await answer("thread/unsubscribe");
+    await answer("thread/archive");
+
+    await expect(install).resolves.toMatchObject({
+      ready: true,
+      liveTest: { status: "passed", attempts: 1 },
+    });
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
+      harness.client,
+    );
+    harness.client.close();
   });
 
   it.each(["abort", "timeout"] as const)(

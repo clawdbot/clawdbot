@@ -19,7 +19,6 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import {
   firstDefined,
@@ -30,6 +29,8 @@ import {
 } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
+import type { TelegramThreadSpec } from "../thread-spec.js";
+import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
   buildSenderLabel,
   buildSenderName,
@@ -53,6 +54,7 @@ export type {
   TelegramMediaKind,
   TelegramTextEntity,
 } from "./body-helpers.js";
+export type { TelegramThreadSpec } from "../thread-spec.js";
 export {
   buildSenderLabel,
   buildSenderName,
@@ -69,10 +71,6 @@ export const TELEGRAM_GENERAL_TOPIC_ID = 1;
 const TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS = 1024;
 const TELEGRAM_FORUM_FLAG_CACHE_TTL_MS = 10 * 60_000;
 const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum: boolean }>();
-
-export function resetTelegramForumFlagCacheForTest(): void {
-  telegramForumFlagByChatId.clear();
-}
 
 function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs = Date.now()) {
   const cacheKey = String(chatId);
@@ -101,12 +99,6 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
 function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
   return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
 }
-
-export type TelegramThreadSpec = {
-  id?: number;
-  /** dm is the historical bot-private topic scope. */
-  scope: "direct-messages" | "dm" | "forum" | "none";
-};
 
 type TelegramThreadParams = {
   direct_messages_topic_id?: number;
@@ -237,6 +229,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     topicConfig?: TelegramTopicConfig;
   };
 }): Promise<{
+  threadSpec: TelegramThreadSpec;
   resolvedThreadId?: number;
   dmThreadId?: number;
   storeAllowFrom: string[];
@@ -293,6 +286,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
+    threadSpec,
     resolvedThreadId,
     dmThreadId,
     storeAllowFrom,
@@ -500,13 +494,12 @@ export function buildTelegramRoutingTarget(
 ): string {
   const base = `telegram:${chatId}`;
   const threadParams = buildTelegramThreadParams(thread);
-  if (typeof threadParams?.direct_messages_topic_id === "number") {
+  if (threadParams?.direct_messages_topic_id != null) {
     return `${base}:direct-topic:${threadParams.direct_messages_topic_id}`;
   }
-  if (typeof threadParams?.message_thread_id !== "number") {
-    return base;
-  }
-  return `${base}:topic:${threadParams.message_thread_id}`;
+  return threadParams?.message_thread_id != null
+    ? `${base}:topic:${threadParams.message_thread_id}`
+    : base;
 }
 
 /**
@@ -540,31 +533,19 @@ export function resolveTelegramStreamMode(telegramCfg?: {
   return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
-export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
-  return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+export function buildTelegramGroupPeerId(
+  chatId: number | string,
+  thread?: number | TelegramThreadSpec,
+) {
+  const threadSpec = typeof thread === "number" ? { id: thread, scope: "forum" as const } : thread;
+  return buildTelegramConversationId({ chatId, thread: threadSpec ?? { scope: "none" } });
 }
 
-/**
- * Resolve the direct-message peer identifier for Telegram routing/session keys.
- *
- * In some Telegram DM deliveries (for example certain business/chat bridge flows),
- * `chat.id` can differ from the actual sender user id. Prefer sender id when present
- * so per-peer DM scopes isolate users correctly.
- */
-export function resolveTelegramDirectPeerId(params: {
-  chatId: number | string;
-  senderId?: number | string | null;
-}) {
-  const senderId =
-    params.senderId != null ? (normalizeOptionalString(String(params.senderId)) ?? "") : "";
-  if (senderId) {
-    return senderId;
-  }
-  return String(params.chatId);
-}
-
-export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
-  return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
+export function buildTelegramGroupFrom(
+  chatId: number | string,
+  thread?: number | TelegramThreadSpec,
+) {
+  return `telegram:group:${buildTelegramGroupPeerId(chatId, thread)}`;
 }
 
 export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): boolean {
@@ -581,7 +562,7 @@ export function resolveTelegramCommandAuthorization(params: {
   accountId: string;
   chatId: number;
   isGroup: boolean;
-  resolvedThreadId?: number;
+  threadSpec: TelegramThreadSpec;
   senderId?: string;
   senderUsername?: string;
 }): CommandAuthorization {
@@ -593,7 +574,7 @@ export function resolveTelegramCommandAuthorization(params: {
       AccountId: params.accountId,
       ChatType: params.isGroup ? "group" : "direct",
       From: params.isGroup
-        ? buildTelegramGroupFrom(params.chatId, params.resolvedThreadId)
+        ? buildTelegramGroupFrom(params.chatId, params.threadSpec)
         : `telegram:${params.chatId}`,
       SenderId: params.senderId || undefined,
       SenderUsername: params.senderUsername || undefined,

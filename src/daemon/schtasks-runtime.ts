@@ -512,10 +512,10 @@ export async function readScheduledTaskRuntime(
       return resolveFallbackRuntime(env);
     }
     const detail = (res.stderr || res.stdout).trim();
-    const missing = normalizeLowercaseStringOrEmpty(detail).includes("cannot find the file");
+    const missing = probeScheduledTaskExists(taskName) === false;
     return {
       status: missing ? "stopped" : "unknown",
-      detail: detail || undefined,
+      ...(!missing && detail ? { detail } : {}),
       missingUnit: missing,
     };
   }

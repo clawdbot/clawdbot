@@ -1,3 +1,4 @@
+import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -11,7 +12,7 @@ import {
   createBeforeGitMutation,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
-  runGitUpdate,
+  updateGitInstall,
 } from "./update-command-git.js";
 import {
   captureOwnedManagedUpdateContext,
@@ -53,7 +54,7 @@ export async function executeMutableUpdate(params: {
   showProgress: boolean;
   opts: UpdateCommandOptions;
   shouldRestart: boolean;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
   packageInstallTarget?: ResolvedGlobalInstallTarget;
@@ -211,7 +212,7 @@ export async function executeMutableUpdate(params: {
               installEnv: params.packageInstallEnv,
               installTarget: params.packageInstallTarget,
             })
-          : await runGitUpdate({
+          : await updateGitInstall({
               root: params.root,
               switchToGit: params.switchToGit,
               installKind: params.installKind,
@@ -223,7 +224,7 @@ export async function executeMutableUpdate(params: {
               showProgress: params.showProgress,
               opts: params.opts,
               stop: params.stop,
-              devTargetRef: params.devTargetRef,
+              devTarget: params.devTarget,
               beforeGitMutation:
                 params.updateInstallKind === "git"
                   ? createBeforeGitMutation({

@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { buildOpenAIResponsesReplayContext } from "../transports/openai-responses-compaction-replay.js";
 import type { Context, Model } from "../types.js";
+import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import {
   streamAzureOpenAIResponses,
   streamSimpleAzureOpenAIResponses,
-  testing,
 } from "./azure-openai-responses.js";
 
 const azureResponsesModel = {
@@ -26,59 +26,63 @@ const context = {
 } satisfies Context;
 
 describe("azure-openai-responses", () => {
-  it("keeps traditional Azure OpenAI hosts on the AzureOpenAI client path", () => {
-    const config = testing.resolveAzureConfig(azureResponsesModel, {
-      azureResourceName: "example",
-      azureApiVersion: "v1",
-    });
-
-    expect(config).toEqual({
-      baseUrl: "https://example.openai.azure.com/openai/v1",
-      apiVersion: "v1",
-    });
-    expect(testing.isOpenAICompatibleAzureResponsesBaseUrl(config.baseUrl)).toBe(false);
-    expect(
-      testing.isOpenAICompatibleAzureResponsesBaseUrl(
-        "https://example.cognitiveservices.azure.com/openai/v1",
-      ),
-    ).toBe(false);
-  });
-
-  it("uses the OpenAI-compatible client path for Foundry /openai/v1 endpoints", () => {
-    expect(
-      testing.isOpenAICompatibleAzureResponsesBaseUrl(
-        "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
-      ),
-    ).toBe(true);
-    expect(
-      testing.isOpenAICompatibleAzureResponsesBaseUrl(
-        "https://project.services.ai.azure.com/openai/v1",
-      ),
-    ).toBe(true);
-    expect(
-      testing.isOpenAICompatibleAzureResponsesBaseUrl(
-        "https://eastus.api.cognitive.microsoft.com/openai/v1",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat non-v1 custom endpoints as OpenAI-compatible Responses bases", () => {
-    expect(
-      testing.isOpenAICompatibleAzureResponsesBaseUrl(
-        "https://project.services.ai.azure.com/api/projects/demo",
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps private or APIM Azure OpenAI-compatible paths on the AzureOpenAI client path", () => {
-    expect(testing.isOpenAICompatibleAzureResponsesBaseUrl("https://aoai.internal/openai/v1")).toBe(
+  it.each([
+    ["traditional resource host", "https://example.openai.azure.com/openai/v1", false],
+    [
+      "traditional cognitive services host",
+      "https://example.cognitiveservices.azure.com/openai/v1",
       false,
-    );
-    expect(
-      testing.isOpenAICompatibleAzureResponsesBaseUrl(
-        "https://gateway.example.com/proxy/openai/v1",
-      ),
-    ).toBe(false);
+    ],
+    [
+      "Foundry project endpoint",
+      "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
+      true,
+    ],
+    ["Foundry root endpoint", "https://project.services.ai.azure.com/openai/v1", true],
+    ["cognitive API endpoint", "https://eastus.api.cognitive.microsoft.com/openai/v1", true],
+    [
+      "Foundry endpoint without /openai/v1",
+      "https://project.services.ai.azure.com/api/projects/demo",
+      false,
+    ],
+    ["private endpoint", "https://aoai.internal/openai/v1", false],
+    ["APIM proxy endpoint", "https://gateway.example.com/proxy/openai/v1", false],
+  ])("classifies the %s client path", (_name, baseUrl, expected) => {
+    expect(isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)).toBe(expected);
+  });
+
+  it("uses the configured Azure resource host and API version at the stream boundary", async () => {
+    const previousBaseUrl = process.env.AZURE_OPENAI_BASE_URL;
+    let requestUrl: URL | undefined;
+    configureAiTransportHost({
+      buildModelFetch: () => async (input) => {
+        requestUrl = new URL(input instanceof Request ? input.url : input.toString());
+        return Response.json({ error: { message: "captured" } }, { status: 400 });
+      },
+    });
+    delete process.env.AZURE_OPENAI_BASE_URL;
+    try {
+      await streamAzureOpenAIResponses(
+        { ...azureResponsesModel, provider: "azure-openai-responses" },
+        context,
+        {
+          apiKey: "test-api-key",
+          azureApiVersion: "2026-07-01-preview",
+          azureResourceName: "configured-resource",
+        },
+      ).result();
+    } finally {
+      configureAiTransportHost({});
+      if (previousBaseUrl === undefined) {
+        delete process.env.AZURE_OPENAI_BASE_URL;
+      } else {
+        process.env.AZURE_OPENAI_BASE_URL = previousBaseUrl;
+      }
+    }
+
+    expect(requestUrl?.origin).toBe("https://configured-resource.openai.azure.com");
+    expect(requestUrl?.pathname).toBe("/openai/v1/responses");
+    expect(requestUrl?.searchParams.get("api-version")).toBe("2026-07-01-preview");
   });
 
   it("sends a case-insensitively resolved deployment name", async () => {

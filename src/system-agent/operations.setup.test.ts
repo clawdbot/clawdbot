@@ -233,7 +233,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).not.toHaveBeenCalled();
 
     const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work" },
+      { kind: "setup", workspace: "/tmp/work", agentName: "robby" },
       runtime,
       {
         approved: true,
@@ -248,6 +248,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
+        firstAgent: { name: "robby" },
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,
@@ -492,6 +493,7 @@ describe("parseSystemAgentOperation", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
+          systemAgent: { agentId: "main" },
         },
         entries: { main: { default: true, workspace: "/tmp/main" } },
       },
@@ -598,6 +600,9 @@ describe("parseSystemAgentOperation", () => {
     expect(
       requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
     ).toEqual({ primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.2"] });
+    expect(
+      requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").systemAgent,
+    ).toEqual({ agentId: "main" });
     expect(requireRecord(persisted.agents, "agents").entries).toEqual({
       main: { default: true, workspace: "/tmp/main" },
       work: { workspace: "/tmp/work" },
@@ -638,18 +643,20 @@ describe("parseSystemAgentOperation", () => {
 
   it.each([
     {
-      field: "default agent",
+      field: "system agent",
       initial: {
         agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            systemAgent: { agentId: "main" },
+          },
           entries: { main: { default: true }, work: {} },
         },
       },
       change: (config: TestConfig) => {
         const next = structuredClone(config);
-        const entries = requireRecord(requireRecord(next.agents, "agents").entries, "entries");
-        delete requireRecord(entries.main, "main").default;
-        requireRecord(entries.work, "work").default = true;
+        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
+        defaults.systemAgent = { agentId: "work" };
         return next;
       },
     },

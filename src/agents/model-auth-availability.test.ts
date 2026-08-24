@@ -5,7 +5,8 @@ import type {
   ProviderModelRouteResolution,
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
@@ -59,6 +60,7 @@ function evaluate(params: {
   preparedRuntimeAuthStore?: AuthProfileStore;
   syntheticAuthProviderRefs?: readonly string[];
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
 }) {
   return createModelAuthAvailabilityResolver({
     cfg: (params.cfg ?? {}) as OpenClawConfig,
@@ -68,6 +70,7 @@ function evaluate(params: {
     syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     preparedRuntimeAuthStore: params.preparedRuntimeAuthStore,
+    preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
   }).evaluateModelAuth("openai", params.ref);
 }
 
@@ -157,6 +160,67 @@ describe("createModelAuthAvailabilityResolver", () => {
       });
     },
   );
+
+  it("keeps successful harness auth scoped to the exact model route", () => {
+    const materialization = {
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+      requestTransportOverrides: "none",
+      authMode: "oauth",
+      runtimeOwnerId: "codex",
+    } as const;
+    const store = authStore({
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    });
+
+    expect(
+      evaluate({
+        store,
+        ref: { modelId: "gpt-5.4" },
+        preparedRuntimeAuthMaterializations: [materialization],
+      }),
+    ).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      selectedRoute: subscriptionRoute,
+    });
+    expect(
+      evaluate({
+        store,
+        ref: { modelId: "gpt-5.5" },
+        preparedRuntimeAuthMaterializations: [materialization],
+      }).availability,
+    ).not.toBe(true);
+    expect(
+      evaluate({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                apiKey: "configured-platform-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        store,
+        ref: { modelId: "gpt-5.4" },
+        preparedRuntimeAuthMaterializations: [materialization],
+      }),
+    ).toMatchObject({
+      availability: true,
+      evidence: "provider-config",
+      selectedRoute: platformRoute,
+    });
+  });
 
   it.each([
     { label: "resolved", key: "runtime-key", availability: true },
@@ -656,6 +720,62 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
+  it("does not grant refresh authority to an unsupported external CLI id", () => {
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {} as OpenClawConfig,
+      authStore: authStore({
+        "acme:cli": {
+          type: "oauth",
+          provider: "acme-cli",
+          access: "expired-access",
+          refresh: "stored-refresh",
+          expires: Date.now() - 60_000,
+        },
+      }),
+      env: {},
+      externalCliProviderIds: ["acme-cli"],
+      routeResolverFactory: routeResolverFactory(null),
+    });
+
+    expect(resolver.resolveProviderAuthAvailability("acme-cli")).toBeUndefined();
+  });
+
+  it("does not grant CLI refresh authority to an unowned sibling profile", () => {
+    const cliProfileId = "anthropic:claude-cli";
+    const manualProfileId = "anthropic:manual";
+    const store = authStore({
+      [cliProfileId]: {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "expired-cli-access",
+        refresh: "cli-owned-refresh",
+        expires: Date.now() - 60_000,
+      },
+      [manualProfileId]: {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "expired-manual-access",
+        refresh: "manual-refresh",
+        expires: Date.now() - 60_000,
+      },
+    });
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: { auth: { order: { "claude-cli": [manualProfileId] } } } as OpenClawConfig,
+      authStore: store,
+      preparedRuntimeAuthStore: Object.assign({}, store, {
+        runtimeExternalCliProfileIds: [cliProfileId],
+      }),
+      env: {},
+      routeResolverFactory: routeResolverFactory(null),
+    });
+
+    expect(
+      resolver.resolveProviderAuthAvailability("claude-cli", {
+        lockedProfileId: manualProfileId,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not borrow usable auth from a later sibling route after an unresolved ordered profile", () => {
     const result = evaluate({
       cfg: { auth: { order: { openai: ["openai:unknown", "openai:chatgpt"] } } },
@@ -753,6 +873,15 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
     expect(result).not.toHaveProperty("selectedAuthMode");
     expect(result).not.toHaveProperty("selectedRoute");
+  });
+
+  it("keeps one unconfigured Codex route indeterminate until native account validation", () => {
+    expect(
+      evaluate({
+        resolution: { ...dualRoutes, routes: [subscriptionRoute] },
+        syntheticAuthProviderRefs: ["codex"],
+      }),
+    ).toMatchObject({ availability: undefined, evidence: "synthetic" });
   });
 
   it("does not let invalid automatic profile evidence block synthetic Codex ownership", () => {

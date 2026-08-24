@@ -254,7 +254,7 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
 function formatWriteCall(
   args: { path?: string; file_path?: string; content?: string } | undefined,
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   cache: WriteHighlightCache | undefined,
 ): string {
   const rawPath = str(args?.file_path ?? args?.path);
@@ -295,7 +295,7 @@ function formatWriteResult(
     }>;
     isError?: boolean;
   },
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string | undefined {
   if (!result.isError) {
     return undefined;

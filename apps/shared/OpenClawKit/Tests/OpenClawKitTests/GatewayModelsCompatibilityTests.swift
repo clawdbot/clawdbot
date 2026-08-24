@@ -67,6 +67,19 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `device pair setup results decode older gateway payloads`() throws {
+        let result = try JSONDecoder().decode(
+            DevicePairSetupCodeResult.self,
+            from: Data(
+                #"{"setupCode":"opaque-code","gatewayUrl":"wss://gateway.example","auth":"token","urlSource":"gateway.remote.url"}"#
+                    .utf8))
+
+        #expect(result.setupid == nil)
+        #expect(result.expiresatms == nil)
+        #expect(result.setupcode == "opaque-code")
+    }
+
+    @Test
     func `generated models ignore additive gateway fields`() throws {
         let result = try JSONDecoder().decode(
             SessionsGroupsListResult.self,

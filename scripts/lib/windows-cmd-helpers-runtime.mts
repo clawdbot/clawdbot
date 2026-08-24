@@ -1,10 +1,8 @@
 // Typed bridge to the plain-Node Windows command helpers.
+import { isRecord } from "./record-shared.mjs";
+
 const runtimeSpecifier = "../windows-cmd-helpers.mjs";
 const runtime: unknown = await import(runtimeSpecifier);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function runtimeFunction(name: string): (...args: unknown[]) => unknown {
   if (!isRecord(runtime) || !(name in runtime)) {

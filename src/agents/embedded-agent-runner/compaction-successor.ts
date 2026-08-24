@@ -3,8 +3,11 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+  type SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult } from "../../context-engine/types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -82,7 +85,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
         })
       : undefined;
     const markerMatches = marker
-      ? listSessionEntries({
+      ? listSessionEntriesCore({
           agentId: marker.agentId,
           storePath: marker.storePath,
         }).filter(({ entry }) => entry.sessionId === marker.sessionId)

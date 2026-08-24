@@ -16,8 +16,7 @@ import {
   type MeetingRealtimeAudioEngineHandle,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import {

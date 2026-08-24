@@ -1,4 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
@@ -11,34 +14,59 @@ import type {
 } from "./tools/cron-tool.types.js";
 
 type CronCreatorAuthorityResolver = NonNullable<CronToolOptions["resolveCreatorToolAuthority"]>;
+type CronCreatorAuthorityMaterializer = (options?: {
+  signal?: AbortSignal;
+}) => Promise<CronCreatorToolAuthorityMaterialization>;
 
 type CronCreatorAuthorityResolverScope = {
-  resolve: (options?: { signal?: AbortSignal }) => Promise<CronCreatorToolAuthorityMaterialization>;
+  resolve: CronCreatorAuthorityMaterializer;
   runId: string;
 };
+
+/** Opaque in-process capability minted only by an admitted exact run. */
+export type CronCreatorAuthorityCapability = CronCreatorAuthorityRunScope;
+
+export function createCronCreatorAuthorityCapability(
+  runId: string,
+  callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
+): CronCreatorAuthorityCapability | undefined {
+  const normalizedRunId = runId.trim();
+  return normalizedRunId
+    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin)
+    : undefined;
+}
 
 const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();
 const activeCronCreatorAuthorityResolver =
   new AsyncLocalStorage<CronCreatorAuthorityResolverScope>();
 
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return false;
-  }
-  return "then" in value && typeof value.then === "function";
+export function shouldAdmitFreshChannelOwnerCronAuthority(params: {
+  senderIsOwner: boolean;
+  messageProvider?: string;
+  senderId?: string;
+  isHeartbeat: boolean;
+  isRoomEvent: boolean;
+  inputProvenance?: unknown;
+  spawnedBy?: string;
+  suppressNextUserMessagePersistence?: boolean;
+}): boolean {
+  return (
+    params.senderIsOwner &&
+    Boolean(params.messageProvider) &&
+    Boolean(normalizeOptionalString(params.senderId)) &&
+    !params.isHeartbeat &&
+    !params.isRoomEvent &&
+    params.inputProvenance === undefined &&
+    params.spawnedBy === undefined &&
+    params.suppressNextUserMessagePersistence !== true
+  );
 }
-
-/** Keeps fresh cron reauthorization within one admitted Gateway agent run. */
-export function runWithCronCreatorAuthority<T>(
-  runId: string,
+/** Owns one explicitly transported creator-authority capability until run settlement. */
+export function runWithCronCreatorAuthorityCapability<T>(
+  scope: CronCreatorAuthorityCapability,
   run: () => T,
   signal?: AbortSignal,
 ): T {
-  const normalizedRunId = runId.trim();
-  if (!normalizedRunId) {
-    return run();
-  }
-  const scope = createCronCreatorAuthorityRunScope(normalizedRunId);
   const revoke = () => revokeCronCreatorAuthorityRunScope(scope);
   signal?.addEventListener("abort", revoke, { once: true });
   if (signal?.aborted) {
@@ -62,10 +90,64 @@ export function runWithCronCreatorAuthority<T>(
   }
 }
 
+/** Combines an admitted capability with a late exact-thread tool-surface resolver. */
+function bindCronCreatorAuthorityResolver(params: {
+  capability: CronCreatorAuthorityCapability | undefined;
+  runId: string | undefined;
+  resolve: CronCreatorAuthorityMaterializer;
+}): CronCreatorAuthorityResolver | undefined {
+  const normalizedRunId = params.runId?.trim();
+  const authority = params.capability;
+  if (!normalizedRunId || authority?.active !== true || authority.runId !== normalizedRunId) {
+    return undefined;
+  }
+  return async (options) => {
+    // Tool callbacks can run after construction; retain the exact scope object
+    // and let its owner revoke it when the admitted run settles.
+    const operationSignal = options?.signal;
+    authority.signal.throwIfAborted();
+    operationSignal?.throwIfAborted();
+    const signal = operationSignal
+      ? AbortSignal.any([authority.signal, operationSignal])
+      : authority.signal;
+    const snapshot = await params.resolve({ signal });
+    authority.signal.throwIfAborted();
+    operationSignal?.throwIfAborted();
+    if (!authority.active) {
+      authority.signal.throwIfAborted();
+    }
+    return Object.freeze({
+      tools: snapshot.tools,
+      provenance: snapshot.provenance,
+      grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
+    });
+  };
+}
+
+/** Installs an explicitly transported capability only for synchronous tool construction. */
+export function runWithCronCreatorAuthorityCapabilityResolver<T>(params: {
+  capability: CronCreatorAuthorityCapability | undefined;
+  runId: string | undefined;
+  resolve: CronCreatorAuthorityMaterializer;
+  run: () => T;
+}): T {
+  const normalizedRunId = params.runId?.trim();
+  const authority = params.capability;
+  if (!normalizedRunId || authority?.active !== true || authority.runId !== normalizedRunId) {
+    return params.run();
+  }
+  return activeCronCreatorAuthority.run(authority, () =>
+    activeCronCreatorAuthorityResolver.run(
+      { runId: normalizedRunId, resolve: params.resolve },
+      params.run,
+    ),
+  );
+}
+
 /** Carries a bundled-Codex resolver through synchronous core tool construction. */
 export function runWithCronCreatorAuthorityResolver<T>(params: {
   runId: string;
-  resolve: (options?: { signal?: AbortSignal }) => Promise<CronCreatorToolAuthorityMaterialization>;
+  resolve: CronCreatorAuthorityMaterializer;
   run: () => T;
 }): T {
   return activeCronCreatorAuthorityResolver.run(
@@ -81,33 +163,41 @@ export function bindActiveCronCreatorAuthorityResolver(
   const authority = activeCronCreatorAuthority.getStore();
   const resolver = activeCronCreatorAuthorityResolver.getStore();
   const normalizedRunId = runId?.trim();
+  if (!normalizedRunId || resolver?.runId !== normalizedRunId) {
+    return undefined;
+  }
+  return bindCronCreatorAuthorityResolver({
+    capability: authority,
+    runId: normalizedRunId,
+    resolve: resolver.resolve,
+  });
+}
+
+/** Retains the exact admitted owner turn only while its run scope remains live. */
+export function bindActiveOperatorTurnAuthority(runId: string | undefined):
+  | {
+      source: "channel-owner" | "local";
+      assertActive: () => void;
+    }
+  | undefined {
+  const authority = activeCronCreatorAuthority.getStore();
+  const normalizedRunId = runId?.trim();
   if (
     !normalizedRunId ||
     authority?.active !== true ||
     authority.runId !== normalizedRunId ||
-    resolver?.runId !== normalizedRunId
+    authority.callerOrigin.kind === "unknown"
   ) {
     return undefined;
   }
-  return async (options) => {
-    // Tool callbacks can run on async resources created outside the ALS scope,
-    // so retain the exact scope object and revoke it when the run settles.
-    const operationSignal = options?.signal;
-    authority.signal.throwIfAborted();
-    operationSignal?.throwIfAborted();
-    const signal = operationSignal
-      ? AbortSignal.any([authority.signal, operationSignal])
-      : authority.signal;
-    const snapshot = await resolver.resolve({ signal });
-    authority.signal.throwIfAborted();
-    operationSignal?.throwIfAborted();
-    if (!authority.active) {
+  return {
+    source: authority.callerOrigin.kind === "local" ? "local" : "channel-owner",
+    assertActive: () => {
       authority.signal.throwIfAborted();
-    }
-    return Object.freeze({
-      tools: snapshot.tools,
-      provenance: snapshot.provenance,
-      grant: mintCronCreatorAuthorityGrant(authority, operationSignal),
-    });
+      if (!authority.active || authority.runId !== normalizedRunId) {
+        authority.signal.throwIfAborted();
+        throw new Error("operator turn authority is no longer active");
+      }
+    },
   };
 }

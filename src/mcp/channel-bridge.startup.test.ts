@@ -3,6 +3,7 @@ import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.
 
 const mockState = vi.hoisted(() => ({
   clientOptions: null as Record<string, unknown> | null,
+  autoHello: true,
 }));
 
 const resolveGatewayClientBootstrapMock = vi.hoisted(() =>
@@ -36,6 +37,9 @@ vi.mock("../gateway/client.js", () => ({
     }
 
     start(): void {
+      if (!mockState.autoHello) {
+        return;
+      }
       const onHelloOk = this.options.onHelloOk;
       if (typeof onHelloOk === "function") {
         onHelloOk();
@@ -78,6 +82,7 @@ const { OpenClawChannelBridge } = await import("./channel-bridge.js");
 describe("OpenClawChannelBridge startup", () => {
   beforeEach(() => {
     mockState.clientOptions = null;
+    mockState.autoHello = true;
   });
 
   it("passes the resolved TLS fingerprint to the Gateway client", async () => {
@@ -89,6 +94,29 @@ describe("OpenClawChannelBridge startup", () => {
     await bridge.start();
 
     expect(mockState.clientOptions?.tlsFingerprint).toBe("sha256:local");
+    await bridge.close();
+  });
+
+  it("waits through retryable Gateway startup until hello succeeds", async () => {
+    mockState.autoHello = false;
+    const bridge = new OpenClawChannelBridge({} as never, {
+      claudeChannelMode: "off",
+      verbose: false,
+    });
+
+    const started = bridge.start();
+    await vi.waitFor(() => {
+      expect(mockState.clientOptions).not.toBeNull();
+    });
+    expect(mockState.clientOptions?.notifyOnStartupRetry).not.toBe(true);
+
+    const onHelloOk = mockState.clientOptions?.onHelloOk;
+    if (typeof onHelloOk !== "function") {
+      throw new Error("Expected Gateway hello callback");
+    }
+    onHelloOk();
+
+    await expect(started).resolves.toBeUndefined();
     await bridge.close();
   });
 });

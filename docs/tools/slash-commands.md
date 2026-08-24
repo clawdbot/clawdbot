@@ -68,13 +68,10 @@ command handling is enabled for the surface.
     debug: false,
     restart: true,
     ownerAllowFrom: ["discord:123456789012345678"],
-    ownerDisplay: "raw",
-    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
     },
-    useAccessGroups: true,
   },
 }
 ```
@@ -139,19 +136,16 @@ command handling is enabled for the surface.
   scope. A wildcard `allowFrom` entry is **not** sufficient.
 </ParamField>
 
-<ParamField path="commands.ownerDisplay" type='"raw" | "hash"'>
-  Controls how owner ids appear in the system prompt.
-</ParamField>
-
-<ParamField path="commands.ownerDisplaySecret" type="string">
-  HMAC secret used when `commands.ownerDisplay: "hash"`.
-</ParamField>
-
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
   **only** authorization source for commands and directives. Use `"*"` for a
   global default; provider-specific keys override it.
 </ParamField>
+
+When `commands.allowFrom` is not configured, command authorization follows
+the channel's allowlists and pairing state. Access-group entries referenced by
+channel allowlists are resolved automatically; there is no command-level
+access-group toggle.
 
 ## Command list
 
@@ -220,6 +214,8 @@ plugins.
 
       </Accordion>
       <Accordion title="Model switching details">
+        - Prefer choosing the model when creating a session. Changing it in an established session is an advanced operation because model context limits, prompt/tool behavior, and prompt-cache behavior can differ. See [Choose a model for a session](/concepts/models#choose-a-model-for-a-session).
+
         **Scope in one line:** a direct owner/admin `/model <model>` changes the session and requests a best-effort configured-default update; `-s` changes only the current session. When an agent inherits `agents.defaults.model`, the update target is that shared global fallback.
 
         Configured `/<alias>` shorthands accept the same trailing `--runtime`, `-s`, and `--session` options as `/model <alias>`.
@@ -319,13 +315,13 @@ must be in the same identity group.
 
 ### Bundled plugin commands
 
-| Command                                                 | Description                                                                                                                                                                                    |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/dreaming [on\|off\|status\|help]`                     | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
-| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]` | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
-| `/voice status\|list\|set <voiceId>`                    | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
-| `/card ...`                                             | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
-| `/codex <action> ...`                                   | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
+| Command                                                                             | Description                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/dreaming [on\|off\|status\|help]`                                                 | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
+| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                             | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
+| [`/voice`](/nodes/talk#choose-a-talk-voice-from-chat) `status\|list\|set <voiceId>` | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
+| `/card ...`                                                                         | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
+| `/codex <action> ...`                                                               | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
 
 QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs`
 
@@ -334,7 +330,7 @@ QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs
 User-invocable skills are exposed as slash commands:
 
 - `/skill <name> [input]` always works as the generic entrypoint.
-- Skills may register as direct commands (e.g. `/prose` for OpenProse).
+- Skills may register as direct commands using their declared skill name.
 - Native skill-command registration is controlled by `commands.nativeSkills` and
   `channels.<provider>.commands.nativeSkills`.
 - Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes.
@@ -344,8 +340,7 @@ User-invocable skills are exposed as slash commands:
     By default, skill commands route to the model as a normal request.
 
     Skills can declare `command-dispatch: tool` to route directly to a tool
-    (deterministic, no model involvement). Example: `/prose` (OpenProse plugin)
-    — see [OpenProse](/prose).
+    (deterministic, no model involvement).
 
   </Accordion>
   <Accordion title="Native command arguments">

@@ -259,6 +259,39 @@ describe("routeReply", () => {
     await expectSlackNoDelivery({ text: SILENT_REPLY_TOKEN });
   });
 
+  it("records a channel transform veto before transport or mirroring", async () => {
+    const messaging = {
+      transformReplyPayload: vi.fn(function (this: unknown) {
+        expect(this).toBe(messaging);
+        return null;
+      }),
+    } satisfies ChannelMessagingAdapter;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: createChannelPlugin("slack", { messaging, threading: slackThreading }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const result = await routeTestReply({
+      payload: { text: "private reply" },
+      channel: "slack",
+      to: "channel:C123",
+      sessionKey: "agent:test",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      delivered: false,
+      suppressed: true,
+      reason: "channel_transform",
+    });
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("does not drop payloads that merely start with the silent token", async () => {
     const res = await routeTestReply({
       payload: { text: `${SILENT_REPLY_TOKEN} -- (why am I here?)` },

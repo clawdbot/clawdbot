@@ -89,16 +89,21 @@ export function buildEmbeddedRunBaseParams(params: {
     params.isReasoningTagProvider,
   );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  return {
+  const runParams = {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,
+    permissionMode: params.run.permissionMode,
+    sessionRoot: params.run.sessionRoot,
     agentDir: params.run.agentDir,
     config,
     toolOverrides: params.run.toolOverrides,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
+    trustedInternalHandoff: params.run.trustedInternalHandoff,
+    scheduledToolPolicy: params.run.scheduledToolPolicy,
+    runtimePluginToolGrant: params.run.runtimePluginToolGrant,
     senderIsOwner: params.run.senderIsOwner,
     conversationToolPolicy: params.run.conversationToolPolicy,
     channelContext: params.run.channelContext,
@@ -106,11 +111,13 @@ export function buildEmbeddedRunBaseParams(params: {
     enforceFinalTag,
     silentExpected: params.run.silentExpected,
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation: params.run.terminalReplyExpectation,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     clientCaps: params.run.clientCaps,
     toolBindings: params.run.toolBindings,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
+    skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
     provider: params.provider,
     model: params.model,
     modelSelectionLocked: params.run.modelSelectionLocked,
@@ -128,4 +135,5 @@ export function buildEmbeddedRunBaseParams(params: {
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
+  return runParams;
 }

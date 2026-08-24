@@ -256,30 +256,11 @@ describe("createCacheTrace", () => {
         safe: "keep-me",
         tokenCount: 42,
       },
-      images: [
-        {
-          type: "image",
-          mimeType: "image/png",
-          data: "<redacted>",
-          bytes: 4,
-          sha256: crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
-        },
-      ],
+      images: "<redacted>",
     });
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toBe(bareGithubKey);
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toContain(
       bareGithubKey,
-    );
-
-    const optionsImages = (
-      ((event.options as { images?: unknown[] } | undefined)?.images ?? []) as Array<
-        Record<string, unknown>
-      >
-    )[0];
-    expect(optionsImages?.data).toBe("<redacted>");
-    expect(optionsImages?.bytes).toBe(4);
-    expect(optionsImages?.sha256).toBe(
-      crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
     );
 
     const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];

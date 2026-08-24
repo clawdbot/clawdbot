@@ -36,6 +36,23 @@ describe("channel plugin module loader helpers", () => {
     expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
   });
 
+  it("preserves explicit JavaScript plugin module specifiers", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const expectedPath = path.join(rootDir, "checker.js");
+    fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
+
+    expect(resolveExistingPluginModulePath(rootDir, "./checker.js")).toBe(expectedPath);
+  });
+
+  it("resolves plugin module directories through their index", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const expectedPath = path.join(rootDir, "checker", "index.js");
+    fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
+    fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
+
+    expect(resolveExistingPluginModulePath(rootDir, "./checker")).toBe(expectedPath);
+  });
+
   it("detects JavaScript module paths case-insensitively", () => {
     expect(isJavaScriptModulePath("/tmp/entry.js")).toBe(true);
     expect(isJavaScriptModulePath("/tmp/entry.MJS")).toBe(true);

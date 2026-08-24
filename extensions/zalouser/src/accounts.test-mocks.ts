@@ -7,7 +7,6 @@ vi.mock("./accounts.js", () => {
     listZalouserAccountIds: () => ["default"],
     resolveDefaultZalouserAccountId: () => "default",
     resolveZalouserAccountSync: () => createDefaultResolvedZalouserAccount(),
-    getZcaUserInfo: async () => null,
     checkZcaAuthenticated: async () => false,
   };
 });

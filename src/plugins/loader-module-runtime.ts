@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
@@ -40,14 +41,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "musicGeneration",
   "llm",
 ] as const satisfies readonly (keyof PluginRuntime)[];
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    (typeof value === "object" || typeof value === "function") &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === "function"
-  );
-}
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   api: OpenClawPluginApi;
@@ -230,6 +223,14 @@ export function createLazyPluginRuntime(params: {
   };
   return new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
+      // Instance-bound surfaces are complete runtime objects. Keep them direct so
+      // the first Gateway call does not materialize the broad plugin runtime graph.
+      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+        const value = params.runtimeOptions?.[prop];
+        if (value !== undefined) {
+          return value;
+        }
+      }
       return Reflect.get(resolveRuntime(), prop, receiver);
     },
     set(_target, prop, value, receiver) {

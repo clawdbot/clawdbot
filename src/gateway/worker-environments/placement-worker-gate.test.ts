@@ -8,6 +8,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "./placement-session-tool-operations.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -85,40 +86,101 @@ describe("worker session placement gate", () => {
     });
   }
 
-  it("accepts only the exact gateway-preclaimed worker run", () => {
-    const runId = "run-worker-gate";
-    preclaim(runId);
-    const gate = createWorkerSessionPlacementGate(store);
+  function bindingFor(claim: ReturnType<typeof preclaim>) {
+    return claim;
+  }
+
+  it("rejects restart-inherited claims while preserving workspace recovery authority", () => {
+    const claim = preclaim("run-inherited-worker");
+    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    store.updateAckCursors({ claim, liveEvent: 1 });
+
+    const restartedStore = createWorkerSessionPlacementStore({ database });
+    const gate = createWorkerSessionPlacementGate(restartedStore, {
+      rejectExistingWorkerClaims: true,
+    });
     const binding = {
-      sessionId: SESSION.sessionId,
+      sessionId: claim.sessionId,
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
-      runId,
     };
 
-    expect(gate.validateWorkerTurn(binding)).toBe(true);
-    expect(gate.validateWorkerTurn({ ...binding, runId: "run-competing" })).toBe(false);
-    expect(gate.validateWorkerTurn({ ...binding, ownerEpoch: OWNER_EPOCH + 1 })).toBe(false);
+    expect(restartedStore.validateTurnClaim(claim)).toBe(true);
+    expect(restartedStore.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: claim.sessionId, claimId: claim.claimId },
+    ]);
+    expect(gate.validateWorkerTurn(claim)).toBe(false);
+    expect(gate.readWorkerTurnClaim(binding)).toEqual(claim);
+    expect(gate.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
+    expect(() => gate.updateAckCursors({ claim, transcriptSeq: 2 })).toThrow("stale worker turn");
   });
 
-  it("updates exact-owner cursors and rejects stale descriptor replay", () => {
+  it("does not classify a same-id claim from a different run as inherited", () => {
+    const first = preclaim("run-inherited-a");
+    const gate = createWorkerSessionPlacementGate(store, {
+      rejectExistingWorkerClaims: true,
+    });
+    expect(gate.validateWorkerTurn(first)).toBe(false);
+    store.releaseTurn(first);
+    const placement = store.get(SESSION.sessionId)!;
+    const second = store.claimTurn({
+      sessionId: placement.sessionId,
+      agentId: placement.agentId,
+      sessionKey: placement.sessionKey,
+      claimId: first.claimId,
+      runId: "run-current-b",
+      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    });
+
+    expect(gate.validateWorkerTurn(second)).toBe(true);
+  });
+
+  it("fences a replaced exact claim when the durable run id is reused", () => {
+    const runId = "run-reused-worker";
+    const first = preclaim(runId);
+    const gate = createWorkerSessionPlacementGate(store);
+    const firstBinding = bindingFor(first);
+    store.releaseTurn(first);
+    const placement = store.get(SESSION.sessionId)!;
+    const second = store.claimTurn({
+      sessionId: placement.sessionId,
+      agentId: placement.agentId,
+      sessionKey: placement.sessionKey,
+      claimId: "claim:replacement",
+      runId,
+      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    });
+    const secondBinding = bindingFor(second);
+    store.authorizeWorkerTurnTools(second, ["sessions_send"]);
+
+    expect(gate.validateWorkerTurn(firstBinding)).toBe(false);
+    expect(gate.validateWorkerTurn(secondBinding)).toBe(true);
+    expect(gate.isWorkerTurnToolAuthorized(firstBinding, "sessions_send")).toBe(false);
+    expect(gate.isWorkerTurnToolAuthorized(secondBinding, "sessions_send")).toBe(true);
+    expect(() => gate.updateAckCursors({ claim: firstBinding, transcriptSeq: 3 })).toThrow(
+      "stale worker turn",
+    );
+  });
+
+  it("atomically retains the finishing cursor and workspace-result fence", () => {
     const runId = "run-worker-ack";
     const claim = preclaim(runId);
     const gate = createWorkerSessionPlacementGate(store);
-    const binding = {
-      sessionId: SESSION.sessionId,
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      runId,
-    };
+    const binding = bindingFor(claim);
 
-    gate.updateAckCursors({ ...binding, transcriptSeq: 4, liveSeq: 9 });
+    gate.updateAckCursors({ claim: binding, transcriptSeq: 4 });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    gate.updateAckCursors({ claim: binding, liveSeq: 9 });
     expect(store.get(SESSION.sessionId)).toMatchObject({
       generation: claim.placementGeneration,
       lastTranscriptAckCursor: 4,
       lastLiveEventAckCursor: 9,
     });
-    store.releaseTurn(claim);
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: SESSION.sessionId, runId },
+    ]);
+    store.acceptWorkspaceResult(claim);
+    store.completeWorkspaceResultAndReleaseTurn(claim);
     expect(store.get(SESSION.sessionId)?.turnClaim).toBeNull();
     expect(gate.validateWorkerTurn(binding)).toBe(false);
   });
@@ -137,17 +199,238 @@ describe("worker session placement gate", () => {
       expectedGeneration: active.generation,
     });
     const gate = createWorkerSessionPlacementGate(store);
-    const binding = {
-      sessionId: SESSION.sessionId,
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      runId,
-    };
+    const binding = bindingFor(claim);
 
     expect(gate.validateWorkerTurn(binding)).toBe(true);
-    gate.updateAckCursors({ ...binding, transcriptSeq: 5 });
+    gate.updateAckCursors({ claim: binding, transcriptSeq: 5 });
     expect(store.get(SESSION.sessionId)?.lastTranscriptAckCursor).toBe(5);
     store.releaseTurn(claim);
     expect(gate.validateWorkerTurn(binding)).toBe(false);
+  });
+
+  it("drains running session-tool operations before revoking their durable state", async () => {
+    const claim = preclaim("run-worker-tools");
+    const binding = bindingFor(claim);
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+
+    expect(store.isWorkerTurnToolAuthorized(binding, "sessions_spawn")).toBe(true);
+    expect(store.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn",
+        requestDigest: "digest-one",
+      }),
+    ).toMatchObject({
+      kind: "execute",
+      operationSeed: expect.any(String),
+    });
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn",
+        requestDigest: "digest-one",
+      }),
+    ).toEqual({ kind: "in-progress" });
+    const closing = store.closeWorkerTurnToolState(claim);
+    expect(store.isWorkerTurnToolAuthorized(binding, "sessions_spawn")).toBe(false);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "call-after-close",
+        requestDigest: "digest-after-close",
+      }),
+    ).toEqual({ kind: "unauthorized" });
+
+    expect(
+      store.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "call-spawn",
+        requestDigest: "digest-one",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    await closing;
+    store.releaseTurn(claim);
+
+    expect(store.isWorkerTurnToolAuthorized(binding, "sessions_spawn")).toBe(false);
+    expect(
+      database.db.prepare("SELECT COUNT(*) AS count FROM worker_turn_tool_authorities").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      database.db.prepare("SELECT COUNT(*) AS count FROM worker_session_tool_operations").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("does not reconcile away a claim while its session operation is running", () => {
+    const claim = preclaim("run-worker-reconcile-tools");
+    const binding = bindingFor(claim);
+    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_send",
+        toolCallId: "call-reconcile-send",
+        requestDigest: "digest-reconcile-send",
+      }),
+    ).toMatchObject({ kind: "execute" });
+    const draining = store.startDrain({
+      sessionId: claim.sessionId,
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      expectedGeneration: claim.placementGeneration,
+    });
+
+    expect(() =>
+      store.startReconcile({
+        sessionId: claim.sessionId,
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        expectedGeneration: draining.generation,
+      }),
+    ).toThrow("running worker session operation");
+    expect(store.get(claim.sessionId)).toMatchObject({
+      state: "draining",
+      turnClaim: { claimId: claim.claimId },
+    });
+
+    expect(
+      store.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "call-reconcile-send",
+        requestDigest: "digest-reconcile-send",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    expect(
+      store.startReconcile({
+        sessionId: claim.sessionId,
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        expectedGeneration: draining.generation,
+      }),
+    ).toMatchObject({ state: "reconciling", turnClaim: null });
+    expect(
+      database.db.prepare("SELECT COUNT(*) AS count FROM worker_turn_tool_authorities").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      database.db.prepare("SELECT COUNT(*) AS count FROM worker_session_tool_operations").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("caps running session operations across connection incarnations", () => {
+    const claim = preclaim("run-worker-tool-capacity");
+    const binding = bindingFor(claim);
+    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    for (let index = 0; index < MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS; index += 1) {
+      expect(
+        store.beginWorkerSessionToolOperation({
+          claim: binding,
+          toolName: "sessions_send",
+          toolCallId: `capacity-call-${index}`,
+          requestDigest: `capacity-digest-${index}`,
+        }),
+      ).toMatchObject({ kind: "execute" });
+    }
+
+    const reconnectedStore = createWorkerSessionPlacementStore({ database });
+    expect(
+      reconnectedStore.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_send",
+        toolCallId: "capacity-overflow",
+        requestDigest: "capacity-overflow-digest",
+      }),
+    ).toEqual({ kind: "capacity" });
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_send",
+        toolCallId: "capacity-call-0",
+        requestDigest: "capacity-digest-0",
+      }),
+    ).toMatchObject({ kind: "in-progress" });
+  });
+
+  it("does not let a foreign store steal a live operation fence", () => {
+    const claim = preclaim("run-worker-restart");
+    const binding = bindingFor(claim);
+    store.authorizeWorkerTurnTools(claim, ["sessions_spawn", "sessions_send"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "call-before-restart",
+        requestDigest: "digest-before-restart",
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    const restarted = createWorkerSessionPlacementStore({ database });
+    expect(
+      restarted.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "call-before-restart",
+        requestDigest: "digest-before-restart",
+      }),
+    ).toEqual({ kind: "unknown" });
+    expect(
+      restarted.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "call-before-restart",
+        requestDigest: "changed-digest",
+      }),
+    ).toEqual({ kind: "conflict" });
+    expect(() => restarted.releaseTurn(claim)).toThrow("running worker session operation");
+    expect(
+      store.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "call-before-restart",
+        requestDigest: "digest-before-restart",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    expect(
+      restarted.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_spawn",
+        toolCallId: "call-before-restart",
+        requestDigest: "digest-before-restart",
+      }),
+    ).toEqual({ kind: "completed", resultJson: '{"status":"ok"}' });
+    restarted.releaseTurn(claim);
+  });
+
+  it("makes crash-ambiguous operations terminal before restart reconciliation", () => {
+    const claim = preclaim("run-worker-crash-recovery");
+    const binding = bindingFor(claim);
+    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_send",
+        toolCallId: "call-before-crash",
+        requestDigest: "digest-before-crash",
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    const restarted = createWorkerSessionPlacementStore({ database });
+    expect(restarted.recoverWorkerSessionToolOperationsAfterRestart()).toBe(1);
+    expect(
+      restarted.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_send",
+        toolCallId: "call-before-crash",
+        requestDigest: "digest-before-crash",
+      }),
+    ).toEqual({ kind: "unknown" });
+    expect(() => restarted.releaseTurn(claim)).not.toThrow();
   });
 });

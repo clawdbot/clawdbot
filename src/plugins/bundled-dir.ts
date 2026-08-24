@@ -48,7 +48,7 @@ function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boole
   );
 }
 
-function hasUsableBundledPluginTree(pluginsDir: string): boolean {
+export function hasUsableBundledPluginTree(pluginsDir: string): boolean {
   if (!fs.existsSync(pluginsDir)) {
     return false;
   }

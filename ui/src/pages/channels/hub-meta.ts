@@ -1,9 +1,6 @@
 // Channel hub presentation: bundled art reuse plus typed per-channel setup
 // helper links surfaced in the setup wizard. Labels/order still come from the
 // gateway channels.status snapshot; this table only decorates known channels.
-import { html, type TemplateResult } from "lit";
-import { pluginArtPath, pluginFallbackGradient, pluginMonogram } from "../plugins/presentation.ts";
-
 type ChannelSetupLink = {
   label: string;
   url: string;
@@ -45,27 +42,4 @@ export function channelHubMeta(channelId: string): ChannelHubMeta {
 
 export function channelDocsUrl(channelId: string): string {
   return `https://docs.openclaw.ai/channels/${encodeURIComponent(channelId)}`;
-}
-
-/** Bundled channel art reuses the plugin art set (channel ids match slugs). */
-export function renderChannelArt(
-  channelId: string,
-  label: string,
-  variant: "tile" | "cover",
-): TemplateResult {
-  const art = pluginArtPath(channelId);
-  if (art) {
-    return html`<span class="channels-${variant}">
-      <img src=${art} alt="" loading="lazy" decoding="async" />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(channelId);
-  const monogram = pluginMonogram(label);
-  return html`<span
-    class="channels-${variant} channels-${variant}--fallback"
-    style=${`--channels-art-a:${from};--channels-art-b:${to}`}
-    aria-hidden="true"
-  >
-    <span>${monogram}</span>
-  </span>`;
 }

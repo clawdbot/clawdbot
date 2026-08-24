@@ -8,7 +8,7 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "./provider-auth-choices.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
 
 const log = createSubsystemLogger("plugins/provider-setup-availability");
 
@@ -44,7 +44,7 @@ export async function detectAvailableSetupProviderIds(params: {
     return new Set();
   }
 
-  const providers = resolvePluginProviders({
+  const providers = resolvePluginProvidersCore({
     config: discoveryConfig,
     workspaceDir: params.workspaceDir,
     env,

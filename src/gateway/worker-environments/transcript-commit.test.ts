@@ -12,7 +12,8 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
-  upsertSessionEntry,
+  updateSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -39,6 +40,13 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: "b".repeat(64),
   sessionId: SESSION_ID,
   runId: "run-worker-transcript",
+  turnClaim: {
+    sessionId: SESSION_ID,
+    claimId: "claim-worker-transcript",
+    runId: "run-worker-transcript",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-a", ownerEpoch: RUN_EPOCH },
+  },
   ownerEpoch: RUN_EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-transcript-commit-v1"],
@@ -174,9 +182,10 @@ describe("worker transcript commit application", () => {
         store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
       },
     };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       {
+        lifecycleRevision: "worker-original-revision",
         sessionId: SESSION_ID,
         updatedAt: 10,
       },
@@ -360,6 +369,42 @@ describe("worker transcript commit application", () => {
     const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toHaveLength(3);
     expect(reopened.getLeafId()).toBe(first.result.newLeafId);
+  });
+
+  it("rejects a commit when lifecycle ownership changes in the writer queue", async () => {
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionEntry(
+      { agentId: "main", sessionKey: SESSION_KEY, storePath },
+      async () => {
+        markOwnerChangeStarted();
+        await ownerChangeGate;
+        return { lifecycleRevision: "worker-replacement-revision" };
+      },
+    );
+    await ownerChangeStarted;
+
+    const commit = committer.commit({ identity: IDENTITY, request: createRequest() });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(commit).resolves.toEqual({ ok: false, reason: "invalid-batch" });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath })).toMatchObject(
+      {
+        lifecycleRevision: "worker-replacement-revision",
+        sessionId: SESSION_ID,
+      },
+    );
+    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([]);
   });
 
   it("replays the same tuple without duplicates and rejects a changed payload", async () => {
@@ -677,7 +722,9 @@ describe("worker transcript commit application", () => {
     });
   });
 
-  it("advances the leaf across sequential commits", async () => {
+  it("persists run ownership on worker output while only the terminal envelope completes it", async () => {
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const first = await committer.commit({ identity: IDENTITY, request: createRequest() });
     if (!first.ok) {
       throw new Error(`expected initial transcript commit success, received ${first.reason}`);
@@ -710,11 +757,32 @@ describe("worker transcript commit application", () => {
     expect(second.result.newLeafId).toBe(second.result.entryIds[0]);
     expect(second.result.newLeafId).not.toBe(first.result.newLeafId);
     const reopened = SessionManager.open(sessionTarget);
+    expect(
+      reopened
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message),
+    ).toMatchObject([
+      { role: "user" },
+      { role: "assistant", __openclaw: { runId: IDENTITY.runId } },
+      { role: "toolResult", __openclaw: { runId: IDENTITY.runId } },
+      { role: "assistant", __openclaw: { runId: IDENTITY.runId } },
+    ]);
     expect(reopened.getEntries().at(-1)).toMatchObject({
       id: second.result.newLeafId,
       parentId: first.result.newLeafId,
       message: expect.objectContaining({ role: "assistant" }),
     });
     expect(reopened.getLeafId()).toBe(second.result.newLeafId);
+    expect(updates).toHaveLength(4);
+    for (const update of updates.slice(0, 3)) {
+      expect(update).not.toHaveProperty("runId");
+    }
+    expect(updates[3]).toMatchObject({
+      message: { role: "assistant" },
+      messageId: second.result.newLeafId,
+      messageSeq: 4,
+      runId: IDENTITY.runId,
+    });
   });
 });

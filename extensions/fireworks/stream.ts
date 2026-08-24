@@ -10,17 +10,6 @@ function isFireworksProviderId(providerId: string): boolean {
   return normalized === "fireworks" || normalized === "fireworks-ai";
 }
 
-function createFireworksKimiThinkingDisabledWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload }) => {
-    // Fireworks Kimi can emit chain-of-thought in visible `content` unless
-    // the Anthropic-style thinking toggle is explicitly disabled.
-    payload.thinking = { type: "disabled" };
-    delete payload.reasoning;
-    delete payload.reasoning_effort;
-    delete payload.reasoningEffort;
-  });
-}
-
 export function wrapFireworksProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
@@ -31,5 +20,12 @@ export function wrapFireworksProviderStream(
   ) {
     return undefined;
   }
-  return createFireworksKimiThinkingDisabledWrapper(ctx.streamFn);
+  return createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload }) => {
+    // Fireworks Kimi can emit chain-of-thought in visible `content` unless
+    // the Anthropic-style thinking toggle is explicitly disabled.
+    payload.thinking = { type: "disabled" };
+    delete payload.reasoning;
+    delete payload.reasoning_effort;
+    delete payload.reasoningEffort;
+  });
 }

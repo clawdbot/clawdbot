@@ -503,8 +503,12 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
         }
       }
       if (!compactionState?.latest) {
+        const thresholdEvidence =
+          peakPromptTokens > 0
+            ? `peak provider prompt tokens=${peakPromptTokens}, compact threshold=${profile.compactThreshold}`
+            : "provider prompt-token usage unavailable";
         throw new Error(
-          `OpenAI emitted no first-class compaction item after ${profile.maxDenseTurns} dense turns`,
+          `OpenAI emitted no first-class compaction item after ${profile.maxDenseTurns} dense turns; ${thresholdEvidence}`,
         );
       }
       expect(compactionState.latest).toMatchObject({

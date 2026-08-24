@@ -1,5 +1,9 @@
 // Shared web provider config, credential, and definition resolution.
-import { coerceSecretRef, isLegacySecretRefEnvMarker } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  isLegacySecretRefEnvMarker,
+  normalizeSecretInputString,
+} from "../config/types.secrets.js";
 
 type WebProviderConfigSource = {
   tools?: {
@@ -22,14 +26,6 @@ type ProviderWithCredential = {
 };
 
 type WebContentProcessEnv = Record<string, string | undefined>;
-
-function normalizeSecretInputString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function normalizeSecretInput(value: unknown): string {
   if (typeof value !== "string") {

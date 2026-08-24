@@ -17,7 +17,6 @@ export type ClosedTranscriptTurnReadResult =
   | {
       kind: "ok";
       messages: AgentMessage[];
-      prePromptMessageCount: number;
     }
   | {
       kind: "non-descendant" | "projection-unavailable" | "session-rebound" | "stale" | "too-large";
@@ -215,11 +214,14 @@ export function readClosedTranscriptTurn(params: {
               .onRef("event.session_id", "=", "active.session_id")
               .onRef("event.seq", "=", "active.event_seq"),
           )
-          .select(["active.message_position", "event.event_json"])
+          .select("event.event_json")
           .where("active.session_id", "=", target.sessionId)
           .where("active.message_position", "is not", null)
+          .where("active.message_position", ">=", params.boundary.admission.activeMessagePosition)
           .where("active.message_position", "<=", params.boundary.terminal.activeMessagePosition)
           .orderBy("active.message_position", "asc")
+          // Read one sentinel row so an oversized turn is rejected without
+          // materializing the rest of its transcript payload.
           .limit(params.maxEvents + 1),
       ).rows;
       if (
@@ -236,7 +238,6 @@ export function readClosedTranscriptTurn(params: {
       return {
         kind: "ok",
         messages,
-        prePromptMessageCount: params.boundary.admission.activeMessagePosition,
       } as const;
     },
     {

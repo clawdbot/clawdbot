@@ -1,7 +1,14 @@
 // Gateway logs CLI with RPC tailing, local file fallback, and systemd journal fallback.
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import {
+  coerceErrorMessage as normalizeErrorMessage,
+  toStringifiedError,
+} from "@openclaw/normalization-core/error-coercion";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -22,7 +29,6 @@ import { projectGatewayConnectionDetailsForDiagnostics } from "../gateway/connec
 import { isLoopbackHost } from "../gateway/net.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
@@ -202,17 +208,6 @@ async function fetchLogs(
       localFallback: true,
     };
   }
-}
-
-function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
@@ -618,9 +613,9 @@ export function registerLogsCli(program: Command) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }
         if (!shouldUseLocalLogsFallback(opts, result.error)) {
-          throw normalizeError(result.error);
+          throw toStringifiedError(result.error);
         }
-        fallbackError = normalizeError(result.error);
+        fallbackError = toStringifiedError(result.error);
       }
 
       const activeProbe = gatewayRecovery.kind === "probing" ? gatewayRecovery.promise : undefined;
@@ -639,7 +634,7 @@ export function registerLogsCli(program: Command) {
         if (result.ok) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }
-        throw normalizeError(result.error);
+        throw toStringifiedError(result.error);
       }
       throw fallbackError ?? new Error("Active systemd journal unavailable for logs follow");
     };
@@ -730,7 +725,7 @@ export function registerLogsCli(program: Command) {
           if (
             !emitJsonLine({
               type: "notice",
-              message: "Log tail truncated (increase --max-bytes).",
+              message: "Log tail truncated (increase --limit or --max-bytes).",
             })
           ) {
             return;
@@ -790,7 +785,7 @@ export function registerLogsCli(program: Command) {
           }
         }
         if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --max-bytes).")) {
+          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
             return;
           }
         }

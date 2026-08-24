@@ -1,11 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaModelsConfig,
+  discoverOllamaModelsForSetup,
   findAvailableOllamaModelName,
   mergeUniqueModelNames,
   normalizeOllamaModelName,
-  selectAppGuidedOllamaModelId,
+  selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function pendingAbortableResponse(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+      once: true,
+    });
+  });
+}
 
 describe("Ollama onboarding model selection", () => {
   it("preserves catalog order while preferring an explicit latest tag", () => {
@@ -59,11 +73,83 @@ describe("Ollama onboarding model selection", () => {
 
   it("selects a deterministic tools-capable model with enough context", () => {
     expect(
-      selectAppGuidedOllamaModelId([
-        { id: "llama3:8b", contextWindow: 32_768, supportsTools: true },
-        { id: "qwen3:0.6b", contextWindow: 40_960, supportsTools: true },
-        { id: "gemma4:e4b", contextWindow: 8_192, supportsTools: true },
+      selectAppGuidedOllamaModelFromDiscovery([
+        { name: "llama3:8b", contextWindow: 32_768, capabilities: ["tools"] },
+        { name: "qwen3:0.6b", contextWindow: 40_960, capabilities: ["tools"] },
+        { name: "gemma4:e4b", contextWindow: 8_192, capabilities: ["tools"] },
       ]),
     ).toBe("qwen3:0.6b");
+  });
+
+  it("prefers the smallest non-reasoning setup model", () => {
+    expect(
+      selectAppGuidedOllamaModelFromDiscovery([
+        {
+          name: "deepseek-r1:8b",
+          contextWindow: 131_072,
+          capabilities: ["tools", "thinking"],
+          size: 1_000,
+        },
+        {
+          name: "orieg/gemma3-tools:12b-ft",
+          contextWindow: 131_072,
+          capabilities: ["tools"],
+          size: 8_000,
+        },
+        {
+          name: "llama3.2:latest",
+          contextWindow: 131_072,
+          capabilities: ["tools"],
+          size: 2_000,
+        },
+      ]),
+    ).toBe("llama3.2:latest");
+  });
+
+  it("aborts pending model discovery with the setup signal", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) =>
+        pendingAbortableResponse(init?.signal),
+      ),
+    );
+
+    const discovery = discoverOllamaModelsForSetup({
+      baseUrl: "http://127.0.0.1:11434",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
+    });
+    controller.abort();
+
+    await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("aborts pending context enrichment with the setup signal", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (requestUrl(input).endsWith("/api/tags")) {
+          return new Response(JSON.stringify({ models: [{ name: "gemma4" }] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return pendingAbortableResponse(init?.signal);
+      }),
+    );
+
+    const discovery = discoverOllamaModelsForSetup({
+      baseUrl: "http://127.0.0.1:11434",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+    });
+    controller.abort();
+
+    await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
   });
 });

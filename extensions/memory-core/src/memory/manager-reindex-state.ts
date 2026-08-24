@@ -2,7 +2,8 @@
 import {
   hashText,
   MEMORY_CHUNKING_VERSION,
-  normalizeExtraMemoryPaths,
+  normalizeExtraMemoryPathEntries,
+  type MemoryExtraPath,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
@@ -107,16 +108,19 @@ function configuredMetaSourcesDiffer(params: {
 
 export function resolveConfiguredScopeHash(params: {
   workspaceDir: string;
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   multimodal: {
     enabled: boolean;
     modalities: string[];
     maxFileBytes: number;
   };
 }): string {
-  const extraPaths = normalizeExtraMemoryPaths(params.workspaceDir, params.extraPaths)
-    .map((value) => value.replace(/\\/g, "/"))
-    .toSorted();
+  const extraPaths = normalizeExtraMemoryPathEntries(params.workspaceDir, params.extraPaths)
+    .map((entry) => {
+      const path = entry.path.replaceAll("\\", "/");
+      return entry.pattern ? { path, pattern: entry.pattern } : path;
+    })
+    .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
   return hashText(
     JSON.stringify({
       extraPaths,

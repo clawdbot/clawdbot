@@ -51,14 +51,4 @@ export const BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES: BannedInternalPluginSdkF
     modulePath: "src/plugin-sdk/inbound-envelope",
     canonical: "openclaw/plugin-sdk/channel-inbound",
   },
-  // Shared dispatch bridge backing the facades above; only the SDK seams may
-  // consume it directly so channel code stays on channel-inbound/channel-outbound.
-  {
-    modulePath: "src/channels/message/inbound-reply-dispatch",
-    canonical: "openclaw/plugin-sdk/channel-inbound",
-    allowedImporters: [
-      "src/plugin-sdk/channel-inbound.ts",
-      "src/plugin-sdk/inbound-reply-dispatch.ts",
-    ],
-  },
 ];

@@ -5,7 +5,7 @@ import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntry } from "./types.js";
 
-export function listSqliteTranscriptInstancesFromDatabase(params: {
+export function listTranscriptInstancesFromDatabase(params: {
   agentId: string;
   currentEntries: ReadonlyMap<string, SessionEntry>;
   database: OpenClawAgentDatabase;

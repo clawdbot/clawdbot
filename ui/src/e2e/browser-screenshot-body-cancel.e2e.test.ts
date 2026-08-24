@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -110,15 +111,20 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}chat`);
         expect(response?.status()).toBe(200);
-        const showFiles = page.getByRole("button", { name: "Show session files", exact: true });
-        await showFiles.waitFor();
-        await showFiles.click();
-        const toggle = page.getByRole("button", { name: "Toggle browser panel", exact: true });
-        await toggle.waitFor();
-        await toggle.click();
+        await openChatSidePanelType(page, "Files");
+        await openChatSidePanelType(page, "Browser");
 
         const panel = page.locator("section.bp");
         await panel.waitFor();
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("browser.request")).map((request) => request.params),
+          )
+          .toContainEqual({
+            body: { targetId: "t1", type: "png" },
+            method: "POST",
+            path: "/screenshot",
+          });
         const alert = panel.getByRole("alert");
         await alert.waitFor();
         expect(await alert.textContent()).toBe(
@@ -148,8 +154,15 @@ suite.define(() => {
           });
 
         const requests = await gateway.getRequests("browser.request");
-        expect(requests.map((request) => request.params)).toEqual([
-          { method: "GET", path: "/tabs" },
+        const requestParams = requests.map(
+          (request) => request.params as { method?: string; path?: string; body?: unknown },
+        );
+        expect(requestParams).toContainEqual({ method: "GET", path: "/tabs" });
+        expect(
+          requestParams.filter(
+            (params) => params.method === "POST" && params.path === "/screenshot",
+          ),
+        ).toEqual([
           {
             body: { targetId: "t1", type: "png" },
             method: "POST",

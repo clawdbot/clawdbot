@@ -3,6 +3,6 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "clawhub": "0.23.1"
+    "clawhub": "0.23.3"
   }
 }

@@ -1,3 +1,8 @@
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "./stale-chunk-reload.ts";
+
 type CustomElementModuleLoader = () => Promise<unknown>;
 
 const pendingLoads = new Map<string, Promise<void>>();
@@ -36,12 +41,207 @@ export type OptionalCustomElement = {
 
 type UpdatingHost = {
   requestUpdate: () => unknown;
+  readonly updateComplete?: Promise<unknown>;
+  /**
+   * Render-root lookup used to gate action replay on the element actually
+   * being rendered. Hosts without it replay unconditionally.
+   */
+  queryRenderedElement?: (tagName: string) => Element | null;
 };
+
+type LazyCustomElementRequestState =
+  | { status: "loading"; element: OptionalCustomElement }
+  | {
+      status: "error";
+      element: OptionalCustomElement;
+      error: unknown;
+      stale: boolean;
+    };
+
+type LazyCustomElementRequest = LazyCustomElementRequestState & {
+  action?: () => void;
+};
+
+/** Owns visible lazy-element requests while global registration stays deduplicated by tag. */
+export class LazyCustomElementRequestController {
+  private current: LazyCustomElementRequest | undefined;
+  private readonly preloads = new Set<string>();
+  private active: OptionalCustomElement | undefined;
+  private activeDismissed = false;
+
+  constructor(
+    private readonly host: UpdatingHost,
+    private readonly onClose?: () => void,
+    private readonly retryStale = retryStaleChunkReloadWhenReachable,
+  ) {}
+
+  get visibleState(): LazyCustomElementRequestState | undefined {
+    return this.current;
+  }
+
+  preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
+    if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
+      return;
+    }
+    this.preloads.add(element.tagName);
+    void ensureCustomElementDefined(element.tagName, element.loadModule)
+      .then(
+        () => this.host.requestUpdate(),
+        (error: unknown) => {
+          if (options?.reportError && !this.current) {
+            this.current = {
+              element,
+              error,
+              stale: isStaleChunkImportError(error),
+              status: "error",
+            };
+            this.host.requestUpdate();
+          }
+        },
+      )
+      .finally(() => this.preloads.delete(element.tagName));
+  }
+
+  request(element: OptionalCustomElement, action?: () => void): void {
+    const request = {
+      action,
+      element,
+      status: "loading",
+    } satisfies LazyCustomElementRequest;
+    this.current = request;
+    this.host.requestUpdate();
+    this.load(request);
+  }
+
+  requestWhileActive(element: OptionalCustomElement, active: boolean): void {
+    if (active) {
+      if (this.active !== element) {
+        this.active = element;
+        this.activeDismissed = false;
+      }
+    } else if (this.active === element) {
+      this.active = undefined;
+      this.activeDismissed = false;
+    }
+    if (!active && this.current?.element === element) {
+      this.abandon();
+    } else {
+      this.pumpActive();
+    }
+  }
+
+  retry(): void {
+    const request = this.current;
+    if (request?.status !== "error") {
+      return;
+    }
+    const retryRequest = {
+      action: request.action,
+      element: request.element,
+      status: "loading",
+    } satisfies LazyCustomElementRequest;
+    this.current = retryRequest;
+    this.host.requestUpdate();
+    void (request.stale ? this.retryStale() : Promise.resolve(false)).then((reloading) => {
+      if (!reloading && this.current === retryRequest) {
+        this.load(retryRequest);
+      }
+    });
+  }
+
+  close(): void {
+    if (this.current) {
+      if (this.current.element === this.active) {
+        this.activeDismissed = true;
+      }
+      this.onClose?.();
+      this.abandon();
+    }
+  }
+
+  abandon(): void {
+    if (this.current) {
+      this.current = undefined;
+      this.host.requestUpdate();
+      this.pumpActive();
+    }
+  }
+
+  private pumpActive(): void {
+    if (
+      this.active &&
+      !this.activeDismissed &&
+      !this.current &&
+      !isOptionalElementDefined(this.active)
+    ) {
+      this.request(this.active);
+    }
+  }
+
+  private load(request: LazyCustomElementRequest): void {
+    void ensureCustomElementDefined(request.element.tagName, request.element.loadModule).then(
+      async () => {
+        if (this.current !== request) {
+          return;
+        }
+        this.host.requestUpdate();
+        await this.host.updateComplete;
+        if (this.current === request) {
+          // Replay only once the host has actually rendered the element.
+          // During boot the shell can still be splash-gated after this update;
+          // replaying then re-dispatches an event nothing handles, which
+          // re-enters this controller in a microtask cycle that starves the
+          // render (and the Gateway socket) forever. The skipped action stays
+          // persisted as the pending lazy shell action and replays through
+          // restorePendingLazyAction on a later context update.
+          const replayable =
+            !this.host.queryRenderedElement ||
+            this.host.queryRenderedElement(request.element.tagName) !== null;
+          if (replayable) {
+            request.action?.();
+          }
+          if (this.current === request) {
+            this.abandon();
+          }
+        }
+      },
+      (error: unknown) => {
+        if (this.current !== request) {
+          return;
+        }
+        this.current = {
+          action: request.action,
+          element: request.element,
+          error,
+          stale: isStaleChunkImportError(error),
+          status: "error",
+        };
+        this.host.requestUpdate();
+      },
+    );
+  }
+}
 
 export const COMMAND_PALETTE_ELEMENT = {
   tagName: "openclaw-command-palette",
   label: "command palette",
   loadModule: () => import("../components/command-palette.ts"),
+} satisfies OptionalCustomElement;
+
+const DEBUG_OVERLAY_TAG = "openclaw-debug-overlay";
+
+export const DEBUG_OVERLAY_ELEMENT = {
+  tagName: DEBUG_OVERLAY_TAG,
+  label: DEBUG_OVERLAY_TAG,
+  loadModule: () => import("../pages/debug/debug-overlay.ts"),
+} satisfies OptionalCustomElement;
+
+const KEYBOARD_SHORTCUTS_TAG = "openclaw-keyboard-shortcuts-dialog";
+
+export const KEYBOARD_SHORTCUTS_ELEMENT = {
+  tagName: KEYBOARD_SHORTCUTS_TAG,
+  label: KEYBOARD_SHORTCUTS_TAG,
+  loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {
@@ -60,6 +260,12 @@ export const DESKTOP_PANEL_ELEMENT = {
   tagName: "openclaw-desktop-panel",
   label: "desktop panel",
   loadModule: () => import("../components/desktop/desktop-panel.ts"),
+} satisfies OptionalCustomElement;
+
+export const DASHBOARD_DOCUMENT_ELEMENT = {
+  tagName: "openclaw-board-document",
+  label: "dashboard document",
+  loadModule: () => import("../components/board/board-document.ts"),
 } satisfies OptionalCustomElement;
 
 export const CUSTODIAN_PANEL_ELEMENT = {
@@ -87,47 +293,6 @@ export const EXEC_APPROVAL_ELEMENT = {
   loadModule: () => import("../components/exec-approval.ts"),
 } satisfies OptionalCustomElement;
 
-const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();
-
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {
   return customElements.get(element.tagName) !== undefined;
-}
-
-export function ensureOptionalElementForHost(
-  host: UpdatingHost,
-  element: OptionalCustomElement,
-): Promise<void> {
-  if (isOptionalElementDefined(element)) {
-    host.requestUpdate();
-    return Promise.resolve();
-  }
-  const existingLoads = hostElementLoads.get(host);
-  const loads = existingLoads ?? new Map<string, Promise<void>>();
-  if (!existingLoads) {
-    hostElementLoads.set(host, loads);
-  }
-  const pending = loads.get(element.tagName);
-  if (pending) {
-    return pending;
-  }
-  const load = ensureCustomElementDefined(element.tagName, element.loadModule)
-    .then(() => {
-      host.requestUpdate();
-    })
-    .catch((error: unknown) => {
-      console.error(`[openclaw] failed to load ${element.label}`, error);
-      throw error;
-    })
-    .finally(() => {
-      loads.delete(element.tagName);
-    });
-  loads.set(element.tagName, load);
-  return load;
-}
-
-export function preloadOptionalElement(host: UpdatingHost, element: OptionalCustomElement): void {
-  if (isOptionalElementDefined(element)) {
-    return;
-  }
-  void ensureOptionalElementForHost(host, element).catch(() => undefined);
 }

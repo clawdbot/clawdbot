@@ -23,9 +23,9 @@ const SURFACE_PATTERNS = [
   ["legacyRootAsset", /^assets\//u],
 ];
 const CHANGED_LANE_TEST_PATH_RE =
-  /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$|(?:^|\/)[^/]+\.test-(?:helpers|support)\.[cm]?[jt]sx?$/u;
+  /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|suite|e2e|browser\.test)\.[cm]?[jt]sx?$|(?:^|\/)[^/]+\.test-(?:helpers|support)\.[cm]?[jt]sx?$/u;
 const TEST_ONLY_PATH_RE =
-  /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-(?:helpers|support|harness)|e2e-harness)\.[cm]?[jt]sx?$)/u;
+  /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|suite|test-utils|test-(?:helpers|support|harness)|e2e-harness)\.[cm]?[jt]sx?$)/u;
 const NATIVE_ONLY_PATH_RE =
   /^(?:apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/u;
 

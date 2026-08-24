@@ -1,7 +1,9 @@
 // TTS directive helpers parse inline speech directives from text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
+import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { extractTtsDirectiveFacts } from "./directive-facts.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
@@ -18,11 +20,10 @@ type ParseTtsDirectiveOptions = {
   preferredProviderId?: string;
 };
 
-type TextRange = {
-  start: number;
-  end: number;
-};
-
+// TRANSITIONAL(marker-retirement): the [[tts ...]] text DSL is a transitional
+// adapter for automatic-mode replies; structured voiceText/voiceProvider/voiceId
+// fields are canonical. Delete the DSL parse forms and this streaming cleaner
+// when the visibleReplies default flips to "message_tool".
 /** Streaming cleaner used to strip TTS tags before final text parsing is available. */
 type TtsDirectiveTextStreamCleaner = {
   push: (text: string) => string;
@@ -115,48 +116,6 @@ function parseGenericSpeakerDirective(params: {
   }
 }
 
-function collectMarkdownCodeRanges(text: string): TextRange[] {
-  const ranges: TextRange[] = [];
-  const addMatches = (regex: RegExp) => {
-    for (const match of text.matchAll(regex)) {
-      if (match.index == null) {
-        continue;
-      }
-      ranges.push({ start: match.index, end: match.index + match[0].length });
-    }
-  };
-
-  addMatches(/```[\s\S]*?```/g);
-  addMatches(/~~~[\s\S]*?~~~/g);
-  addMatches(/^(?: {4}|\t).*(?:\n|$)/gm);
-  addMatches(/`+[^`\n]*`+/g);
-
-  return ranges.toSorted((left, right) => left.start - right.start);
-}
-
-function isInsideRange(index: number, ranges: readonly TextRange[]): boolean {
-  return ranges.some((range) => index >= range.start && index < range.end);
-}
-
-function replaceOutsideMarkdownCode(
-  text: string,
-  regex: RegExp,
-  replace: (match: string, captures: readonly string[]) => string,
-): string {
-  const codeRanges = collectMarkdownCodeRanges(text);
-  return text.replace(regex, (...args: unknown[]) => {
-    const match = String(args[0]);
-    const offset = args.at(-2);
-    if (typeof offset === "number" && isInsideRange(offset, codeRanges)) {
-      return match;
-    }
-    // String.replace passes captures before offset/input; keep the callback
-    // typed without depending on the exact regexp arity for each directive.
-    const captures = args.slice(1, -2).map((capture) => String(capture));
-    return replace(match, captures);
-  });
-}
-
 function normalizeTtsTagBody(body: string): string {
   return body.trim().replace(/\s+/g, "").toLowerCase();
 }
@@ -239,18 +198,14 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
   };
 }
 
-/** Parse TTS directives from final message text, leaving markdown code spans unchanged. */
-export function parseTtsDirectives(
-  text: string,
+/** Resolve persisted TTS facts against the active model/provider policy. */
+export function resolveTtsDirectiveFacts(
+  facts: AssistantDeliveryTtsFacts | undefined,
   policy: SpeechModelOverridePolicy,
   options?: ParseTtsDirectiveOptions,
-): TtsDirectiveParseResult {
-  if (!policy.enabled) {
-    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
-  }
-
-  if (!/\[\[\s*\/?\s*tts(?:\s*:|\s*\]\])/iu.test(text)) {
-    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
+): Omit<TtsDirectiveParseResult, "cleanedText"> {
+  if (!facts || !policy.enabled) {
+    return { overrides: {}, warnings: [], hasDirective: false };
   }
 
   let providers: SpeechProviderPlugin[] | undefined;
@@ -260,58 +215,15 @@ export function parseTtsDirectives(
   };
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
-  let cleanedText = text;
-  let hasDirective = false;
+  if (policy.allowText && facts.text != null) {
+    overrides.ttsText = facts.text;
+  }
 
-  const blockRegex = /\[\[\s*tts\s*:\s*text\s*\]\]([\s\S]*?)\[\[\s*\/\s*tts\s*:\s*text\s*\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, blockRegex, (_match, [inner = ""]) => {
-    hasDirective = true;
-    if (policy.allowText && overrides.ttsText == null) {
-      overrides.ttsText = inner.trim();
+  for (const directive of facts.directives ?? []) {
+    const declaredProviderId = policy.allowProvider ? directive.provider : undefined;
+    if (declaredProviderId) {
+      overrides.provider = declaredProviderId;
     }
-    return "";
-  });
-
-  const plainBlockRegex = /\[\[\s*tts\s*\]\]([\s\S]*?)\[\[\s*\/\s*tts\s*\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, plainBlockRegex, (_match, [inner = ""]) => {
-    hasDirective = true;
-    const visible = inner.trim();
-    if (policy.allowText && overrides.ttsText == null) {
-      overrides.ttsText = visible;
-    }
-    return visible;
-  });
-
-  const directiveRegex = /\[\[\s*tts\s*:\s*([^\]]+)\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, directiveRegex, (_match, [body = ""]) => {
-    hasDirective = true;
-    const tokens = body.split(/\s+/).filter(Boolean);
-
-    let declaredProviderId: string | undefined;
-    if (policy.allowProvider) {
-      for (const token of tokens) {
-        const eqIndex = token.indexOf("=");
-        if (eqIndex === -1) {
-          continue;
-        }
-        const rawKey = token.slice(0, eqIndex).trim();
-        if (!rawKey || normalizeLowercaseStringOrEmpty(rawKey) !== "provider") {
-          continue;
-        }
-        const rawValue = token.slice(eqIndex + 1).trim();
-        if (!rawValue) {
-          continue;
-        }
-        const providerId = normalizeLowercaseStringOrEmpty(rawValue);
-        if (!providerId) {
-          warnings.push("invalid provider id");
-          continue;
-        }
-        declaredProviderId = providerId;
-        overrides.provider = providerId;
-      }
-    }
-
     let directiveProviders: SpeechProviderPlugin[] | undefined;
     const getDirectiveProviders = () => {
       if (directiveProviders) {
@@ -334,27 +246,13 @@ export function parseTtsDirectives(
       return directiveProviders;
     };
 
-    for (const token of tokens) {
-      const eqIndex = token.indexOf("=");
-      if (eqIndex === -1) {
-        continue;
-      }
-      const rawKey = token.slice(0, eqIndex).trim();
-      const rawValue = token.slice(eqIndex + 1).trim();
-      if (!rawKey || !rawValue) {
-        continue;
-      }
-      const key = normalizeLowercaseStringOrEmpty(rawKey);
-      if (key === "provider") {
-        continue;
-      }
-
+    for (const [key, value] of Object.entries(directive.values)) {
       let handled = false;
       const directiveProvidersLocal = getDirectiveProviders();
       for (const provider of directiveProvidersLocal) {
         const genericSpeakerOverrides = parseGenericSpeakerDirective({
           key,
-          value: rawValue,
+          value,
           policy,
           currentOverrides: overrides.providerOverrides?.[provider.id],
         });
@@ -371,7 +269,7 @@ export function parseTtsDirectives(
         }
         const parsed = provider.parseDirectiveToken?.({
           key,
-          value: rawValue,
+          value,
           policy,
           selectedProvider: declaredProviderId ? provider.id : undefined,
           providerConfig: resolveDirectiveProviderConfig(provider, options),
@@ -396,31 +294,33 @@ export function parseTtsDirectives(
         break;
       }
       if (!handled && declaredProviderId && directiveProvidersLocal.length > 0) {
-        // Unknown keys are only actionable when the user explicitly selected a
-        // provider; auto-selected providers may not support each other's knobs.
         warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }
-    return "";
-  });
-
-  const bareTagRegex = /\[\[\s*tts\s*\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, bareTagRegex, () => {
-    hasDirective = true;
-    return "";
-  });
-
-  const closingTagRegex = /\[\[\s*\/\s*tts(?:\s*:\s*[^\]]*)?\]\]/gi;
-  cleanedText = replaceOutsideMarkdownCode(cleanedText, closingTagRegex, () => {
-    hasDirective = true;
-    return "";
-  });
+  }
 
   return {
-    cleanedText,
     ttsText: overrides.ttsText,
-    hasDirective,
+    hasDirective: true,
     overrides,
     warnings,
+  };
+}
+
+/** Parse TTS directives from final message text, leaving markdown code spans unchanged. */
+export function parseTtsDirectives(
+  text: string,
+  policy: SpeechModelOverridePolicy,
+  options?: ParseTtsDirectiveOptions,
+): TtsDirectiveParseResult {
+  if (!policy.enabled) {
+    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
+  }
+  const extracted = extractTtsDirectiveFacts(text);
+  const resolved = resolveTtsDirectiveFacts(extracted.facts, policy, options);
+
+  return {
+    cleanedText: extracted.cleanedText,
+    ...resolved,
   };
 }

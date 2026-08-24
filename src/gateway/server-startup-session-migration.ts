@@ -33,6 +33,7 @@ type SessionSqliteStartupFailureReportWriter = (
 type SessionSqliteDatabaseExists = (params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
+  path?: string;
 }) => boolean;
 
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
@@ -55,8 +56,9 @@ export async function runStartupSessionMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
-  await runSessionStartupMigration(params);
-  await runStartupSessionSqliteImport(params);
+  if (await runSessionStartupMigration(params)) {
+    await runStartupSessionSqliteImport(params);
+  }
   await reconcileStartupSessionTranscriptIndexes(params);
 }
 

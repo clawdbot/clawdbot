@@ -1,5 +1,4 @@
-import type { CliBackendToolAvailability } from "../../plugins/cli-backend.types.js";
-import { normalizeToolName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 
 /** Transport prefix CLI harnesses use for loopback OpenClaw MCP tool names. */
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
@@ -11,18 +10,6 @@ export function stripOpenClawMcpToolPrefix(toolName: string): string {
     : toolName;
 }
 
-/** Builds the public backend contract plus the shipped beta MCP-name projection. */
-export function buildCliBackendToolAvailability(availability: {
-  native: readonly string[];
-  openClaw: readonly string[];
-}): CliBackendToolAvailability {
-  return {
-    native: availability.native,
-    openClaw: availability.openClaw,
-    mcp: availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`),
-  };
-}
-
 /** Keeps only explicit runtime caps for backend-owned exact translation. */
 export function resolveCliRuntimeToolsAllow(
   toolsAllow?: string[],
@@ -31,7 +18,7 @@ export function resolveCliRuntimeToolsAllow(
   if (toolsAllow === undefined) {
     return undefined;
   }
-  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+  return toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
     ? undefined
     : toolsAllow;
 }

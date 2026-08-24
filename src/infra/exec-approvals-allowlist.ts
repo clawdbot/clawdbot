@@ -561,6 +561,7 @@ function resolveSegmentAllowlistMatch(params: {
           ? params.context.allowlist
           : params.context.allowlist.filter((entry) => entry.argPattern === undefined),
         {
+          kind: "executable",
           rawExecutable: shellPositionalArgvCandidate.path,
           resolvedPath: shellPositionalArgvCandidate.path,
           resolvedRealPath: resolveCandidateTrustPath(shellPositionalArgvCandidate.path),
@@ -591,6 +592,7 @@ function resolveSegmentAllowlistMatch(params: {
       ? matchAllowlist(
           params.context.allowlist,
           {
+            kind: "executable",
             rawExecutable: shellScriptCandidatePath,
             resolvedPath: shellScriptCandidatePath,
             resolvedRealPath: resolveCandidateTrustPath(shellScriptCandidatePath),
@@ -1267,6 +1269,7 @@ function resolveCandidateTrustPath(candidatePath: string | undefined): string | 
     return undefined;
   }
   return resolveExecutableTrustPath({
+    kind: "executable",
     rawExecutable: candidatePath,
     resolvedPath: candidatePath,
     executableName: path.basename(candidatePath),

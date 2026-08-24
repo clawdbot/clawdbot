@@ -131,11 +131,11 @@ describe("persisted pairing storage", () => {
       },
     },
     {
-      label: "a loopback relay with an independent Gateway hint",
+      label: "an SSH-tunneled browser-node pairing with a loopback Gateway hint",
       stored: {
         relayUrl: "ws://127.0.0.1:18797/extension",
         token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com/base",
+        gatewayUrl: "ws://127.0.0.1:19089",
       },
     },
     {

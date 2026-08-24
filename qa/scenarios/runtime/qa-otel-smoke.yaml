@@ -23,6 +23,7 @@ scenario:
     - extensions/diagnostics-otel/runtime-api.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts
     config:
       requiredProviderMode: mock-openai

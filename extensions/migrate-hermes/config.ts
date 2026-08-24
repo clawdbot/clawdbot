@@ -7,6 +7,7 @@ import {
   hasMigrationConfigPatchConflict,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { importsMcpSensitiveValues, mapMcpServer, mcpManualItems } from "./config-mcp.js";
 import { providerConfig } from "./config-provider-contract.js";
 import {
@@ -14,7 +15,7 @@ import {
   collectHermesProviders,
   providerManualItems,
 } from "./config-providers.js";
-import { childRecord, isRecord, readString, sanitizeName } from "./helpers.js";
+import { childRecord, sanitizeName } from "./helpers.js";
 
 function mapSkillEntries(config: Record<string, unknown>): Record<string, unknown> | undefined {
   const entries: Record<string, unknown> = {};
@@ -38,7 +39,7 @@ export function buildConfigItems(params: {
 }): MigrationItem[] {
   const items: MigrationItem[] = [];
   const memory = childRecord(params.config, "memory");
-  const memoryProvider = readString(memory.provider);
+  const memoryProvider = normalizeOptionalString(memory.provider);
 
   if (params.hasMemoryFiles || memoryProvider) {
     items.push(

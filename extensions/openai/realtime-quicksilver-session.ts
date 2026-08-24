@@ -3,7 +3,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveProviderAuthProfileApiKey } from "openclaw/plugin-sdk/provider-auth";
+import {
+  resolveOpenAICodexAuthIdentity,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
@@ -15,7 +18,6 @@ import {
   resolveAcceptedBrowserOrigin,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
   releaseOpenAIQuicksilverSession,
@@ -55,8 +57,8 @@ const WEBSOCKET_OPEN = 1;
 type OpenAIQuicksilverSessionRequest = RealtimeVoiceBrowserSessionCreateRequest & {
   initialItems?: OpenAIQuicksilverInitialItem[];
   ownerConnId?: string;
+  gaSession?: Record<string, unknown> & { model: string };
   gaSideband?: {
-    session: Record<string, unknown> & { model: string };
     createBridge: (params: {
       apiKey: string;
       callId: string;
@@ -164,7 +166,7 @@ export async function resolveOpenAIChatGptSubscriptionAuth(params: {
   if (!token) {
     return undefined;
   }
-  const accountId = resolveCodexAuthIdentity({ accessToken: token }).accountId;
+  const accountId = resolveOpenAICodexAuthIdentity({ access: token }).accountId;
   if (!accountId) {
     throw new Error("The selected ChatGPT OAuth profile is missing its account id");
   }
@@ -295,8 +297,17 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (!model) {
         throw new Error("OpenAI realtime browser sessions require a model");
       }
-      if (isOpenAIGptLiveModel(model) && !request.runAgentConsult) {
+      const isGptLive = isOpenAIGptLiveModel(model);
+      if (isGptLive && !request.runAgentConsult) {
         throw new Error("OpenAI GPT-Live requires the Gateway agent-consult runtime");
+      }
+      if (!isGptLive) {
+        if (!request.gaSession) {
+          throw new Error("OpenAI GA realtime browser sessions require an initial session policy");
+        }
+        if (request.gaSession.model !== model) {
+          throw new Error("OpenAI GA realtime session policy model must match the requested model");
+        }
       }
       prunePendingOffers();
       if (
@@ -447,6 +458,17 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         lifecycleSignal,
         AbortSignal.timeout(OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS),
       ]);
+      const sessionConfig = isOpenAIGptLiveModel(offer.request.model)
+        ? buildOpenAIQuicksilverSession({
+            model: offer.request.model,
+            instructions: offer.request.instructions,
+            voice: offer.request.voice,
+            initialItems: offer.request.initialItems,
+          })
+        : offer.request.gaSession;
+      if (!sessionConfig) {
+        throw new Error("OpenAI GA realtime browser sessions require an initial session policy");
+      }
       const gaSideband = offer.request.gaSideband;
       if (gaSideband) {
         try {
@@ -463,7 +485,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
           auth: offer.auth,
           requestIds: offer.requestIds,
           sdp,
-          session: gaSideband.session,
+          session: sessionConfig,
           gaSideband: true,
           signal: upstreamSignal,
           fetchImpl: params.fetchImpl,
@@ -540,12 +562,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         auth: offer.auth,
         requestIds: offer.requestIds,
         sdp,
-        session: buildOpenAIQuicksilverSession({
-          model: offer.request.model,
-          instructions: offer.request.instructions,
-          voice: offer.request.voice,
-          initialItems: offer.request.initialItems,
-        }),
+        session: sessionConfig,
         signal: upstreamSignal,
         fetchImpl: params.fetchImpl,
       });

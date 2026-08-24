@@ -7,7 +7,7 @@ import type { SessionGoal } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 import type { SessionInfo } from "./tui-types.js";
@@ -467,7 +467,7 @@ function formatAssistantErrorFromRecord(record: Record<string, unknown>): string
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
-function collectSanitizedBlockStrings(params: {
+function collectBlockStrings(params: {
   content: unknown;
   blockType: "text" | "thinking";
   valueKey: "text" | "thinking";
@@ -482,7 +482,7 @@ function collectSanitizedBlockStrings(params: {
     }
     const rec = block as Record<string, unknown>;
     if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
-      parts.push(sanitizeRenderableText(rec[params.valueKey] as string));
+      parts.push(rec[params.valueKey] as string);
     }
   }
   return parts;
@@ -501,7 +501,7 @@ export function extractThinkingFromMessage(message: unknown): string {
   if (typeof content === "string") {
     return "";
   }
-  const parts = collectSanitizedBlockStrings({
+  const parts = collectBlockStrings({
     content,
     blockType: "thinking",
     valueKey: "thinking",
@@ -522,10 +522,14 @@ export function extractContentFromMessage(message: unknown): string {
 
   if (record.role === "assistant") {
     if (typeof content === "string") {
-      return sanitizeRenderableText(content).trim();
+      return content.trim();
     }
     if (Array.isArray(content)) {
-      return extractAssistantRenderableContent(record);
+      const text = (extractAssistantPhaseText(record) ?? "").trim();
+      const pairingQr = extractPairingQrTerminalText(record);
+      return (
+        [text, pairingQr].filter(Boolean).join("\n\n") || formatAssistantErrorFromRecord(record)
+      );
     }
   }
 
@@ -533,11 +537,11 @@ export function extractContentFromMessage(message: unknown): string {
     return sanitizeRenderableText(content).trim();
   }
 
-  const parts = collectSanitizedBlockStrings({
+  const parts = collectBlockStrings({
     content,
     blockType: "text",
     valueKey: "text",
-  });
+  }).map(sanitizeRenderableText);
   if (parts.length > 0) {
     return parts.join("\n").trim();
   }
@@ -545,7 +549,7 @@ export function extractContentFromMessage(message: unknown): string {
 }
 
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
-  const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
+  const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
   const pairingQr = extractPairingQrTerminalText(record);
   const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
   if (content) {
@@ -586,18 +590,14 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
     return "";
   }
 
-  const textParts = collectSanitizedBlockStrings({
-    content,
-    blockType: "text",
-    valueKey: "text",
-  });
+  const textParts = collectBlockStrings({ content, blockType: "text", valueKey: "text" }).map(
+    sanitizeRenderableText,
+  );
   const thinkingParts =
     opts?.includeThinking === true
-      ? collectSanitizedBlockStrings({
-          content,
-          blockType: "thinking",
-          valueKey: "thinking",
-        })
+      ? collectBlockStrings({ content, blockType: "thinking", valueKey: "thinking" }).map(
+          sanitizeRenderableText,
+        )
       : [];
 
   return composeThinkingAndContent({
@@ -680,7 +680,7 @@ export function extractTuiAbortedText(message: unknown, includeThinking: boolean
   return extractTextFromMessage(message, { includeThinking, includeAttachments: false });
 }
 
-export function isCommandMessage(message: unknown): boolean {
+export function isCommandMarkedMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -748,7 +748,7 @@ export function formatContextUsageLine(params: {
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
-export function asString(value: unknown, fallback = ""): string {
+export function formatPrimitiveString(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
   }

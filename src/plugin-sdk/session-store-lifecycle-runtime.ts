@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore as resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  resolveStorePath,
+  resolveSessionStorePathCore as resolveStorePath,
 } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore as patchSessionEntry,
   resetSessionEntryLifecycle as resetAccessorSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -69,6 +70,57 @@ async function rollbackLifecycleResetReservation(params: {
   );
 }
 
+async function publishReleasedOwnerReplacement(params: {
+  agentId?: string;
+  expectedReservedEntry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+  resolveNextSessionFile: (
+    sessionId: string,
+    options?: { agentId?: string; sessionsDir?: string },
+  ) => string;
+}): Promise<boolean> {
+  const current = loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  if (!current || !isDeepStrictEqual(current, params.expectedReservedEntry)) {
+    // A writer that advanced the reserved row owns the newer state. Never
+    // overwrite it merely to clean up this failed lifecycle transaction.
+    return false;
+  }
+  const nextSessionId = randomUUID();
+  const nextSessionFile = params.resolveNextSessionFile(
+    nextSessionId,
+    resolveSessionFilePathOptions({
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      storePath: params.storePath,
+    }),
+  );
+  try {
+    await resetAccessorSessionEntryLifecycle({
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      storePath: params.storePath,
+      target: { canonicalKey: params.sessionKey, storeKeys: [params.sessionKey] },
+      buildNextEntry: ({ currentEntry }) => {
+        if (!currentEntry || !isDeepStrictEqual(currentEntry, params.expectedReservedEntry)) {
+          throw new SessionLifecycleResetSkipped();
+        }
+        // The physical harness is already gone. Publish a minimal fresh row so
+        // no persisted lock or harness identity claims ownership of that session.
+        return {
+          sessionFile: nextSessionFile,
+          sessionId: nextSessionId,
+          updatedAt: Date.now(),
+        };
+      },
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof SessionLifecycleResetSkipped) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function resetSessionEntryLifecycleImpl(
   params: ResetSessionEntryLifecycleParams,
   resolveNextSessionFile: (
@@ -123,6 +175,7 @@ export async function resetSessionEntryLifecycleImpl(
       }
       const resetReservationRevision = `reset:${randomUUID()}`;
       let originalEntry: SessionEntry | undefined;
+      let reservedEntry: SessionEntry | undefined;
       let physicalOwnerReleased = false;
       try {
         const reserved = await patchSessionEntry(
@@ -140,6 +193,10 @@ export async function resetSessionEntryLifecycleImpl(
           { preserveActivity: true, requireWriteSuccess: true },
         );
         if (!reserved || !originalEntry) {
+          throw new SessionLifecycleResetSkipped();
+        }
+        reservedEntry = loadSessionEntry({ sessionKey: params.sessionKey, storePath });
+        if (!reservedEntry) {
           throw new SessionLifecycleResetSkipped();
         }
         if (reserved.modelSelectionLocked === true && reserved.agentHarnessId?.trim()) {
@@ -216,12 +273,13 @@ export async function resetSessionEntryLifecycleImpl(
         resultEntry = result.nextEntry;
       } catch (err) {
         if (err instanceof SessionLifecycleResetSkipped) {
-          if (physicalOwnerReleased && originalEntry) {
-            await rollbackLifecycleResetReservation({
-              expectedReservedRevision: resetReservationRevision,
-              originalEntry,
+          if (physicalOwnerReleased && reservedEntry) {
+            await publishReleasedOwnerReplacement({
+              ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+              expectedReservedEntry: reservedEntry,
               sessionKey: params.sessionKey,
               storePath,
+              resolveNextSessionFile,
             });
             throw new Error(
               `session lifecycle reset skipped after physical owner release: ${params.sessionKey}`,
@@ -231,12 +289,13 @@ export async function resetSessionEntryLifecycleImpl(
           skipped = true;
           return;
         }
-        if (physicalOwnerReleased && originalEntry) {
-          await rollbackLifecycleResetReservation({
-            expectedReservedRevision: resetReservationRevision,
-            originalEntry,
+        if (physicalOwnerReleased && reservedEntry) {
+          await publishReleasedOwnerReplacement({
+            ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+            expectedReservedEntry: reservedEntry,
             sessionKey: params.sessionKey,
             storePath,
+            resolveNextSessionFile,
           });
         }
         throw err;

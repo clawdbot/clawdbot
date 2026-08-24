@@ -131,7 +131,7 @@ Configure one of the supported Tailscale publishing modes:
 }
 ```
 
-OpenClaw automatically honors `gateway.tailscale.serviceName` when selecting the published host and `gateway.controlUi.basePath` when building the Control UI and WebSocket URLs.
+OpenClaw automatically honors `gateway.controlUi.basePath` when building the Control UI and WebSocket URLs.
 
 When the Mini App opens, Telegram provides signed WebApp `initData`. OpenClaw verifies its signature with the selected bot account's token, rejects missing, invalid, expired, or replayed data, extracts the numeric Telegram user ID, and checks owner access again before handing off to the Control UI.
 
@@ -351,7 +351,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - short initial answer previews are debounced, then materialized after a bounded delay if the run is still active
     - `progress` keeps one editable status draft for tool progress, shows the stable status label when answer activity arrives before tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
-    - `streaming.preview.commandText` controls command/exec detail inside those lines: `raw` (default) or `status` (tool label only)
+    - `streaming.preview.commandText` controls command/exec detail inside those lines: `status` (default, tool label only) or `raw` (explicit command text)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
     - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them
 
@@ -583,14 +583,29 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`)
     - `react` (`chatId`, `messageId`, `emoji`)
+    - `emoji-list` (optional `chatId`, `limit`)
     - `deleteMessage` (`chatId`, `messageId`)
     - `editMessage` (`chatId`, `messageId`, `content` or `caption`, optional `presentation` inline buttons; button-only edits update reply markup)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
 
     Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`.
 
-    Gating: `channels.telegram.actions.sendMessage`, `deleteMessage`, `reactions`, `sticker` (default: disabled). `edit`, `createForumTopic`, and `editForumTopic` are enabled by default with no dedicated toggle.
+    Gating: `channels.telegram.actions.sendMessage`, `deleteMessage`, `reactions`, `sticker` (default: disabled). `reactions` controls both `react` and `emoji-list`. `edit`, `createForumTopic`, and `editForumTopic` are enabled by default with no dedicated toggle.
     Runtime sends use the active config/secrets snapshot from startup/reload, so action paths do not re-resolve `SecretRef` values per send.
+
+    Use `emoji-list` to inspect reactions in the current trusted chat and account. Agents cannot inspect another chat; direct operators may provide a different `chatId`. `limit` defaults to and cannot exceed 100:
+
+```json
+{
+  "ok": true,
+  "emojis": [
+    { "name": "👍", "identifier": "👍" },
+    { "identifier": "5368324170671202286", "type": "custom_emoji" }
+  ]
+}
+```
+
+    Pass a Unicode identifier or numeric custom emoji identifier directly to `react`. Chats without reaction restrictions return the known standard Telegram reactions and a `note` explaining that all standard reactions are allowed. When Telegram rejects a reaction and the chat's allowed Unicode reactions are known, the error includes a short sample of valid alternatives.
 
     Reaction removal semantics: [/tools/reactions](/tools/reactions).
 
@@ -748,7 +763,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `own` means user reactions to bot-sent messages only (best-effort via a sent-message cache). Reaction events still respect Telegram access controls (`dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`); unauthorized senders are dropped.
 
-    Telegram does not provide thread IDs in reaction updates. Non-forum groups route to the group chat session. Forum groups recover the originating topic from OpenClaw's bounded message cache (keyed by account, chat, and message ID), so the reaction routes to that topic's session, including its topic agent and conversation bindings. When the reacted-to message is no longer cached the topic is unknown, so OpenClaw skips the reaction notification and logs a warning instead of attributing it to General (`:topic:1`).
+    Telegram does not provide topic metadata in reaction updates. Ordinary non-forum groups remain chat-scoped. Forum and channel Direct Messages reactions recover the originating topic from OpenClaw's bounded message cache (keyed by account, chat, and message ID), so topic config, topic agents, and conversation bindings still apply. If the cached topic is missing or belongs to the wrong scope, OpenClaw skips the reaction notification and logs a warning instead of falling back to General or the base chat.
 
     `allowed_updates` for polling/webhook include `message_reaction` automatically.
 
@@ -795,6 +810,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   <Accordion title="Long polling vs webhook">
     Default is long polling. For webhook mode, set `channels.telegram.webhookUrl` and `channels.telegram.webhookSecret`; optional `webhookPath` (default `/telegram-webhook`), `webhookHost` (default `127.0.0.1`), `webhookPort` (default `8787`), `webhookCertPath` (self-signed cert PEM for direct-IP or no-domain setups).
+
+    The listener reserves `/healthz` for health checks, so `webhookPath` must use a different route. If an existing setup uses `/healthz`, choose another route, update the path in `webhookUrl` and the reverse proxy mapping, then restart OpenClaw.
 
     In long-polling mode, OpenClaw persists its restart watermark only after an update dispatches successfully; a failed handler leaves that update retryable in the same process instead of marking it completed.
 

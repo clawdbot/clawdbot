@@ -154,7 +154,6 @@ describe("captured plugin registration", () => {
     expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
-    expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
   });
 
   it("enforces captured middleware runtime and tool scopes", async () => {

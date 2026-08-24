@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   supportsModelTools,
@@ -15,6 +15,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Codex tests cover run attempt.context engine plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -208,10 +209,6 @@ type MockCallReader = { mock: { calls: unknown[][] } };
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-function optionalString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function requireFirstCallArg(mock: unknown, label: string): unknown {
   const call = (mock as MockCallReader).mock.calls[0];
   if (!call) {
@@ -256,7 +253,7 @@ function getRequestInputTextAt(
   return input
     .map((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
-      return item.type === "text" ? optionalString(item.text) : "";
+      return item.type === "text" ? (readStringValue(item.text) ?? "") : "";
     })
     .join("\n");
 }
@@ -343,7 +340,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assembleParams.availableTools).toEqual(new Set());
 
     const threadStartParams = requireRequestParams(harness, "thread/start");
-    expect(optionalString(threadStartParams.developerInstructions)).toContain(
+    expect(readStringValue(threadStartParams.developerInstructions) ?? "").toContain(
       "context-engine system",
     );
     expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -351,6 +348,30 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh turn before the post-start mirror records admission", async () => {
+    const workspaceDir = path.join(tempDir, "workspace-fresh-admission");
+    const params = await createSqliteParams(workspaceDir, "fresh-admission");
+    params.contextEngine = createContextEngine();
+    const recorder = params.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("expected user turn transcript recorder");
+    }
+    const markRuntimePersisted = vi.fn();
+    recorder.markRuntimePersisted = markRuntimePersisted;
+    recorder.markSentToProvider = vi.fn(() => {
+      throw new Error("admission is not available before Codex turn/start");
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(recorder.markSentToProvider).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(markRuntimePersisted).toHaveBeenCalledOnce());
+    await harness.completeTurn();
+    await run;
   });
 
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
@@ -1159,20 +1180,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         },
       } as EmbeddedRunAttemptParams["config"];
 
-      let runError: unknown;
-      const run = runCodexAppServerAttempt(params).catch((error: unknown) => {
-        runError = error;
-        throw error;
-      });
-      await vi.waitFor(
-        () => {
-          if (runError) {
-            throw toLintErrorObject(runError, "Non-Error thrown");
-          }
-          expect(harness.requests.map((request) => request.method)).toContain("turn/start");
-        },
-        { interval: 1 },
-      );
+      const run = runCodexAppServerAttempt(params);
+      await Promise.race([
+        harness.waitForMethod("turn/start"),
+        run.then(() => {
+          throw new Error("Codex attempt completed before turn/start");
+        }),
+      ]);
 
       expect(harness.requests.map((request) => request.method)).toEqual([
         "thread/start",
@@ -1781,11 +1795,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   it.each([
     {
-      name: "commitment-only",
-      trigger: "heartbeat",
-      bootstrapContextRunKind: "commitment-only",
-    },
-    {
       name: "Gateway-routed heartbeat",
       trigger: "user",
       bootstrapContextRunKind: "heartbeat",
@@ -1895,9 +1904,31 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("logs assemble failures as a formatted message instead of the raw error object", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      assistantMessage("first baseline message", 1) as never,
+    );
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      userMessage("second baseline message", 2) as never,
+    );
+    let preassemblyMessages: AgentMessage[] = [];
+    let promptHookMessages: AgentMessage[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: async (event) => {
+            promptHookMessages = (event as { messages: AgentMessage[] }).messages;
+            return {};
+          },
+        },
+      ]),
+    );
     const rawError = new Error("Authorization: Bearer sk-abcdefghijklmnopqrstuv");
     const contextEngine = createContextEngine({
-      assemble: vi.fn(async () => {
+      assemble: vi.fn(async ({ messages }) => {
+        preassemblyMessages = messages.slice();
+        messages.reverse();
+        messages.pop();
         throw rawError;
       }),
       bootstrap: undefined,
@@ -1919,6 +1950,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(typeof details.error).toBe("string");
     expect(warning?.[1]).not.toEqual({ error: rawError });
     expect(String(details.error)).not.toContain("sk-abcdefghijklmnopqrstuv");
+    expect(promptHookMessages).toEqual(preassemblyMessages);
+    expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expectRequestInputTextContains(harness, params.prompt);
   });
 
   it("does not advance context-engine state on prompt failure", async () => {
@@ -1945,17 +1979,4 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,8 @@
 import path from "node:path";
+import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
-// session write-lock behavior.
+// session write-settlement behavior.
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -36,7 +37,7 @@ import * as publicSessionSdk from "./index.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
+import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
@@ -57,6 +58,30 @@ const testModel: Model = {
 describe("createAgentSession runtime ownership", () => {
   it("keeps embedded recovery construction out of the public sessions barrel", () => {
     expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+  });
+
+  it("keeps durable provider resources when an embedded attempt session is disposed", async () => {
+    const cleanup = vi.fn();
+    const unregisterCleanup = registerSessionResourceCleanup(cleanup);
+    try {
+      const sessionManager = SessionManager.inMemory();
+      const { session } = await createAgentSessionForEmbeddedRunner(
+        {
+          model: testModel,
+          resourceLoader: createEmptyResourceLoader(),
+          sessionManager,
+          settingsManager: SettingsManager.inMemory(),
+          modelRegistry: createTestModelRegistry(),
+        },
+        {},
+      );
+
+      session.dispose();
+
+      expect(cleanup).not.toHaveBeenCalled();
+    } finally {
+      unregisterCleanup();
+    }
   });
 
   it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
@@ -455,9 +480,10 @@ describe("AgentSession queued user turns", () => {
     });
   });
 
-  it("carries prompt facts non-enumerably on the exact steered message", async () => {
+  it("preserves prompt image ownership across steered and follow-up messages", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const followUp = vi.spyOn(session.agent, "followUp").mockImplementation(() => undefined);
     const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
     const imageOrder = ["inline"] as const;
     const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
@@ -484,6 +510,10 @@ describe("AgentSession queued user turns", () => {
       mediaImageBlockFactIndexes: [0],
     });
     expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
+    await session.followUp("inspect queued attachment", images);
+    expect(followUp.mock.calls[0]?.[0]).toMatchObject({
+      __openclaw: { mediaImageBlockFactIndexes: [0] },
+    });
   });
 });
 
@@ -675,9 +705,9 @@ describe("createAgentSession tool defaults", () => {
     expect(exactPromptOptions.promptGuidelines).toEqual(["Use custom_lookup for test values."]);
   });
 
-  it("runs session message persistence under the configured write lock", async () => {
-    // Transcript writes share the caller-provided lock so concurrent event
-    // handlers cannot interleave JSONL persistence.
+  it("runs session message persistence under the configured write settlement", async () => {
+    // Transcript writes share the caller-provided settlement boundary so
+    // concurrent event handlers cannot interleave persistence.
     const events: string[] = [];
     const sessionManager = SessionManager.inMemory();
     const { session } = await createAgentSession({
@@ -686,12 +716,12 @@ describe("createAgentSession tool defaults", () => {
       sessionManager,
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      withSessionWriteLock: async (run) => {
-        events.push("lock:start");
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
         try {
           return await run();
         } finally {
-          events.push("lock:end");
+          events.push("settlement:end");
         }
       },
     });
@@ -709,11 +739,46 @@ describe("createAgentSession tool defaults", () => {
       },
     });
 
-    expect(events).toEqual(["lock:start", "lock:end"]);
+    expect(events).toEqual(["settlement:start", "settlement:end"]);
     expect(sessionManager.getEntries().some((entry) => entry.type === "message")).toBe(true);
   });
 
-  it("runs write-capable tool hooks under the configured write lock", async () => {
+  it("runs provider response hooks under the configured write settlement", async () => {
+    const events: string[] = [];
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      [
+        "after_provider_response",
+        [
+          async () => {
+            events.push("hook");
+            return undefined;
+          },
+        ],
+      ],
+    ]);
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createResourceLoaderWithHandlers(handlers),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
+        try {
+          return await run();
+        } finally {
+          events.push("settlement:end");
+        }
+      },
+    });
+
+    await session.agent.onResponse?.({ status: 200, headers: {} }, testModel);
+
+    expect(events).toEqual(["settlement:start", "hook", "settlement:end"]);
+  });
+
+  it("runs write-capable tool hooks under the configured write settlement", async () => {
     const events: string[] = [];
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       [
@@ -733,12 +798,12 @@ describe("createAgentSession tool defaults", () => {
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      withSessionWriteLock: async (run) => {
-        events.push("lock:start");
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
         try {
           return await run();
         } finally {
-          events.push("lock:end");
+          events.push("settlement:end");
         }
       },
     });
@@ -770,12 +835,12 @@ describe("createAgentSession tool defaults", () => {
       },
     });
 
-    expect(events).toEqual(["lock:start", "hook", "lock:end"]);
+    expect(events).toEqual(["settlement:start", "hook", "settlement:end"]);
   });
 
   it("fences tool execution when no extension hook is registered", async () => {
-    // Write-capable tools still enter the lock even without hooks; the lock is
-    // about shared session state, not just extension execution.
+    // Write-capable tools still enter the settlement boundary even without hooks;
+    // it covers shared session state, not just extension execution.
     const events: string[] = [];
     const { session } = await createAgentSession({
       model: testModel,
@@ -783,12 +848,12 @@ describe("createAgentSession tool defaults", () => {
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      withSessionWriteLock: async (run) => {
-        events.push("lock:start");
+      withSessionWriteSettlement: async (run) => {
+        events.push("settlement:start");
         try {
           return await run();
         } finally {
-          events.push("lock:end");
+          events.push("settlement:end");
         }
       },
     });
@@ -820,7 +885,7 @@ describe("createAgentSession tool defaults", () => {
       },
     });
 
-    expect(events).toEqual(["lock:start", "lock:end"]);
+    expect(events).toEqual(["settlement:start", "settlement:end"]);
   });
 });
 

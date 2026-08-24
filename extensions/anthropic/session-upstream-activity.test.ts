@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { SessionUpstreamProbe } from "openclaw/plugin-sdk/session-catalog";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
@@ -31,6 +32,25 @@ function row(params: {
     message: { role: params.type, content: params.content },
     ...params.extra,
   });
+}
+
+async function injectFileShortReads(filePath: string, maxBytes: number): Promise<void> {
+  const handle = await fs.open(filePath, "r");
+  const prototype = Object.getPrototypeOf(handle) as FileHandle;
+  const realRead = Object.getOwnPropertyDescriptor(prototype, "read")?.value;
+  await handle.close();
+  if (typeof realRead !== "function") {
+    throw new Error("FileHandle.read is unavailable");
+  }
+  vi.spyOn(prototype, "read").mockImplementation(function (
+    this: FileHandle,
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ) {
+    return Reflect.apply(realRead, this, [buffer, offset, Math.min(length, maxBytes), position]);
+  } as FileHandle["read"]);
 }
 
 afterEach(() => {
@@ -117,6 +137,54 @@ describe("Claude upstream activity", () => {
         upstreamKind: "claude-cli",
         upstreamRef: { filePath },
         marker: { size: 3 },
+        ownRecentUserTexts: [],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("completes bounded scan windows across positional short reads", async () => {
+    await using workspace = await createClaudeUpstreamWorkspace("short-read");
+    const filePath = path.join(workspace.dir, "thread-short-read.jsonl");
+    await fs.writeFile(
+      filePath,
+      `${row({
+        type: "user",
+        content: "short-read prompt",
+        timestamp: "2026-07-13T10:05:00.000Z",
+      })}\n`,
+    );
+    await injectFileShortReads(filePath, 17);
+    const completeSize = (await fs.stat(filePath)).size;
+
+    await expect(
+      checkActivity({
+        sessionKey: "agent:main:adopted:claude-short-read",
+        agentId: "main",
+        threadId: "thread-short-read",
+        hostId: "gateway:local",
+        upstreamKind: "claude-cli",
+        upstreamRef: { filePath },
+        marker: { offset: 0 },
+        ownRecentUserTexts: [],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "activity",
+        humanTurns: 1,
+        nextMarker: { offset: completeSize },
+      }),
+    );
+
+    await fs.appendFile(filePath, '{"type":"user"');
+    await expect(
+      checkActivity({
+        sessionKey: "agent:main:adopted:claude-short-read",
+        agentId: "main",
+        threadId: "thread-short-read",
+        hostId: "gateway:local",
+        upstreamKind: "claude-cli",
+        upstreamRef: { filePath },
+        marker: { offset: completeSize },
         ownRecentUserTexts: [],
       }),
     ).resolves.toBeUndefined();

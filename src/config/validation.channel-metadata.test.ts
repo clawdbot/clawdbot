@@ -242,7 +242,7 @@ function createPluginManifestRecord(
 }
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  loadPluginManifestRegistryCore: () => mockLoadPluginManifestRegistry(),
   resolveManifestContractPluginIds: () => [],
 }));
 
@@ -266,6 +266,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => ({
 }));
 
 vi.mock("../secrets/target-registry-data.js", () => ({
+  buildSecretTargetRegistryFromPlugins: () => [],
   getCoreSecretTargetRegistry: () => [],
   getSecretTargetRegistry: () => [],
 }));

@@ -25,6 +25,9 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,
   });
+  if (attempt.disableTrajectory) {
+    return null;
+  }
   const sessionTarget =
     attempt.sessionTarget?.agentId &&
     attempt.sessionTarget.sessionId &&
@@ -37,21 +40,19 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
           storePath: attempt.sessionTarget.storePath,
         }
       : undefined;
-  const recorder = attempt.disableTrajectory
-    ? null
-    : createTrajectoryRuntimeRecorder({
-        cfg: attempt.config,
-        env: process.env,
-        runId: attempt.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: attempt.sessionKey,
-        sessionFile: trajectorySessionFile,
-        sessionTarget,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        modelApi: attempt.model.api,
-        workspaceDir: attempt.workspaceDir,
-      });
+  const recorder = createTrajectoryRuntimeRecorder({
+    cfg: attempt.config,
+    env: process.env,
+    runId: attempt.runId,
+    sessionId: activeSession.sessionId,
+    sessionKey: attempt.sessionKey,
+    sessionFile: trajectorySessionFile,
+    sessionTarget,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    modelApi: attempt.model.api,
+    workspaceDir: attempt.workspaceDir,
+  });
   recorder?.recordEvent("session.started", {
     trigger: attempt.trigger,
     sessionFile: attempt.sessionFile,

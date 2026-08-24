@@ -6,12 +6,8 @@ import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import type {
-  BoardObserverContext,
-  BoardViewSnapshot,
-  BoardWidgetFrameUrl,
-} from "../../lib/board/view-types.ts";
+import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 
 export type BoardChatDockSize = {
   height: number;
@@ -26,8 +22,7 @@ export type WorkboardCardChipProps = {
 
 type BoardSessionSurfaceProps = {
   active: boolean;
-  snapshot: BoardViewSnapshot;
-  observer?: BoardObserverContext;
+  snapshot: BoardSnapshot;
   activeTabId: string;
   dock: BoardTab["chatDock"];
   dockSize: BoardChatDockSize;
@@ -77,6 +72,7 @@ export function renderBoardViewSwitch(props: {
   face: BoardFace;
   dock: BoardTab["chatDock"];
   canChangeDock: boolean;
+  fullscreenControl?: TemplateResult;
   onSelectMode: (mode: BoardViewMode) => void;
   onDockSideChange: (dock: BoardVisibleChatDock) => void;
 }) {
@@ -147,6 +143,7 @@ export function renderBoardViewSwitch(props: {
             </wa-dropdown>
           `
         : nothing}
+      ${mode === "chat" ? nothing : props.fullscreenControl}
     </div>
   `;
 }
@@ -170,7 +167,6 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
-        .observer=${props.observer}
         .canMutate=${props.canMutate}
         .canGrant=${props.canGrant}
       ></openclaw-board-view>

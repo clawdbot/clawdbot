@@ -1,44 +1,41 @@
 import { WebClient } from "@slack/web-api";
 import { describe, expect, it } from "vitest";
-import { resolveSlackEventScope } from "./event-scope.js";
+import { resolveSlackListenerEventScope } from "./event-scope.js";
 
 const identity = { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" } as const;
 const client = new WebClient("listener-token");
 
-describe("resolveSlackEventScope", () => {
-  it.each(["T111", "T222"])("accepts authorized workspace %s in the same org", (teamId) => {
-    const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
-    const result = resolveSlackEventScope({
-      identity,
-      body: { api_app_id: "A123" },
-      context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
-      client: listenerClient,
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      scope: {
+describe("resolveSlackListenerEventScope", () => {
+  it.each(["T111", "workspace/Mixed Case"])(
+    "preserves authorized workspace %s in the same org",
+    (teamId) => {
+      const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
+      const result = resolveSlackListenerEventScope({
+        identity,
+        body: { api_app_id: "A123" },
+        context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
+        client: listenerClient,
+      });
+      expect(result).toMatchObject({
         teamId,
         client: listenerClient,
-      },
-    });
-    expect(result.ok && result.scope?.client).toBe(listenerClient);
-    expect(result.ok && result.scope?.uploadCompletionClient).toBeInstanceOf(WebClient);
-    expect(result.ok && result.scope?.uploadCompletionClient).not.toBe(listenerClient);
-  });
+      });
+      expect(result?.client).toBe(listenerClient);
+      expect(result?.uploadCompletionClient).toBeInstanceOf(WebClient);
+      expect(result?.uploadCompletionClient).not.toBe(listenerClient);
+    },
+  );
 
-  it("accepts a signed enterprise event when startup auth.test omitted app_id", () => {
-    const result = resolveSlackEventScope({
-      identity: { kind: "enterprise", enterpriseId: "E123" },
-      body: { api_app_id: "A123" },
+  it("accepts a Bolt-authenticated payload that does not carry api_app_id", () => {
+    const result = resolveSlackListenerEventScope({
+      identity,
+      body: {},
       context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
       client,
     });
     expect(result).toMatchObject({
-      ok: true,
-      scope: {
-        teamId: "T111",
-        client,
-      },
+      teamId: "T111",
+      client,
     });
   });
 
@@ -77,7 +74,8 @@ describe("resolveSlackEventScope", () => {
       enterpriseId: "E123",
       teamId: "T111",
     };
-    const result = resolveSlackEventScope({
+    let droppedReason: string | undefined;
+    const result = resolveSlackListenerEventScope({
       identity,
       body: { api_app_id: "A123" },
       client,
@@ -86,8 +84,12 @@ describe("resolveSlackEventScope", () => {
         ...baseContext,
         ...("context" in override ? override.context : {}),
       },
+      onDrop: (value) => {
+        droppedReason = value;
+      },
     });
-    expect(result).toEqual({ ok: false, reason });
+    expect(result).toBeNull();
+    expect(droppedReason).toBe(reason);
   });
 
   it("rejects enterprise events for workspace and degraded accounts", () => {
@@ -95,14 +97,19 @@ describe("resolveSlackEventScope", () => {
       { kind: "workspace", apiAppId: "A123", teamId: "T111" } as const,
       { kind: "degraded", reason: "auth_test_failed" } as const,
     ]) {
+      let droppedReason: string | undefined;
       expect(
-        resolveSlackEventScope({
+        resolveSlackListenerEventScope({
           identity: workspaceIdentity,
           body: { api_app_id: "A123" },
           context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
           client,
+          onDrop: (value) => {
+            droppedReason = value;
+          },
         }),
-      ).toEqual({ ok: false, reason: "enterprise_event_for_workspace_account" });
+      ).toBeNull();
+      expect(droppedReason).toBe("enterprise_event_for_workspace_account");
     }
   });
 });

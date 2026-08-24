@@ -4,7 +4,7 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import {
   reserveSkillCommandNames,
   resolveConfiguredDirectiveAliases,
@@ -301,7 +301,7 @@ describe("reply directive aliases", () => {
 
   it("parses configured alias session scope through the inline directive boundary", () => {
     const cfg = configWithModelAlias("fable");
-    const parsed = parseInlineDirectives("/fable -s", {
+    const parsed = parseInlineSessionDirectives("/fable -s", {
       modelAliases: resolveConfiguredDirectiveAliases({
         cfg,
         commandTextHasSlash: true,
@@ -322,7 +322,7 @@ describe("reply directive aliases", () => {
     const reservedCommands = new Set<string>();
     const cfg = configWithModelAlias("demo_skill");
 
-    const beforeSkillRegistration = parseInlineDirectives("/demo_skill", {
+    const beforeSkillRegistration = parseInlineSessionDirectives("/demo_skill", {
       modelAliases: resolveConfiguredDirectiveAliases({
         cfg,
         commandTextHasSlash: true,
@@ -344,7 +344,7 @@ describe("reply directive aliases", () => {
       ],
     });
 
-    const afterSkillRegistration = parseInlineDirectives("/demo_skill", {
+    const afterSkillRegistration = parseInlineSessionDirectives("/demo_skill", {
       modelAliases: resolveConfiguredDirectiveAliases({
         cfg,
         commandTextHasSlash: true,
@@ -359,7 +359,7 @@ describe("reply directive aliases", () => {
     const cfg = configWithModelAlias(" help ");
     const reservedCommands = new Set(["help"]);
 
-    const parsed = parseInlineDirectives("/help", {
+    const parsed = parseInlineSessionDirectives("/help", {
       modelAliases: resolveConfiguredDirectiveAliases({
         cfg,
         commandTextHasSlash: true,

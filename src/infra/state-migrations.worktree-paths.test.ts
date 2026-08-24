@@ -7,6 +7,7 @@ import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -37,6 +38,7 @@ describe("managed worktree path state migrations", () => {
       cfg: {} as OpenClawConfig,
       env,
       homedir: () => root,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
 
     expect(detected.worktrees.pathRewrites).toStrictEqual([]);
@@ -108,11 +110,21 @@ describe("managed worktree path state migrations", () => {
       const cfg = {} as OpenClawConfig;
       // Doctor's read-only SELECT * follows the physical columns. Compatibility
       // validation must allow this additive column to be absent before that query.
-      const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+      const detected = await detectLegacyStateMigrations({
+        cfg,
+        env,
+        homedir: () => root,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
       expect(detected.preview).toContain(
         "- Managed worktrees: canonicalize 2 persisted paths for symlinked state directories",
       );
-      const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+      const result = await runLegacyStateMigrations({
+        detected,
+        config: cfg,
+        env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
       expect(result.warnings).toStrictEqual([]);
       expect(result.changes).toContain(
         "Canonicalized 2 managed worktree paths for symlinked state directories",
@@ -128,12 +140,14 @@ describe("managed worktree path state migrations", () => {
         cfg,
         env,
         homedir: () => root,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
       expect(secondDetection.worktrees.pathRewrites).toStrictEqual([]);
       const secondResult = await runLegacyStateMigrations({
         detected: secondDetection,
         config: cfg,
         env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
       expect(secondResult.changes).not.toContain(
         "Canonicalized 2 managed worktree paths for symlinked state directories",

@@ -1,5 +1,6 @@
 // Builds task status summaries and formatted status text for user-facing surfaces.
 import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -72,7 +73,7 @@ function stripInlineLeakedInternalContext(value: string): string {
 
 function sanitizeTaskStatusValue(value: unknown, errorContext: boolean): unknown {
   if (typeof value === "string") {
-    const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value), {
+    const sanitized = renderUserFacingText(stripInlineLeakedInternalContext(value), {
       errorContext,
     })
       .replace(/\s+/g, " ")

@@ -2,16 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  listAgentEntries,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
@@ -19,6 +14,7 @@ import {
 } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { loadOfficialExternalChannelSecretContractApi } from "./official-external-channel-secret-contract.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
@@ -160,18 +156,11 @@ function listChannelSecretContractRecords(params: {
   env: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): PluginManifestRecord[] {
-  // Static target-registry compilation intentionally has no runtime config.
-  // External plugin discovery can proceed without a workspace scan in that case.
-  const workspaceDir =
-    listAgentEntries(params.config).length > 0
-      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
-      : undefined;
-  const snapshot = loadPluginMetadataSnapshot({
+  const manifestRegistry = resolveConfigWidePluginManifestRegistry({
     config: params.config,
-    ...(workspaceDir ? { workspaceDir } : {}),
     env: params.env,
   });
-  return snapshot.plugins
+  return manifestRegistry.plugins
     .filter((record) => record.origin !== "bundled")
     .filter((record) => recordOwnsChannel(record, params.channelId))
     .filter(
@@ -195,26 +184,38 @@ export function loadChannelSecretContractApi(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  bundledOnly?: boolean;
 }): BundledChannelSecretContractApi | undefined {
   const bundled = loadBundledChannelSecretContractApi(params.channelId);
-  if (bundled) {
+  if (bundled || params.bundledOnly) {
     return bundled;
   }
   // External contracts are considered only after bundled artifacts so core channels keep their
   // shipped metadata stable even when similarly named plugins are installed.
   const env = params.env ?? process.env;
-  for (const record of listChannelSecretContractRecords({
-    channelId: params.channelId,
-    config: params.config,
-    env,
-    loadablePluginOrigins: params.loadablePluginOrigins,
-  })) {
+  const officialFallback = loadOfficialExternalChannelSecretContractApi(params.channelId);
+  let records: PluginManifestRecord[];
+  try {
+    records = listChannelSecretContractRecords({
+      channelId: params.channelId,
+      config: params.config,
+      env,
+      loadablePluginOrigins: params.loadablePluginOrigins,
+    });
+  } catch (error) {
+    // Catalog contracts are process-stable fallbacks when plugin metadata is unavailable.
+    if (officialFallback) {
+      return officialFallback;
+    }
+    throw error;
+  }
+  for (const record of records) {
     const contract = loadExternalChannelSecretContractFromRecord(record, env);
     if (contract) {
       return contract;
     }
   }
-  return undefined;
+  return officialFallback;
 }
 
 /** Loads a channel secret contract directly from a manifest record. */

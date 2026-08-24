@@ -70,18 +70,18 @@ function readNonNegativeInt(name, fallback) {
   return parsed;
 }
 
-function clampTimerTimeoutMs(valueMs, minMs = 1) {
+function clampOpenWebUiTimerTimeoutMs(valueMs, minMs = 1) {
   const min = Math.max(0, Math.floor(minMs));
   const value = Number.isFinite(valueMs) ? valueMs : min;
   return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
 }
 
 function readPositiveTimerMs(name, fallback) {
-  return clampTimerTimeoutMs(readPositiveInt(name, fallback));
+  return clampOpenWebUiTimerTimeoutMs(readPositiveInt(name, fallback));
 }
 
 function readNonNegativeTimerMs(name, fallback) {
-  return clampTimerTimeoutMs(readNonNegativeInt(name, fallback), 0);
+  return clampOpenWebUiTimerTimeoutMs(readNonNegativeInt(name, fallback), 0);
 }
 
 function createTimeoutError(label, timeoutMs) {
@@ -91,7 +91,7 @@ function createTimeoutError(label, timeoutMs) {
 }
 
 async function withRequestTimeout(label, timeoutMs, run) {
-  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
+  const resolvedTimeoutMs = clampOpenWebUiTimerTimeoutMs(timeoutMs);
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, resolvedTimeoutMs);
   let timer;
@@ -156,7 +156,7 @@ function buildAuthHeaders(token, cookie) {
 
 function sleep(ms) {
   return new Promise((resolve) => {
-    setTimeout(resolve, clampTimerTimeoutMs(ms, 0));
+    setTimeout(resolve, clampOpenWebUiTimerTimeoutMs(ms, 0));
   });
 }
 

@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Checkout
         if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           fetch-tags: false
@@ -77,7 +77,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -87,7 +87,7 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
             if [ -d "$xcode_app/Contents/Developer" ]; then
               sudo xcode-select -s "$xcode_app/Contents/Developer"
               break
@@ -95,8 +95,8 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.* ]]; then
-            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
             exit 1
           fi
           swift --version
@@ -104,6 +104,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Install iOS scan tooling
@@ -152,14 +153,17 @@ jobs:
             cp "$output_dir/periphery.stdout.json" "$output_dir/periphery.json"
           fi
 
+      # Failed-job reruns retain successful producer artifacts from the original attempt.
+      # Keep artifact slots run-scoped; rerun producers overwrite their slot.
       - name: Upload iOS consumer report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-ios-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-ios
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   scan-macos:
     name: Scan shared kit from macOS
@@ -169,7 +173,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -179,7 +183,7 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
             if [ -d "$xcode_app/Contents/Developer" ]; then
               sudo xcode-select -s "$xcode_app/Contents/Developer"
               break
@@ -187,8 +191,8 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.* ]]; then
-            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
             exit 1
           fi
           swift --version
@@ -225,10 +229,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   intersect:
     name: Intersect shared OpenClawKit dead code
@@ -237,7 +242,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -247,13 +252,13 @@ jobs:
       - name: Download iOS consumer report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-ios-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-ios
 
       - name: Download macOS consumer report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
 
       - name: Intersect exact Swift identities
@@ -269,7 +274,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-intersection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-intersection-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-intersection
           if-no-files-found: warn
           retention-days: 14
+          overwrite: true

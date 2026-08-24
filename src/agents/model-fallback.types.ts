@@ -1,7 +1,7 @@
 /**
  * Shared candidate and attempt types for model fallback execution.
  */
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 // Shared model fallback record types used by selection, observation, and retry
 // reporting.

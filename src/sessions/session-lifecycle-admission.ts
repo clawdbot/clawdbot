@@ -48,6 +48,7 @@ type SessionLifecycleMutationTarget = {
 type SessionLifecycleMutationParams<T> = {
   kind?: SessionLifecycleMutationKind;
   prepare?: () => Promise<void>;
+  finalize?: () => Promise<void>;
   run: () => Promise<T>;
   signal?: AbortSignal;
 } & (SessionLifecycleMutationTarget | { targets: Iterable<SessionLifecycleMutationTarget> });
@@ -241,34 +242,40 @@ export async function runExclusiveSessionLifecycleMutation<T>(
           await params.prepare?.();
           return await runWithSessionIdentityLocks(identities, 0, params.run);
         } finally {
-          await runWithSessionIdentityLocks(identities, 0, async () => {
-            for (const identity of identities) {
-              if (params.kind) {
-                const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity);
-                const remainingKindCount = (kinds?.get(params.kind) ?? 1) - 1;
-                if (remainingKindCount > 0) {
-                  kinds?.set(params.kind, remainingKindCount);
-                } else {
-                  kinds?.delete(params.kind);
-                  if (kinds?.size === 0) {
-                    ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.delete(identity);
+          // Resource finalization is part of the mutation: successors remain
+          // fenced until rollback or exact-generation cleanup has completed.
+          try {
+            await params.finalize?.();
+          } finally {
+            await runWithSessionIdentityLocks(identities, 0, async () => {
+              for (const identity of identities) {
+                if (params.kind) {
+                  const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity);
+                  const remainingKindCount = (kinds?.get(params.kind) ?? 1) - 1;
+                  if (remainingKindCount > 0) {
+                    kinds?.set(params.kind, remainingKindCount);
+                  } else {
+                    kinds?.delete(params.kind);
+                    if (kinds?.size === 0) {
+                      ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.delete(identity);
+                    }
                   }
                 }
+                const remaining = (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 1) - 1;
+                if (remaining > 0) {
+                  ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, remaining);
+                  continue;
+                }
+                ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
+                const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
+                SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
+                for (const resolve of waiters ?? []) {
+                  resolve();
+                }
               }
-              const remaining = (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 1) - 1;
-              if (remaining > 0) {
-                ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, remaining);
-                continue;
-              }
-              ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
-              const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
-              SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
-              for (const resolve of waiters ?? []) {
-                resolve();
-              }
-            }
-            ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
-          });
+              ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
+            });
+          }
         }
       }),
     "mutation",
@@ -349,16 +356,14 @@ type SessionWorkAdmissionReleaseParams = {
   identities: Iterable<string | undefined>;
 };
 
-function resolveSessionWorkAdmissionRelease(
+/** Completion of the currently active turns that own a session. */
+export function getSessionWorkAdmissionRelease(
   params: SessionWorkAdmissionReleaseParams,
-  ownedAdmissions?: ReadonlySet<SessionWorkAdmission>,
 ): Promise<void> | undefined {
   const matchingAdmissions = new Set<SessionWorkAdmission>();
   for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
     for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      if (!ownedAdmissions || ownedAdmissions.has(admission)) {
-        matchingAdmissions.add(admission);
-      }
+      matchingAdmissions.add(admission);
     }
   }
   if (matchingAdmissions.size === 0) {
@@ -370,24 +375,6 @@ function resolveSessionWorkAdmissionRelease(
   return Promise.all(Array.from(matchingAdmissions, (admission) => admission.released)).then(
     () => undefined,
   );
-}
-
-/** Completion of this caller's admitted turn for the requested session identities. */
-export function getCurrentSessionWorkAdmissionRelease(
-  params: SessionWorkAdmissionReleaseParams,
-): Promise<void> | undefined {
-  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
-  if (!currentAdmissions?.size) {
-    return undefined;
-  }
-  return resolveSessionWorkAdmissionRelease(params, currentAdmissions);
-}
-
-/** Completion of the currently active turns that own a session. */
-export function getSessionWorkAdmissionRelease(
-  params: SessionWorkAdmissionReleaseParams,
-): Promise<void> | undefined {
-  return resolveSessionWorkAdmissionRelease(params);
 }
 
 /** Active session identities for one store/lifecycle scope. */
@@ -547,11 +534,10 @@ export async function beginSessionWorkAdmission(params: {
   });
 }
 
-export async function interruptSessionWorkAdmissions(params: {
+export function startSessionWorkAdmissionInterruption(params: {
   scope: string;
   identities: Iterable<string | undefined>;
-  timeoutMs?: number;
-}): Promise<boolean> {
+}): { released: Promise<void> } {
   const admissions = new Set<SessionWorkAdmission>();
   const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
   for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
@@ -568,7 +554,19 @@ export async function interruptSessionWorkAdmissions(params: {
     admission.interrupted = true;
     admission.interrupt?.();
   }
-  const released = Promise.all(Array.from(admissions, (admission) => admission.released));
+  return {
+    released: Promise.all(Array.from(admissions, (admission) => admission.released)).then(
+      () => undefined,
+    ),
+  };
+}
+
+export async function interruptSessionWorkAdmissions(params: {
+  scope: string;
+  identities: Iterable<string | undefined>;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const { released } = startSessionWorkAdmissionInterruption(params);
   if (params.timeoutMs === undefined) {
     await released;
     return true;

@@ -19,9 +19,14 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
+const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/approval-turn-source.js", () => ({
   hasApprovalTurnSourceRoute: hasApprovalTurnSourceRouteMock,
+}));
+
+vi.mock("../approval-channel-custody.js", () => ({
+  prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
 
 type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
@@ -856,6 +861,57 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 
+  it("expires suppressed requests instead of retaining a hidden turn-source route", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo cron",
+        turnSourceChannel: "discord",
+        turnSourceAccountId: "default",
+      },
+      60_000,
+      "approval-suppressed-turn-source",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const deliverRequest = vi.fn(() => true);
+
+    await handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast,
+        hasExecApprovalClients: () => true,
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      suppressDelivery: true,
+      deliverRequest,
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(deliverRequest).not.toHaveBeenCalled();
+    expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    expect(manager.getSnapshot(record.id)).toMatchObject({
+      resolvedBy: "no-approval-route",
+      terminalReason: "no-route",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: null }),
+      undefined,
+    );
+  });
+
   it("does not target no-device browser UI approvals to unrelated approval-scoped clients", async () => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = new ExecApprovalManager();
@@ -1522,6 +1578,40 @@ describe("handlePendingApprovalRequest", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+  });
+
+  it("filters legacy prefix candidates by channel custody before resolving", async () => {
+    const manager = new ExecApprovalManager();
+    const owned = manager.create({ command: "owned" }, 60_000, "approval-prefix-owned");
+    const foreign = manager.create({ command: "foreign" }, 60_000, "approval-prefix-foreign");
+    void manager.register(owned, 60_000);
+    void manager.register(foreign, 60_000);
+    prepareApprovalChannelCustodyMock.mockReturnValueOnce({
+      resolverId: "telegram:ops",
+      authorizes: (request: { request: { command: string } }) =>
+        request.request.command === "owned",
+    });
+    const respond = vi.fn();
+
+    await handleApprovalResolve({
+      approvalKind: "exec",
+      manager,
+      inputId: "approval-prefix",
+      decision: "deny",
+      reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext,
+      client: null,
+      exposeAmbiguousPrefixError: true,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(owned.id)?.decision).toBe("deny");
+    expect(manager.getSnapshot(foreign.id)?.decision).toBeUndefined();
   });
 
   it("targets resolved approval events to visible approval clients when available", async () => {

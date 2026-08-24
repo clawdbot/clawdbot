@@ -281,6 +281,61 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:other-user"].updatedAt).toBe(2_000);
   });
 
+  it("does not route a personal lifecycle event through a Team binding that matches its tenant", async () => {
+    const store = {
+      "msteams:direct:user-aad": { sessionId: "personal-session", updatedAt: 1_000 },
+      "msteams:direct:team-owner": { sessionId: "team-session", updatedAt: 2_000 },
+    };
+    setupStore(store);
+    const resolveAgentRoute = vi.fn(
+      (params: { peer: { id: string; kind: string }; teamId?: string }) =>
+        params.teamId === "shared-tenant"
+          ? {
+              accountId: "default",
+              agentId: "team-owner",
+              sessionKey: "msteams:direct:team-owner",
+            }
+          : {
+              accountId: "default",
+              agentId: "default",
+              sessionKey: `msteams:${params.peer.kind}:${params.peer.id}`,
+            },
+    );
+    installMSTeamsTestRuntime({
+      resetSessionEntryLifecycle: hoisted.resetSessionEntryLifecycle,
+      resolveAgentRoute,
+    });
+    const { deps } = createDeps();
+
+    const result = await handleMSTeamsLifecycleRemove(
+      createContext({
+        type: "installationUpdate",
+        action: "remove",
+        from: { aadObjectId: "user-aad" },
+        recipient: { id: "bot-id" },
+        conversation: {
+          id: "19:personal-chat",
+          conversationType: "personal",
+          tenantId: "shared-tenant",
+        },
+      }),
+      deps,
+    );
+
+    expect(resolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { id: "user-aad", kind: "direct" },
+        teamId: undefined,
+      }),
+    );
+    expect(result.sessionsReset).toBe(1);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("personal-session");
+    expect(store["msteams:direct:team-owner"]).toEqual({
+      sessionId: "team-session",
+      updatedAt: 2_000,
+    });
+  });
+
   it("rotates a zero-timestamp session that still has Teams provider bindings", async () => {
     const store = {
       "msteams:direct:user-aad": {

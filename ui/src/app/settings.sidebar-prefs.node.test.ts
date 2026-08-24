@@ -55,6 +55,25 @@ describe("sidebar preference persistence", () => {
     vi.unstubAllGlobals();
   });
 
+  it("persists sidebar width without leaking tab-local visibility across reloads", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const gatewayUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gatewayUrl}`;
+
+    saveSettings(makeSettings(gatewayUrl, { navCollapsed: true, navWidth: 320 }));
+
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(persisted).not.toHaveProperty("navCollapsed");
+    expect(persisted.navWidth).toBe(320);
+    expect(loadSettings()).toMatchObject({ navCollapsed: false, navWidth: 320 });
+
+    localStorage.setItem(scopedKey, JSON.stringify({ ...persisted, navCollapsed: true }));
+    expect(loadSettings()).toMatchObject({ navCollapsed: false, navWidth: 320 });
+  });
+
   it("persists sidebar entries across save and load, normalizing bad values", () => {
     setTestLocation({
       protocol: "https:",
@@ -97,12 +116,16 @@ describe("sidebar preference persistence", () => {
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
     const legacy = makeSettings(gwUrl) as unknown as Record<string, unknown>;
     delete legacy.sidebarEntries;
-    legacy.sidebarPinnedRoutes = ["usage", "tasks", "usage", "worktrees", 7];
+    legacy.sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
     localStorage.setItem(scopedKey, JSON.stringify(legacy));
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:usage", "route:tasks"]);
+    expect(loadSettings().sidebarEntries).toEqual([
+      "route:workboard",
+      "route:usage",
+      "route:tasks",
+    ]);
     const migrated = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<string, unknown>;
-    expect(migrated.sidebarEntries).toEqual(["route:usage", "route:tasks"]);
+    expect(migrated.sidebarEntries).toEqual(["route:workboard", "route:usage", "route:tasks"]);
     expect(migrated).not.toHaveProperty("sidebarPinnedRoutes");
   });
 });

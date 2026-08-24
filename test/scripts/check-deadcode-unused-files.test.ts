@@ -13,6 +13,7 @@ import {
   parseKnipCompactUnusedFiles,
   runKnipUnusedFiles,
 } from "../../scripts/check-deadcode-unused-files.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -34,6 +35,21 @@ function finishFakeProcess(
 ): void {
   child.emit("exit", status, signal);
   child.emit("close", status, signal);
+}
+
+function waitForPidFileSync(filePath: string, timeoutMs: number): number {
+  const deadlineAt = Date.now() + timeoutMs;
+  const waitSignal = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadlineAt) {
+    if (existsSync(filePath)) {
+      const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    }
+    Atomics.wait(waitSignal, 0, 0, 5);
+  }
+  throw new Error(`timeout waiting for pid in ${filePath}`);
 }
 
 describe("check-deadcode-unused-files", () => {
@@ -159,7 +175,7 @@ Delete the files or model their real entrypoints in Knip.`,
           "--config.minimum-release-age=0",
           "dlx",
           "--package",
-          "knip@6.8.0",
+          "knip@6.32.2",
           "knip",
           "--config",
           "config/knip.config.ts",
@@ -214,7 +230,7 @@ Delete the files or model their real entrypoints in Knip.`,
         "--config.minimum-release-age=0",
         "dlx",
         "--package",
-        "knip@6.8.0",
+        "knip@6.32.2",
         "knip",
         "--config",
         "config/knip.config.ts",
@@ -299,16 +315,17 @@ Delete the files or model their real entrypoints in Knip.`,
           env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
           killGraceMs: 50,
           spawnCommand(_command: string, _args: string[], options: unknown) {
-            return spawn(process.execPath, ["-e", parentScript], {
+            const parent = spawn(process.execPath, ["-e", parentScript], {
               ...(options as Parameters<typeof spawn>[2]),
               env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
             });
+            childPid = waitForPidFileSync(childPidPath, 2_000);
+            return parent;
           },
           timeoutMs: 100,
           writeStatus: () => {},
         });
 
-        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         await expect(resultPromise).resolves.toMatchObject({
@@ -316,9 +333,7 @@ Delete the files or model their real entrypoints in Knip.`,
         });
         await waitForDead(childPid, 2_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },
@@ -380,9 +395,7 @@ Delete the files or model their real entrypoints in Knip.`,
         if (runner?.pid && isProcessAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },

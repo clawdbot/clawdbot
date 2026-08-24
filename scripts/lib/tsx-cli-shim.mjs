@@ -6,11 +6,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
-const FORCE_KILL_DELAY_MS = 5_000;
+const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
+const SHIM_CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-function resolvePrimaryRoot(repoRoot) {
+function resolvePrimaryRoot(checkoutRoot) {
   const result = spawnSync("git", ["rev-parse", "--git-common-dir"], {
-    cwd: repoRoot,
+    cwd: checkoutRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
@@ -21,13 +22,22 @@ function resolvePrimaryRoot(repoRoot) {
   if (!commonDir) {
     return null;
   }
-  const resolved = path.resolve(repoRoot, commonDir);
+  const resolved = path.resolve(checkoutRoot, commonDir);
   return path.basename(resolved) === ".git" ? path.dirname(resolved) : null;
 }
 
-function resolveTsxImport(repoRoot) {
+function resolveTsxImport(checkoutRoot) {
+  const modulesDir =
+    process.env.PNPM_CONFIG_MODULES_DIR?.trim() || process.env.npm_config_modules_dir?.trim();
+  const hydratedTsxRoot = modulesDir
+    ? path.join(path.resolve(checkoutRoot, modulesDir), "tsx")
+    : null;
   let resolutionError;
-  for (const candidateRoot of [repoRoot, resolvePrimaryRoot(repoRoot)].filter(Boolean)) {
+  for (const candidateRoot of [
+    hydratedTsxRoot,
+    checkoutRoot,
+    resolvePrimaryRoot(checkoutRoot),
+  ].filter(Boolean)) {
     try {
       const require = createRequire(path.join(candidateRoot, "package.json"));
       return pathToFileURL(require.resolve("tsx")).href;
@@ -68,6 +78,7 @@ function signalChild(child, signal, detached) {
 
 async function runTsxCliShimInner(moduleUrl, options) {
   const detached = options.detached ?? (process.platform !== "win32" && !process.stdin.isTTY);
+  const forceKillDelayMs = options.forceKillDelayMs ?? DEFAULT_FORCE_KILL_DELAY_MS;
   let child = null;
   let forceKillTimer = null;
   const signalHandlers = new Map();
@@ -88,7 +99,7 @@ async function runTsxCliShimInner(moduleUrl, options) {
       signalChild(child, signal, detached);
       forceKillTimer ??= setTimeout(
         () => signalChild(child, "SIGKILL", detached),
-        FORCE_KILL_DELAY_MS,
+        forceKillDelayMs,
       );
       forceKillTimer.unref();
     };
@@ -100,8 +111,7 @@ async function runTsxCliShimInner(moduleUrl, options) {
   try {
     const implementationUrl = new URL(options.implementation, moduleUrl);
     const implementationPath = fileURLToPath(implementationUrl);
-    const repoRoot = path.resolve(path.dirname(implementationPath), "..");
-    const tsxImport = resolveTsxImport(repoRoot);
+    const tsxImport = resolveTsxImport(SHIM_CHECKOUT_ROOT);
     const nodeExecutable = process.versions.bun ? "node" : process.execPath;
     child = spawn(
       nodeExecutable,

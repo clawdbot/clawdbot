@@ -1,11 +1,9 @@
 // Cron schedule tests cover schedule parsing and next-run calculations.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Cron } from "croner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  coerceFiniteScheduleNumber,
-  computeNextRunAtMs,
-  computePreviousRunAtMs,
-} from "./schedule.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { computeNextRunAtMs, computePreviousRunAtMs } from "./schedule.js";
 import {
   clearCronScheduleCacheForTest,
   getCronScheduleCacheMaxForTest,
@@ -385,6 +383,38 @@ describe("cron schedule", () => {
     expect(next).toBe(anchor + 60_000);
   });
 
+  it("rejects every schedule numbers outside the ECMAScript Date range", () => {
+    expect(
+      computeNextRunAtMs({ kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS + 1 }, 0),
+    ).toBeUndefined();
+    expect(
+      computeNextRunAtMs({ kind: "every", everyMs: 1, anchorMs: MAX_DATE_TIMESTAMP_MS + 1 }, 0),
+    ).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 0.5, anchorMs: 0 }, 0)).toBeUndefined();
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 1, anchorMs: -1 }, 0)).toBeUndefined();
+  });
+
+  it("does not return an every occurrence outside the ECMAScript Date range", () => {
+    const anchorMs = MAX_DATE_TIMESTAMP_MS - 1;
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 2, anchorMs }, anchorMs)).toBeUndefined();
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY],
+    ["above Date range", MAX_DATE_TIMESTAMP_MS + 1],
+    ["below Date range", -MAX_DATE_TIMESTAMP_MS - 1],
+  ])("returns undefined instead of throwing for an invalid %s cursor", (_label, nowMs) => {
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 60_000 }, nowMs)).toBeUndefined();
+    expect(
+      computeNextRunAtMs({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, nowMs),
+    ).toBeUndefined();
+    expect(
+      computePreviousRunAtMs({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, nowMs),
+    ).toBeUndefined();
+  });
+
   it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
     const next = computeNextRunAtMs(
@@ -527,6 +557,7 @@ describe("coerceFiniteScheduleNumber", () => {
     expect(coerceFiniteScheduleNumber("0x10")).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Number.NaN)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(MAX_DATE_TIMESTAMP_MS + 1)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(String(Number.MAX_SAFE_INTEGER + 1))).toBeUndefined();
     expect(coerceFiniteScheduleNumber(null)).toBeUndefined();

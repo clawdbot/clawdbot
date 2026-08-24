@@ -1363,6 +1363,49 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
   });
 
+  it("does not materialize or dispatch media after ingress cancellation", async () => {
+    const cancellation = new Error("LINE webhook spool stopped");
+    const abort = new AbortController();
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementationOnce(
+      async (
+        _messageId: string,
+        _token: string,
+        _maxBytes: number,
+        options?: { signal?: AbortSignal },
+      ) => {
+        options?.signal?.throwIfAborted();
+        throw new Error("download did not receive ingress cancellation");
+      },
+    );
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-cancelled-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-cancelled",
+      },
+      source: { type: "user", userId: "user-image-cancelled" },
+      webhookEventId: "evt-image-cancelled",
+    });
+    const context = {
+      ...createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+      turnAdoptionLifecycle: {
+        admission: "exclusive" as const,
+        abortSignal: abort.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    };
+    abort.abort(cancellation);
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toBe(cancellation);
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
   it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {
     // Image message -- LINE only carries mention metadata on text messages.
     const event = createTestMessageEvent({

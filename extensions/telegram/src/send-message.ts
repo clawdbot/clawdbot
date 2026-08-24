@@ -7,6 +7,7 @@ import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/cha
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { telegramCaptionDeliveryMetadata } from "./caption.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
@@ -68,17 +69,23 @@ async function sendMessageTelegramWithContext(
   opts: TelegramSendOpts,
   apiContext: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api } = apiContext;
+  const { cfg, account, api, ownerAgentId } = apiContext;
   const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
   const {
     chatId,
     threadSpec,
+    threadParams: preparedThreadParams,
     request: requestWithChatNotFound,
   } = await prepareTelegramOutbound({
     to,
     context: apiContext,
     opts,
-    thread: { messageThreadId: opts.messageThreadId },
+    thread: {
+      messageThreadId: opts.messageThreadId,
+      replyToMessageId: opts.replyToMessageId,
+      replyQuoteText: opts.quoteText,
+      useReplyIdAsQuoteSource: true,
+    },
     request: { kind: "nonIdempotent" },
   });
   const reportDelivery = async (
@@ -111,6 +118,7 @@ async function sendMessageTelegramWithContext(
     const projection = plan?.cursor.take(plan.finalPart && finalPart);
     const recorded = await recordOutboundMessageForPromptContext({
       cfg,
+      ownerAgentId,
       account,
       ...(botUserId !== undefined ? { botUserId } : {}),
       chatId,
@@ -135,17 +143,14 @@ async function sendMessageTelegramWithContext(
     opts.replyToIdSource === "implicit" &&
     opts.replyToMode !== undefined &&
     isSingleUseReplyToMode(opts.replyToMode);
-  const buildThreadParams = (includeReplyTo: boolean) =>
-    buildTelegramThreadReplyParams({
-      thread: threadSpec,
-      ...(includeReplyTo
-        ? {
-            replyToMessageId: opts.replyToMessageId,
-            replyQuoteText: opts.quoteText,
-            useReplyIdAsQuoteSource: true,
-          }
-        : {}),
-    });
+  let threadParamsWithoutReply: ReturnType<typeof buildTelegramThreadReplyParams> | undefined;
+  const buildThreadParams = (includeReplyTo: boolean) => {
+    if (includeReplyTo) {
+      return preparedThreadParams;
+    }
+    threadParamsWithoutReply ??= buildTelegramThreadReplyParams({ thread: threadSpec });
+    return threadParamsWithoutReply;
+  };
   const textMode = opts.textMode ?? "markdown";
   // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
   // newlines, 4096 chunking) even on rich accounts; blocks are markdown-only.
@@ -165,6 +170,7 @@ async function sendMessageTelegramWithContext(
 
   const { sendChunkedText } = createTelegramTextSender({
     cfg,
+    ownerAgentId,
     account,
     api,
     chatId,
@@ -253,7 +259,7 @@ async function sendMessageTelegramWithContext(
     const needsSeparateText = Boolean(followUpText);
     // When splitting, put reply_markup only on the follow-up text (the "main" content),
     // not on the media message.
-    const mediaThreadParams = buildThreadParams(true);
+    const mediaThreadParams = preparedThreadParams;
     const mediaUsedReplyTo = resolveAcceptedReplyToMessageId(mediaThreadParams) !== undefined;
     const baseMediaParams = {
       ...mediaThreadParams,
@@ -288,12 +294,14 @@ async function sendMessageTelegramWithContext(
           withTelegramNativeQuoteFallback({
             label,
             requestParams,
-            request: (effectiveParams, effectiveLabel) =>
-              requestWithChatNotFound(
+            request: async (effectiveParams, effectiveLabel) => {
+              await opts.onPlatformSendDispatch?.();
+              return await requestWithChatNotFound(
                 () => sender(effectiveParams),
                 effectiveLabel,
                 shouldLog ? { shouldLog } : undefined,
-              ),
+              );
+            },
           }),
       });
     };
@@ -334,19 +342,24 @@ async function sendMessageTelegramWithContext(
     const acceptedMediaParams = toAcceptedThreadScopedParams(mediaDelivery.acceptedParams);
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
-    recordSentMessage(chatId, mediaMessageId, cfg);
+    recordSentMessage(chatId, mediaMessageId, cfg, {
+      accountId: account.accountId,
+      agentId: ownerAgentId,
+    });
     let mediaDeliveryResult: TelegramSendResult | undefined;
     let mediaPromptRecorded = false;
     const reportMediaDelivery = async (hasInlineKeyboard: boolean) => {
       try {
+        const meta = {
+          ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
+          telegramHasInlineKeyboard: hasInlineKeyboard,
+        };
+        telegramCaptionDeliveryMetadata.add(meta);
         mediaDeliveryResult = await reportDelivery(
           mediaMessageId,
           resolvedChatId,
           result,
-          {
-            ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
-            telegramHasInlineKeyboard: hasInlineKeyboard,
-          },
+          meta,
           "media",
           (delivery) => {
             mediaDeliveryResult = delivery;
@@ -434,15 +447,12 @@ async function sendMessageTelegramWithContext(
             messageId: String(mediaMessageId),
             chatId: resolvedChatId,
           };
-          return hasInlineKeyboard
-            ? {
-                ...finalMediaResult,
-                meta: {
-                  ...finalMediaResult.meta,
-                  telegramHasInlineKeyboard: true,
-                },
-              }
-            : finalMediaResult;
+          if (!hasInlineKeyboard) {
+            return finalMediaResult;
+          }
+          const meta = { ...finalMediaResult.meta, telegramHasInlineKeyboard: true };
+          telegramCaptionDeliveryMetadata.add(meta);
+          return { ...finalMediaResult, meta };
         }
         await recordMediaPromptContext(false);
         const textMessageIds = isChannelPartialDeliveryError(error)
@@ -480,13 +490,13 @@ async function sendMessageTelegramWithContext(
       };
     }
 
-    return mediaDeliveryResult?.receipt
-      ? {
-          messageId: mediaDeliveryResult.messageId,
-          chatId: mediaDeliveryResult.chatId,
-          receipt: mediaDeliveryResult.receipt,
-        }
-      : { messageId: String(mediaMessageId), chatId: resolvedChatId };
+    return mediaDeliveryResult?.meta?.telegramHasInlineKeyboard
+      ? mediaDeliveryResult
+      : {
+          messageId: String(mediaMessageId),
+          chatId: resolvedChatId,
+          ...(mediaDeliveryResult?.receipt ? { receipt: mediaDeliveryResult.receipt } : {}),
+        };
   }
 
   if (!text || !text.trim()) {

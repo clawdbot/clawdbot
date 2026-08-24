@@ -259,6 +259,35 @@ describe("one-shot CLI exit", () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
+  it("falls back when stream drain callbacks never settle", async () => {
+    vi.useFakeTimers();
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
+    vi.spyOn(process.stdout, "write").mockImplementation(
+      (() => true) as typeof process.stdout.write,
+    );
+    vi.spyOn(process.stderr, "write").mockImplementation(
+      (() => true) as typeof process.stderr.write,
+    );
+
+    try {
+      requestExitAfterOneShotOutput(defaultRuntime, 5);
+      await runCliWithExitFinalization({
+        run: successfulRun,
+        onError: ignoreError,
+        env: {},
+        execArgv: [],
+        platform: "linux",
+        markers: {},
+      });
+
+      expect(exit).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(exit).toHaveBeenCalledWith(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drains large piped stdout before a requested nonzero exit", () => {
     const env = { ...process.env };
     delete env.VITEST;

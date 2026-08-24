@@ -8,10 +8,13 @@ import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-ses
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
+  clearActiveEmbeddedRun,
   formatEmbeddedAgentQueueFailureSummary,
+  preemptAndDrainEmbeddedHeartbeatRun,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
 } from "./runs.js";
 import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
 
@@ -22,6 +25,65 @@ describe("embedded-agent active-run steering", () => {
     resetDiagnosticSessionStateForTest();
     setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
+  });
+
+  it("aborts and drains the exact heartbeat handle through session replacement", async () => {
+    const heartbeatPreempt = vi.fn(() => true);
+    const finalizingHeartbeatPreempt = vi.fn(() => true);
+    const visibleAbort = vi.fn();
+    const heartbeatHandle: EmbeddedAgentQueueHandle = {
+      ...createEmbeddedRunHandle(),
+      preemptByVisibleTurn: heartbeatPreempt,
+    };
+    const replacementHandle: EmbeddedAgentQueueHandle = {
+      ...createEmbeddedRunHandle({ abort: visibleAbort }),
+    };
+    const finalizingHeartbeatHandle: EmbeddedAgentQueueHandle = {
+      ...createEmbeddedRunHandle({ isAbortable: false }),
+      preemptByVisibleTurn: finalizingHeartbeatPreempt,
+    };
+    setActiveEmbeddedRun("heartbeat-session", heartbeatHandle);
+    setActiveEmbeddedRun("visible-session", replacementHandle);
+    setActiveEmbeddedRun("finalizing-heartbeat-session", finalizingHeartbeatHandle);
+
+    const heartbeatPreemption = preemptAndDrainEmbeddedHeartbeatRun("heartbeat-session", 1_000);
+    const finalizingPreemption = preemptAndDrainEmbeddedHeartbeatRun(
+      "finalizing-heartbeat-session",
+      1_000,
+    );
+    await expect(preemptAndDrainEmbeddedHeartbeatRun("visible-session", 1_000)).resolves.toBe(
+      "not-heartbeat",
+    );
+
+    let heartbeatDrained = false;
+    void heartbeatPreemption.then(() => {
+      heartbeatDrained = true;
+    });
+    setActiveEmbeddedRun("heartbeat-session", replacementHandle);
+    await Promise.resolve();
+    expect(heartbeatDrained).toBe(false);
+
+    clearActiveEmbeddedRun("heartbeat-session", heartbeatHandle);
+    clearActiveEmbeddedRun("finalizing-heartbeat-session", finalizingHeartbeatHandle);
+
+    await expect(heartbeatPreemption).resolves.toBe("drained");
+    await expect(finalizingPreemption).resolves.toBe("drained");
+    expect(heartbeatPreempt).toHaveBeenCalledOnce();
+    expect(finalizingHeartbeatPreempt).toHaveBeenCalledOnce();
+    expect(visibleAbort).not.toHaveBeenCalled();
+  });
+
+  it("leaves a heartbeat in another session running", async () => {
+    const preemptIsolatedHeartbeat = vi.fn(() => true);
+    setActiveEmbeddedRun("base-session:heartbeat", {
+      ...createEmbeddedRunHandle(),
+      preemptByVisibleTurn: preemptIsolatedHeartbeat,
+    });
+
+    await expect(preemptAndDrainEmbeddedHeartbeatRun("base-session", 1_000)).resolves.toBe(
+      "not-heartbeat",
+    );
+    expect(preemptIsolatedHeartbeat).not.toHaveBeenCalled();
   });
 
   it("passes steering options to active embedded runs", () => {
@@ -378,6 +440,142 @@ describe("embedded-agent active-run steering", () => {
     expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
       "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
     );
+  });
+
+  it("atomically claims pending plain-text input across an authority mismatch", async () => {
+    const claimPendingUserInputAnswer = vi.fn(async () => true);
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-pending-question", {
+      ...createEmbeddedRunHandle(),
+      toolAuthorityFingerprint: "fallback-authority",
+      claimPendingUserInputAnswer,
+      queueMessage,
+    });
+
+    const options = {
+      isInboundUserMessage: true,
+      onQueueAccepted: vi.fn(),
+      pendingInputAuthorityFingerprint: "fallback-authority",
+      toolAuthorityFingerprint: "default-authority",
+    } as const;
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-pending-question",
+      "2",
+      options,
+    );
+
+    expect(outcome).toMatchObject({ queued: true, target: "embedded_run" });
+    expect(claimPendingUserInputAnswer).toHaveBeenCalledWith("2", options);
+    expect(options.onQueueAccepted).toHaveBeenCalledWith(true);
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "a proven route-only mismatch without a pending question",
+      claimed: false,
+      images: undefined,
+      pendingInputAuthorityFingerprint: "fallback-authority",
+      expectedClaimCalls: 1,
+      expectedCancelCalls: 0,
+    },
+    {
+      label: "unproven plain text",
+      claimed: true,
+      images: undefined,
+      pendingInputAuthorityFingerprint: undefined,
+      expectedClaimCalls: 0,
+      expectedCancelCalls: 0,
+    },
+    {
+      label: "unproven image input",
+      claimed: true,
+      images: [{ type: "image" as const, data: "png", mimeType: "image/png" as const }],
+      pendingInputAuthorityFingerprint: undefined,
+      expectedClaimCalls: 0,
+      expectedCancelCalls: 0,
+    },
+  ])(
+    "preserves authority mismatch for $label",
+    async ({
+      claimed,
+      images,
+      pendingInputAuthorityFingerprint,
+      expectedClaimCalls,
+      expectedCancelCalls,
+    }) => {
+      const claimPendingUserInputAnswer = vi.fn(async () => claimed);
+      const cancelPendingUserInput = vi.fn(async () => true);
+      const queueMessage = vi.fn(async () => {});
+      setActiveEmbeddedRun("session-pending-question-rejected", {
+        ...createEmbeddedRunHandle(),
+        toolAuthorityFingerprint: "fallback-authority",
+        claimPendingUserInputAnswer,
+        cancelPendingUserInput,
+        queueMessage,
+      });
+
+      const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        "session-pending-question-rejected",
+        "continue",
+        {
+          isInboundUserMessage: true,
+          pendingInputAuthorityFingerprint,
+          toolAuthorityFingerprint: "default-authority",
+          images,
+        },
+      );
+
+      expect(outcome).toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(expectedClaimCalls);
+      expect(cancelPendingUserInput).toHaveBeenCalledTimes(expectedCancelCalls);
+      expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels pending input for a proven route-only image mismatch", async () => {
+    const cancelPendingUserInput = vi.fn(async () => true);
+    setActiveEmbeddedRun("session-route-image", {
+      ...createEmbeddedRunHandle(),
+      toolAuthorityFingerprint: "fallback-authority",
+      cancelPendingUserInput,
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-route-image",
+      "inspect",
+      {
+        isInboundUserMessage: true,
+        pendingInputAuthorityFingerprint: "fallback-authority",
+        toolAuthorityFingerprint: "default-authority",
+        images: [{ type: "image", data: "png", mimeType: "image/png" }],
+      },
+    );
+
+    expect(outcome).toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+    expect(cancelPendingUserInput).toHaveBeenCalledWith("image-reply");
+  });
+
+  it("cancels pending input before rejecting an unsupported queued image", async () => {
+    const cancelPendingUserInput = vi.fn(async () => true);
+    setActiveEmbeddedRun("session-unsupported-question-image", {
+      ...createEmbeddedRunHandle(),
+      toolAuthorityFingerprint: "same-authority",
+      cancelPendingUserInput,
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-unsupported-question-image",
+      "inspect",
+      {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "same-authority",
+        images: [{ type: "image", data: "png", mimeType: "image/png" }],
+      },
+    );
+
+    expect(outcome).toMatchObject({ queued: false, reason: "image_input_unsupported" });
+    expect(cancelPendingUserInput).toHaveBeenCalledWith("image-reply");
   });
 
   it("reports accepted steering without transcript confirmation as non-replayable", async () => {

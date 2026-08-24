@@ -223,7 +223,6 @@ const rules: Array<DeprecatedRule & { id: string }> = [
     roots: ["src", "extensions", "packages"],
     names: ["deliverOutboundPayloads"],
     allowedFiles: [
-      "src/channels/message/inbound-reply-dispatch.ts",
       "src/infra/outbound/deliver-runtime.ts",
       "src/infra/outbound/deliver.ts",
       "src/plugin-sdk/channel-message.ts",

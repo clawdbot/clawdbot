@@ -4,19 +4,22 @@ import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  acquireLocalHeavyCheckLockSync,
   ensureRepoToolNodeModulesLink,
-  resolveLocalHeavyCheckEnv,
+  resolveLocalCheckEnv,
   resolveRepoToolBinPath,
-  shouldAcquireLocalHeavyCheckLockForOxlint,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
+import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
 const POST_FORCE_KILL_WAIT_MS = 1_000;
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
@@ -31,6 +34,7 @@ const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];
 
 type OxlintShard = { name: string; args: string[] };
+type CoreStripe = { index: number; total: number };
 type HostResources = { logicalCpuCount: number; totalMemoryBytes: number };
 type ReadDirectoryEntries = (target: string, options: { withFileTypes: true }) => Dirent[];
 type DirectoryOptions = { cwd?: string; readDir?: ReadDirectoryEntries };
@@ -46,13 +50,10 @@ type RunnerOptions = {
 };
 type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard };
 type ShardBatchOptions = RunnerOptions & { concurrency: number; entries: OxlintShard[] };
-type ChildProcessGroupOptions = { child: ChildProcess; useProcessGroup: boolean };
-type ActiveShardChild = ChildProcessGroupOptions & { killGraceMs: number };
-type SignalOptions = ChildProcessGroupOptions & { signal: NodeJS.Signals };
-type WaitOptions = ChildProcessGroupOptions & { timeoutMs: number };
+type ActiveShardChild = { child: ChildProcess; killGraceMs: number };
 
 const ACTIVE_SHARD_CHILDREN = new Set<ActiveShardChild>();
-let parentTerminationSignal: NodeJS.Signals | null = null;
+let parentTerminationSignal: (typeof PARENT_TERMINATION_SIGNALS)[number] | null = null;
 let parentTerminationForceKill: ReturnType<typeof setTimeout> | null = null;
 let parentSignalForwardingInstalled = false;
 
@@ -252,78 +253,62 @@ export async function main(
 ) {
   const runner = path.resolve("scripts", "run-oxlint.mjs");
   const shardArgs = parseShardRunnerArgs(extraArgs);
-  const env = resolveLocalHeavyCheckEnv(runtimeEnv);
-  const hasMetadataOnlyFlag = shardArgs.oxlintArgs.some((arg) =>
-    ["--help", "-h", "--version", "-V", "--rules", "--print-config", "--init"].includes(arg),
+  const env = resolveLocalCheckEnv(runtimeEnv);
+  const shards = createOxlintShards({
+    cwd: process.cwd(),
+    env,
+    platform: process.platform,
+    splitCore: shardArgs.splitCore,
+  });
+  const selectedShards = selectCoreOxlintStripe(
+    filterOxlintShards(shards, shardArgs.only),
+    shardArgs.coreStripe,
   );
-  const shouldAcquireParentLock =
-    !hasMetadataOnlyFlag ||
-    shouldAcquireLocalHeavyCheckLockForOxlint(shardArgs.oxlintArgs, {
-      cwd: process.cwd(),
-      env,
-    });
-  const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
-      ? () => {}
-      : shouldAcquireParentLock
-        ? acquireLocalHeavyCheckLockSync({
-            cwd: process.cwd(),
-            env,
-            toolName: "oxlint shards",
-          })
-        : () => {};
 
-  try {
-    const shards = createOxlintShards({
-      cwd: process.cwd(),
+  ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
+  const prepareResult = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
+    selectedShards,
+    shardArgs.oxlintArgs,
+  )
+    ? spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
+        ],
+        {
+          stdio: "inherit",
+          env,
+        },
+      )
+    : undefined;
+
+  if (prepareResult?.error) {
+    throw prepareResult.error;
+  }
+  if (prepareResult && (prepareResult.status ?? 1) !== 0) {
+    process.exitCode = prepareResult.status ?? 1;
+  } else {
+    const shardConcurrency = resolveOxlintShardConcurrency({
       env,
       platform: process.platform,
       splitCore: shardArgs.splitCore,
     });
-    const selectedShards = filterOxlintShards(shards, shardArgs.only);
-
-    ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
-    const prepareResult = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-      ],
-      {
-        stdio: "inherit",
-        env,
-      },
+    const hostResources = resolveHostResources();
+    // stderr: stdout may carry machine-readable oxlint output for callers.
+    console.error(
+      `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
+        `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
     );
-
-    if (prepareResult.error) {
-      throw prepareResult.error;
-    }
-    if ((prepareResult.status ?? 1) !== 0) {
-      process.exitCode = prepareResult.status ?? 1;
-    } else {
-      const shardConcurrency = resolveOxlintShardConcurrency({
-        env,
-        platform: process.platform,
-        splitCore: shardArgs.splitCore,
-      });
-      const hostResources = resolveHostResources();
-      // stderr: stdout may carry machine-readable oxlint output for callers.
-      console.error(
-        `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
-          `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
-      );
-      const results = await runShards({
-        concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
-        entries: selectedShards,
-        env,
-        extraArgs: shardArgs.oxlintArgs,
-        runner,
-      });
-      process.exitCode = results.find((status) => status !== 0) ?? 0;
-    }
-  } finally {
-    releaseLock();
+    const results = await runShards({
+      concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
+      entries: selectedShards,
+      env,
+      extraArgs: shardArgs.oxlintArgs,
+      runner,
+    });
+    process.exitCode = results.find((status) => status !== 0) ?? 0;
   }
 }
 
@@ -349,6 +334,7 @@ function resolveHostResources(hostResources?: HostResources) {
 export function parseShardRunnerArgs(args: string[]) {
   const only = new Set<string>();
   const oxlintArgs: string[] = [];
+  let coreStripe: CoreStripe | undefined;
   let splitCore = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -358,6 +344,15 @@ export function parseShardRunnerArgs(args: string[]) {
     }
     if (arg === "--split-core") {
       splitCore = true;
+      continue;
+    }
+    if (arg === "--core-stripe") {
+      coreStripe = parseCoreStripe(args[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--core-stripe=")) {
+      coreStripe = parseCoreStripe(arg.slice("--core-stripe=".length));
       continue;
     }
     if (arg === "--only") {
@@ -372,7 +367,26 @@ export function parseShardRunnerArgs(args: string[]) {
     oxlintArgs.push(arg);
   }
 
-  return { only, oxlintArgs, splitCore };
+  if (coreStripe && !splitCore) {
+    throw new Error("--core-stripe requires --split-core");
+  }
+  return { coreStripe, only, oxlintArgs, splitCore };
+}
+
+function parseCoreStripe(value: string | undefined): CoreStripe {
+  const match = /^(\d+)\/(\d+)$/u.exec(value ?? "");
+  const index = Number(match?.[1]);
+  const total = Number(match?.[2]);
+  if (
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(total) ||
+    index < 1 ||
+    total < 1 ||
+    index > total
+  ) {
+    throw new Error(`--core-stripe requires INDEX/TOTAL with 1 <= INDEX <= TOTAL; got: ${value}`);
+  }
+  return { index, total };
 }
 
 /**
@@ -395,6 +409,37 @@ export function filterOxlintShards<T extends { name: string }>(shards: T[], only
 
   return shards.filter((shard) =>
     selectors.some((selector) => matchesShardSelector(shard, selector)),
+  );
+}
+
+/** Aggregate one deterministic, disjoint stripe into a single core Program. */
+export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: CoreStripe | undefined) {
+  if (!stripe) {
+    return shards;
+  }
+  if (shards.length === 0 || shards.some((shard) => !shard.name.startsWith("core:"))) {
+    throw new Error("--core-stripe requires a non-empty core-only shard selection");
+  }
+  const targets = shards
+    .filter((_, index) => index % stripe.total === stripe.index - 1)
+    .flatMap((shard) => shard.args.slice(2));
+  if (targets.length === 0) {
+    return [];
+  }
+  return [
+    {
+      name: `core:stripe:${stripe.index}`,
+      args: ["--tsconfig", CORE_TS_CONFIG, ...targets],
+    },
+  ];
+}
+
+export function shouldPrepareExtensionPackageBoundaryArtifactsForShards(
+  shards: readonly OxlintShard[],
+  extraArgs: readonly string[] = [],
+) {
+  return shards.some((shard) =>
+    shouldPrepareExtensionPackageBoundaryArtifacts([...shard.args, ...extraArgs]),
   );
 }
 
@@ -464,17 +509,15 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
   const heartbeatMs = resolveShardHeartbeatMs(env);
   const timeoutMs = resolveShardTimeoutMs(env);
   const killGraceMs = resolveShardKillGraceMs(env);
-  const useProcessGroup = process.platform !== "win32";
   const child = spawn(process.execPath, [runner, ...shard.args, ...extraArgs], {
     stdio: "inherit",
-    detached: useProcessGroup,
+    detached: process.platform !== "win32",
     env: {
       ...env,
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
       OPENCLAW_OXLINT_SKIP_PREPARE: "1",
     },
   });
-  const unregisterShardChild = registerShardChild({ child, killGraceMs, useProcessGroup });
+  const unregisterShardChild = registerShardChild({ child, killGraceMs });
 
   return await new Promise<number>((resolve) => {
     let finished = false;
@@ -497,16 +540,16 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
             console.error(
               `[oxlint:${shard.name}] timed out after ${elapsedSeconds}s; terminating shard`,
             );
-            signalChildProcess({ child, signal: "SIGTERM", useProcessGroup });
+            signalChildProcess(child, "SIGTERM");
             if (killGraceMs > 0) {
               forceKillAt = Date.now() + killGraceMs;
               forceKill = setTimeout(() => {
                 console.error(`[oxlint:${shard.name}] did not exit cleanly; killing shard`);
-                signalChildProcess({ child, signal: "SIGKILL", useProcessGroup });
+                signalChildProcess(child, "SIGKILL");
               }, killGraceMs);
               forceKill.unref();
             } else {
-              signalChildProcess({ child, signal: "SIGKILL", useProcessGroup });
+              signalChildProcess(child, "SIGKILL");
             }
           }, timeoutMs)
         : null;
@@ -534,20 +577,12 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       const graceRemainingMs =
         forceKillAt === null ? killGraceMs : Math.max(0, forceKillAt - Date.now());
       if (graceRemainingMs > 0) {
-        await waitForChildProcessGroupExit({
-          child,
-          timeoutMs: graceRemainingMs,
-          useProcessGroup,
-        });
+        await waitForChildProcessGroupExit(child, graceRemainingMs);
       }
-      if (isChildProcessGroupAlive({ child, useProcessGroup })) {
-        signalChildProcess({ child, signal: "SIGKILL", useProcessGroup });
+      if (isChildProcessGroupAlive(child)) {
+        signalChildProcess(child, "SIGKILL");
       }
-      await waitForChildProcessGroupExit({
-        child,
-        timeoutMs: POST_FORCE_KILL_WAIT_MS,
-        useProcessGroup,
-      });
+      await waitForChildProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS);
       finish(status);
     };
     child.once("error", (error) => {
@@ -560,10 +595,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
         : timedOut
           ? 124
           : (status ?? 1);
-      if (
-        (timedOut || parentTerminationSignal) &&
-        isChildProcessGroupAlive({ child, useProcessGroup })
-      ) {
+      if ((timedOut || parentTerminationSignal) && isChildProcessGroupAlive(child)) {
         void finishAfterForcedTeardown(exitStatus);
         return;
       }
@@ -656,47 +688,30 @@ function parsePositiveEnvInt(rawValue: string, key: string) {
   return parsedValue;
 }
 
-function signalChildProcess({ child, signal, useProcessGroup }: SignalOptions) {
+function signalChildProcess(child: ChildProcess, signal: NodeJS.Signals) {
   if (!child.pid) {
     return;
   }
 
-  try {
-    if (useProcessGroup) {
-      process.kill(-child.pid, signal);
-    } else {
-      child.kill(signal);
-    }
-  } catch (error) {
+  const reportSignalError = (error: unknown) => {
     if (!isNodeErrorCode(error, "ESRCH")) {
       console.error(error);
     }
-  }
+  };
+  terminateManagedChild(child, signal, {
+    onChildSignalError: reportSignalError,
+    onProcessGroupSignalError: reportSignalError,
+    processGroupFallback: "never",
+    useWindowsTaskkill: false,
+  });
 }
 
-function isChildProcessGroupAlive({ child, useProcessGroup }: ChildProcessGroupOptions) {
-  if (!useProcessGroup || !child.pid) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return isNodeErrorCode(error, "EPERM");
-  }
+function isChildProcessGroupAlive(child: ChildProcess) {
+  return inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForChildProcessGroupExit({ child, timeoutMs, useProcessGroup }: WaitOptions) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isChildProcessGroupAlive({ child, useProcessGroup })) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !isChildProcessGroupAlive({ child, useProcessGroup });
+function waitForChildProcessGroupExit(child: ChildProcess, timeoutMs: number) {
+  return waitForManagedProcessGroupExit(child, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 function registerShardChild(entry: ActiveShardChild) {
@@ -738,7 +753,7 @@ function isParentTerminationRequested() {
 
 function signalActiveShardChildren(signal: NodeJS.Signals) {
   for (const entry of ACTIVE_SHARD_CHILDREN) {
-    signalChildProcess({ ...entry, signal });
+    signalChildProcess(entry.child, signal);
   }
 }
 

@@ -6,11 +6,15 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
-const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
+const { readCodexCliCredentialsCachedMock, resolveProviderIdForAuthMock } = vi.hoisted(() => ({
   readCodexCliCredentialsCachedMock: vi.fn<
     (options?: { allowKeychainPrompt?: boolean }) => OAuthCredential | null
   >(() => null),
+  resolveProviderIdForAuthMock: vi.fn<(provider: string, params?: unknown) => string>(
+    (provider: string) => (provider === "codex-cli" ? "openai" : provider),
+  ),
 }));
 
 vi.mock("./cli-credentials.js", () => ({
@@ -20,7 +24,7 @@ vi.mock("./cli-credentials.js", () => ({
   resetCliCredentialCachesForTest: () => undefined,
 }));
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) => (provider === "codex-cli" ? "openai" : provider),
+  resolveProviderIdForAuth: resolveProviderIdForAuthMock,
 }));
 
 import {
@@ -72,6 +76,10 @@ describe("buildAuthHealthSummary", () => {
   beforeEach(() => {
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
+    resolveProviderIdForAuthMock.mockReset();
+    resolveProviderIdForAuthMock.mockImplementation((provider: string) =>
+      provider === "codex-cli" ? "openai" : provider,
+    );
   });
 
   it("classifies OAuth and API key profiles", () => {
@@ -579,6 +587,50 @@ describe("buildAuthHealthSummary", () => {
         profiles: [],
       },
     ]);
+  });
+
+  it("uses caller-owned plugin metadata when resolving explicit auth order", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    resolveProviderIdForAuthMock.mockImplementation((provider: string, params?: unknown) => {
+      const metadata = (params as { metadataSnapshot?: { plugins?: unknown[] } } | undefined)
+        ?.metadataSnapshot;
+      return provider === "fixture-alias" && metadata?.plugins?.length
+        ? "fixture-provider"
+        : provider;
+    });
+    const metadataSnapshot = {
+      plugins: [
+        {
+          id: "fixture-auth-alias",
+          origin: "bundled" as const,
+          providerAuthAliases: { "fixture-alias": "fixture-provider" },
+        },
+      ],
+    } as unknown as NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
+    const summary = buildAuthHealthSummary({
+      cfg: { auth: { order: { "fixture-provider": [] } } },
+      store: {
+        version: 1,
+        profiles: {
+          "fixture-alias:token": {
+            type: "token",
+            provider: "fixture-alias",
+            token: "fake-token",
+          },
+        },
+      },
+      authAliasLookupParams: {
+        metadataSnapshot,
+      },
+    });
+
+    expect(summary.providers).toMatchObject([
+      { provider: "fixture-alias", status: "missing", effectiveProfiles: [] },
+    ]);
+    expect(resolveProviderIdForAuthMock).toHaveBeenCalledWith(
+      "fixture-alias",
+      expect.objectContaining({ metadataSnapshot }),
+    );
   });
 });
 
