@@ -36,6 +36,7 @@ const CONTINUATION_TURN_DRAINING_REASON = "draining";
 // terminal-parked (superseded) so the self-rearm loop stops; never requeued.
 const CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON = "noop-rearm-blocked";
 const CONTINUATION_TURN_RESET_REASON = "session-reset";
+const CONTINUATION_TURN_LIFECYCLE_CHANGED_REASON = "session-lifecycle-changed";
 const CONTINUATION_TURN_STALE_CLAIM_REASON = "stale-claim";
 const GATEWAY_RESTARTING_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
@@ -105,7 +106,8 @@ function isRetryableContinuationSkipReason(reason: string): boolean {
   return (
     isRetryableHeartbeatBusySkipReason(reason) ||
     reason === CONTINUATION_TURN_DRAINING_REASON ||
-    reason === CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON
+    reason === CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON ||
+    reason === CONTINUATION_TURN_LIFECYCLE_CHANGED_REASON
   );
 }
 
@@ -353,7 +355,7 @@ async function driveContinuationTurn(
     currentSessionEntry?.sessionId !== admittedSessionIdentity.sessionId ||
     currentSessionEntry?.lifecycleRevision !== admittedSessionIdentity.lifecycleRevision
   ) {
-    return { status: "skipped", reason: CONTINUATION_TURN_RESET_REASON };
+    return { status: "skipped", reason: CONTINUATION_TURN_LIFECYCLE_CHANGED_REASON };
   }
   const reply = await runWithDiagnosticTraceparent(work.traceparent, () =>
     getReplyFromConfig(
@@ -554,6 +556,9 @@ export async function executePendingContinuationWork(
         `[continuation:work-drive-cancelled] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason}`,
       );
       return { kind: "cancelled" };
+    }
+    if (skippedReason === CONTINUATION_TURN_STALE_CLAIM_REASON) {
+      return { kind: "unchanged" };
     }
     if (skippedReason === CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON) {
       markPendingWorkSuperseded(

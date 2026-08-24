@@ -747,6 +747,38 @@ describe("durable continuation_work dispatch", () => {
     expect(consumePendingWork(sessionKey, { includeRunning: true })).toStrictEqual([]);
   });
 
+  it("requeues claimed work when an implicit rollover changes lifecycle before admission", async () => {
+    const sessionKey = "agent:main:rollover-before-work-admission";
+    const previousEntry = {
+      sessionId: "rollover-before-work-admission-session",
+      lifecycleRevision: "previous-lifecycle-revision",
+    };
+    const successorEntry = {
+      sessionId: previousEntry.sessionId,
+      lifecycleRevision: "successor-lifecycle-revision",
+    };
+    let sessionReadCount = 0;
+    loadSessionEntryMock.mockImplementation(() => {
+      sessionReadCount += 1;
+      return sessionReadCount === 1 ? previousEntry : successorEntry;
+    });
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "continue after implicit rollover",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    expect([...mockFlows.values()].at(0)?.status).toBe("queued");
+  });
+
   it("keeps scheduled timers and idle ownership when durable reset cancellation fails", async () => {
     const sessionKey = "agent:main:reset-persist-failure";
     mockSessionStore[sessionKey] = {
