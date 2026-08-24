@@ -3,6 +3,11 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatByteSize } from "../../../lib/format.ts";
+import {
+  formatKeyboardShortcutCombo,
+  isApplePlatform,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../../lib/keyboard-shortcut-catalog.ts";
 import type { SessionWorkspaceProps } from "./chat-session-workspace-types.ts";
 
 function formatWorkspaceFileSize(file: { size?: number }): string {
@@ -41,7 +46,7 @@ export function renderSessionWorkspaceRail(
   sessionWorkspace: SessionWorkspaceProps | undefined,
   options: { embedded?: boolean } = {},
 ): TemplateResult | typeof nothing {
-  // Standalone collapsed rails render nothing; the shared panel menu or ⇧⌘B reopens them.
+  // Standalone collapsed rails render nothing; the panel menu or workspace shortcut reopens them.
   if (!sessionWorkspace || (sessionWorkspace.collapsed && !options.embedded)) {
     return nothing;
   }
@@ -421,12 +426,14 @@ export function renderSessionWorkspaceRail(
                   ${icons.refresh}
                 </button>
               </openclaw-tooltip>
-              <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
+              <openclaw-tooltip
+                .content=${`${t("chat.workspaceFiles.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles)})`}
+              >
                 <button
                   type="button"
                   class="rail-header__action chat-workspace-rail__collapse-toggle"
                   aria-label=${t("chat.workspaceFiles.collapse")}
-                  aria-keyshortcuts="Meta+Shift+B"
+                  aria-keyshortcuts=${isApplePlatform() ? "Meta+Shift+B" : "Control+Shift+B"}
                   aria-expanded="true"
                   @click=${sessionWorkspace.onToggleCollapsed}
                 >

@@ -170,7 +170,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "reply-runtime": 1,
   "security-runtime": 1,
   "session-store-runtime": 4,
-  "setup-runtime": 0,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "reply-history": 6,
   "provider-auth": 19,
   "telegram-account": 3,
@@ -309,7 +310,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -2: retire the uncalled secret-plan target resolver and its result type.
       // +2: conversation-binding inspection result and runtime inspector.
-      4337,
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      // +1: canonical untrusted audio-transcript formatter for channel plugins.
+      4340,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -399,7 +402,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -1: retire the uncalled secret-plan target resolver.
       // +1: read-only authoritative conversation-binding inspector.
-      2578,
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      // +1: canonical untrusted audio-transcript formatter for channel plugins.
+      2581,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

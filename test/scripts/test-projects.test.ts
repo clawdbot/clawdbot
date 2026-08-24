@@ -589,25 +589,25 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/ios-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
         ".github/workflows/macos-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
         ".github/workflows/shared-openclawkit-periphery.yml",
         [
+          "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/periphery-intersection.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
     ]);
@@ -1320,6 +1320,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/scripts/codex-media-path-client.test.ts",
       "test/scripts/package-acceptance-workflow.test.ts",
       "test/scripts/live-plugin-tool-assertions.test.ts",
+      "test/scripts/plugin-binding-command-escape-docker.test.ts",
     ]);
   });
 

@@ -22,6 +22,7 @@ import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   buildCompactionDividerItem,
+  buildGuardianNoticeItem,
   buildResetDividerItem,
   clearWorkingProgress,
   projectContextCompactionActivity,
@@ -29,11 +30,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
-import {
-  coalesceToolActivityMessages,
-  groupMessages,
-  isKeyedAssistantStreamFallbackMessage,
-} from "./chat-thread-grouping.ts";
+import { coalesceToolActivityMessages, groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   buildMessageKeys,
@@ -54,9 +51,17 @@ import {
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   turnHasMatchingAssistant,
-  userTurnSendIdentity,
   type TurnInsertionBounds,
+  userTurnSendIdentity,
 } from "./chat-thread-items.ts";
+import {
+  findCurrentTurnBounds,
+  findRunTurnBounds,
+  isKeyedAssistantStreamFallbackMessage,
+  optionalBoundaryIdentity,
+  optionalRunIdentity,
+  resolveRunInsertionBounds,
+} from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
@@ -69,6 +74,7 @@ import {
 export type BuildChatItemsProps = {
   paneId: string;
   sessionKey: string;
+  archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
   runId?: string | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
@@ -91,97 +97,6 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
 };
-
-function guardianNoticeItem(notice: ChatGuardianNotice): Extract<ChatItem, { kind: "notice" }> {
-  const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
-  if (notice.kind === "approved") {
-    return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
-      label: t("chat.systemNotice.guardian.approvedSummary", { action }),
-      text: "",
-      timestamp: notice.timestamp,
-    };
-  }
-  if (notice.kind === "warning") {
-    return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
-      label: t("chat.systemNotice.guardian.warningLabel"),
-      text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
-      tone: "danger",
-    };
-  }
-  return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
-    label: t("chat.systemNotice.guardian.deniedLabel"),
-    text: t("chat.systemNotice.guardian.deniedSummary", {
-      action,
-      risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
-      rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
-    }),
-    timestamp: notice.timestamp,
-    tone: "danger",
-  };
-}
-
-function isUserChatItem(item: ChatItem): boolean {
-  if (item.kind !== "message") {
-    return false;
-  }
-  const normalized = safeNormalizeMessage(item.message);
-  return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
-}
-
-function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const index = items.findLastIndex(isUserChatItem);
-  const item = items[index];
-  return index >= 0 && item ? { afterKey: item.key } : null;
-}
-
-function findRunTurnBounds(items: ChatItem[], runId: string): TurnInsertionBounds | null {
-  const sendIdentity = `send:${runId}`;
-  const index = items.findIndex(
-    (item) =>
-      item.kind === "message" &&
-      isUserChatItem(item) &&
-      userTurnSendIdentity(item.message) === sendIdentity,
-  );
-  const item = items[index];
-  if (index < 0 || !item) {
-    return null;
-  }
-  const nextUser = items.slice(index + 1).find(isUserChatItem);
-  return { afterKey: item.key, ...(nextUser ? { beforeKey: nextUser.key } : {}) };
-}
-
-function resolveRunInsertionBounds(
-  items: ChatItem[],
-  runId: unknown,
-  currentRunId: string | null | undefined,
-  currentTurnBounds: TurnInsertionBounds | null,
-): TurnInsertionBounds | null {
-  if (typeof runId !== "string" || !runId.trim()) {
-    return currentRunId != null ? currentTurnBounds : null;
-  }
-  const runBounds = findRunTurnBounds(items, runId);
-  if (runId === currentRunId) {
-    // Active runs can span steers: the original prompt is a floor, not a ceiling.
-    return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
-  }
-  if (runBounds || currentRunId == null) {
-    return runBounds;
-  }
-  // Legacy rows may lack the user-run identity needed for exact bounds. Keep
-  // their timestamp ordering across historical turns, but never cross the
-  // current prompt and become current-run output.
-  return currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null;
-}
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
@@ -278,6 +193,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ? t(noticeKind.summaryKey)
         : extractTextCached(msg)?.replace(/^\[System\] /u, "");
       if (text?.trim()) {
+        const boundaryId = userTurnSendIdentity(msg);
         items.push({
           kind: "notice",
           key: itemKey,
@@ -286,6 +202,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           startsTurn: true,
           text,
           timestamp: normalized.timestamp,
+          ...(boundaryId ? { boundaryId } : {}),
         });
       }
       continue;
@@ -503,8 +420,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   };
   if (!searchFiltering) {
+    if (props.archiveNotice) {
+      timestampedProjectionItems.push(props.archiveNotice);
+    }
     for (const notice of props.guardianNotices ?? []) {
-      const item = guardianNoticeItem(notice);
+      const item = buildGuardianNoticeItem(notice);
       timestampedProjectionItems.push(item);
       applyRunBounds(item.key, notice.runId);
     }
@@ -571,6 +491,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
+          ...optionalRunIdentity(segment.runId),
+          ...optionalBoundaryIdentity(afterBoundaryBySegment.get(segment) ?? segment.runId),
         };
         timestampedProjectionItems.push(streamItem);
         applyRunBounds(
@@ -639,6 +561,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       text,
       startedAt: segment.ts,
       isStreaming: false,
+      ...optionalRunIdentity(segment.runId),
+      ...optionalBoundaryIdentity(afterBoundaryBySegment.get(segment) ?? segment.runId),
     };
     timestampedProjectionItems.push(commentaryItem);
     applyRunBounds(
@@ -712,12 +636,17 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
     if (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
       const liveProgress = resolveProgress();
+      const liveRunId = props.runId ?? liveProgress.runId;
       const liveStreamItem: ChatItem = {
         kind: "stream",
-        key: liveProgress.key,
+        key: latestBoundaryRunId
+          ? `${liveProgress.key}:after:${latestBoundaryRunId}`
+          : liveProgress.key,
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
+        ...optionalRunIdentity(liveRunId),
+        ...optionalBoundaryIdentity(latestBoundaryRunId ?? liveRunId),
       };
       const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
       const liveTurnBounds = liveTurnRunId ? findRunTurnBounds(items, liveTurnRunId) : null;
@@ -730,7 +659,15 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
   if (showWorkingIndicator) {
-    items.push({ kind: "reading-indicator", ...resolveProgress() });
+    const workingProgress = resolveProgress();
+    const workingRunId = props.runId ?? workingProgress.runId;
+    items.push({
+      kind: "reading-indicator",
+      key: workingProgress.key,
+      startedAt: workingProgress.startedAt,
+      ...optionalRunIdentity(workingRunId),
+      ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
+    });
   }
   // Future queued turns are a causal ceiling for every current-run projection.
   // Append them after tools, streams, progress, and prompts so none can cross the

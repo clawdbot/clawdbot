@@ -62,6 +62,7 @@ function ownedDeclaration(params: {
   declarationKey: string;
   owner: TriggerStateOwner;
   script?: string;
+  once?: boolean;
   state?: CronJobCreate["state"];
   sameOwnerEdit?: boolean;
 }): CronJobCreate {
@@ -71,14 +72,14 @@ function ownedDeclaration(params: {
     delivery: { mode: "none" },
     trigger:
       params.owner === "condition"
-        ? { script, ...(params.sameOwnerEdit ? { once: true } : {}) }
+        ? { script, ...(params.once !== undefined ? { once: params.once } : {}) }
         : undefined,
     payload:
       params.owner === "script"
         ? { kind: "script", script, ...(params.sameOwnerEdit ? { timeoutSeconds: 45 } : {}) }
         : { kind: "agentTurn", message: "report" },
     ...(params.state ? { state: params.state } : {}),
-    ...(params.sameOwnerEdit && params.owner === "none" ? { displayName: "Updated report" } : {}),
+    ...(params.sameOwnerEdit ? { displayName: "Updated report" } : {}),
   });
 }
 
@@ -252,6 +253,8 @@ describe("CronService declarative jobs", () => {
         previous: TriggerStateOwner;
         next: TriggerStateOwner;
         replaceScript?: boolean;
+        previousOnce?: boolean;
+        nextOnce?: boolean;
         sameOwnerEdit?: boolean;
         replacementState?: CronJobCreate["state"];
       }> = [
@@ -277,6 +280,64 @@ describe("CronService declarative jobs", () => {
         { name: "same script owner", previous: "script", next: "script", sameOwnerEdit: true },
         { name: "same absent owner", previous: "none", next: "none", sameOwnerEdit: true },
         {
+          name: "same explicit-false condition owner",
+          previous: "condition",
+          next: "condition",
+          previousOnce: false,
+          nextOnce: false,
+          sameOwnerEdit: true,
+        },
+        {
+          name: "condition once enabled from default",
+          previous: "condition",
+          next: "condition",
+          nextOnce: true,
+        },
+        {
+          name: "condition once disabled to default",
+          previous: "condition",
+          next: "condition",
+          previousOnce: true,
+        },
+        {
+          name: "condition once enabled from explicit false",
+          previous: "condition",
+          next: "condition",
+          previousOnce: false,
+          nextOnce: true,
+        },
+        {
+          name: "condition once disabled to explicit false",
+          previous: "condition",
+          next: "condition",
+          previousOnce: true,
+          nextOnce: false,
+        },
+        {
+          name: "condition once made explicit false",
+          previous: "condition",
+          next: "condition",
+          nextOnce: false,
+        },
+        {
+          name: "condition explicit false omitted",
+          previous: "condition",
+          next: "condition",
+          previousOnce: false,
+        },
+        {
+          name: "condition once explicit replacement",
+          previous: "condition",
+          next: "condition",
+          nextOnce: true,
+          replacementState: {
+            triggerState: { owner: "replacement" },
+            triggerEvalCount: 0,
+            lastTriggerEvalAtMs: 444,
+            lastTriggerFireAtMs: 555,
+          },
+        },
+        {
           name: "explicit replacement state and count",
           previous: "condition",
           next: "condition",
@@ -299,6 +360,7 @@ describe("CronService declarative jobs", () => {
           const input = ownedDeclaration({
             declarationKey,
             owner: testCase.previous,
+            once: testCase.previousOnce,
             state: retiredTriggerState,
           });
           if (mutationPath === "ordinary update") {
@@ -314,6 +376,7 @@ describe("CronService declarative jobs", () => {
             declarationKey,
             owner: testCase.next,
             script: testCase.replaceScript ? 'return "replacement"' : undefined,
+            once: testCase.nextOnce,
             state: testCase.replacementState,
             sameOwnerEdit: testCase.sameOwnerEdit,
           });

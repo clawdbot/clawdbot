@@ -70,6 +70,7 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
     anthropic: ["ANTHROPIC_API_KEY"],
     minimax: ["MINIMAX_CODE_PLAN_KEY"],
     openai: ["OPENAI_API_KEY"],
+    zai: ["ZAI_API_KEY"],
   }),
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
@@ -77,6 +78,7 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
       anthropic: ["ANTHROPIC_API_KEY"],
       minimax: ["MINIMAX_CODE_PLAN_KEY"],
       openai: ["OPENAI_API_KEY"],
+      zai: ["ZAI_API_KEY"],
     },
     authEvidenceMap: {},
   }),
@@ -139,16 +141,19 @@ describe("resolveProviderAuths plugin boundary", () => {
       token: "plugin-zai-token",
     });
 
-    await expect(
-      resolveProviderAuthsForTest({
-        providers: ["zai"],
-      }),
-    ).resolves.toEqual([
-      {
-        provider: "zai",
-        token: "plugin-zai-token",
-      },
-    ]);
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuthsForTest({
+          providers: ["zai"],
+          env: { HOME: homeDir, ZAI_API_KEY: "zai-env-key" },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "zai",
+          token: "plugin-zai-token",
+        },
+      ]);
+    });
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
@@ -156,11 +161,14 @@ describe("resolveProviderAuths plugin boundary", () => {
     const authError = new Error("plugin auth failed");
     resolveProviderUsageAuthWithPluginMock.mockRejectedValueOnce(authError);
 
-    await expect(
-      resolveProviderAuthsForTest({
-        providers: ["anthropic"],
-      }),
-    ).rejects.toBe(authError);
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuthsForTest({
+          providers: ["anthropic"],
+          env: { HOME: homeDir, ANTHROPIC_API_KEY: "sk-ant-env" },
+        }),
+      ).rejects.toBe(authError);
+    });
   });
 
   it("resolves SecretRef-backed profiles before provider credential classification", async () => {
@@ -174,6 +182,8 @@ describe("resolveProviderAuths plugin boundary", () => {
       },
     };
     ensureAuthProfileStoreMock.mockReturnValue(store as never);
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(store as never);
     resolveAuthProfileOrderMock.mockReturnValue(["anthropic:admin"]);
     resolveApiKeyForProfileMock.mockResolvedValue({
       apiKey: "sk-ant-admin-secretref",
@@ -216,20 +226,23 @@ describe("resolveProviderAuths plugin boundary", () => {
   });
 
   it("does not synthesize Codex app-server auth for generic OpenAI usage", async () => {
-    await expect(
-      resolveProviderAuthsForTest({
-        providers: ["openai"],
-      }),
-    ).resolves.toEqual([]);
-    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["openai"]);
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuthsForTest({
+          providers: ["openai"],
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([]);
+    });
+    // The credential-source gate keeps credential-less providers off plugin runtime entirely.
+    expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("skips plugin usage auth when requested and no direct credential source exists", async () => {
+  it("skips plugin usage auth by default when no credential source exists", async () => {
     await withTempHome(async (homeDir) => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["zai"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
         }),
       ).resolves.toStrictEqual([]);
@@ -265,7 +278,6 @@ describe("resolveProviderAuths plugin boundary", () => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["anthropic", "zai"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
         }),
       ).resolves.toEqual([
@@ -307,7 +319,6 @@ describe("resolveProviderAuths plugin boundary", () => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["minimax"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
         }),
       ).resolves.toEqual([
@@ -332,7 +343,6 @@ describe("resolveProviderAuths plugin boundary", () => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["minimax"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: {
             HOME: homeDir,
             MINIMAX_CODE_PLAN_KEY: "code-plan-key",
@@ -359,7 +369,6 @@ describe("resolveProviderAuths plugin boundary", () => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["openai"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: {
             HOME: homeDir,
             OPENAI_API_KEY: "sk-admin-test",
@@ -385,7 +394,6 @@ describe("resolveProviderAuths plugin boundary", () => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["openai"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: {
             HOME: homeDir,
             OPENAI_ADMIN_KEY: "sk-admin-test",
@@ -409,7 +417,6 @@ describe("resolveProviderAuths plugin boundary", () => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["anthropic"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
         }),
       ).resolves.toStrictEqual([]);
@@ -426,7 +433,6 @@ describe("resolveProviderAuths plugin boundary", () => {
       await expect(
         resolveProviderAuthsForTest({
           providers: ["anthropic", "zai"],
-          skipPluginAuthWithoutCredentialSource: true,
           env: {
             HOME: homeDir,
             ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret

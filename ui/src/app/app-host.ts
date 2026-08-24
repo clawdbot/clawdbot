@@ -9,7 +9,6 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import "../components/resizable-divider.ts";
-import "../components/sidebar-update-card.ts";
 import "../components/update-banner.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
@@ -163,6 +162,10 @@ class OpenClawShell
     () =>
       hasStoredLazyShellAction() ? retryStaleChunkReloadWhenReachable() : Promise.resolve(false),
   );
+  // Gates lazy-action replay on the element being rendered; while the shell is
+  // still splash-gated, replaying would loop through the open handlers forever.
+  readonly queryRenderedElement = (tagName: string): Element | null =>
+    this.renderRoot?.querySelector(tagName) ?? null;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
   approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
@@ -211,6 +214,9 @@ class OpenClawShell
     | null = null;
   @state() settingsSidebarLoadFailed = false;
   private settingsSidebarRuntime: Promise<unknown> | null = null;
+  private readonly sidebarUpdateCardImport = createIdleImport(
+    () => import("../components/sidebar-update-card.ts"),
+  );
 
   loadSettingsSidebarRenderer(): void {
     this.settingsSidebarRuntime ??= import("../components/settings-sidebar.ts")
@@ -227,6 +233,14 @@ class OpenClawShell
   retrySettingsSidebarRenderer(): void {
     this.settingsSidebarLoadFailed = false;
     this.loadSettingsSidebarRenderer();
+  }
+
+  private loadSidebarUpdateCard(): void {
+    void this.sidebarUpdateCardImport.load().catch((error: unknown) => {
+      if (isStaleChunkImportError(error)) {
+        void scheduleStaleChunkReload();
+      }
+    });
   }
   // Lazy: the critical-notice module stays out of the startup chunk (perf
   // budget); loaded on the first session.observer digest after boot.
@@ -450,6 +464,7 @@ class OpenClawShell
   override disconnectedCallback() {
     this.shellChrome.disconnect();
     this.outboxStoreImport.dispose();
+    this.sidebarUpdateCardImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
     this.lastLocalePrefSignature = null;
@@ -627,12 +642,16 @@ class OpenClawShell
     } else if (routeId === "custodian") {
       primaryContext = t("nav.askOpenClaw");
     }
-    const title = formatDocumentTitle({
+    let title = formatDocumentTitle({
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
       offline: context.gateway.snapshot.phase !== "connected",
       queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total ?? 0,
     });
+    const environment = context.config?.current.environment;
+    if (environment) {
+      title += ` · ${environment.label}`;
+    }
     if (document.title !== title) {
       document.title = title;
     }
@@ -640,6 +659,15 @@ class OpenClawShell
 
   override updated() {
     this.syncDocumentTitle();
+    // Render-gated pending lazy actions replay on the update that first
+    // renders their element, independent of further context updates.
+    this.restorePendingLazyAction();
+    if (
+      !customElements.get("openclaw-sidebar-update-card") &&
+      this.querySelector("openclaw-sidebar-update-card")
+    ) {
+      this.loadSidebarUpdateCard();
+    }
     const chatPage = this.querySelector<ChatPage>("openclaw-chat-page");
     if (chatPage) {
       chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;

@@ -71,6 +71,8 @@ export type GatewayClientInfo = {
   deviceFamily?: string;
   /** Native hardware/model identifier when available. */
   modelIdentifier?: string;
+  /** Self-reported IANA time zone, such as `Europe/Vienna`, for presence display. */
+  timeZone?: string;
   /** Coarse category from `GATEWAY_CLIENT_MODES` for policy and diagnostics. */
   mode: GatewayClientMode;
   /** Per-installation or per-process id used to distinguish same-product clients. */

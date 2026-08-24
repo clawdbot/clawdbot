@@ -587,6 +587,7 @@ function createCronPromptExecutor(params: {
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
                 sessionEntry: params.cronSession.sessionEntry,
+                contextWindow: params.cronSession.sessionEntry.contextWindow,
                 agentId: params.agentId,
                 trigger: "cron",
                 jobId: params.job.id,

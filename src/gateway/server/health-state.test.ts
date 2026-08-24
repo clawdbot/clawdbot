@@ -87,6 +87,20 @@ async function loadHealthState() {
 
 describe("buildGatewaySnapshot update metadata", () => {
   it.each([
+    { agent: { model: "openai/gpt-5.6-luna" }, expected: true },
+    { agent: {}, expected: false },
+  ])("advertises modelConfigured=$expected for the default agent", async ({ agent, expected }) => {
+    const healthState = await loadHealthState();
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { entries: { main: agent } },
+    });
+
+    const snapshot = healthState.buildGatewaySnapshot({ revisionProjector });
+
+    expect(snapshot.sessionDefaults?.modelConfigured).toBe(expected);
+  });
+
+  it.each([
     { role: "operator", scopes: ["operator.pairing"], allowed: false },
     { role: "node", scopes: ["operator.read", "operator.admin"], allowed: false },
     { role: "operator", scopes: ["operator.read"], allowed: true },

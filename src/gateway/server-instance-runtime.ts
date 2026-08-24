@@ -82,15 +82,24 @@ export function createGatewayInstanceRuntime(
     });
   };
 
-  const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+  const recoveryClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [WRITE_SCOPE],
+  });
   const recoveryAgentTurns = createInternalAgentTurnFacade({
     client: recoveryClient,
     getContext: options.getContext,
     getMethodRegistry: options.getMethodRegistry,
   });
-  const approvalClient = createSyntheticPluginRuntimeClient({ scopes: [APPROVALS_SCOPE] });
+  const approvalClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [APPROVALS_SCOPE],
+  });
   const approvalMethods = new Set<GatewayNativeApprovalMethod>(GATEWAY_NATIVE_APPROVAL_METHODS);
-  const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+  const approvalRouteClient = createSyntheticPluginRuntimeClient({
+    operatorRoleActor: { kind: "system" },
+    scopes: [WRITE_SCOPE],
+  });
   const approvalRouteMethods = new Set(["send"]);
 
   const recovery: GatewayRecoveryRuntime = {
@@ -116,6 +125,7 @@ export function createGatewayInstanceRuntime(
       const agentTurns = needsDedicatedPrincipal
         ? createInternalAgentTurnFacade({
             client: createSyntheticPluginRuntimeClient({
+              operatorRoleActor: { kind: "system" },
               allowModelOverride:
                 dispatchOptions.allowModelOverride === true ||
                 dispatchOptions.allowSyntheticModelOverride === true,

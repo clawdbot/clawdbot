@@ -84,6 +84,8 @@ type OutboundSendContext = {
   deliveryIntentId?: string;
   /** Serializable owner state finalized by live send or recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** The caller resends proven-not-sent payloads itself, so recovery must not. */
+  deliveryRetryOwner?: "caller";
   /** Runs after queue persistence and before platform I/O. */
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   /** Revalidates authority once per durable queue execution, before adapter fanout. */
@@ -188,6 +190,7 @@ async function sendCoreMessage(params: {
     gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
     deliveryIntentId: params.ctx.deliveryIntentId,
     deliveryCompletion: params.ctx.deliveryCompletion,
+    deliveryRetryOwner: params.ctx.deliveryRetryOwner,
     requireUnknownSendReconciliation: params.ctx.requireQueuePersistence ? false : undefined,
     onDeliveryIntent: params.ctx.onDeliveryIntent,
     onDeliveryAttempt: params.ctx.onDeliveryAttempt,

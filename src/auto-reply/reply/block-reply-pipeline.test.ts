@@ -2,7 +2,12 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { ReplyPayload } from "../types.js";
+import {
+  createAudioAsVoiceBuffer,
+  createBlockReplyContentKey,
+  createBlockReplyPipeline,
+} from "./block-reply-pipeline.js";
 
 const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
   new Promise((resolve) => {
@@ -166,6 +171,62 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       "file:///b.ogg",
       "file:///c.ogg",
     ]);
+  });
+
+  it.each([
+    {
+      name: "coalesced text on both sides of audio",
+      payloads: [{ text: "Before" }, { mediaUrl: "file:///voice.ogg" }, { text: "After" }],
+      expected: [{ text: "Before" }, { mediaUrl: "file:///voice.ogg" }, { text: "After" }],
+    },
+    {
+      name: "audio before a following image",
+      payloads: [{ mediaUrls: ["file:///voice.ogg"] }, { mediaUrls: ["file:///photo.png"] }],
+      expected: [{ mediaUrls: ["file:///voice.ogg"] }, { mediaUrls: ["file:///photo.png"] }],
+    },
+    {
+      name: "a late voice marker before following text",
+      payloads: [{ mediaUrl: "file:///voice.ogg" }, { text: "After", audioAsVoice: true }],
+      expected: [
+        { mediaUrl: "file:///voice.ogg", audioAsVoice: true },
+        { text: "After", audioAsVoice: true },
+      ],
+    },
+  ])("preserves streamed delivery order for $name", async ({ payloads, expected }) => {
+    const sent: ReplyPayload[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload);
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+      buffer: createAudioAsVoiceBuffer({
+        isAudioPayload: (payload) =>
+          [payload.mediaUrl, ...(payload.mediaUrls ?? [])].some((url) => url?.endsWith(".ogg")),
+      }),
+    });
+
+    for (const payload of payloads) {
+      pipeline.enqueue(payload);
+    }
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(expected.length);
+    expect(sent).toMatchObject(expected);
+    expect(pipeline.getSentMediaUrls()).toEqual(
+      expected.flatMap((payload) =>
+        "mediaUrls" in payload
+          ? payload.mediaUrls
+          : "mediaUrl" in payload
+            ? [payload.mediaUrl]
+            : [],
+      ),
+    );
   });
 
   it("keeps separate deliveries for distinct rich-only payloads", async () => {

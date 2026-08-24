@@ -8,6 +8,7 @@ import {
   type CodexBundleMcpThreadConfig,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
@@ -22,6 +23,7 @@ import {
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   resetCodexTestBindingStore,
@@ -30,6 +32,7 @@ import {
 import {
   clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
+  createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   resolveCodexAppServerSpawnIdentity,
@@ -122,6 +125,7 @@ function startThreadWithHarness(
     >[0]["runtimeArtifactRequest"];
     sandbox?: Parameters<typeof startCodexAttemptThread>[0]["sandbox"];
     sandboxExecServerEnabled?: boolean;
+    runtime?: Parameters<typeof startCodexAttemptThread>[0]["runtime"];
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
@@ -133,6 +137,7 @@ function startThreadWithHarness(
 
   const run = startCodexAttemptThread({
     bindingStore: testCodexAppServerBindingStore,
+    runtime: overrides?.runtime,
     attemptClientFactory:
       overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
@@ -227,6 +232,80 @@ async function waitForRequest(
 
 async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number }> {
   return waitForRequest(harness, "thread/start");
+}
+
+function createPairedAttemptRuntime() {
+  const channels: Array<{ close: ReturnType<typeof vi.fn>; sessionId: string }> = [];
+  const openDuplex = vi.fn<
+    NonNullable<Parameters<typeof startCodexAttemptThread>[0]["runtime"]>["nodes"]["openDuplex"]
+  >(async (request) => {
+    let resolveClosed: (value: unknown) => void = () => undefined;
+    const closed = new Promise<unknown>((resolve) => {
+      resolveClosed = resolve;
+    });
+    const channel = {
+      send: vi.fn(async () => undefined),
+      onMessage: vi.fn(() => () => undefined),
+      closed,
+      close: vi.fn(() => resolveClosed({ ok: true })),
+    };
+    channels.push({
+      close: channel.close,
+      sessionId: (request.params as { sessionId: string }).sessionId,
+    });
+    return channel;
+  });
+  return {
+    runtime: createPluginRuntimeMock({ nodes: { openDuplex } }),
+    channels,
+    openDuplex,
+  };
+}
+
+async function startIsolatedPairedAttempt(params: {
+  harness: ClientHarness;
+  sessionId: string;
+  runtime: NonNullable<Parameters<typeof startCodexAttemptThread>[0]["runtime"]>;
+  paths?: AttemptPaths;
+}) {
+  const paths = params.paths ?? createAttemptPaths();
+  const sandbox = {
+    ...createSandboxContext({}),
+    backendId: "node",
+    backend: undefined,
+    fsBridge: undefined,
+    runtimeId: `paired-node-${params.sessionId}`,
+    placementExecutionMode: "remote-exec" as const,
+    placementNodeId: "paired-device-1",
+    placementEnvironmentId: `environment-${params.sessionId}`,
+    placementSessionId: params.sessionId,
+    placementOwnerEpoch: 1,
+  };
+  const run = startThreadWithHarness(5_000, new AbortController().signal, {
+    harness: params.harness,
+    paths,
+    skipStartSpy: true,
+    runtime: params.runtime,
+    sandbox,
+    attemptClientFactory: () => createIsolatedCodexAppServerClient,
+    buildAttemptParams: () => ({
+      ...createAttemptParams(paths),
+      sessionId: params.sessionId,
+      sessionKey: `agent:agent-1:${params.sessionId}`,
+    }),
+  }).run;
+  await answerInitialize(params.harness);
+  const environmentAdd = await waitForRequest(params.harness, "environment/add");
+  params.harness.send({ id: environmentAdd.id, result: {} });
+  const threadStart = await waitForThreadStart(params.harness);
+  params.harness.send({ id: threadStart.id, result: threadStartResult(params.sessionId) });
+  const result = await run;
+  const environmentId = (environmentAdd.params as { environmentId?: string }).environmentId;
+  expect(environmentId).toMatch(/^openclaw-node-/u);
+  expect(
+    readHarnessMessages(params.harness.writes).filter(({ method }) => method === "environment/add"),
+  ).toHaveLength(1);
+  return { result, sandbox, environmentId };
 }
 
 function threadStartResult(threadId = "thread-1") {
@@ -699,6 +778,94 @@ describe("startCodexAttemptThread", () => {
 
     await expect(run).rejects.toThrow("custom initialize failed");
     expect(harness.stdinDestroyed).toBe(true);
+  });
+
+  it("retires each fresh paired-node app-server and its registered environment", async () => {
+    const runtime = createPairedAttemptRuntime();
+    const clients = [createClientHarness(), createClientHarness(), createClientHarness()];
+    const start = vi.spyOn(CodexAppServerClient, "start");
+    for (const harness of clients) {
+      start.mockReturnValueOnce(harness.client);
+    }
+    const environmentIds = new Set<string>();
+
+    for (const [index, harness] of clients.entries()) {
+      const attempt = await startIsolatedPairedAttempt({
+        harness,
+        sessionId: `sequential-${index}`,
+        runtime: runtime.runtime,
+      });
+      environmentIds.add(attempt.environmentId!);
+      await releaseCodexSandboxExecServerEnvironment(
+        attempt.sandbox,
+        attempt.result.sandboxEnvironment,
+      );
+      attempt.result.releaseSharedClientLease();
+
+      expect(harness.process.stdin.destroyed).toBe(true);
+      expect(runtime.channels.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
+      expect(sandboxExecServerRegistry.servers.size).toBe(0);
+    }
+
+    expect(environmentIds.size).toBe(clients.length);
+    expect(start).toHaveBeenCalledTimes(clients.length);
+    expect(runtime.openDuplex).toHaveBeenCalledTimes(clients.length);
+  });
+
+  it("closes each paired-node environment and client without interrupting an overlapping sibling", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const runtime = createPairedAttemptRuntime();
+    const firstPaths = createAttemptPaths();
+    const secondPaths = createAttemptPaths();
+    const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation((options) => {
+      const codexHome = options?.env?.CODEX_HOME;
+      if (codexHome?.startsWith(`${firstPaths.agentDir}${path.sep}`)) {
+        return first.client;
+      }
+      if (codexHome?.startsWith(`${secondPaths.agentDir}${path.sep}`)) {
+        return second.client;
+      }
+      throw new Error(`Unexpected isolated Codex home: ${codexHome}`);
+    });
+    const [firstAttempt, secondAttempt] = await Promise.all([
+      startIsolatedPairedAttempt({
+        harness: first,
+        sessionId: "overlap-1",
+        runtime: runtime.runtime,
+        paths: firstPaths,
+      }),
+      startIsolatedPairedAttempt({
+        harness: second,
+        sessionId: "overlap-2",
+        runtime: runtime.runtime,
+        paths: secondPaths,
+      }),
+    ]);
+
+    expect(firstAttempt.result.client).toBe(first.client);
+    expect(secondAttempt.result.client).toBe(second.client);
+    expect(firstAttempt.environmentId).not.toBe(secondAttempt.environmentId);
+    expect(start).toHaveBeenCalledTimes(2);
+    const firstChannel = runtime.channels.find(({ sessionId }) => sessionId === "overlap-1");
+    const secondChannel = runtime.channels.find(({ sessionId }) => sessionId === "overlap-2");
+    await releaseCodexSandboxExecServerEnvironment(
+      firstAttempt.sandbox,
+      firstAttempt.result.sandboxEnvironment,
+    );
+    firstAttempt.result.releaseSharedClientLease();
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(second.process.stdin.destroyed).toBe(false);
+    expect(firstChannel?.close).toHaveBeenCalledOnce();
+    expect(secondChannel?.close).not.toHaveBeenCalled();
+    await releaseCodexSandboxExecServerEnvironment(
+      secondAttempt.sandbox,
+      secondAttempt.result.sandboxEnvironment,
+    );
+    secondAttempt.result.releaseSharedClientLease();
+    expect(second.process.stdin.destroyed).toBe(true);
+    expect(secondChannel?.close).toHaveBeenCalledOnce();
+    expect(sandboxExecServerRegistry.servers.size).toBe(0);
   });
 
   it("forwards prepared auth without a legacy profile selector", async () => {

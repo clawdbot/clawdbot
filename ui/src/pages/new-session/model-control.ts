@@ -26,7 +26,6 @@ import type { NewSessionPreference } from "./preferences.ts";
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 type GatewayAgentRuntime = NonNullable<GatewayAgentRow["agentRuntime"]> & {
   cloudPlacementSupported?: boolean;
-  devicePlacementSupported?: boolean;
 };
 type NewSessionMetadataStatus = ChatModelCatalogState["status"];
 type NewSessionMetadataState = {
@@ -122,6 +121,7 @@ export class NewSessionModelControl {
   private catalogTargetRequestId = 0;
   private catalogTargetDiscovery: CatalogTargetDiscoveryState = { status: "idle" };
   selected = "";
+  contextWindow = "";
   thinkingLevel = "";
 
   constructor(
@@ -337,6 +337,7 @@ export class NewSessionModelControl {
       this.agentId = "";
       this.metadataClient = undefined;
       this.selected = "";
+      this.contextWindow = "";
       this.thinkingLevel = "";
       this.updateMetadataState({
         catalog: [],
@@ -371,6 +372,7 @@ export class NewSessionModelControl {
       this.agentId = normalizedAgentId;
       this.metadataClient = undefined;
       this.selected = "";
+      this.contextWindow = "";
       this.thinkingLevel = "";
       this.metadataState = {
         catalog: [],
@@ -514,10 +516,11 @@ export class NewSessionModelControl {
   }
 
   devicePlacementUnsupportedReason(): string | undefined {
-    return this.resolveAgentRuntime({
+    const runtime = this.resolveAgentRuntime({
       agent: this.pendingAgent,
       context: this.pendingContext,
-    })?.devicePlacementSupported === false
+    });
+    return runtime && !runtime.devicePlacement
       ? t("newSession.deviceRuntimeUnsupported")
       : undefined;
   }
@@ -555,6 +558,9 @@ export class NewSessionModelControl {
       this.catalog,
     );
     const selectedTarget = resolveDraftModelTarget(this.selected, undefined, this.catalog);
+    const contextWindowTarget = selectedTarget?.entry ?? defaultTarget?.entry;
+    const contextWindowDefault = contextWindowTarget?.contextWindowDefault;
+    const selectedContextWindow = this.contextWindow || contextWindowDefault;
     const thinkingTarget = {
       model: selectedTarget?.model,
       modelProvider: selectedTarget?.provider ?? undefined,
@@ -587,6 +593,14 @@ export class NewSessionModelControl {
             ? "loading"
             : this.metadataState.status,
       },
+      contextWindowTarget:
+        contextWindowTarget?.contextWindows && selectedContextWindow
+          ? {
+              contextWindow: selectedContextWindow,
+              contextWindows: contextWindowTarget.contextWindows,
+              ...(contextWindowDefault ? { contextWindowDefault } : {}),
+            }
+          : undefined,
       modelOverrides: { [sessionKey]: this.selected },
       modelPickerTargetGroups: this.catalogTargetGroups(),
       modelSwitching: false,
@@ -602,6 +616,7 @@ export class NewSessionModelControl {
         this.restoringPreference = false;
         const selection = this.reconcileSelection(value, this.thinkingLevel, options);
         this.selected = selection.model;
+        this.contextWindow = "";
         this.thinkingLevel = selection.thinkingLevel;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
@@ -620,6 +635,12 @@ export class NewSessionModelControl {
         this.restoringPreference = false;
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
+      },
+      onContextWindowSelect: (value) => {
+        this.selectionGeneration += 1;
+        this.restoringPreference = false;
+        this.contextWindow = value;
+        this.notify();
       },
       onModelSetup: () => options.context?.navigate("model-setup"),
       onModelPickerOpen: () => this.refreshPickerCatalogs(),

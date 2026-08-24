@@ -3,6 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
+import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -48,6 +49,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
   "update.auto.enabled": "Auto Update Enabled",
+  telemetry: "Telemetry",
+  ...projectTelemetryFieldMetadata("label"),
   surfaces: "Surface Policies",
   "surfaces.*.silentReply": "Surface Silent Reply Policy",
   "diagnostics.enabled": "Diagnostics Enabled",
@@ -133,6 +136,14 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
     "Trusted Proxy Device Auto-Approval Enabled",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes": "Trusted Proxy Device Auto-Approval Scopes",
+  "gateway.roles": "Gateway Operator Roles",
+  "gateway.roles.default": "Default Operator Role",
+  "gateway.roles.definitions": "Operator Role Definitions",
+  "gateway.roles.definitions.*": "Operator Role Definition",
+  "gateway.roles.definitions.*.sessions": "Operator Role Session Access",
+  "gateway.roles.definitions.*.sessions.others": "Operator Role Access to Other Sessions",
+  "gateway.roles.definitions.*.agents": "Operator Role Allowed Agents",
+  "gateway.roles.definitions.*.scopes": "Operator Role Scope Ceiling",
   "gateway.trustedProxies": "Gateway Trusted Proxy CIDRs",
   "gateway.allowRealIpFallback": "Gateway Allow x-real-ip Fallback",
   "gateway.tools": "Gateway Tool Exposure Policy",
@@ -358,6 +369,9 @@ export const FIELD_LABELS: Record<string, string> = {
     "Web Fetch Allow RFC 2544 Benchmark Range",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": "Web Fetch Allow IPv6 Unique Local Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
+  "gateway.controlUi.environment": "Control UI Environment",
+  "gateway.controlUi.environment.label": "Control UI Environment Label",
+  "gateway.controlUi.environment.color": "Control UI Environment Color",
   "gateway.controlUi.toolTitles": "Control UI Tool Call Titles",
   "gateway.controlUi.github.token": "Control UI GitHub Service Credential",
   "gateway.controlUi.sessionObserver": "Control UI Session Observer",
@@ -406,6 +420,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.agentRuns.claude.enabled": "Node Claude Agent Runs Enabled",
   "nodeHost.workerRuns": "Node Worker Runs",
   "nodeHost.workerRuns.enabled": "Node Worker Runs Enabled",
+  "nodeHost.workerRuns.capacity": "Node Worker Run Capacity",
+  "nodeHost.workerRuns.isolation": "Node Worker Run Isolation",
+  "nodeHost.workerRuns.containerImage": "Node Worker Run Container Image",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
@@ -707,6 +724,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.codex.default_tools_approval_mode": "Codex MCP Tool Approval",
   ui: "UI",
   "ui.seamColor": "Accent Color",
+  "ui.prefs.accent": "User Accent Color",
   "ui.assistant": "Assistant Appearance",
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",

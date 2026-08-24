@@ -27,12 +27,12 @@ type WorkerEnvironmentAccessOptions = {
   now: () => number;
   identityResolverFor: (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     leaseId: string,
   ) => Parameters<WorkerTunnelManager["start"]>[0]["resolveIdentity"];
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   isStopping: () => boolean;
-  providerFor: (providerId: string) => WorkerProvider;
+  providerFor: (providerId: string) => WorkerProvider<"internal">;
   serviceError: (
     code:
       | "desktop_app_not_found"

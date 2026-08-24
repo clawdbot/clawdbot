@@ -11,6 +11,7 @@ import {
   validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
+  validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
@@ -23,8 +24,10 @@ import {
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setUserProfileRole,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   authenticatedProfileUnavailableError,
@@ -292,6 +295,35 @@ export const usersHandlers: GatewayRequestHandlers = {
       }
       const profile = setDisplayName(params.profileId, params.displayName);
       refreshConnectedProfile(context, profile);
+      respond(true, { profile });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.setRole": ({ context, params, respond }) => {
+    if (!validateUsersSetRoleParams(params)) {
+      respond(false, undefined, invalidParams("users.setRole", validateUsersSetRoleParams.errors));
+      return;
+    }
+    const roleDefinitions = context.getRuntimeConfig().gateway?.roles?.definitions;
+    if (
+      params.role !== null &&
+      (!roleDefinitions || !Object.hasOwn(roleDefinitions, params.role))
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown operator role "${params.role}"; define it under gateway.roles.definitions before assigning it`,
+        ),
+      );
+      return;
+    }
+    try {
+      const profile = setUserProfileRole(params.profileId, params.role);
+      invalidateOperatorRolePolicy(profile.id);
+      context.disconnectClientsForUserProfile?.(profile.id);
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));

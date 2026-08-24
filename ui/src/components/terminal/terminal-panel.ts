@@ -125,6 +125,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private readonly onDockBottomRequest = (event: Event) => this.handleToggleRequest(event);
   private readonly onDocumentPointerDown = (event: PointerEvent) =>
     this.handleDocumentPointerDown(event);
+  private themeObserver: MutationObserver | null = null;
 
   private get sessionBottomOnly(): boolean {
     return !this.embedded && this.sessionKey !== null;
@@ -144,6 +145,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
     }
     document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
+    if (typeof MutationObserver !== "undefined") {
+      this.themeObserver = new MutationObserver(() =>
+        updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode),
+      );
+      this.themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme", "data-theme-mode", "style"],
+      });
+    }
     if (this.dockLayout.open) {
       void this.terminalSessions.restoreSessions();
     }
@@ -155,6 +165,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
     document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
     this.terminalSessions.disconnectHost();
   }
 

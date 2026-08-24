@@ -8,6 +8,7 @@ import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -61,6 +62,8 @@ export type ReplyMessageAccess = {
 
 export type ChatThreadProps = {
   paneId: string;
+  /** Routing for peer sender names in a shared session. */
+  personActivity?: PersonActivityRouting;
   sessionKey: string;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
@@ -395,6 +398,8 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
   if (
+    event.button !== 0 ||
+    event.ctrlKey ||
     typeof props.onCompanionQuestion !== "function" ||
     typeof props.onCompanionPrefill !== "function"
   ) {
@@ -458,7 +463,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     (element) => element.dataset.messageActionsFor === messageId,
   );
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
-  const canReply = Boolean(text && props.onSetReply);
+  const ownsRunFrame = group.dataset.chatRowKey?.startsWith("agent-run:") === true;
+  const canReply = Boolean(text && props.onSetReply && (!ownsRunFrame || actionOwner));
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";

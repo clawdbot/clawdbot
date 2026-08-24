@@ -87,6 +87,17 @@ type RemDreamingConfig = DreamingPhaseStorageConfig & {
   limit: number;
   minPatternStrength: number;
 };
+type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> = {
+  agentId?: string;
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  primaryWorkspaceDir?: string;
+  config: TConfig;
+  logger: Logger;
+  subagent?: DreamNarrativeRequest["subagent"];
+  detachNarratives?: boolean;
+  nowMs?: number;
+};
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
@@ -1279,17 +1290,9 @@ export function previewRemDreaming(params: {
   };
 }
 
-async function runLightDreaming(params: {
-  agentId?: string;
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  primaryWorkspaceDir?: string;
-  config: LightDreamingConfig;
-  logger: Logger;
-  subagent?: DreamNarrativeRequest["subagent"];
-  detachNarratives?: boolean;
-  nowMs?: number;
-}): Promise<DreamNarrativeOutcome> {
+async function ingestDreamingPhaseSignals(
+  params: DreamingPhaseRunParams<LightDreamingConfig | RemDreamingConfig>,
+): Promise<number> {
   const nowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   await ingestDailyMemorySignals({
@@ -1307,6 +1310,13 @@ async function runLightDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
+  return nowMs;
+}
+
+async function runLightDreaming(
+  params: DreamingPhaseRunParams<LightDreamingConfig>,
+): Promise<DreamNarrativeOutcome> {
+  const nowMs = await ingestDreamingPhaseSignals(params);
   const recentEntries = (
     await filterLiveShortTermRecallEntries({
       workspaceDir: params.workspaceDir,
@@ -1382,34 +1392,10 @@ async function runLightDreaming(params: {
   return { status: "skipped" };
 }
 
-async function runRemDreaming(params: {
-  agentId?: string;
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  primaryWorkspaceDir?: string;
-  config: RemDreamingConfig;
-  logger: Logger;
-  subagent?: DreamNarrativeRequest["subagent"];
-  detachNarratives?: boolean;
-  nowMs?: number;
-}): Promise<DreamNarrativeOutcome> {
-  const nowMs =
-    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
-  await ingestDailyMemorySignals({
-    workspaceDir: params.workspaceDir,
-    lookbackDays: dailyIngestionLookbackDays(params.config.lookbackDays),
-    limit: params.config.limit,
-    nowMs,
-    timezone: params.config.timezone,
-  });
-  await ingestSessionTranscriptSignals({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    primaryWorkspaceDir: params.primaryWorkspaceDir,
-    lookbackDays: params.config.lookbackDays,
-    nowMs,
-    timezone: params.config.timezone,
-  });
+async function runRemDreaming(
+  params: DreamingPhaseRunParams<RemDreamingConfig>,
+): Promise<DreamNarrativeOutcome> {
+  const nowMs = await ingestDreamingPhaseSignals(params);
   const allEntries = (
     await filterLiveShortTermRecallEntries({
       workspaceDir: params.workspaceDir,

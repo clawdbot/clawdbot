@@ -241,6 +241,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,
             replyResolver: resolved.replyResolver,
+            dispatchReplyFromConfig: resolved.dispatchReplyFromConfig,
           });
           return withTelegramTestSettledReceipt(dispatchResult);
         },
@@ -673,6 +674,7 @@ export async function dispatchWithContext(params: {
   textLimit?: number;
   turnAdoptionLifecycle?: Parameters<typeof dispatchTelegramMessage>[0]["turnAdoptionLifecycle"];
   runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
+  opts?: Parameters<typeof dispatchTelegramMessage>[0]["opts"];
 }) {
   const bot = params.bot ?? createBot();
   return await dispatchTelegramMessage({
@@ -685,7 +687,7 @@ export async function dispatchWithContext(params: {
     textLimit: params.textLimit ?? 4096,
     telegramCfg: params.telegramCfg ?? {},
     telegramDeps: params.telegramDeps ?? telegramDepsForTest,
-    opts: { token: "token" },
+    opts: params.opts ?? { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
     turnAdoptionLifecycle: params.turnAdoptionLifecycle,

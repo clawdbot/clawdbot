@@ -1,10 +1,11 @@
 // Markdown Core module implements ir behavior.
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
-import MarkdownIt from "markdown-it";
+import MarkdownIt, {
+  type MarkdownIt as MarkdownItParser,
+  type StateCore,
+  type StateInline,
+} from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
-import { HTML_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
-import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
-import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
@@ -13,7 +14,7 @@ import {
   type AssistantTranscriptRoleTokenMeta,
 } from "./assistant-transcript.js";
 import { chunkText } from "./chunk-text.js";
-import { tokenizeHtmlTags } from "./html-tags.js";
+import { matchMarkdownHtmlTag, tokenizeHtmlTags } from "./html-tags.js";
 import {
   appendAssistantTranscriptRoleImage,
   appendAssistantTranscriptRoleText,
@@ -287,13 +288,14 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
   state.headingLineEnd = undefined;
 }
 
-function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
+function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   const md = new MarkdownIt({
     html: false,
     linkify: options.linkify ?? true,
     breaks: false,
     typographer: false,
   });
+  md.linkify.set({ fuzzyLink: true });
   md.use(markdownItCjkFriendly);
   md.use(markdownItAssistantTranscriptRoles);
   if (options.enableTaskLists) {
@@ -355,7 +357,7 @@ function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x3c) {
     return false;
   }
-  const raw = HTML_TAG_RE.exec(state.src.slice(state.pos))?.[0];
+  const raw = matchMarkdownHtmlTag(state.src.slice(state.pos));
   if (!raw) {
     return false;
   }

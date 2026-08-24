@@ -156,11 +156,13 @@ describe("sidebar session sort modes", () => {
 });
 
 describe("sidebar session live-run projection", () => {
-  it("projects the durable last-message preview", () => {
+  it("projects durable message and execution-owner facts", () => {
     expect(
-      projectSidebarSession({ lastMessagePreview: "The final reply is durable." })
-        .lastMessagePreview,
-    ).toBe("The final reply is durable.");
+      projectSidebarSession({
+        lastMessagePreview: "The final reply is durable.",
+        execNode: "build-mac",
+      }),
+    ).toMatchObject({ lastMessagePreview: "The final reply is durable.", execNode: "build-mac" });
   });
 
   it.each([

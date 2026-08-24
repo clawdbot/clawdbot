@@ -61,7 +61,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const identityResolverFor = (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     leaseId: string,
   ) => {
     const profile = requireWorkerProfile(record.profileSnapshot.settings);
@@ -76,7 +76,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     };
   };
 
-  const providerFor = (providerId: string): WorkerProvider => {
+  const providerFor = (providerId: string): WorkerProvider<"internal"> => {
     const provider = options.resolveProvider(providerId);
     if (provider) {
       return provider;
@@ -126,7 +126,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const failBootstrap = async (
     record: WorkerEnvironmentRecord,
     leaseId: string,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     error: unknown,
     failureCode: "bootstrap_failure" | "invalid_profile" = "bootstrap_failure",
     leasePatch?: TransitionPatch,
@@ -199,7 +199,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const finishBootstrap = async (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     installation: WorkerInstallationArtifact,
   ) => {
     if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
@@ -229,7 +229,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const finishProvision = async (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     preparedInstallation?: WorkerInstallationArtifact,
   ) => {
     let lease: WorkerLease;
@@ -283,34 +283,29 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       leaseId: lease.leaseId,
       sharedHost: lease.sharedHost === true,
       desktop: lease.desktop ?? null,
+      ...(lease.node
+        ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null }
+        : { nodeDeviceId: null, sshEndpoint: lease.ssh }),
     };
     const leaseModeError = resolveWorkerLeaseModeError(provider, lease);
     if (leaseModeError) {
-      const leasePatch = {
-        ...patch,
-        ...(lease.node
-          ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null }
-          : { nodeDeviceId: null, sshEndpoint: lease.ssh }),
-      };
       return await failBootstrap(
         record,
         lease.leaseId,
         provider,
         leaseModeError,
         "invalid_profile",
-        leasePatch,
+        patch,
       );
+    }
+    if (record.destroyRequestedAtMs !== null) {
+      // Replay must recover its exact lease, but teardown intent forbids transport bootstrap.
+      return move(record, "draining", patch);
     }
     if (lease.node) {
       return await finishNodeProvisioning(record, lease, provider, patch);
     }
-    const bootstrapping = move(record, "bootstrapping", {
-      ...patch,
-      sshEndpoint: lease.ssh,
-    });
-    if (record.destroyRequestedAtMs !== null) {
-      return bootstrapping;
-    }
+    const bootstrapping = move(record, "bootstrapping", patch);
     let installation = preparedInstallation;
     if (!installation) {
       try {
@@ -375,7 +370,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError("invalid_state", `Cannot destroy worker in state: ${record.state}`);
   };
 
-  const finishDestroy = async (r: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
+  const finishDestroy = async (
+    r: WorkerEnvironmentRecord,
+    provider?: WorkerProvider<"internal">,
+  ) => {
     if (!r.leaseId) {
       throw serviceError("invalid_state", "Worker environment has no lease");
     }
@@ -415,7 +413,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         // Provider inspection and the state-specific path below retain their existing retry policy.
       }
     }
-    let provider: WorkerProvider;
+    let provider: WorkerProvider<"internal">;
     try {
       provider = providerFor(record.providerId);
     } catch (error) {
@@ -624,7 +622,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }
         return existing;
       }
-      let provider: WorkerProvider;
+      let provider: WorkerProvider<"internal">;
       let providerId: string;
       let profileSnapshot: WorkerProfile;
       if (inherited) {

@@ -860,6 +860,22 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   padding-left: 124px;
 }
 
+/* The floating attention cluster widens the overlay strip; clear its resting
+   width (inbox 32 + gap 4 + update 32 + 12 breathing) so the session title is
+   not covered. The update pill's hover expansion may transiently overlap.
+   Native-nav/web-chrome hosts pin the cluster at the far left, inside the
+   larger insets below. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed:not(.shell--mobile-nav):has(.sidebar-attention--floating)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  :is(.chat-main__conversation-column, .chat-pane-primary-column)
+  > .chat-pane__header {
+  padding-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 88px
+  );
+}
+
 /* Native macOS desktop shells: the pane header is the window's top surface,
    so it adopts the app titlebar height (52px injected by
    DashboardWindowController; the 50px fallback mirrors

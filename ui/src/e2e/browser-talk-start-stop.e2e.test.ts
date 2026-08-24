@@ -1014,6 +1014,44 @@ suite.define(() => {
     });
   });
 
+  it("shows actionable guidance when Talk microphone permission is blocked", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      const relaySessionId = "relay-blocked-microphone-e2e";
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "talk.client.create": {
+            provider: "openai",
+            transport: "gateway-relay",
+            relaySessionId,
+            audio: {
+              inputEncoding: "pcm16",
+              inputSampleRateHz: 16_000,
+              outputEncoding: "pcm16",
+              outputSampleRateHz: 24_000,
+            },
+          },
+          "talk.session.close": {},
+        },
+      });
+      await installBlockedMicrophoneFixture(page);
+
+      await page.setViewportSize({ width: 320, height: 720 });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.waitForRequest("talk.client.create");
+
+      await expect
+        .poll(() => page.getByRole("alert").locator(".agent-chat__talk-status-text").textContent())
+        .toBe("Microphone access is blocked. Allow it in browser site settings to list inputs.");
+      await expect
+        .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
+        .toBe(1);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
+        .toBe(true);
+    });
+  });
+
   it("keeps blocked microphone guidance readable in a narrow viewport", async () => {
     await suite.withPage(undefined, async ({ page }) => {
       await installMockGateway(page);

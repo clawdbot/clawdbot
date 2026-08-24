@@ -28,10 +28,6 @@
     padding-right: 0;
   }
 
-  .content--chat:has(.chat-workbench) .scope-upgrade-chip-row {
-    padding: 8px 20px 0;
-  }
-
   .content--chat:has(.chat-workbench) .chat {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
@@ -94,8 +90,7 @@
 }
 
 openclaw-chat-sidebar-region,
-.sidebar-region__right-runtime,
-.sidebar-region__panels-runtime {
+.sidebar-region__right-runtime {
   display: contents;
 }
 
@@ -729,14 +724,6 @@ openclaw-chat-sidebar-region,
   line-height: 1.25;
 }
 
-.side-panel-empty__description {
-  max-width: 40ch;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
-}
-
 .side-panel-empty--selector .side-panel-empty__title {
   margin-top: 0;
   font-size: var(--control-ui-text-md);
@@ -744,13 +731,6 @@ openclaw-chat-sidebar-region,
 
 .side-panel-empty--selector {
   transform: translateY(-18px);
-}
-
-.side-panel-empty--selector .side-panel-empty__description {
-  max-width: none;
-  margin-top: 4px;
-  line-height: 1.3;
-  white-space: nowrap;
 }
 
 .side-panel-empty__types {
@@ -1846,12 +1826,12 @@ openclaw-session-discussion {
 
 .file-view .tok-deleted {
   color: var(--hljs-deletion);
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-subtle);
 }
 
 .file-view .tok-inserted {
   color: var(--hljs-addition);
-  background: rgba(46, 160, 67, 0.12);
+  background: var(--ok-subtle);
 }
 
 .file-view .tok-emphasis {

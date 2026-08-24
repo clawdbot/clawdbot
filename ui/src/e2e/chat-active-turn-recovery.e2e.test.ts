@@ -158,7 +158,9 @@ async function installActiveRunSnapshot(
 }
 
 async function assertActiveTurnVisible(page: Page, streamText: string): Promise<void> {
-  await expect(page.getByText(streamText, { exact: true })).toHaveCount(1, { timeout: 10_000 });
+  await expect(
+    page.locator(".chat-thread-inner").getByText(streamText, { exact: true }),
+  ).toHaveCount(1, { timeout: 10_000 });
   await page.locator(".chat-tool-row--running").waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
   await expect
@@ -250,14 +252,14 @@ async function assertSteeredRecoveryOrder(
   await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
 
   const order = await thread.evaluate((element, expected) => {
-    const groups = Array.from(element.querySelectorAll<HTMLElement>(".chat-group"));
-    const groupWithText = (text: string) =>
-      groups.find((group) => (group.textContent ?? "").includes(text));
-    const original = groupWithText(expected.original);
-    const beforeSteer = groupWithText(expected.beforeSteer);
-    const steer = groupWithText(expected.steer);
+    const visibleText = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
+    const bubbleWithText = (text: string) =>
+      visibleText.find((bubble) => (bubble.textContent ?? "").includes(text));
+    const original = bubbleWithText(expected.original);
+    const beforeSteer = bubbleWithText(expected.beforeSteer);
+    const steer = bubbleWithText(expected.steer);
     const tool = element.querySelector<HTMLElement>(".chat-tool-row--running");
-    const afterSteer = groupWithText(expected.afterSteer);
+    const afterSteer = bubbleWithText(expected.afterSteer);
     const precedes = (upper: Element | undefined | null, lower: Element | undefined | null) =>
       Boolean(
         upper && lower && upper.compareDocumentPosition(lower) & Node.DOCUMENT_POSITION_FOLLOWING,

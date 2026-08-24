@@ -226,7 +226,13 @@ async function executeJobCoreWithTimeoutUnfinalized(
       error: `cron webhook delivery cancelled: ${error}`,
     });
   };
-  if (!isCronActiveJobMarkerCurrent(opts?.activeJobMarker)) {
+  const reservation = opts?.runReceipt ? state.queuedRunReservationsByJobId.get(job.id) : undefined;
+  if (
+    !isCronActiveJobMarkerCurrent(opts?.activeJobMarker) ||
+    (opts?.runReceipt &&
+      (reservation?.runReceipt.receiptId !== opts.runReceipt.receiptId ||
+        reservation.lifecycleGeneration !== state.lifecycleGeneration))
+  ) {
     runAbortController.abort("Gateway restarting.");
     return createOperatorCancellationOutcome();
   }

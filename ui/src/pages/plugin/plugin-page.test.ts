@@ -95,6 +95,7 @@ function externalPluginConfig(
     },
     serverVersion: null,
     devGitBranch: null,
+    environment: null,
     localMediaPreviewRoots: [],
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,

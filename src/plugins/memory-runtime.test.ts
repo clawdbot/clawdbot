@@ -14,6 +14,9 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
+type ClassifyWorkspaceMemoryPaths = NonNullable<
+  MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]
+>;
 
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
@@ -38,6 +41,7 @@ vi.mock("./memory-state.js", async (importOriginal) => {
 
 import {
   authorizeActiveMemorySearchHits,
+  classifyActiveMemoryWorkspacePaths,
   closeActiveMemorySearchManagerCore,
   closeActiveMemorySearchManagersCore,
   getActiveMemorySearchManagerCore,
@@ -49,6 +53,9 @@ import { hasMemoryRuntime } from "./memory-state.js";
 function createRuntime() {
   return {
     authorizeSearchHits: vi.fn<AuthorizeSearchHits>(async ({ hits }) => hits),
+    classifyWorkspaceMemoryPaths: vi.fn<ClassifyWorkspaceMemoryPaths>(async ({ relativePaths }) =>
+      relativePaths.map((relativePath) => ({ relativePath, originClass: "agent" as const })),
+    ),
     getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
     resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
     closeMemorySearchManager: vi.fn(async () => {}),
@@ -386,6 +393,52 @@ describe("memory runtime handles", () => {
         hits,
       }),
     ).resolves.toEqual([hits[0]]);
+  });
+
+  it("classifies workspace paths inside the selected plugin runtime scope", async () => {
+    const { registry, runtime } = createRegistry();
+    runtime.classifyWorkspaceMemoryPaths.mockImplementationOnce(async ({ relativePaths }) => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+      return relativePaths.map((relativePath) => ({
+        relativePath,
+        originClass: relativePath === "MEMORY.md" ? "untrusted" : "owner",
+      }));
+    });
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    await expect(
+      classifyActiveMemoryWorkspacePaths({
+        cfg: memoryConfig,
+        agentId: "main",
+        workspaceDir: "/workspace/main",
+        relativePaths: ["MEMORY.md", "USER.md"],
+      }),
+    ).resolves.toEqual({
+      status: "classified",
+      classifications: [
+        { relativePath: "MEMORY.md", originClass: "untrusted" },
+        { relativePath: "USER.md", originClass: "owner" },
+      ],
+    });
+  });
+
+  it("distinguishes a selected runtime without workspace provenance support", async () => {
+    const runtimeWithoutClassifier = {
+      getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+      resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
+    } satisfies MemoryPluginRuntime;
+    mocks.loadPluginRegistryHandle.mockReturnValue(
+      createRegistry(runtimeWithoutClassifier).registry,
+    );
+
+    await expect(
+      classifyActiveMemoryWorkspacePaths({
+        cfg: memoryConfig,
+        agentId: "main",
+        workspaceDir: "/workspace/main",
+        relativePaths: ["MEMORY.md", "USER.md"],
+      }),
+    ).resolves.toEqual({ status: "unsupported" });
   });
 
   it("fails closed on session hits when a memory runtime has no authorizer", async () => {

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
 import { failoverRetryExpectations } from "../../agents/failover/failover-retry.expected.test-support.js";
-import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE, type AssistantMessage } from "../types.js";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type AssistantMessage,
+} from "../types.js";
 import { isRetryableAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
@@ -46,13 +50,25 @@ describe("isRetryableAssistantError", () => {
     },
   );
 
-  it("does not retry an ambiguous post-dispatch provider outcome", () => {
+  it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
+    "does not retry replay-unsafe provider outcome %s",
+    (errorCode) => {
+      expect(
+        isRetryableAssistantError({
+          ...errorMessage("The WebSocket closed after dispatch"),
+          errorCode,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("retries an incomplete terminal stream that retained visible partial text", () => {
     expect(
       isRetryableAssistantError({
-        ...errorMessage("The WebSocket closed after dispatch"),
-        errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+        ...errorMessage("Bedrock stream ended before messageStop"),
+        content: [{ type: "text", text: "I have" }],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("retries a structured transient Undici error", () => {

@@ -340,6 +340,70 @@ describe("tui command handlers", () => {
     ]);
   });
 
+  it.each(["/models", "/agents", "/sessions", "/context", "/settings"])(
+    "lets the newer %s picker own the overlay after an older model request resolves",
+    async (newerCommand) => {
+      const olderModels = createDeferred<Array<{ provider: string; id: string }>>();
+      const listModels = vi
+        .fn()
+        .mockReturnValueOnce(olderModels.promise)
+        .mockResolvedValueOnce([{ provider: "openai", id: "current-model" }]);
+      const harness = createHarness({
+        listModels,
+        listSessions: vi
+          .fn()
+          .mockResolvedValue({ sessions: [{ key: "agent:main:current", updatedAt: 1 }] }),
+        agents: [{ id: "main", name: "Main Agent" }],
+      });
+
+      const olderPicker = harness.handleCommand("/models");
+      await harness.handleCommand(newerCommand);
+      olderModels.resolve([{ provider: "openai", id: "obsolete-model" }]);
+      await olderPicker;
+
+      expect(harness.openOverlay).toHaveBeenCalledOnce();
+      for (const [selection] of listModels.mock.calls) {
+        expect(selection).toEqual({ agentId: "main" });
+      }
+    },
+  );
+
+  it("retires an unfinished agent refresh before opening a newer session picker", async () => {
+    const pendingRefresh = createDeferred<Result<void, string>>();
+    const refreshAgents = vi.fn(() => pendingRefresh.promise) as RefreshAgentsMock;
+    const harness = createHarness({
+      refreshAgents,
+      listSessions: vi
+        .fn()
+        .mockResolvedValue({ sessions: [{ key: "agent:main:current", updatedAt: 1 }] }),
+      agents: [{ id: "main", name: "Main Agent" }],
+    });
+
+    const olderPicker = harness.handleCommand("/agents");
+    const [ownsRefresh] = refreshAgents.mock.calls[0] as [(() => boolean) | undefined];
+    await harness.handleCommand("/sessions");
+    expect(ownsRefresh?.()).toBe(false);
+
+    pendingRefresh.resolve({ ok: true, value: undefined });
+    await olderPicker;
+
+    expect(harness.openOverlay).toHaveBeenCalledOnce();
+  });
+
+  it("closes the exact current picker before opening its replacement", async () => {
+    const harness = createHarness({
+      listSessions: vi
+        .fn()
+        .mockResolvedValue({ sessions: [{ key: "agent:main:current", updatedAt: 1 }] }),
+    });
+
+    await harness.handleCommand("/context");
+    await harness.handleCommand("/sessions");
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(2);
+    expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+  });
+
   it("bounds Ctrl+P hydration to recent non-global TUI sessions", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       sessions: [
@@ -1996,6 +2060,56 @@ describe("tui command handlers", () => {
     expect(harness.loadHistory).not.toHaveBeenCalled();
     expect(harness.addSystem).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { mode: "gateway", local: false, command: "/think default", field: "thinkingLevel" },
+    { mode: "gateway", local: false, command: "/fast default", field: "fastMode" },
+    { mode: "gateway", local: false, command: "/model default", field: "model" },
+    { mode: "embedded", local: true, command: "/think default", field: "thinkingLevel" },
+    { mode: "embedded", local: true, command: "/fast default", field: "fastMode" },
+    { mode: "embedded", local: true, command: "/model default", field: "model" },
+    { mode: "gateway", local: false, command: "/think inherit", field: "thinkingLevel" },
+    { mode: "embedded", local: true, command: "/fast reset", field: "fastMode" },
+    { mode: "gateway", local: false, command: "/model DEFAULT", field: "model" },
+  ])(
+    "clears the $field session override for $command in $mode mode",
+    async ({ local, command, field }) => {
+      const { handleCommand, patchSession, refreshSessionInfo } = createHarness({
+        opts: { local },
+      });
+
+      await handleCommand(command);
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        [field]: null,
+      });
+      expect(refreshSessionInfo).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not treat non-default model names as session reset aliases", async () => {
+    const { handleCommand, patchSession } = createHarness();
+
+    await handleCommand("/model reset");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      model: "reset",
+    });
+  });
+
+  it.each(["", "invalid"])(
+    "rejects unsupported elevated mode %j without patching",
+    async (mode) => {
+      const { handleCommand, patchSession, addSystem } = createHarness();
+
+      await handleCommand(`/elevated ${mode}`);
+
+      expect(patchSession).not.toHaveBeenCalled();
+      expect(addSystem).toHaveBeenCalledWith("usage: /elevated <on|off|ask|full>");
+    },
+  );
 
   it("uses the effective runtime for the no-arg /think usage", async () => {
     const codex = createHarness({

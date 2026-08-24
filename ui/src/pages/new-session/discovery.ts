@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeArrayBackedTrimmedStringList,
+  normalizeSortedUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import type {
   EnvironmentStatus,
   RuntimeTargetIssue,
@@ -52,6 +55,7 @@ export type DraftEnvironment = {
   lastSeenReason?: string;
   trust?: "persistent" | "disposable";
   capabilities?: string[];
+  invocableCommands?: string[];
   issues?: RuntimeTargetIssue[];
 };
 
@@ -194,6 +198,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
         lastSeenReason?: unknown;
         trust?: unknown;
         capabilities?: unknown;
+        invocableCommands?: unknown;
         issues?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
@@ -213,6 +218,11 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ? environment.trust
           : undefined;
       const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
+      const invocableCommands = Array.isArray(environment.invocableCommands)
+        ? normalizeSortedUniqueTrimmedStringList(environment.invocableCommands)
+            .filter((command) => command.length <= 128)
+            .slice(0, 128)
+        : undefined;
       const lastConnectedAtMs = normalizeTimestamp(environment.lastConnectedAtMs);
       const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
@@ -236,6 +246,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ...(lastSeenReason ? { lastSeenReason } : {}),
           ...(trust ? { trust } : {}),
           ...(capabilities ? { capabilities } : {}),
+          ...(invocableCommands ? { invocableCommands } : {}),
           ...(issues ? { issues } : {}),
         },
       ];

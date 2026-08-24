@@ -350,9 +350,10 @@ the failure to that exact active run.
 The child-dispatch jobs record run ID, run attempt, and URL, then finish. The
 parent seals those tuples, original dispatch titles, gate coverage, reuse
 policy, and original parent attempt in one immutable
-`full-release-execution-plan-<run-id>` artifact. Collector retries restore that
-artifact and adopt its children; they never reconstruct the plan or redispatch
-tests.
+`full-release-execution-plan-<run-id>` artifact and exact run-ID cache entry.
+Collector retries restore the cached bytes, validate them, and re-upload the
+artifact for their attempt before adopting its children; they never reconstruct
+the plan or redispatch tests.
 `Release Decision` polls those exact identities and can report
 `blocked_diagnostics_running` before unrelated children finish.
 For reused evidence, it also repeats the canonical target, policy, changed-path,

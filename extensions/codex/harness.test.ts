@@ -34,9 +34,13 @@ describe("Codex agent harness supports()", () => {
 
   it("publishes provider ids for lightweight auto selection", () => {
     expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
-    expect(
-      (harness as typeof harness & { cloudPlacement?: { mode: "remote-exec" } }).cloudPlacement,
-    ).toEqual({ mode: "remote-exec" });
+    expect(harness.cloudPlacement).toEqual({
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    });
   });
 
   it("keeps computer-control denies out of the native-surface exemption", () => {

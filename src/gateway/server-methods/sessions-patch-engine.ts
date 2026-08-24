@@ -18,6 +18,7 @@ import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
@@ -33,7 +34,6 @@ import {
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   prepareSessionPatchArchive,
@@ -58,8 +58,8 @@ type MutationTarget = PatchTargetIdentity & {
 };
 
 type PreparedPatchTarget = {
-  archivePreparation?: SessionPatchArchivePreparation;
   archiveActor: ReturnType<typeof gatewayClientSessionCreator>;
+  archivePreparation?: SessionPatchArchivePreparation;
   canonicalKey: string;
   fullPatch: SessionsPatchParams;
   index: number;
@@ -72,9 +72,7 @@ type PreparedPatchTarget = {
   targetAgentId: string;
 };
 
-type MutationOutcome =
-  | { ok: true; archiveStateChanged: boolean; entry: SessionEntry }
-  | { ok: false; error: ErrorShape };
+type MutationOutcome = { ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape };
 
 type ModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
 
@@ -90,13 +88,8 @@ type MutationCoreResult =
 
 function unexpectedPatchError(key: string, error: unknown): ErrorShape {
   sessionLog.warn(`sessions.patch: target failed for ${key}: ${formatErrorMessage(error)}`);
-  return errorShape(
-    ErrorCodes.UNAVAILABLE,
-    "Session patch failed unexpectedly. Retry the request.",
-    {
-      retryable: true,
-    },
-  );
+  const message = "Session patch failed unexpectedly. Retry the request.";
+  return errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true });
 }
 
 function sessionChangedError(key: string): ErrorShape {
@@ -105,16 +98,16 @@ function sessionChangedError(key: string): ErrorShape {
   });
 }
 
-function pluginOwnershipError(params: {
-  client: GatewayClient | null;
-  entry: SessionEntry | undefined;
-  key: string;
-}): ErrorShape | undefined {
+function pluginOwnershipError(
+  client: GatewayClient | null,
+  entry: SessionEntry | undefined,
+  key: string,
+): ErrorShape | undefined {
   return resolvePluginSessionOwnershipError({
     action: "patch",
-    entry: params.entry,
-    key: params.key,
-    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
+    entry,
+    key,
+    pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
   });
 }
 
@@ -137,13 +130,12 @@ async function executeSessionPatchMutations(params: {
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
 }): Promise<MutationCoreResult> {
+  const { client } = params;
   const cfg = params.context.getRuntimeConfig();
-  const archiveActor = gatewayClientSessionCreator(params.client);
-  const callerScopes = Array.isArray(params.client?.connect?.scopes)
-    ? params.client.connect.scopes
-    : [];
-  const callerCanManageCron = params.client === null || callerScopes.includes(ADMIN_SCOPE);
-  const pluginOwnerId = params.client?.internal?.pluginRuntimeOwnerId;
+  const archiveActor = gatewayClientSessionCreator(client);
+  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
+  const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const targetDiscoveryCache = new Map();
   const preflightTargets = params.targets.map((input) => {
     const key = input.key.trim();
@@ -175,11 +167,9 @@ async function executeSessionPatchMutations(params: {
     logicalTargets.add(logicalId);
   }
 
-  const outcomes: Array<MutationOutcome | undefined> = Array.from({
-    length: params.targets.length,
-  });
+  const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
   const prepared: PreparedPatchTarget[] = [];
-  const preparedByIndex: Array<PreparedPatchTarget | undefined> = Array.from({
+  const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({
     length: params.targets.length,
   });
   for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
@@ -204,11 +194,13 @@ async function executeSessionPatchMutations(params: {
       outcomes[index] = { ok: false, error: unexpectedPatchError(key, error) };
       continue;
     }
-    const ownershipError = pluginOwnershipError({
-      client: params.client,
-      entry: initialEntry,
-      key: canonicalKey,
-    });
+    const creationError =
+      !initialEntry && authorizeGatewaySessionCreation({ cfg, client, agentId: resolved.agentId });
+    if (creationError) {
+      outcomes[index] = { ok: false, error: creationError };
+      continue;
+    }
+    const ownershipError = pluginOwnershipError(client, initialEntry, canonicalKey);
     if (ownershipError) {
       outcomes[index] = { ok: false, error: ownershipError };
       continue;
@@ -372,12 +364,23 @@ async function executeSessionPatchMutations(params: {
                           store: workingStore,
                           ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                         });
+                        const creationError =
+                          !existingEntry &&
+                          authorizeGatewaySessionCreation({
+                            cfg,
+                            client,
+                            agentId: target.targetAgentId,
+                          });
+                        if (creationError) {
+                          projectedOutcomes.push({ ok: false, error: creationError });
+                          continue;
+                        }
                         const candidateKeys = currentTarget.storeKeys;
-                        const ownershipError = pluginOwnershipError({
-                          client: params.client,
-                          entry: existingEntry,
-                          key: primaryKey,
-                        });
+                        const ownershipError = pluginOwnershipError(
+                          client,
+                          existingEntry,
+                          primaryKey,
+                        );
                         if (ownershipError) {
                           projectedOutcomes.push({ ok: false, error: ownershipError });
                           continue;
@@ -427,7 +430,6 @@ async function executeSessionPatchMutations(params: {
                             continue;
                           }
                         }
-                        const wasArchivedBeforePatch = existingEntry?.archivedAt !== undefined;
                         const projected = await projectSessionsPatchEntry({
                           cfg,
                           existingEntry,
@@ -479,9 +481,6 @@ async function executeSessionPatchMutations(params: {
                         );
                         projectedOutcomes.push({
                           ok: true,
-                          archiveStateChanged:
-                            typeof target.fullPatch.archived === "boolean" &&
-                            wasArchivedBeforePatch !== (cloned.archivedAt !== undefined),
                           entry: cloned,
                         });
                       } catch (error) {
@@ -507,34 +506,6 @@ async function executeSessionPatchMutations(params: {
               }
             }),
           );
-
-          for (const target of prepared) {
-            const outcome = outcomes[target.index];
-            if (!outcome?.ok || !archiveActor) {
-              continue;
-            }
-            if (!outcome.archiveStateChanged) {
-              continue;
-            }
-            const action = outcome.entry.archivedAt === undefined ? "unarchived" : "archived";
-            try {
-              await appendSessionAudit({
-                cfg,
-                target: {
-                  agentId: target.targetAgentId,
-                  entry: outcome.entry,
-                  sessionKey: target.canonicalKey,
-                  storePath: target.storePath,
-                },
-                text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
-                now: Date.now(),
-              });
-            } catch (error) {
-              sessionLog.warn(
-                `sessions.patch: ${action} audit note failed for ${target.canonicalKey}; archive kept: ${formatErrorMessage(error)}`,
-              );
-            }
-          }
         },
       });
     } finally {

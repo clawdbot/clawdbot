@@ -20,6 +20,7 @@ export const PresenceEntrySchema = closedObject({
   platform: Type.Optional(NonEmptyString),
   deviceFamily: Type.Optional(NonEmptyString),
   modelIdentifier: Type.Optional(NonEmptyString),
+  timeZone: Type.Optional(NonEmptyString),
   mode: Type.Optional(NonEmptyString),
   lastInputSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   reason: Type.Optional(NonEmptyString),
@@ -213,6 +214,7 @@ const HealthSnapshotSchema = closedObject({
 /** Default session routing keys included in initial gateway snapshots. */
 const SessionDefaultsSchema = closedObject({
   defaultAgentId: NonEmptyString,
+  modelConfigured: Type.Optional(Type.Boolean()),
   ownership: Type.Optional(AgentOwnershipSchema),
   selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,

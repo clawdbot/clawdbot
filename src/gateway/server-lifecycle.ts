@@ -85,7 +85,6 @@ export async function prepareGatewayLifecycle(params: {
     watchNodeRequestHandler,
     defaultWorkspaceDir,
     activeTaskCount,
-    residentRegistry,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     nodeDesktopObserveAvailable,
@@ -348,7 +347,7 @@ export async function prepareGatewayLifecycle(params: {
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
     isConnectionActive,
     onReplace: (connId, sessionKeys) => {
-      const client = [...clients].find((candidate) => candidate.connId === connId);
+      const client = clients.getByConnectionId(connId);
       if (!client?.presenceKey) {
         return;
       }
@@ -598,35 +597,28 @@ export async function prepareGatewayLifecycle(params: {
     });
   };
 
-  const diagnosticHeartbeatResident = residentRegistry.register({
-    name: "diagnostic-heartbeat",
-    start: () => {
-      // Gateway lifecycle owns both this existing heartbeat timer and the monitor
-      // it samples, so startup failure and normal close tear them down together.
-      startDiagnosticHeartbeat(undefined, {
-        getConfig: getRuntimeConfig,
-        startupGraceMs: 60_000,
-        sampleLiveness: () => {
-          const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
-          if (!sample || sample.degradedSinceMs == null) {
-            return null;
-          }
-          return {
-            reasons: sample.reasons,
-            intervalMs: sample.intervalMs,
-            degradedSinceMs: sample.degradedSinceMs,
-            eventLoopDelayP99Ms: sample.delayP99Ms,
-            eventLoopDelayMaxMs: sample.delayMaxMs,
-            eventLoopUtilization: sample.utilization,
-            cpuCoreRatio: sample.cpuCoreRatio,
-          };
-        },
-      });
-    },
-    stop: () => stopDiagnosticHeartbeat(),
-  });
   if (diagnosticsEnabled) {
-    diagnosticHeartbeatResident.start();
+    // Gateway lifecycle owns both this existing heartbeat timer and the monitor
+    // it samples, so startup failure and normal close tear them down together.
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+      sampleLiveness: () => {
+        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
+        if (!sample || sample.degradedSinceMs == null) {
+          return null;
+        }
+        return {
+          reasons: sample.reasons,
+          intervalMs: sample.intervalMs,
+          degradedSinceMs: sample.degradedSinceMs,
+          eventLoopDelayP99Ms: sample.delayP99Ms,
+          eventLoopDelayMaxMs: sample.delayMaxMs,
+          eventLoopUtilization: sample.utilization,
+          cpuCoreRatio: sample.cpuCoreRatio,
+        };
+      },
+    });
   }
 
   return {

@@ -2,13 +2,12 @@
  * Creates and configures stdio-backed Codex app-server transports, including
  * Windows spawn normalization and environment filtering.
  */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerStartOptions } from "./config.js";
-import type { CodexAppServerTransport } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
@@ -124,8 +123,11 @@ function copySafeEnvironmentEntries(
 }
 
 /** Spawns the Codex app-server process and returns the shared transport interface. */
-export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
-  const env = resolveCodexAppServerSpawnEnv(options);
+export function createStdioTransport(
+  options: CodexAppServerStartOptions,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): ChildProcessWithoutNullStreams {
+  const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, {
     platform: process.platform,
     env,

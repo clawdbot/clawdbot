@@ -15,6 +15,10 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -42,6 +46,7 @@ import type {
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
+import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
@@ -84,6 +89,7 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);
+  applyControlUiAccent(settings.accent);
   const background = getComputedStyle(root).getPropertyValue("--bg").trim();
   if (background) {
     for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
@@ -183,13 +189,13 @@ function createApplicationTheme(
 
 function createApplicationNavigationPreferences(
   initialSettings: UiSettings,
+  navCollapsed: boolean,
 ): ApplicationNavigationPreferences {
-  let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed: settings.navCollapsed,
-    navWidth: settings.navWidth,
-    sidebarEntries: settings.sidebarEntries,
-    pinnedAgentIds: settings.pinnedAgentIds ?? [],
+    navCollapsed,
+    navWidth: initialSettings.navWidth,
+    sidebarEntries: initialSettings.sidebarEntries,
+    pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -207,8 +213,7 @@ function createApplicationNavigationPreferences(
       ) {
         return;
       }
-      settings = patchSettings({
-        navCollapsed: nextSnapshot.navCollapsed,
+      patchSettings({
         navWidth: nextSnapshot.navWidth,
         sidebarEntries: [...nextSnapshot.sidebarEntries],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
@@ -279,7 +284,17 @@ export function bootstrapApplication(
       saveSettings(startup.settings);
     }
   }
-  const applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  const startupSearchParams = new URLSearchParams(applicationLocation.search);
+  const hasSidebarCollapseIntent =
+    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
+    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
+  if (hasSidebarCollapseIntent) {
+    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
+    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
+    const search = startupSearchParams.toString();
+    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
+  }
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
@@ -377,7 +392,11 @@ export function bootstrapApplication(
   };
   const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
   syncConfigWriteSuspension();
-  const navigation = createApplicationNavigationPreferences(settings);
+  const navigation = createApplicationNavigationPreferences(
+    settings,
+    hasSidebarCollapseIntent &&
+      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
+  );
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({

@@ -230,6 +230,7 @@ async function runEmbeddedAgentViaCliBackend(
       provider: dispatch.provider,
       model: params.model,
       modelHasVision: params.modelHasVision,
+      contextWindow: params.contextWindow,
       thinkLevel: params.thinkLevel,
       timeoutMs: params.timeoutMs,
       runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,
@@ -242,6 +243,8 @@ async function runEmbeddedAgentViaCliBackend(
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,
+      onBlockReply: params.onBlockReply,
+      onPartialReply: params.onPartialReply,
       onExecutionPhase: params.onExecutionPhase,
       cliToolAvailability,
       // One-shot helper run: fresh CLI process, no warm live session left

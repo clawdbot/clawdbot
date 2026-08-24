@@ -299,8 +299,8 @@ describe("parseSlashCommand", () => {
         acceptsArgs: true,
       },
       {
-        name: "prose",
-        textAliases: ["/prose"],
+        name: "draft",
+        textAliases: ["/draft"],
         description: "Draft polished prose.",
         source: "skill",
         skillModelVisible: true,
@@ -318,14 +318,14 @@ describe("parseSlashCommand", () => {
       key: "dreaming",
       executeLocal: false,
     });
-    expectRecordFields(requireCommandByName("prose"), "prose command", {
-      key: "prose",
+    expectRecordFields(requireCommandByName("draft"), "draft command", {
+      key: "draft",
       executeLocal: false,
       source: "skill",
       skillModelVisible: true,
     });
     expectParsedSlash("/dock_discord", { name: "dock-discord" }, "");
-    expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
+    expect(getSkillCommandCompletions("dra").map((command) => command.name)).toEqual(["draft"]);
   });
 
   it("matches skill queries against both display titles and command tokens", () => {
@@ -405,8 +405,8 @@ describe("parseSlashCommand", () => {
   it("drops remote commands with unsafe identifiers before they reach the palette/parser", () => {
     applyRemoteEntries([
       {
-        name: "prose now",
-        textAliases: ["/prose now", "/safe-name"],
+        name: "draft now",
+        textAliases: ["/draft now", "/safe-name"],
         description: "Unsafe injected command.",
         source: "skill",
         scope: "both",

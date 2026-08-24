@@ -1,12 +1,12 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 
-const CRABBOX_HEARTBEAT_UPGRADE =
-  "upgrade Crabbox to a release that includes `crabbox heartbeat` (added after v0.43.0)";
+const CRABBOX_HEARTBEAT_UPGRADE = "upgrade Crabbox to v0.44.0 or newer for `crabbox heartbeat`";
 
 type HeartbeatContext = {
   binary: string;
   heartbeatIntervalMs: number;
+  heartbeatTimeoutMs: number;
   id: string;
   idleTimeout: string;
   provider: string;
@@ -62,6 +62,7 @@ export function createCrabboxHeartbeatManager(dependencies: {
     const controller = new AbortController();
     entry.controller = controller;
     let result: SpawnResult;
+    const startedAt = Date.now();
     try {
       result = await dependencies.run(entry, controller.signal);
     } catch (error) {
@@ -93,7 +94,8 @@ export function createCrabboxHeartbeatManager(dependencies: {
     }
     if (!entry.failureWarned) {
       entry.failureWarned = true;
-      warn(entry, crabboxCommandError("heartbeat", result).message);
+      const message = crabboxCommandError("heartbeat", result).message;
+      warn(entry, message.replace("(timeout)", `(timeout after ${Date.now() - startedAt} ms)`));
     }
     schedule(entry);
   };

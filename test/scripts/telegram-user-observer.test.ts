@@ -66,6 +66,12 @@ with tempfile.TemporaryDirectory() as root:
         media_error = ""
     except module.DriverError as error:
         media_error = str(error)
+    (public / "escape").symlink_to(private)
+    try:
+        observer.resolve_media("escape/credential.txt")
+        directory_escape_error = ""
+    except module.DriverError as error:
+        directory_escape_error = str(error)
     observer.ingest({
         "@type": "updateNewMessage",
         "message": {
@@ -216,6 +222,7 @@ with tempfile.TemporaryDirectory() as root:
     print(json.dumps({
         "bystanderError": bystander_error,
         "deleted": deleted,
+        "directoryEscapeError": directory_escape_error,
         "documentContent": module.UserDriver.document_content(None, "/tmp/proof.txt", "proof"),
         "events": observer.events,
         "foreignAlive": foreign_alive,
@@ -272,6 +279,9 @@ describe("Telegram user observer", () => {
     expect(value.foreignError).toBe("Telegram observer process identity changed before cleanup.");
     expect(value.bystanderError).toBe("Message 125 was not observed in this session.");
     expect(value.mediaError).toBe(
+      "Media must be a regular file inside the Mantis output directory.",
+    );
+    expect(value.directoryEscapeError).toBe(
       "Media must be a regular file inside the Mantis output directory.",
     );
     expect(value.documentContent).toEqual({

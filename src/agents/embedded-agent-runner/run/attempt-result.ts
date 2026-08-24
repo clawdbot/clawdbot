@@ -73,6 +73,7 @@ type EmbeddedAttemptResultState = Pick<
   | "lastAssistant"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
+  | "codeModeReconciliationCandidate"
   | "successfulNestedToolNames"
   | "attemptUsage"
   | "promptCache"
@@ -396,6 +397,7 @@ export function completeEmbeddedAttemptResult(
     ...state,
     replayMetadata,
     currentAttemptReplayMetadata,
+    codeModeReconciliationCandidate: state.codeModeReconciliationCandidate,
     itemLifecycle: getItemLifecycle(),
     assistantTurns: getAssistantTurnCount(),
     setTerminalLifecycleMeta,

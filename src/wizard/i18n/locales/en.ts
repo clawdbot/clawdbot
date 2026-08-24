@@ -461,6 +461,13 @@ export const en = {
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
+    telemetry: {
+      accept: "Yes, share feature stats",
+      decline: "No thanks",
+      description:
+        "Share which features you use (channels, providers, plugin count) as part of the daily update check. Never messages, never identifiers. See exactly what is sent: `openclaw telemetry show`. Change anytime: `openclaw telemetry on|off`.",
+      title: "Help make OpenClaw better?",
+    },
     skills: {
       configure: "Configure skills now? (recommended)",
       containerBrewHidden:

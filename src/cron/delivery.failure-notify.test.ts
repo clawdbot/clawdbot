@@ -1,5 +1,9 @@
 // Strict cron announcement transport tests cover scheduler-authorized alert delivery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../infra/outbound/deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   resolveDeliveryTarget: vi.fn(),
@@ -107,6 +111,100 @@ describe("sendCronAnnouncePayloadStrict", () => {
     await expect(delivery).rejects.toThrow("delivery deadline exceeded");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { reason: "no_visible_result", recipientReached: false },
+    { reason: "no_visible_payload", recipientReached: false },
+    { reason: "cancelled_by_message_sending_hook", recipientReached: false },
+    { reason: "cancelled_by_reply_payload_sending_hook", recipientReached: false },
+    { reason: "empty_after_message_sending_hook", recipientReached: false },
+    { reason: "empty_after_reply_payload_sending_hook", recipientReached: false },
+    { reason: "adapter_returned_no_identity", recipientReached: true },
+  ] as const)(
+    "preserves terminal $reason suppression and authoritative recipient reach",
+    async ({ reason, recipientReached }) => {
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+          if (reason !== "no_visible_result") {
+            params.onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
+          }
+          return [];
+        },
+      );
+      const onDeliveryAttempt = vi.fn();
+
+      const result = await sendCronAnnouncePayloadStrict({
+        deps: {} as never,
+        cfg: {} as never,
+        agentId: "main",
+        jobId: "job-1",
+        target: { channel: "telegram", to: "123" },
+        payload: { text: "Scheduled result" },
+        abortSignal: new AbortController().signal,
+        onDeliveryAttempt,
+      });
+
+      expect(result).toMatchObject({ status: "suppressed", reason, results: [] });
+      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(recipientReached);
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["raw-partial", "wrapped-partial", "failed-after-send"] as const)(
+    "preserves recipient-reached evidence across a %s failure",
+    async (failureKind) => {
+      const rejectedChunk = new PlatformMessageNotDispatchedError(
+        "second chunk was never dispatched",
+        {
+          cause: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          }),
+        },
+      );
+      const firstChunk = { channel: "telegram" as const, messageId: "already-delivered" };
+      const deliveryError =
+        failureKind === "wrapped-partial"
+          ? new OutboundDeliveryError("delivery failed after the first chunk", {
+              cause: rejectedChunk,
+              results: [firstChunk],
+              stage: "platform_send",
+            })
+          : rejectedChunk;
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+          if (failureKind === "wrapped-partial") {
+            throw deliveryError;
+          }
+          params.onPayloadDeliveryOutcome?.({
+            index: 0,
+            status: "failed",
+            error: deliveryError,
+            sentBeforeError: true,
+            stage: "platform_send",
+          });
+          return failureKind === "raw-partial" ? [firstChunk] : [];
+        },
+      );
+      const onDeliveryAttempt = vi.fn();
+
+      await expect(
+        sendCronAnnouncePayloadStrict({
+          deps: {} as never,
+          cfg: {} as never,
+          agentId: "main",
+          jobId: "job-1",
+          target: { channel: "telegram", to: "123" },
+          payload: { text: "Automation failed" },
+          abortSignal: new AbortController().signal,
+          onDeliveryAttempt,
+        }),
+      ).rejects.toThrow(deliveryError.message);
+
+      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     {

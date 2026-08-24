@@ -787,6 +787,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         source: "clawhub";
         slug?: string;
         all?: boolean;
+        force?: boolean;
         acknowledgeClawHubRisk?: boolean;
       };
       if (!p.slug && !p.all) {
@@ -816,6 +817,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir: resolved.workspaceDir,
         slug: p.slug,
+        ...(p.force ? { force: true } : {}),
         ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         logger: context.logGateway,
         config: resolved.cfg,

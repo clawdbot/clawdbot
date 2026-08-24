@@ -40,11 +40,12 @@ function requiresFollowingValue(token: string, options: readonly Option[]): bool
   return false;
 }
 
-/** Return whether Commander consumed one of the supplied argv tokens as a required option value. */
-export function hasCommanderOptionValue(
+/** Match an argv token in its actual Commander role rather than its spelling alone. */
+export function hasCommanderOptionToken(
   command: Command,
   argv: readonly string[],
   tokens: ReadonlySet<string>,
+  kind: "flag" | "value",
 ): boolean {
   const hierarchy = getCommandHierarchy(command);
   const args = argv.slice(2);
@@ -63,10 +64,14 @@ export function hasCommanderOptionValue(
     // parses only the active command's options; ancestor flags there never reach pre-action.
     if (requiresFollowingValue(arg, hierarchy[commandIndex]?.options ?? [])) {
       const value = args[index + 1];
-      if (value && tokens.has(value)) {
+      if (kind === "value" && value && tokens.has(value)) {
         return true;
       }
       index += 1;
+      continue;
+    }
+    if (kind === "flag" && tokens.has(arg.split("=")[0] ?? arg)) {
+      return true;
     }
   }
   return false;

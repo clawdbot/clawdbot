@@ -13,7 +13,7 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
-import { hasScheduledNextRunAtMs, nextWakeAtMs } from "./jobs-scheduling.js";
+import { summarizeCronJobSchedule } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   cleanupQueuedCronRunReservations,
@@ -60,13 +60,11 @@ export function armTimer(state: CronServiceState) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
     return;
   }
-  const nextAt = nextWakeAtMs(state);
+  const { nextWakeAtMs: nextAt, jobCount, enabledCount } = summarizeCronJobSchedule(state);
   if (!nextAt) {
-    const jobCount = state.store?.jobs.length ?? 0;
-    const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
-    const withNextRun =
-      state.store?.jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs))
-        .length ?? 0;
+    // The summary uses the same scheduled-timestamp predicate as this branch,
+    // so no explicitly enabled job can have a next run here.
+    const withNextRun = 0;
     if (enabledCount > 0) {
       armRunningRecheckTimer(state);
       state.deps.log.debug(
@@ -148,6 +146,7 @@ function requestIndependentImmediateCronRecheck(
 
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
+  const lifecycleGeneration = state.lifecycleGeneration;
   let admission;
   try {
     // A restart signal can be rejected after temporarily closing admission.
@@ -160,7 +159,10 @@ export async function onTimer(state: CronServiceState) {
     throw err;
   }
   try {
-    await admission.run(async () => await onAdmittedTimer(state));
+    // Reopening admission cannot transfer a retired tick to a restarted scheduler.
+    if (state.lifecycleGeneration === lifecycleGeneration) {
+      await admission.run(async () => await onAdmittedTimer(state));
+    }
   } finally {
     admission.release();
   }
