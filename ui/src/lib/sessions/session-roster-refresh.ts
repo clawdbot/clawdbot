@@ -41,6 +41,13 @@ type ManagedSessionListRefresh = {
   invalidated?: true;
 };
 
+type SessionRosterLoadOptions = SessionRefreshOptions & {
+  mergeExisting?: boolean;
+  provisional?: boolean;
+};
+
+const OWNER_FIRST_SESSION_LIST_LIMIT = 60;
+
 type ManagedSessionListQuery = Readonly<Record<string, unknown>> & { readonly limit: number };
 
 type ManagedSessionList = {
@@ -224,22 +231,29 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
   };
 
-  const load = async (options: SessionRefreshOptions) => {
+  const load = async (options: SessionRosterLoadOptions) => {
     const scope = host.connection.capture();
     if (!scope) {
       return;
     }
-    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
+    const {
+      append = false,
+      force: _force,
+      backgroundHydrate = false,
+      mergeExisting = false,
+      provisional = false,
+      ...requestOptions
+    } = options;
     // Every canonical roster replaces visible session names, so omitted title
     // enrichment must inherit the UI default instead of publishing fallback ids.
     requestOptions.includeDerivedTitles ??= true;
     const durableListOptions: SessionListOptions = { ...requestOptions };
     // Pagination is request-local; replacements retain filters but restart at page one.
     delete durableListOptions.offset;
-    if (!backgroundHydrate) {
+    if (!backgroundHydrate && !provisional) {
       lastListOptions = durableListOptions;
       hasForegroundListOptions = true;
-    } else if (!hasForegroundListOptions && !hasSeededListOptions) {
+    } else if (!provisional && !hasForegroundListOptions && !hasSeededListOptions) {
       lastListOptions = durableListOptions;
       hasSeededListOptions = true;
     }
@@ -256,8 +270,10 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         return;
       }
       const currentState = host.readState();
+      const mergeWithCurrent =
+        mergeExisting || (append && typeof requestOptions.offset === "number");
       let nextResult =
-        result && append && requestOptions.offset && currentState.result
+        result && mergeWithCurrent && currentState.result
           ? appendSessionResults(currentState.result, result)
           : reconcileRosterPresentationMetadata(result, currentState.result);
       if (append && nextResult && !backgroundHydrate) {
@@ -303,7 +319,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
       }
       nextResult = host.decorate(nextResult);
-      host.onCanonicalList(nextResult);
+      if (!provisional) {
+        host.onCanonicalList(nextResult);
+      }
       const state = host.readState();
       const error = host.observerError();
       host.publish(
@@ -361,6 +379,28 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     return { ...lastListOptions, force: true };
   };
 
+  const refreshPlan = (options: SessionRefreshOptions): SessionRosterLoadOptions[] => {
+    const ownerId = host.snapshot().selfUser?.id.trim();
+    if (!ownerId || options.append === true || !isPrimarySessionListQuery(options)) {
+      return [options];
+    }
+    // Keep owner-first and shared loads atomic in the existing refresh queue.
+    // Only the shared phase advances canonical membership and durable options.
+    return [
+      {
+        ...options,
+        ownerId,
+        limit: OWNER_FIRST_SESSION_LIST_LIMIT,
+        provisional: true,
+      },
+      {
+        ...options,
+        limit: OWNER_FIRST_SESSION_LIST_LIMIT,
+        mergeExisting: true,
+      },
+    ];
+  };
+
   const drainRefreshQueue = async (options: SessionRefreshOptions) => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -368,9 +408,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     let next: SessionRefreshOptions | null = options;
     while (next) {
-      await load(next);
-      if (!host.connection.isCurrent(scope)) {
-        return;
+      for (const loadOptions of refreshPlan(next)) {
+        await load(loadOptions);
+        if (!host.connection.isCurrent(scope)) {
+          return;
+        }
       }
       next = takeNextQueuedRefresh();
     }
