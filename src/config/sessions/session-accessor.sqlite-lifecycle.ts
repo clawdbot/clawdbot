@@ -199,6 +199,7 @@ export async function resetSessionEntryLifecycle(
         ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
+        params.beforeEntryMutation?.();
         assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
         if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundaryReason) {
           const event = buildSessionResetBoundaryEvent({

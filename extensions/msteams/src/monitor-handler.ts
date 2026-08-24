@@ -264,6 +264,8 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleMSTeamsLifecycleRemove(asMSTeamsTurnContext(context), deps);
     } catch (err) {
+      // The lifecycle owner persists initializationPending before awaited reset work.
+      // Logging a failure here therefore cannot reopen the removed chat's old transcript.
       deps.runtime.error(`msteams lifecycle handler failed: ${formatUnknownError(err)}`);
     }
     await next();
@@ -273,6 +275,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleMSTeamsLifecycleRemove(asMSTeamsTurnContext(context), deps);
     } catch (err) {
+      // Re-add retries the durable pending boundary; until it succeeds, work stays blocked.
       deps.runtime.error(`msteams lifecycle handler failed: ${formatUnknownError(err)}`);
     }
     await next();

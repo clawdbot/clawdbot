@@ -39,34 +39,16 @@ export type ResetSessionEntryLifecycleParams = {
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 };
 
+type InternalResetSessionEntryLifecycleParams = ResetSessionEntryLifecycleParams & {
+  /** Owner-bound assertion intentionally absent from the plugin-facing runtime contract. */
+  assertActiveOwner?: () => void;
+};
+
 class SessionLifecycleResetSkipped extends Error {
   constructor() {
     super("session lifecycle reset skipped");
     this.name = "SessionLifecycleResetSkipped";
   }
-}
-
-async function rollbackLifecycleResetReservation(params: {
-  expectedReservedRevision: string;
-  originalEntry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  await patchSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    (currentEntry) => {
-      if (
-        currentEntry.sessionId !== params.originalEntry.sessionId ||
-        currentEntry.lifecycleRevision !== params.expectedReservedRevision
-      ) {
-        throw new Error(
-          `session lifecycle reset reservation changed before rollback: ${params.sessionKey}`,
-        );
-      }
-      return { lifecycleRevision: params.originalEntry.lifecycleRevision };
-    },
-    { preserveActivity: true, requireWriteSuccess: true },
-  );
 }
 
 async function publishReleasedOwnerReplacement(params: {
@@ -129,7 +111,7 @@ async function publishReleasedOwnerReplacement(params: {
 }
 
 export async function resetSessionEntryLifecycleImpl(
-  params: ResetSessionEntryLifecycleParams,
+  params: InternalResetSessionEntryLifecycleParams,
   resolveNextSessionFile: (
     sessionId: string,
     options?: { agentId?: string; sessionsDir?: string },
@@ -149,8 +131,11 @@ export async function resetSessionEntryLifecycleImpl(
   }
 
   const identities = [params.sessionKey, expectedSessionId];
+  const resetReservationRevision = `reset:${randomUUID()}`;
   let skipped = false;
   let resultEntry: SessionEntry | null = null;
+  let originalEntry: SessionEntry | undefined;
+  let reservedEntry: SessionEntry | undefined;
 
   await runExclusiveSessionLifecycleMutation({
     scope: storePath,
@@ -164,6 +149,37 @@ export async function resetSessionEntryLifecycleImpl(
       ) {
         skipped = true;
         return;
+      }
+      try {
+        const reserved = await patchSessionEntry(
+          { sessionKey: params.sessionKey, storePath },
+          (currentEntry) => {
+            if (
+              currentEntry.sessionId !== expectedSessionId ||
+              (expectedUpdatedAt !== undefined && currentEntry.updatedAt !== expectedUpdatedAt)
+            ) {
+              throw new SessionLifecycleResetSkipped();
+            }
+            originalEntry = structuredClone(currentEntry);
+            // Persist the removal boundary before awaited drain/owner work. If
+            // reset later fails, new work cannot reuse the old transcript.
+            return { initializationPending: true, lifecycleRevision: resetReservationRevision };
+          },
+          { preserveActivity: true, requireWriteSuccess: true },
+        );
+        if (!reserved || !originalEntry) {
+          throw new SessionLifecycleResetSkipped();
+        }
+        reservedEntry = loadSessionEntry({ sessionKey: params.sessionKey, storePath });
+        if (!reservedEntry) {
+          throw new SessionLifecycleResetSkipped();
+        }
+      } catch (error) {
+        if (error instanceof SessionLifecycleResetSkipped) {
+          skipped = true;
+          return;
+        }
+        throw error;
       }
       const drained = await interruptSessionWorkAdmissions({
         scope: storePath,
@@ -180,73 +196,38 @@ export async function resetSessionEntryLifecycleImpl(
       if (skipped) {
         return;
       }
-      const resetReservationRevision = `reset:${randomUUID()}`;
-      let originalEntry: SessionEntry | undefined;
-      let reservedEntry: SessionEntry | undefined;
+      if (!originalEntry || !reservedEntry) {
+        throw new Error(`session lifecycle reset lost its durable boundary: ${params.sessionKey}`);
+      }
       let physicalOwnerReleased = false;
       try {
-        const reserved = await patchSessionEntry(
-          { sessionKey: params.sessionKey, storePath },
-          (currentEntry) => {
-            if (
-              currentEntry.sessionId !== expectedSessionId ||
-              (expectedUpdatedAt !== undefined && currentEntry.updatedAt !== expectedUpdatedAt)
-            ) {
-              throw new SessionLifecycleResetSkipped();
-            }
-            originalEntry = structuredClone(currentEntry);
-            return { lifecycleRevision: resetReservationRevision };
-          },
-          { preserveActivity: true, requireWriteSuccess: true },
-        );
-        if (!reserved || !originalEntry) {
-          throw new SessionLifecycleResetSkipped();
-        }
-        reservedEntry = loadSessionEntry({ sessionKey: params.sessionKey, storePath });
-        if (!reservedEntry) {
-          throw new SessionLifecycleResetSkipped();
-        }
-        if (reserved.modelSelectionLocked === true && reserved.agentHarnessId?.trim()) {
+        if (reservedEntry.modelSelectionLocked === true && reservedEntry.agentHarnessId?.trim()) {
           if (!params.releasePhysicalOwner) {
-            await rollbackLifecycleResetReservation({
-              expectedReservedRevision: resetReservationRevision,
-              originalEntry,
-              sessionKey: params.sessionKey,
-              storePath,
-            });
             throw new Error(
               `locked harness-owned session requires physical owner release before lifecycle reset: ${params.sessionKey}`,
             );
           }
-          try {
-            const sessionFile =
-              "sessionFile" in originalEntry && typeof originalEntry.sessionFile === "string"
-                ? originalEntry.sessionFile
-                : undefined;
-            await params.releasePhysicalOwner({
-              ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-              entry: structuredClone(originalEntry),
-              reason: "reset",
-              ...(sessionFile ? { sessionFile } : {}),
-              sessionId: expectedSessionId,
-              sessionKey: params.sessionKey,
-              storePath,
-            });
-            physicalOwnerReleased = true;
-          } catch (error) {
-            await rollbackLifecycleResetReservation({
-              expectedReservedRevision: resetReservationRevision,
-              originalEntry,
-              sessionKey: params.sessionKey,
-              storePath,
-            });
-            throw error;
-          }
+          const sessionFile =
+            "sessionFile" in originalEntry && typeof originalEntry.sessionFile === "string"
+              ? originalEntry.sessionFile
+              : undefined;
+          params.assertActiveOwner?.();
+          await params.releasePhysicalOwner({
+            ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+            entry: structuredClone(originalEntry),
+            reason: "reset",
+            ...(sessionFile ? { sessionFile } : {}),
+            sessionId: expectedSessionId,
+            sessionKey: params.sessionKey,
+            storePath,
+          });
+          physicalOwnerReleased = true;
         }
         const result = await resetAccessorSessionEntryLifecycle({
           ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
           storePath,
           target: { canonicalKey: params.sessionKey, storeKeys: [params.sessionKey] },
+          ...(params.assertActiveOwner ? { beforeEntryMutation: params.assertActiveOwner } : {}),
           buildNextEntry: async ({ currentEntry }) => {
             if (
               !currentEntry ||
@@ -270,6 +251,7 @@ export async function resetSessionEntryLifecycleImpl(
             }
             return {
               ...patch,
+              initializationPending: undefined,
               lifecycleRevision: undefined,
               sessionFile: nextSessionFile,
               sessionId: nextSessionId,
@@ -293,8 +275,10 @@ export async function resetSessionEntryLifecycleImpl(
               { cause: err },
             );
           }
-          skipped = true;
-          return;
+          throw new Error(
+            `session lifecycle reset skipped after durable boundary: ${params.sessionKey}`,
+            { cause: err },
+          );
         }
         if (physicalOwnerReleased && reservedEntry) {
           await publishReleasedOwnerReplacement({

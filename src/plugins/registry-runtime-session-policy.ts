@@ -49,6 +49,7 @@ type ResetContext = {
   storePath: string;
 };
 type ResetWithOwnerParams = ResetParams & {
+  assertActiveOwner?: () => void;
   releasePhysicalOwner?: (context: ResetContext) => Promise<void> | void;
 };
 type LockedHarnessResolution =
@@ -162,6 +163,7 @@ export async function resetPluginSessionEntryLifecycle(params: {
 }
 
 export async function resetPluginChannelSessionEntryLifecycle(params: {
+  assertActiveOwner: () => void;
   channelIds: readonly string[];
   pluginId: string;
   request: ChannelResetParams;
@@ -193,6 +195,7 @@ export async function resetPluginChannelSessionEntryLifecycle(params: {
   const { channelId: _channelId, ...request } = params.request;
   return await params.reset({
     ...request,
+    assertActiveOwner: params.assertActiveOwner,
     releasePhysicalOwner: async (context: ResetContext) =>
       await releaseLockedSessionPhysicalOwner({
         context,

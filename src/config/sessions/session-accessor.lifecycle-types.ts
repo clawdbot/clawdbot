@@ -59,6 +59,8 @@ export type ResetSessionEntryLifecycleParams = {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  /** Synchronous authority check run inside the final SQLite write transaction. */
+  beforeEntryMutation?: () => void;
   /** Atomically append this boundary with the reset entry mutation. */
   resetBoundaryReason?: SessionResetBoundaryReason;
   /** Explicit store target for SQLite session ownership. */

@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-lifecycle-admission.js";
 import { resetPluginRuntimeSessionEntryLifecycle } from "./session-store-lifecycle-runtime.js";
 import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "./session-store-runtime.js";
 
@@ -93,6 +97,61 @@ describe("session-store lifecycle runtime", () => {
     }
   });
 
+  it("keeps a durable pending boundary when active work cannot drain", async () => {
+    const sessionKey = "agent:main:main";
+    await seedSessionEntry(sessionKey, {
+      sessionId: "blocked-old-session",
+      updatedAt: 10,
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, "blocked-old-session"],
+      assertAllowed: () => {},
+      onInterrupt: () => {},
+    });
+    vi.useFakeTimers();
+    try {
+      const reset = resetPluginRuntimeSessionEntryLifecycle({
+        expectedSessionId: "blocked-old-session",
+        expectedUpdatedAt: 10,
+        sessionKey,
+        storePath,
+        update: () => ({ updatedAt: 0 }),
+      });
+      const outcome = reset.then(
+        () => ({ error: undefined }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      expect((await outcome).error).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining("timed out draining work"),
+        }),
+      );
+
+      const pending = getSessionEntry({ sessionKey, storePath });
+      expect(pending).toMatchObject({
+        initializationPending: true,
+        sessionId: "blocked-old-session",
+      });
+      expect(pending?.lifecycleRevision).toMatch(/^reset:/);
+      expect(resolveSessionWorkStartError(sessionKey, pending)).toContain("still initializing");
+    } finally {
+      admission.release();
+      vi.useRealTimers();
+    }
+
+    const retried = await resetPluginRuntimeSessionEntryLifecycle({
+      expectedSessionId: "blocked-old-session",
+      expectedUpdatedAt: 10,
+      sessionKey,
+      storePath,
+      update: () => ({ updatedAt: 0 }),
+    });
+    expect(retried?.sessionId).not.toBe("blocked-old-session");
+    expect(retried?.initializationPending).toBeUndefined();
+  });
+
   it("rejects locked harness lifecycle reset without a physical owner release hook", async () => {
     const sessionKey = "agent:main:harness:codex:thread";
     await seedSessionEntry(sessionKey, lockedEntry());
@@ -106,13 +165,16 @@ describe("session-store lifecycle runtime", () => {
         update: () => ({ updatedAt: 0 }),
       }),
     ).rejects.toThrow("requires physical owner release");
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      lifecycleRevision: "original-revision",
+    const pending = getSessionEntry({ sessionKey, storePath });
+    expect(pending).toMatchObject({
+      initializationPending: true,
       sessionId: "locked-old-session",
     });
+    expect(pending?.lifecycleRevision).toMatch(/^reset:/);
+    expect(resolveSessionWorkStartError(sessionKey, pending)).toContain("still initializing");
   });
 
-  it("rolls back the lifecycle reservation when physical owner release fails", async () => {
+  it("keeps a durable boundary after owner failure and clears it on retry", async () => {
     const sessionKey = "agent:main:harness:codex:thread";
     await seedSessionEntry(sessionKey, lockedEntry());
 
@@ -128,10 +190,25 @@ describe("session-store lifecycle runtime", () => {
         update: () => ({ updatedAt: 0 }),
       }),
     ).rejects.toThrow("native reset failed");
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      lifecycleRevision: "original-revision",
+    const pending = getSessionEntry({ sessionKey, storePath });
+    expect(pending).toMatchObject({
+      initializationPending: true,
       sessionId: "locked-old-session",
     });
+    expect(pending?.lifecycleRevision).toMatch(/^reset:/);
+    expect(resolveSessionWorkStartError(sessionKey, pending)).toContain("still initializing");
+
+    const retried = await resetPluginRuntimeSessionEntryLifecycle({
+      expectedSessionId: "locked-old-session",
+      expectedUpdatedAt: 10,
+      releasePhysicalOwner: () => {},
+      sessionKey,
+      storePath,
+      update: () => ({ updatedAt: 0 }),
+    });
+    expect(retried?.sessionId).not.toBe("locked-old-session");
+    expect(retried?.initializationPending).toBeUndefined();
+    expect(retried?.lifecycleRevision).toBeUndefined();
   });
 
   it("releases locked physical ownership before publishing the replacement session", async () => {

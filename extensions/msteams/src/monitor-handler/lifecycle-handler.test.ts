@@ -281,6 +281,35 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:other-user"].updatedAt).toBe(2_000);
   });
 
+  it("propagates a lifecycle-owner failure after accepting the removal boundary", async () => {
+    setupStore({
+      "msteams:direct:user-aad": {
+        sessionId: "old-session",
+        updatedAt: 1_000,
+        route: { channel: "msteams" },
+      },
+    });
+    hoisted.resetSessionEntryLifecycle.mockRejectedValueOnce(
+      new Error("timed out draining work before session lifecycle reset"),
+    );
+    const { deps, remove } = createDeps();
+
+    await expect(
+      handleMSTeamsLifecycleRemove(
+        createContext({
+          type: "installationUpdate",
+          action: "remove",
+          from: { aadObjectId: "user-aad" },
+          recipient: { id: "bot-id" },
+          conversation: { id: "19:personal-chat", conversationType: "personal" },
+        }),
+        deps,
+      ),
+    ).rejects.toThrow("timed out draining work before session lifecycle reset");
+    expect(remove).toHaveBeenCalledWith("19:personal-chat");
+    expect(hoisted.resetSessionEntryLifecycle).toHaveBeenCalledOnce();
+  });
+
   it("does not route a personal lifecycle event through a Team binding that matches its tenant", async () => {
     const store = {
       "msteams:direct:user-aad": { sessionId: "personal-session", updatedAt: 1_000 },

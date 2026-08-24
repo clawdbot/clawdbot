@@ -797,15 +797,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 // otherwise revocation or replacement would leave mutation authority alive.
                 const activeOwnerRecord = requireActiveLifecycleOwner();
                 return resetPluginChannelSessionEntryLifecycle({
+                  assertActiveOwner: () => {
+                    requireActiveLifecycleOwner();
+                  },
                   channelIds: activeOwnerRecord.channelIds,
                   pluginId,
                   request: params,
-                  reset: async (request) => {
-                    requireActiveLifecycleOwner();
-                    return await registryParams.runtime.agent.session.resetSessionEntryLifecycle(
-                      request,
-                    );
-                  },
+                  reset: async (request) =>
+                    await registryParams.runtime.agent.session.resetSessionEntryLifecycle(request),
                   resolveLockedSessionHarnessRegistration,
                 });
               }),
