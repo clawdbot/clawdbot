@@ -9,8 +9,15 @@ describe("normalizeMattermostEmojiName", () => {
     expect(normalizeMattermostEmojiName("🎉")).toBe("tada");
   });
 
-  it("strips skin-tone modifiers and variation selectors before lookup", () => {
-    expect(normalizeMattermostEmojiName("👍🏽")).toBe("thumbsup");
+  it("preserves the skin tone as Mattermost's toned short name", () => {
+    expect(normalizeMattermostEmojiName("👍🏽")).toBe("thumbsup_medium_skin_tone");
+    expect(normalizeMattermostEmojiName("🙌🏿")).toBe("raised_hands_dark_skin_tone");
+    // Accepted tradeoff: a modifier on a non-modifier base is not a real emoji
+    // sequence, so the stray tone is dropped instead of composing an unknown name.
+    expect(normalizeMattermostEmojiName("🔥\u{1F3FD}")).toBe("fire");
+  });
+
+  it("strips variation selectors before lookup", () => {
     expect(normalizeMattermostEmojiName("⚠️")).toBe("warning");
   });
 
