@@ -15,6 +15,10 @@ export default defineConfig({
         import.meta.dirname,
         "../../../packages/normalization-core/src/utf16-slice.ts",
       ),
+      "openclaw/plugin-sdk/time-runtime": path.resolve(
+        import.meta.dirname,
+        "../../../packages/plugin-sdk/src/time-runtime.ts",
+      ),
     },
   },
   build: {

@@ -40,6 +40,6 @@ export {
   detectAppGuidedLmstudioAvailability,
   discoverLmstudioProvider,
   prepareAppGuidedLmstudioSetup,
-  prepareLmstudioDynamicModels,
+  prepareLmstudioDynamicModel,
   promptAndConfigureLmstudioInteractive,
 } from "./setup.js";

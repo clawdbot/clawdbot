@@ -3,12 +3,10 @@ import { existsSync, globSync, readdirSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
   createVitestCacheWarmGroups,
   resolvePolicyTestTargets,
-  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -110,40 +108,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ui/src/styles/cursor-policy.node.test.ts",
     ]);
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
-  });
-
-  it("assigns one semantic Vitest cache writer without changing shard order", () => {
-    const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
-    const compact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "push",
-    });
-
-    const expectWriter = (plan: Array<Pick<NodeTestShard, "groups" | "shardName">>) => {
-      const marked = assignVitestFsCacheWriter(plan);
-      expect(marked.map((shard) => shard.shardName)).toEqual(plan.map((shard) => shard.shardName));
-      expect(marked.filter((shard) => shard.saveVitestFsCache)).toHaveLength(1);
-      expect(
-        marked.find((shard) => shard.saveVitestFsCache)?.shardName.startsWith("core-unit-fast") ||
-          marked
-            .find((shard) => shard.saveVitestFsCache)
-            ?.groups?.some((group) => group.shard_name.startsWith("core-unit-fast")),
-      ).toBe(true);
-    };
-    expectWriter(full);
-    expectWriter(compact);
-
-    expect(assignVitestFsCacheWriter([])).toEqual([]);
-    const changedOnly = {
-      checkName: "checks-node-changed-only",
-      configs: ["test/vitest/vitest.unit.config.ts"],
-      requiresDist: false,
-      runner: DEFAULT_NODE_TEST_RUNNER,
-      shardName: "changed-only",
-    };
-    expect(assignVitestFsCacheWriter([changedOnly])).toEqual([
-      { ...changedOnly, saveVitestFsCache: true },
-    ]);
   });
 
   it("projects cache-warm groups from the owned node test plan", () => {

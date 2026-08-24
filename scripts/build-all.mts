@@ -63,6 +63,7 @@ type BuildAllStepParams = {
 };
 type BuildAllCacheParams = { rootDir?: string; fs?: BuildAllFs; env?: NodeJS.ProcessEnv };
 const BUILD_CACHE_VERSION = 4;
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const TSDOWN_SOURCE_EXTENSIONS = [
   ".cjs",
@@ -362,8 +363,25 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ],
 };
 
+const FULL_RUNTIME_ONLY_STEPS = [
+  "plugins:assets:build",
+  "tsdown",
+  "external-plugins:local-dist",
+  "check-cli-bootstrap-imports",
+  "plugins:assets:copy",
+  "runtime-postbuild",
+  "build-stamp",
+  "runtime-postbuild-stamp",
+  "ui:build",
+  "write-build-info",
+  "write-cli-startup-metadata",
+];
+
 export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
   full: {
+    tsdown: {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
     "tsdown-unified": {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
@@ -449,11 +467,20 @@ export function parseBuildAllArgs(argv: string[]) {
   return args;
 }
 
-export function resolveBuildAllSteps(profile = "full"): BuildAllStep[] {
-  const labels = BUILD_ALL_PROFILES[profile];
-  if (!labels) {
+export function resolveBuildAllSteps(
+  profile = "full",
+  buildEnv: NodeJS.ProcessEnv = process.env,
+): BuildAllStep[] {
+  const profileLabels = BUILD_ALL_PROFILES[profile];
+  if (!profileLabels) {
     throw new Error(`Unknown build profile: ${profile}`);
   }
+  // A cold runtime-only build has no declarations for the canonical SDK gates.
+  // Keep the full runtime artifact surface, but use the uncached runtime graph.
+  const labels =
+    profile === "full" && buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+      ? FULL_RUNTIME_ONLY_STEPS
+      : profileLabels;
   const selected = labels.map((label) => BUILD_ALL_STEPS.find((step) => step.label === label));
   if (selected.some((step) => !step)) {
     const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
@@ -950,7 +977,7 @@ if (isMainModule()) {
     const buildEnv = resolveBuildAllEnvironment();
     const timings: BuildAllTiming[] = [];
     let exitCode = 0;
-    for (const step of resolveBuildAllSteps(args.profile)) {
+    for (const step of resolveBuildAllSteps(args.profile, buildEnv)) {
       const startedAt = performance.now();
       const cacheState = resolveBuildAllStepCacheState(step, { env: buildEnv });
       let stepToRun = step;

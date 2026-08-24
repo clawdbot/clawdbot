@@ -259,13 +259,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           row.source === "memory" || row.source === "sessions" ? [row.source] : [],
         ),
       );
+      this.memorySourceProvenanceRepairPending =
+        this.sources.has("memory") && invalidatedSources.has("memory");
       this.dirty =
         resolveInitialMemoryDirty({
           hasMemorySource: this.sources.has("memory"),
           statusOnly: params.purpose === "status",
           hasIndexedMeta: Boolean(meta),
-        }) ||
-        (this.sources.has("memory") && invalidatedSources.has("memory"));
+        }) || this.memorySourceProvenanceRepairPending;
       if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
         // Migration cannot map a durable session source path back to one live
         // transcript file. Carry a full-session retry so unchanged and deleted

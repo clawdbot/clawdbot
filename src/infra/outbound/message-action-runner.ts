@@ -3,7 +3,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
@@ -13,6 +14,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -47,6 +49,10 @@ import {
   resolveEffectiveMessageToolsConfig,
 } from "./outbound-policy.js";
 import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
+
+const loadInternalSourceReplyPersistence = createLazyRuntimeModule(
+  () => import("../../gateway/internal-source-reply-persistence.js"),
+);
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
@@ -235,27 +241,101 @@ async function handleInternalSourceReplySendAction(
 ): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  const agentId =
+    input.agentId ??
+    (input.sessionKey
+      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
+      : undefined);
+  await hydrateAttachmentParamsForAction({
+    cfg: input.cfg,
+    channel: INTERNAL_MESSAGE_CHANNEL,
+    args: params,
+    action: "send",
+    dryRun,
+    mediaPolicy: resolveAttachmentMediaPolicy({
+      sandboxRoot: input.sandboxRoot,
+      mediaAccess: input.mediaAccess,
+      mediaLocalRoots: getAgentScopedMediaLocalRoots(input.cfg, agentId),
+    }),
+  });
   const sourceReply = await buildMessagePayload({
     cfg: input.cfg,
     actionParams: params,
     input,
-    agentId:
-      input.agentId ??
-      (input.sessionKey
-        ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-        : undefined),
+    agentId,
   });
+  let sourceReplyPayload = sourceReply.payload;
+  const requestedMediaCount =
+    resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length;
+  if (!dryRun && requestedMediaCount > 0) {
+    const workspaceDir =
+      input.workspaceDir ??
+      input.mediaAccess?.workspaceDir ??
+      (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined);
+    if (!workspaceDir) {
+      throw new Error("Current-source media requires an agent workspace.");
+    }
+    const { createReplyMediaPathNormalizer } =
+      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+    sourceReplyPayload = await createReplyMediaPathNormalizer({
+      cfg: input.cfg,
+      sessionKey: input.sessionKey,
+      agentId,
+      workspaceDir,
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      requesterSenderId: input.requesterSenderId ?? undefined,
+      requesterSenderName: input.requesterSenderName ?? undefined,
+      requesterSenderUsername: input.requesterSenderUsername ?? undefined,
+      requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      sandboxRoot: input.sandboxRoot,
+    })(sourceReplyPayload);
+    if (
+      resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
+    ) {
+      throw new Error(
+        "Current-source media could not be staged. Use an accessible URL, a file inside the agent workspace, or the buffer field.",
+      );
+    }
+  }
+  const sourceReplyMediaUrls = resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls;
+  const sourceReplyMessage = sourceReplyPayload.text ?? sourceReply.message;
+  const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
+  let persistedIdempotencyKey: string | undefined;
+  let persistedTranscriptOwner = false;
+  if (!dryRun && input.sessionId) {
+    const sessionKey = input.sourceReplySessionKey ?? input.sessionKey;
+    if (!sessionKey) {
+      throw new Error("Internal source reply requires a session key");
+    }
+    const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
+    await persistInternalSourceReply({
+      cfg: input.cfg,
+      sessionKey,
+      expectedSessionId: input.sessionId,
+      agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+      payload: sourceReplyPayload,
+      idempotencyKey,
+      runId: input.runId,
+      sourceReplyFinal: input.sourceReplyFinal,
+      toolCallId: input.sourceReplyToolCallId,
+      sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
+    });
+    persistedIdempotencyKey = idempotencyKey;
+    persistedTranscriptOwner = true;
+  }
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
     channel: INTERNAL_MESSAGE_CHANNEL,
     target: "current-run",
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+    ...(persistedIdempotencyKey ? { idempotencyKey: persistedIdempotencyKey } : {}),
+    ...(persistedTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
     ...(dryRun ? {} : { sourceReplySink: "internal-ui" as const }),
-    sourceReply: sourceReply.payload,
-    ...(sourceReply.message ? { message: sourceReply.message } : {}),
-    ...(sourceReply.mediaUrl ? { mediaUrl: sourceReply.mediaUrl } : {}),
-    ...(sourceReply.mediaUrls?.length ? { mediaUrls: sourceReply.mediaUrls } : {}),
+    sourceReply: sourceReplyPayload,
+    ...(sourceReplyMessage ? { message: sourceReplyMessage } : {}),
+    ...(sourceReplyMediaUrls[0] ? { mediaUrl: sourceReplyMediaUrls[0] } : {}),
+    ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
   return withSendNormalization(
@@ -279,6 +359,8 @@ function buildInternalSourceReplyToolResult(payload: {
   channel: ChannelId;
   target: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  idempotencyKey?: string;
+  sourceReplyTranscriptOwner?: true;
   sourceReplySink?: "internal-ui";
   sourceReply: ReplyPayload;
   message?: string;
@@ -291,6 +373,8 @@ function buildInternalSourceReplyToolResult(payload: {
   channel: ChannelId;
   target: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  idempotencyKey?: string;
+  sourceReplyTranscriptOwner?: true;
   sourceReplySink?: "internal-ui";
   sourceReply: ReplyPayload;
   message?: string;
@@ -315,6 +399,8 @@ function buildInternalSourceReplyToolResult(payload: {
       ...(payload.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
         : {}),
+      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
+      ...(payload.sourceReplyTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
       ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
       sourceReply: payload.sourceReply,
       ...(payload.message ? { message: payload.message } : {}),
@@ -386,20 +472,22 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     structuredAttachments: structuredAttachmentMode,
   });
 
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-    cfg,
-    agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
-      structuredAttachments: structuredAttachmentMode,
-    }),
-    sessionKey: input.sessionKey,
-    messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-    requesterSenderId: input.requesterSenderId,
-    requesterSenderName: input.requesterSenderName,
-    requesterSenderUsername: input.requesterSenderUsername,
-    requesterSenderE164: input.requesterSenderE164,
-  });
+  const mediaAccess =
+    input.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: resolvedAgentId,
+      mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
+        structuredAttachments: structuredAttachmentMode,
+      }),
+      sessionKey: input.sessionKey,
+      messageProvider: input.sessionKey ? undefined : channel,
+      accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+      requesterSenderId: input.requesterSenderId,
+      requesterSenderName: input.requesterSenderName,
+      requesterSenderUsername: input.requesterSenderUsername,
+      requesterSenderE164: input.requesterSenderE164,
+    });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaAccess,

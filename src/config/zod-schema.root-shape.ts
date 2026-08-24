@@ -229,6 +229,7 @@ export const OpenClawSchemaShape = {
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
+          accent: HexColorSchema.startsWith("#").optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),

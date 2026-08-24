@@ -57,6 +57,7 @@ async function callTyping(params: {
   sessionKey: string;
   sessionId: string;
   typing: boolean;
+  preview?: string;
   agentId?: string;
   client: GatewayClient;
   context: GatewayRequestContext;
@@ -67,6 +68,7 @@ async function callTyping(params: {
     sessionId: params.sessionId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     typing: params.typing,
+    ...(params.preview !== undefined ? { preview: params.preview } : {}),
   };
   await sessionSuggestionHandlers["session.typing"]?.({
     req: { type: "req", id: "typing-request", method: "session.typing", params: requestParams },
@@ -90,6 +92,105 @@ afterEach(() => {
 });
 
 describe("session typing handler", () => {
+  it("broadcasts bounded draft previews and never includes previews after typing stops", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(30_000);
+      const sessionKey = "agent:main:preview";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-preview",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "shared",
+        },
+      );
+      mocks.presence = [
+        { user: { id: "alice" }, watchedSessions: [sessionKey] },
+        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+      ];
+      const broadcast = vi.fn();
+      const params = {
+        sessionKey,
+        sessionId: "session-preview",
+        client: client("alice", "alice-preview"),
+        context: context(broadcast),
+      };
+
+      expect(await callTyping({ ...params, typing: true, preview: "  first draft  " })).toEqual({
+        ok: true,
+        broadcast: true,
+      });
+      expect(broadcast.mock.calls[0]?.[1]).toMatchObject({ typing: true, preview: "first draft" });
+
+      const oversizedPreview = "😀".repeat(405);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(await callTyping({ ...params, typing: true, preview: oversizedPreview })).toEqual({
+        ok: true,
+        broadcast: true,
+      });
+      expect(broadcast.mock.calls[1]?.[1].preview).toBe("😀".repeat(400));
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await callTyping({ ...params, typing: false, preview: "must not leak" })).toEqual({
+        ok: true,
+        broadcast: true,
+      });
+      expect(broadcast.mock.calls[2]?.[1]).toMatchObject({ typing: false });
+      expect(broadcast.mock.calls[2]?.[1]).not.toHaveProperty("preview");
+    });
+  });
+
+  it("keeps a live draft preview when another connection sends boolean-only typing", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(40_000);
+      const sessionKey = "agent:main:shared-preview";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-shared-preview",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "shared",
+        },
+      );
+      mocks.presence = [
+        { user: { id: "alice" }, watchedSessions: [sessionKey] },
+        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+      ];
+      const broadcast = vi.fn();
+      const params = {
+        sessionKey,
+        sessionId: "session-shared-preview",
+        context: context(broadcast),
+      };
+
+      expect(
+        await callTyping({
+          ...params,
+          typing: true,
+          preview: "still drafting",
+          client: client("alice", "alice-preview-tab"),
+        }),
+      ).toEqual({ ok: true, broadcast: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(
+        await callTyping({
+          ...params,
+          typing: true,
+          client: client("alice", "alice-presence-tab"),
+        }),
+      ).toEqual({ ok: true, broadcast: true });
+
+      expect(broadcast.mock.calls[1]?.[1]).toMatchObject({
+        typing: true,
+        preview: "still drafting",
+      });
+    });
+  });
+
   it.each([
     { agentId: "main", expected: ["agent:main:global"] },
     { agentId: "work", expected: ["agent:work:global"] },

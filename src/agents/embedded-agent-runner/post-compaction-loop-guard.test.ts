@@ -1,5 +1,18 @@
 // Coverage for detecting repeated tool loops immediately after compaction.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const logInfo = vi.hoisted(() => vi.fn());
+const logError = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({
+    info: logInfo,
+    error: logError,
+    warn: vi.fn(),
+    debug: vi.fn(),
+  })),
+}));
+
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
@@ -117,6 +130,64 @@ describe("createPostCompactionLoopGuard", () => {
     guard.observe(callOutcome("exec", { cmd: "ls" }, "r3"));
     expect(guard.snapshot().armed).toBe(false);
     expect(guard.snapshot().remainingAttempts).toBe(0);
+  });
+});
+
+describe("post-compaction re-read instrumentation", () => {
+  beforeEach(() => {
+    logInfo.mockClear();
+    logError.mockClear();
+  });
+
+  it("summarizes post-compaction re-reads against the pre-compaction baseline", () => {
+    const guard = createPostCompactionLoopGuard();
+    guard.observe(callOutcome("read", { path: "/report.md" }, "content-v1"));
+    guard.observe(callOutcome("exec", { cmd: "ls" }, "ok"));
+    guard.armPostCompaction();
+    // The model immediately re-reads what compaction summarized away, then moves on.
+    guard.observe(callOutcome("read", { path: "/report.md" }, "content-v2"));
+    guard.observe(callOutcome("read", { path: "/other.md" }, "fresh"));
+    const last = guard.observe(callOutcome("gateway", { action: "probe" }, "r1"));
+    expect(last.shouldAbort).toBe(false);
+    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining("post-compaction window closed"));
+    const summary = logInfo.mock.calls
+      .map((call) => call[0] as string)
+      .find((message) => message.includes("post-compaction window closed"));
+    expect(summary).toContain("toolCalls=3");
+    expect(summary).toContain("preCompactionRepeats=1");
+    expect(summary).toContain("read");
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("reports zero re-reads when the window introduces only fresh calls", () => {
+    const guard = createPostCompactionLoopGuard();
+    guard.observe(callOutcome("read", { path: "/a.md" }, "v1"));
+    guard.armPostCompaction();
+    guard.observe(callOutcome("read", { path: "/b.md" }, "v1"));
+    guard.observe(callOutcome("read", { path: "/c.md" }, "v1"));
+    guard.observe(callOutcome("exec", { cmd: "ls" }, "ok"));
+    const summary = logInfo.mock.calls
+      .map((call) => call[0] as string)
+      .find((message) => message.includes("post-compaction window closed"));
+    expect(summary).toContain("preCompactionRepeats=0");
+  });
+
+  it("does not count signatures evicted from the bounded baseline", () => {
+    const guard = createPostCompactionLoopGuard();
+    for (let i = 0; i < 20; i += 1) {
+      guard.observe(callOutcome("read", { path: `/old-${i}.md` }, "v1"));
+    }
+    guard.armPostCompaction();
+    // Signature from before the baseline window: no longer comparable.
+    guard.observe(callOutcome("read", { path: "/old-0.md" }, "v2"));
+    // Signature still inside the baseline window tail.
+    guard.observe(callOutcome("read", { path: "/old-19.md" }, "v2"));
+    guard.observe(callOutcome("gateway", { action: "probe" }, "r1"));
+    const summary = logInfo.mock.calls
+      .map((call) => call[0] as string)
+      .find((message) => message.includes("post-compaction window closed"));
+    expect(summary).toContain("toolCalls=3");
+    expect(summary).toContain("preCompactionRepeats=1");
   });
 });
 

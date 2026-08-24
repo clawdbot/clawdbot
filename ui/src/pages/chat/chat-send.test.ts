@@ -501,6 +501,7 @@ describe("refreshChat", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
+      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(controls.composerControls, container);
@@ -3908,6 +3909,10 @@ describe("handleSendChat", () => {
       chatRunId: "run-1",
       chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
+      chatStreamSegments: [{ text: "Checking the active run", ts: 1, itemId: "active-commentary" }],
+      chatToolMessages: [
+        { role: "toolResult", toolCallId: "active-tool", content: "still running" },
+      ],
       sessionKey: "agent:main:main",
       settings: { chatFollowUpMode: "steer" },
     });
@@ -3927,6 +3932,12 @@ describe("handleSendChat", () => {
     );
     expect(host.chatRunId).toBe("run-1");
     expect(host.chatStream).toBe("Working...");
+    expect(host.chatStreamSegments).toEqual([
+      { text: "Checking the active run", ts: 1, itemId: "active-commentary" },
+    ]);
+    expect(host.chatToolMessages).toEqual([
+      { role: "toolResult", toolCallId: "active-tool", content: "still running" },
+    ]);
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
         queueMode: "steer",
@@ -3945,11 +3956,15 @@ describe("handleSendChat", () => {
         "chat.send": { status: "started", runId: "started-run" },
       },
       chatMessage: "start through steer mode",
+      chatStreamSegments: [{ text: "stale commentary", ts: 1, itemId: "stale" }],
+      chatToolMessages: [{ role: "toolResult", toolCallId: "stale-tool", content: "stale output" }],
     });
 
     await handleSendChat(host, undefined, { followUpMode: "steer" });
 
     expect(host.chatRunId).toBe("started-run");
+    expect(host.chatStreamSegments).toEqual([]);
+    expect(host.chatToolMessages).toEqual([]);
   });
 
   it("sends a fresh mode-bearing row ahead of older outbox reconciliation", async () => {
@@ -6731,6 +6746,8 @@ describe("handleSendChat", () => {
 
       expect(historyAttempts).toBe(1);
       expect(sendAttempts).toBe(0);
+      await Promise.all(Array.from({ length: 20 }, () => retryReconnectableQueuedChatSends(host)));
+      expect(historyAttempts).toBe(1);
       await vi.advanceTimersByTimeAsync(100);
       // Same fire-and-forget retry hand-off as the send-rejection case above.
       await waitForFast(() => {
@@ -6738,6 +6755,92 @@ describe("handleSendChat", () => {
         expect(historyAttempts).toBeGreaterThanOrEqual(2);
         expect(listStoredChatOutboxes(host)).toStrictEqual([]);
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries after reconnecting with the same Gateway client", async () => {
+    let sendAttempts = 0;
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        },
+        "chat.send": (params: unknown) => {
+          sendAttempts += 1;
+          if (sendAttempts === 1) {
+            throw new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "Gateway is temporarily busy",
+              retryable: true,
+              retryAfterMs: 100,
+            });
+          }
+          const payload = requireRecord(params, "reconnected send payload");
+          return { runId: payload.idempotencyKey, status: "ok" };
+        },
+      },
+      chatMessage: "retry after reconnecting",
+    });
+
+    vi.useFakeTimers();
+    try {
+      await handleSendChat(host);
+      expect(sendAttempts).toBe(1);
+
+      host.connectionEpoch += 1;
+      await retryReconnectableQueuedChatSends(host);
+
+      expect(sendAttempts).toBe(2);
+      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("transfers an active retry backoff to a sibling pane without bypassing it", async () => {
+    let historyAttempts = 0;
+    const owner = makeChatHost({
+      connectionEpoch: 1,
+      requestHandlers: {
+        "chat.history": () => {
+          historyAttempts += 1;
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "History is temporarily unavailable",
+            retryable: true,
+            retryAfterMs: 100,
+          });
+        },
+      },
+      chatQueue: [
+        {
+          id: "shared-retry",
+          text: "wait for backoff",
+          createdAt: 1,
+          sendRunId: "shared-retry-run",
+          sendState: "waiting-reconnect",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(owner);
+    const sibling = makeChatHost({
+      client: owner.client,
+      connectionEpoch: 2,
+      chatQueue: owner.chatQueue,
+    });
+
+    vi.useFakeTimers();
+    try {
+      await retryReconnectableQueuedChatSends(owner);
+      owner.sessionKey = "agent:main:other";
+      await retryReconnectableQueuedChatSends(sibling);
+      expect(historyAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(100);
+      await waitForFast(() => expect(historyAttempts).toBe(2));
     } finally {
       vi.useRealTimers();
     }

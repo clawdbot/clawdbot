@@ -364,7 +364,7 @@ extensions/discord/src/internal/entity-cache.ts	3
 extensions/discord/src/internal/gateway-dispatch.ts	7
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway-voice-state-cache.ts	4
-extensions/discord/src/internal/gateway.ts	9
+extensions/discord/src/internal/gateway.ts	8
 extensions/discord/src/internal/interaction-dispatch.ts	12
 extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
@@ -402,7 +402,7 @@ extensions/discord/src/monitor/model-picker-preferences-migrations.ts	5
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/model-picker.state.ts	3
 extensions/discord/src/monitor/native-command-model-picker-interaction.ts	1
-extensions/discord/src/monitor/native-command-reply.ts	3
+extensions/discord/src/monitor/native-command-reply.ts	2
 extensions/discord/src/monitor/native-command.ts	2
 extensions/discord/src/monitor/presence.ts	1
 extensions/discord/src/monitor/provider.allowlist.ts	6
@@ -1200,7 +1200,6 @@ extensions/slack/src/monitor/message-handler/dispatch-helpers.ts	2
 extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	6
 extensions/slack/src/monitor/message-handler/dispatch.ts	2
 extensions/slack/src/monitor/message-handler/prepare-dm-history.ts	1
-extensions/slack/src/monitor/message-handler/prepare-routing.ts	1
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
 extensions/slack/src/monitor/message-handler/prepare.ts	3
 extensions/slack/src/monitor/message-handler/preview-finalize.ts	3
@@ -1298,7 +1297,7 @@ extensions/telegram/src/message-cache.ts	10
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
-extensions/telegram/src/monitor.ts	4
+extensions/telegram/src/monitor.ts	3
 extensions/telegram/src/network-config.ts	1
 extensions/telegram/src/network-errors.ts	8
 extensions/telegram/src/outbound-adapter.ts	5
@@ -1417,8 +1416,8 @@ extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	7
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	4
-extensions/whatsapp/src/inbound/message-delivery.ts	2
-extensions/whatsapp/src/inbound/message-enrichment.ts	4
+extensions/whatsapp/src/inbound/message-delivery.ts	1
+extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/inbound/send-api.ts	5
 extensions/whatsapp/src/inbound/socket-session.ts	5
@@ -1498,7 +1497,7 @@ packages/acp-core/src/runtime/session-identity.ts	2
 packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
-packages/agent-core/src/harness/compaction/compaction.ts	5
+packages/agent-core/src/harness/compaction/compaction.ts	3
 packages/agent-core/src/harness/messages.ts	3
 packages/agent-core/src/harness/session/session.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
@@ -1828,7 +1827,7 @@ src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
 src/agents/embedded-agent-runner/replay-history.ts	60
-src/agents/embedded-agent-runner/result-fallback-classifier.ts	3
+src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
 src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	5
@@ -2127,7 +2126,7 @@ src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
-src/agents/tools/media-tool-shared.ts	4
+src/agents/tools/media-tool-shared.ts	2
 src/agents/tools/message-tool-discovery.ts	3
 src/agents/tools/message-tool-execution.ts	4
 src/agents/tools/message-tool-visible-content.ts	9
@@ -2379,7 +2378,7 @@ src/claws/update-capability-changes.ts	11
 src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
-src/cli/capability-cli/audio.ts	4
+src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	21
 src/cli/capability-cli/model.ts	4
@@ -2474,8 +2473,8 @@ src/cli/program/register.audit.ts	12
 src/cli/program/register.backup.ts	14
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	12
-src/cli/program/register.onboard.ts	37
-src/cli/program/register.setup.ts	10
+src/cli/program/register.onboard.ts	28
+src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
 src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
@@ -2764,7 +2763,7 @@ src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
 src/config/sessions/session-entry-json.ts	1
 src/config/sessions/session-history-eviction.ts	2
-src/config/sessions/session-reset-boundary-event.ts	11
+src/config/sessions/session-reset-boundary-event.ts	5
 src/config/sessions/session-sharing-store.ts	2
 src/config/sessions/session-snapshot-merge.ts	26
 src/config/sessions/session-sqlite-target.ts	3
@@ -3128,7 +3127,6 @@ src/gateway/worker-environments/node-worker-tunnel.ts	6
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/node-workspace-transfer-service.ts	1
 src/gateway/worker-environments/node-workspace-transfer-snapshot.ts	1
-src/gateway/worker-environments/placement-session-runtime.ts	1
 src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/provider-lifecycle.ts	1
@@ -3456,7 +3454,7 @@ src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/desktop-stream-command.ts	2
 src/node-host/invoke-agent-cli-claude-params.ts	4
-src/node-host/invoke-agent-cli-claude.ts	2
+src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-file-commands.ts	1
 src/node-host/invoke-payload.ts	5
 src/node-host/invoke.ts	7
@@ -3550,7 +3548,7 @@ src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	2
 src/plugins/capability-provider-runtime.ts	16
-src/plugins/captured-registration.ts	3
+src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
 src/plugins/clawhub.ts	10
@@ -3579,7 +3577,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
-src/plugins/hooks.ts	19
+src/plugins/hooks.ts	16
 src/plugins/host-hook-attachments.ts	2
 src/plugins/host-hook-json.ts	1
 src/plugins/host-hook-runtime.ts	1
@@ -3708,7 +3706,7 @@ src/process/exec-spawn.ts	4
 src/process/exec.ts	3
 src/process/spawn-secret-input.ts	1
 src/process/spawn-utils.ts	1
-src/process/supervisor/adapters/child.ts	3
+src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
@@ -3998,7 +3996,7 @@ ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	3
 ui/src/components/agent-select.ts	3
-ui/src/components/app-sidebar-agent-menu.ts	4
+ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-nav-menus.ts	6
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
@@ -4065,8 +4063,6 @@ ui/src/components/session-menu.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
-ui/src/components/sidebar-agent-card.ts	1
-ui/src/components/sidebar-attention-dismissals.ts	1
 ui/src/components/sidebar-attention.ts	4
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
@@ -4171,7 +4167,7 @@ ui/src/pages/chat/components/chat-composer-slash-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
 ui/src/pages/chat/components/chat-composer.ts	5
 ui/src/pages/chat/components/chat-effort-picker.ts	6
-ui/src/pages/chat/components/chat-header-session-menu.ts	3
+ui/src/pages/chat/components/chat-header-session-menu.ts	2
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	2
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
@@ -4235,7 +4231,7 @@ ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	5
 ui/src/pages/connection/connection-page.ts	1
 ui/src/pages/connection/view.ts	3
-ui/src/pages/cron/view-runs.ts	5
+ui/src/pages/cron/view-runs.ts	3
 ui/src/pages/cron/view.ts	9
 ui/src/pages/custodian/custodian-session-store.ts	1
 ui/src/pages/custodian/custodian-surface.ts	2
@@ -4249,7 +4245,6 @@ ui/src/pages/logs/log-lines.ts	1
 ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	3
 ui/src/pages/model-providers/default-models-view.ts	1
-ui/src/pages/model-providers/model-providers-page.ts	1
 ui/src/pages/model-providers/view.ts	3
 ui/src/pages/model-setup/provider-picker.ts	3
 ui/src/pages/model-setup/view.ts	2

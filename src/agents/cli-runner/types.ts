@@ -132,6 +132,8 @@ export type RunCliAgentParams = {
   modelContextWindow?: number;
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
+  /** Session-selected context-window option id carried by the run owner. */
+  contextWindow?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;

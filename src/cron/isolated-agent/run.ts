@@ -130,7 +130,12 @@ export async function runCronIsolatedAgentTurn(params: {
   let runContextOwnerToken: string | undefined;
   let runLifecycleGeneration = admittedLifecycleGeneration;
   let executionStarted = false;
-  const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
+  const notifyExecutionStarted = (info?: {
+    lifecycleGeneration?: string;
+    isFallback?: boolean;
+    provider?: string;
+    model?: string;
+  }) => {
     executionStarted = true;
     if (info?.lifecycleGeneration) {
       runLifecycleGeneration = info.lifecycleGeneration;
@@ -140,9 +145,10 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,
+      ...(info?.isFallback === true ? { isFallback: true } : {}),
       phase: "runner_entered",
-      provider: prepared.context.liveSelection.provider,
-      model: prepared.context.liveSelection.model,
+      provider: info?.provider ?? prepared.context.liveSelection.provider,
+      model: info?.model ?? prepared.context.liveSelection.model,
     });
   };
   const notifyExecutionPhase = (

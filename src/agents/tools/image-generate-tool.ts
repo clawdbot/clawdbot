@@ -46,10 +46,7 @@ import {
   sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
-import {
-  buildMediaGenerationRequestKey,
-  recordRecentMediaGenerationTaskStartForSession,
-} from "../media-generation-task-status-shared.js";
+import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import {
@@ -66,20 +63,13 @@ import {
 } from "./image-generate-tool.actions.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
-  buildMediaGenerationStartedToolResult,
   createDefaultMediaGenerateBackgroundScheduler,
-  notifyMediaGenerationAsyncTaskStarted,
-  scheduleMediaGenerationTaskCompletion,
-  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
 import {
-  completeImageGenerationTaskRun,
-  createImageGenerationTaskRun,
-  failImageGenerationTaskRun,
   imageGenerationTaskLifecycle,
-  recordImageGenerationTaskProgress,
+  runMediaGenerationTask,
   type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
@@ -718,7 +708,7 @@ async function executeImageGenerationJob(params: {
   providers?: ImageGenerationProvider[];
 }) {
   if (params.taskHandle) {
-    recordImageGenerationTaskProgress({
+    imageGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
       progressSummary: "Generating image",
     });
@@ -746,7 +736,7 @@ async function executeImageGenerationJob(params: {
     createCapabilityProviderRuntimeDeps(params.providers),
   );
   if (params.taskHandle) {
-    recordImageGenerationTaskProgress({
+    imageGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
       progressSummary: "Saving generated image",
     });
@@ -1071,139 +1061,61 @@ export function createImageGenerateTool(options?: {
       });
       // Accepted tasks own their paid work independently; cancellation applies only before admission.
       signal?.throwIfAborted();
-      const taskHandle = createImageGenerationTaskRun({
+      return runMediaGenerationTask({
+        lifecycle: imageGenerationTaskLifecycle,
+        generationLabel: "image",
         sessionKey: options?.agentSessionKey,
         requesterAgentId: options?.requesterAgentId,
         requesterOrigin: options?.requesterOrigin,
         prompt,
+        requestKey,
         providerId: selectedProvider?.id,
+        config: effectiveCfg,
+        scheduleBackgroundWork,
+        onAsyncTaskStarted: options?.onAsyncTaskStarted,
+        onFailure: (message, meta) => log.warn(message, meta),
+        detailExtras: {
+          ...buildMediaReferenceDetails({
+            entries: loadedReferenceImages,
+            singleKey: "image",
+            pluralKey: "images",
+            getResolvedInput: (entry) => entry.resolvedImage,
+          }),
+          ...(model ? { model } : {}),
+          ...(resolution ? { resolution } : {}),
+          ...(size ? { size } : {}),
+          ...(aspectRatio ? { aspectRatio } : {}),
+          ...(quality ? { quality } : {}),
+          ...(outputFormat ? { outputFormat } : {}),
+          ...(background ? { background } : {}),
+          ...(filename ? { filename } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        },
+        run: (taskHandle) =>
+          executeImageGenerationJob({
+            effectiveCfg,
+            prompt,
+            agentDir: options?.agentDir,
+            model,
+            size,
+            aspectRatio,
+            resolution: explicitResolution,
+            inferredResolution,
+            quality,
+            outputFormat,
+            background,
+            count,
+            inputImages,
+            timeoutMs,
+            providerOptions,
+            ssrfPolicy: remoteMediaSsrfPolicy,
+            filename,
+            loadedReferenceImages,
+            taskHandle,
+            autoProviderFallback: explicitModelConfig ? false : undefined,
+            providers: imageGenerationProviders,
+          }),
       });
-      const shouldDetach = Boolean(
-        taskHandle &&
-        shouldDetachMediaGenerationTask(options?.agentSessionKey, options?.requesterAgentId),
-      );
-
-      if (shouldDetach && taskHandle) {
-        recordRecentMediaGenerationTaskStartForSession({
-          sessionKey: options?.agentSessionKey,
-          agentId: options?.requesterAgentId,
-          taskKind: "image_generation",
-          sourcePrefix: "image_generate",
-          taskId: taskHandle.taskId,
-          runId: taskHandle.runId,
-          taskLabel: prompt,
-          requestKey,
-          providerId: selectedProvider?.id,
-          progressSummary: "Generating image",
-        });
-        scheduleMediaGenerationTaskCompletion({
-          lifecycle: imageGenerationTaskLifecycle,
-          handle: taskHandle,
-          scheduleBackgroundWork,
-          progressSummary: "Generating image",
-          config: effectiveCfg,
-          toolName: "Image generation",
-          onWakeFailure: (message, meta) => log.warn(message, meta),
-          run: () =>
-            executeImageGenerationJob({
-              effectiveCfg,
-              prompt,
-              agentDir: options?.agentDir,
-              model,
-              size,
-              aspectRatio,
-              resolution: explicitResolution,
-              inferredResolution,
-              quality,
-              outputFormat,
-              background,
-              count,
-              inputImages,
-              timeoutMs,
-              providerOptions,
-              ssrfPolicy: remoteMediaSsrfPolicy,
-              filename,
-              loadedReferenceImages,
-              taskHandle,
-              autoProviderFallback: explicitModelConfig ? false : undefined,
-              providers: imageGenerationProviders,
-            }),
-        });
-
-        await notifyMediaGenerationAsyncTaskStarted({
-          callback: options?.onAsyncTaskStarted,
-          message: "Image generation started; wait for the generated image completion event.",
-          toolName: "image_generate",
-          handle: taskHandle,
-          onFailure: (message, meta) => log.warn(message, meta),
-        });
-
-        return buildMediaGenerationStartedToolResult({
-          toolName: "image_generate",
-          generationLabel: "image",
-          completionLabel: "image",
-          taskHandle,
-          detailExtras: {
-            ...buildMediaReferenceDetails({
-              entries: loadedReferenceImages,
-              singleKey: "image",
-              pluralKey: "images",
-              getResolvedInput: (entry) => entry.resolvedImage,
-            }),
-            ...(model ? { model } : {}),
-            ...(resolution ? { resolution } : {}),
-            ...(size ? { size } : {}),
-            ...(aspectRatio ? { aspectRatio } : {}),
-            ...(quality ? { quality } : {}),
-            ...(outputFormat ? { outputFormat } : {}),
-            ...(background ? { background } : {}),
-            ...(filename ? { filename } : {}),
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-          },
-        });
-      }
-
-      try {
-        const executed = await executeImageGenerationJob({
-          effectiveCfg,
-          prompt,
-          agentDir: options?.agentDir,
-          model,
-          size,
-          aspectRatio,
-          resolution: explicitResolution,
-          inferredResolution,
-          quality,
-          outputFormat,
-          background,
-          count,
-          inputImages,
-          timeoutMs,
-          providerOptions,
-          ssrfPolicy: remoteMediaSsrfPolicy,
-          filename,
-          loadedReferenceImages,
-          taskHandle,
-          autoProviderFallback: explicitModelConfig ? false : undefined,
-          providers: imageGenerationProviders,
-        });
-        completeImageGenerationTaskRun({
-          handle: taskHandle,
-          provider: executed.provider,
-          model: executed.model,
-          count: executed.count,
-        });
-        return {
-          content: [{ type: "text", text: executed.contentText }],
-          details: executed.details,
-        };
-      } catch (error) {
-        failImageGenerationTaskRun({
-          handle: taskHandle,
-          error,
-        });
-        throw error;
-      }
     },
   };
 }

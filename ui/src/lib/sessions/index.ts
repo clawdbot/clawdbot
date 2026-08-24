@@ -387,6 +387,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
             : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
           await roster.refresh({
+            ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
             ...agentScope,
             includeDerivedTitles: true,
             includeLastMessage: true,

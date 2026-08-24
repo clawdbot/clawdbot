@@ -342,10 +342,12 @@ async function buildSnapshotBatch(
     const prepareInboundPluginRegistry = groupInputs.some((input) =>
       inboundPluginRegistryInputs.has(input),
     );
+    const preferBuiltPluginArtifacts =
+      pluginGeneration?.preferBuiltPluginArtifacts ?? prepareInboundPluginRegistry;
     const prepared = await prepareWorkspaceBuildGroup(
       groupInputs,
       catalogMode,
-      {},
+      { preferBuiltPluginArtifacts },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
       pluginMetadataSnapshot,

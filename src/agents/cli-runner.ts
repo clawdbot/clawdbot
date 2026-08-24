@@ -40,6 +40,7 @@ import {
   buildCliDeliveredFailure,
   buildCliRunResult,
   cliRunSettlementDeps,
+  formatCliTerminalInterruption,
   isClaudeCliBackend,
   resolveCliSourceReplyMirror,
   settleCliBackendOutcome,
@@ -53,6 +54,7 @@ import {
   persistApprovedCliUserTurnTranscript,
   persistCliAssistantTranscript,
   persistCliRunBlock,
+  resolveCliAssistantStopReason,
   runCliAgentEndHook,
 } from "./cli-runner/cli-run-transcript.js";
 import {
@@ -435,6 +437,7 @@ export async function runPreparedCliAgent(
             provider: params.provider,
             model: context.modelId,
             usage: output.usage,
+            stopReason: resolveCliAssistantStopReason(output),
           })
         : undefined;
     if (assistantText.length > 0 && hasLlmOutputHooks) {
@@ -536,7 +539,10 @@ export async function runPreparedCliAgent(
       const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
         result;
       try {
-        await assertCliRuntimeBinding(context);
+        const terminalInterruption = output.terminalInterruption;
+        if (!terminalInterruption) {
+          await assertCliRuntimeBinding(context);
+        }
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
@@ -545,6 +551,7 @@ export async function runPreparedCliAgent(
           text: sourceReplyWasDelivered ? "" : assistantText,
           modelId: context.modelId,
           usage: output.usage,
+          stopReason: resolveCliAssistantStopReason(output),
         });
         await finalizeCliContextEngineTurn({
           context,
@@ -563,10 +570,14 @@ export async function runPreparedCliAgent(
               context.cwd ?? context.workspaceDir,
               { skipTranscriptProbe: acceptsClaudeLive(context) },
             );
+        const interruptionError = terminalInterruption
+          ? formatCliTerminalInterruption(terminalInterruption)
+          : undefined;
         await runCliAgentEndHook(params, {
           event: {
             messages: buildAgentEndMessages(lastAssistant),
-            success: true,
+            success: interruptionError === undefined,
+            ...(interruptionError ? { error: interruptionError } : {}),
             durationMs: Date.now() - context.started,
           },
           ctx: hookContext,

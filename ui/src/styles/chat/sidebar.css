@@ -28,10 +28,6 @@
     padding-right: 0;
   }
 
-  .content--chat:has(.chat-workbench) .scope-upgrade-chip-row {
-    padding: 8px 20px 0;
-  }
-
   .content--chat:has(.chat-workbench) .chat {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
@@ -1846,12 +1842,12 @@ openclaw-session-discussion {
 
 .file-view .tok-deleted {
   color: var(--hljs-deletion);
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-subtle);
 }
 
 .file-view .tok-inserted {
   color: var(--hljs-addition);
-  background: rgba(46, 160, 67, 0.12);
+  background: var(--ok-subtle);
 }
 
 .file-view .tok-emphasis {

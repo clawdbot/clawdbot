@@ -26,6 +26,8 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
   configuredCatalogEntries: readonly ModelCatalogEntry[];
   pluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
+  /** Immutable artifact choice for every registry reuse in this generation. */
+  preferBuiltPluginArtifacts?: boolean;
 }>;
 
 export type PreparedModelRuntimeSnapshot = Readonly<{

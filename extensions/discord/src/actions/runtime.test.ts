@@ -2192,6 +2192,18 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
+  it("allows embed-only message sends", async () => {
+    const embeds = [{ title: "Release notes", description: "Version available" }];
+
+    await handleMessagingAction("sendMessage", { to: "channel:123", embeds }, enableAllActions);
+
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "",
+      expect.objectContaining({ embeds }),
+    );
+  });
+
   it("ignores empty components objects for regular media sends", async () => {
     sendMessageDiscord.mockClear();
     sendDiscordComponentMessage.mockClear();

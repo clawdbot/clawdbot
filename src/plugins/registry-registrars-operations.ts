@@ -371,7 +371,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     if (!id) {
       return;
     }
-    const existing = registry.services.find((entry) => entry.service.id === id);
+    const existing = registry.services.find((entry) => entry.service.id.trim() === id);
     if (existing) {
       // Snapshot and activating loads can both register the same owner; keep the first.
       if (existing.pluginId === record.id) {
@@ -405,7 +405,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     if (!id) {
       return;
     }
-    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
+    const existing = registry.gatewayDiscoveryServices.find((row) => row.service.id.trim() === id);
     if (existing) {
       if (existing.pluginId === record.id) {
         return;

@@ -225,6 +225,69 @@ describe("Codex app-server dynamic tool build", () => {
     expect(tools).toEqual([]);
   });
 
+  it("keeps host and plugin tools while native paired-device execution owns filesystem and shell", async () => {
+    const workspaceDir = path.join(tempDir, "paired-node-workspace");
+    const params = createParams(path.join(tempDir, "paired-node-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factory = vi.fn((options: Parameters<typeof createOpenClawCodingTools>[0]) => [
+      ...createOpenClawCodingTools(options).filter((tool) => tool.name === "message"),
+      createRuntimeDynamicTool("paired_host_plugin"),
+    ]);
+    setOpenClawCodingToolsFactoryForTests(factory);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: {
+        enabled: true,
+        backendId: "node",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workspaceAccess: "rw",
+        browserAllowHostControl: false,
+        placementExecutionMode: "remote-exec",
+        placementNodeId: "paired-device-1",
+      } as never,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["message", "paired_host_plugin"]),
+    );
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: true,
+          includeOpenClawTools: true,
+          includePluginTools: true,
+        },
+      }),
+    );
+  });
+
+  it("fails paired-device execution visibly when native execution is unavailable", async () => {
+    const workspaceDir = path.join(tempDir, "paired-node-workspace");
+    const params = createParams(path.join(tempDir, "paired-node-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factory = vi.fn(() => [createRuntimeDynamicTool("exec")]);
+    setOpenClawCodingToolsFactoryForTests(factory);
+
+    await expect(
+      buildDynamicToolsForTest(params, workspaceDir, {
+        sandbox: {
+          enabled: true,
+          backendId: "node",
+          placementExecutionMode: "remote-exec",
+          placementNodeId: "paired-device-1",
+        } as never,
+        nativeToolSurfaceEnabled: false,
+      }),
+    ).rejects.toThrow("requires its native exec-server tool surface");
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it("uses the prepared explicit-policy fact to disable the native surface", () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
     params.disableTools = false;
@@ -2442,6 +2505,20 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, sandbox as never, {
         sandboxExecServerEnabled: true,
       }),
+    ).toBe(true);
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(
+        params,
+        {
+          ...sandbox,
+          backendId: "node",
+          backend: undefined,
+          placementExecutionMode: "remote-exec",
+          placementNodeId: "device-1",
+        } as never,
+        { sandboxExecServerEnabled: true },
+      ),
     ).toBe(true);
 
     expect(

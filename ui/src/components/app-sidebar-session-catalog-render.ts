@@ -11,6 +11,7 @@ import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
@@ -22,6 +23,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import {
   formatSidebarTimestamp,
+  normalizeCatalogTimestamp,
   type CatalogBackingSessionDisplay,
   type CatalogSessionMenuRequest,
   visibleCatalogHosts,
@@ -74,6 +76,7 @@ type SessionCatalogGroupsParams = {
     y: number,
     trigger?: HTMLElement,
   ) => void;
+  isMenuOpen: (key: CatalogSessionKey) => boolean;
 };
 
 function renderSessionRunSpinner(showTitle = true) {
@@ -140,7 +143,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
       return row ? [row] : [];
     });
-    const hasActiveRun = liveRows.some((row) => row.hasActiveRun === true);
+    const hasActiveRun = liveRows.some(isSessionRunActive);
     const hasUnread = liveRows.some((row) => row.unread === true);
     const hasBrandIcon = hasProviderBrandIcon(catalog.id);
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
@@ -394,11 +397,9 @@ function renderCatalogSessionRow(
   params: SessionCatalogGroupsParams,
   projectChild = false,
 ) {
-  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-  const timestamp =
-    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-      ? rawTimestamp * 1000
-      : rawTimestamp;
+  const timestamp = normalizeCatalogTimestamp(
+    session.recencyAt ?? session.updatedAt ?? session.createdAt,
+  );
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
   if (adoptedRow) {
     const label = session.name || session.threadId;
@@ -514,6 +515,7 @@ function renderCatalogSessionRow(
             title=${t("chat.sidebar.openSessionMenu")}
             aria-label=${t("chat.sidebar.openSessionMenu")}
             aria-haspopup="menu"
+            aria-expanded=${String(params.isMenuOpen(catalogKey))}
             @click=${(event: MouseEvent) => {
               event.stopPropagation();
               const trigger = event.currentTarget as HTMLElement;

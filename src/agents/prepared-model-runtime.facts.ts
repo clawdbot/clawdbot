@@ -140,7 +140,10 @@ function prepareAgentFacts(
 export async function prepareWorkspaceBuildGroup(
   inputs: readonly PreparedModelRuntimeInput[],
   catalogMode: PreparedModelRuntimeCatalogMode,
-  options: { providerDiscoveryProviderIds?: readonly string[] } = {},
+  options: {
+    providerDiscoveryProviderIds?: readonly string[];
+    preferBuiltPluginArtifacts?: boolean;
+  } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
   preparedPluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
@@ -176,9 +179,23 @@ export async function prepareWorkspaceBuildGroup(
         inboundPluginRegistry: reusablePluginGeneration.inboundPluginRegistry,
         runtimePluginRegistry: reusablePluginGeneration.pluginRegistry,
       }
-    : prepareWorkspacePluginRegistries(input, pluginMetadataSnapshot, loadInboundPluginRegistry);
+    : prepareWorkspacePluginRegistries(
+        input,
+        pluginMetadataSnapshot,
+        loadInboundPluginRegistry,
+        options.preferBuiltPluginArtifacts === true,
+      );
   const runtimePluginMs = reusablePluginGeneration ? 0 : performance.now() - runtimePluginStartedAt;
-  prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry, pluginMetadataSnapshot);
+  const preferBuiltPluginArtifacts =
+    reusablePluginGeneration?.preferBuiltPluginArtifacts ??
+    options.preferBuiltPluginArtifacts === true;
+  prepareOwnedPluginLoadContext(
+    input,
+    env,
+    runtimePluginRegistry,
+    pluginMetadataSnapshot,
+    preferBuiltPluginArtifacts,
+  );
   const prepare = async () => {
     const matchesStaticModelId = createStaticModelIdMatcher({
       manifestPlugins: pluginMetadataSnapshot.plugins,
@@ -386,6 +403,7 @@ export async function prepareWorkspaceBuildGroup(
       pluginMetadataSnapshot,
       preparedStaticProviderCatalog,
       providerStaticModels,
+      preferBuiltPluginArtifacts,
       reusablePluginGeneration,
       runtimePluginRegistry,
     });

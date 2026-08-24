@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   cleanupMcpCliTestState,
@@ -29,7 +30,7 @@ describe("mcp cli", () => {
     await cleanupMcpCliTestState();
   });
 
-  it("sets and shows a configured MCP server", async () => {
+  it("sets, replaces, and shows a configured MCP server", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -37,10 +38,16 @@ describe("mcp cli", () => {
 
       await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
       expect(lastLogLine()).toBe(`Saved MCP server "context7" to ${configPath}.`);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "context7",
+        '{"command":"uvx","args":["context7-mcp@2"]}',
+      ]);
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "context7", "--json"]);
-      expect(JSON.parse(lastLogLine())).toEqual({ command: "uvx", args: ["context7-mcp"] });
+      expect(JSON.parse(lastLogLine())).toEqual({ command: "uvx", args: ["context7-mcp@2"] });
     });
   });
 
@@ -88,6 +95,84 @@ describe("mcp cli", () => {
         connectionTimeoutMs: 3_000,
         supportsParallelToolCalls: true,
         codex: { defaultToolsApprovalMode: "approve" },
+      });
+    });
+  });
+
+  it("rejects an existing MCP server before probing", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["existing.mjs"]}']);
+      const probe = vi.fn(() => {
+        throw new Error("duplicate add attempted a probe");
+      });
+      setCreateSessionMcpRuntimeOverride(probe);
+
+      await expect(runMcpCommand(["mcp", "add", "docs", "--command", "uvx"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(probe).not.toHaveBeenCalled();
+      expect(lastErrorLine()).toBe('MCP server "docs" already exists.');
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        command: "node",
+        args: ["existing.mjs"],
+      });
+    });
+  });
+
+  it("does not replace an MCP server added while probing", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      let competitorWon = false;
+      setCreateSessionMcpRuntimeOverride((params) => ({
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: "cli-probe-race",
+        createdAt: 0,
+        lastUsedAt: 0,
+        getCatalog: async () => {
+          const result = await setConfiguredMcpServer({
+            name: "docs",
+            server: { command: "node", args: ["winner.mjs"] },
+            createOnly: true,
+          });
+          competitorWon = result.ok;
+          return {
+            version: 1,
+            generatedAt: Date.now(),
+            servers: {
+              docs: {
+                serverName: "docs",
+                launchSummary: "node winner.mjs",
+                toolCount: 0,
+              },
+            },
+            tools: [],
+            diagnostics: [],
+          };
+        },
+        peekCatalog: () => null,
+        markUsed: () => {},
+        callTool: async () => ({ content: [] }),
+        dispose: async () => {},
+      }));
+
+      await expect(runMcpCommand(["mcp", "add", "docs", "--command", "uvx"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(competitorWon).toBe(true);
+      expect(lastErrorLine()).toBe('MCP server "docs" already exists.');
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        command: "node",
+        args: ["winner.mjs"],
       });
     });
   });

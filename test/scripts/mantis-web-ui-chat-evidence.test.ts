@@ -28,8 +28,10 @@ describe("build-web-ui-chat-evidence", () => {
     expect(manifest).toMatchObject({
       id: "web-ui-chat-proof",
       scenario: "web-ui-chat-proof",
+      schemaVersion: 2,
       comparison: {
         candidate: {
+          expectationMet: true,
           fixed: true,
           ref: "HEAD",
           sha: "1234567890abcdef1234567890abcdef12345678",
@@ -63,6 +65,7 @@ describe("build-web-ui-chat-evidence", () => {
       expect(existsSync(result.reportPath)).toBe(true);
       const manifest = JSON.parse(readFileSync(result.manifestPath, "utf8"));
       expect(manifest.comparison.pass).toBe(false);
+      expect(manifest.comparison.candidate.expectationMet).toBe(false);
       expect(
         manifest.artifacts.find(
           (artifact: { path: string }) => artifact.path === "web-ui-chat.png",

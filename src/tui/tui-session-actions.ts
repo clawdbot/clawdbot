@@ -110,6 +110,7 @@ export function createSessionActions(context: SessionActionContext) {
     setActivityStatus("idle");
     if (selectionChanged) {
       state.currentSessionId = null;
+      state.sessionInfo.displayName = undefined;
       clearTuiSessionModeOverrides(state.sessionInfo);
     }
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness

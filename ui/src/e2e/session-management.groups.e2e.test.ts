@@ -480,6 +480,8 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
+      await page.getByRole("button", { name: "Filters" }).click();
+      await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
       await page.locator(".session-groupby__select").selectOption("category");
       await page.getByRole("button", { name: "New group…" }).click();
       const field = page.locator("openclaw-modal-dialog input");

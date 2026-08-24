@@ -56,7 +56,7 @@ const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode_only": false,
 };
 
-const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
+const CODEX_NO_PROJECT_DOCS_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
 };
 
@@ -126,7 +126,6 @@ const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
     SubagentStop: [],
     Stop: [],
   },
-  project_doc_max_bytes: 0,
   notify: [],
   web_search: "disabled",
 };
@@ -430,6 +429,10 @@ export function buildCodexRuntimeThreadConfigForRun(
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
   const restrictedToolSurface =
     ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
+  const restrictedTurnDisablesProjectDocs =
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    (params.pluginHarnessToolPolicyRestricted && params.disableTools);
   const configMcpServers = config?.mcp_servers;
   if (restrictedToolSurface && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
     throw new Error("Codex restricted tool surface received invalid thread mcp_servers config");
@@ -469,23 +472,21 @@ export function buildCodexRuntimeThreadConfigForRun(
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
       messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
-        ? buildCodexRestrictedToolThreadConfigPatch(restrictedToolSurfaceMcpServerNames)
+        ? buildRestrictedToolConfigPatch(restrictedToolSurfaceMcpServerNames)
         : buildCodexRingZeroThreadConfigPatch(
             params,
             options.hostSystemAgentActive,
             restrictedToolSurfaceMcpServerNames,
           ),
+      restrictedTurnDisablesProjectDocs ? CODEX_NO_PROJECT_DOCS_CONFIG : undefined,
       params.authoredContextTokenCap === undefined
         ? undefined
         : { model_context_window: params.authoredContextTokenCap },
     ) ?? baseConfig;
-  const contextConfig =
-    params.bootstrapContextMode !== "lightweight"
-      ? runtimeConfig
-      : (mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
-          ...runtimeConfig,
-          ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
-        });
+  const contextConfig = {
+    ...runtimeConfig,
+    ...(params.bootstrapContextMode === "lightweight" ? CODEX_NO_PROJECT_DOCS_CONFIG : {}),
+  };
   return applyCodexManagedShellEnvironment(
     contextConfig,
     options.shellEnvironment,
@@ -501,15 +502,16 @@ export function buildCodexRingZeroThreadConfigPatch(
   if (!hostSystemAgentActive || !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     return undefined;
   }
-  return buildCodexRestrictedToolThreadConfigPatch(inheritedMcpServerNames);
+  return {
+    ...buildRestrictedToolConfigPatch(inheritedMcpServerNames),
+    ...CODEX_NO_PROJECT_DOCS_CONFIG,
+  };
 }
 
-function buildCodexRestrictedToolThreadConfigPatch(
-  inheritedMcpServerNames: readonly string[],
-): JsonObject {
-  // Restricted turns already send environments: [] and disable native code
-  // mode. Remove every other configurable Codex-owned source so
-  // native delegation, installed MCP tools, and utilities cannot escape the cap.
+function buildRestrictedToolConfigPatch(inheritedMcpServerNames: readonly string[]): JsonObject {
+  // Restricted turns already send environments: [] and disable native code mode.
+  // Remove Codex-owned tool sources here; project-document suppression belongs to
+  // ring-zero, message-only, and tool-disabled context policy at the caller.
   const mcpServers = Object.fromEntries(
     [...new Set(inheritedMcpServerNames)].toSorted().map((name) => [name, { enabled: false }]),
   );

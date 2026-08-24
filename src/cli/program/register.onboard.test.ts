@@ -129,6 +129,32 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { leaf: "read", args: ["--reset", "recommendations"] },
+    { leaf: "acknowledge", args: ["--reset", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--reset", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["--json", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--json", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["recommendations", "--json", "acknowledge"] },
+    { leaf: "refresh", args: ["recommendations", "--json", "refresh"] },
+  ])("rejects inapplicable parent options for recommendations $leaf", async ({ args }) => {
+    await runCli(["onboard", ...args]);
+
+    const unsupportedFlag = args.includes("--reset") ? "--reset" : "--json";
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unsupportedFlag));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps parent --json supported for reading recommendations", async () => {
+    await runCli(["onboard", "--json", "recommendations"]);
+
+    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+  });
+
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
     await runCli(["onboard"]);
 

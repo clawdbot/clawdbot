@@ -205,8 +205,9 @@ stated honestly (revision 1 undersold this):
   `{ profileId } | { deviceId }`; the device → environment mapping resolves
   server-side. Devices are not smuggled through synthesized
   `cloudWorkers.profiles` entries.
-- **Concurrency slots.** The node supervisor admits two physical worker
-  processes by default. Durable `pending` and `running` launches consume those
+- **Concurrency slots.** The node supervisor defaults to one physical worker
+  process per available CPU core; `nodeHost.workerRuns.capacity` overrides the
+  slot count. Durable `pending` and `running` launches consume those
   slots atomically; same-launch replay consumes no additional slot. The node
   publishes exact bounded `{ total, available }` capacity after restart
   reconciliation and every occupancy transition. New launches require
@@ -235,7 +236,7 @@ makes clients refetch without exposing hashes, paths, or receipt details. Status
 and cancellation reacquire the current supervisor proof and use the durable
 launch identity so an upgrade cannot strand an existing worker. Node-local
 opt-in advertises capacity; default nodes remain non-hosts. The supervisor owns
-two atomic durable capacity slots, bounded 10-second admission, restart
+configurable atomic durable capacity slots, bounded 10-second admission, restart
 reconciliation, and exact occupancy publication.
 Device dormancy expiry and terminal launch/environment retention bound durable
 rows. Node workspace cleanup waits for a full reconnect-scoped Gateway retain
@@ -410,11 +411,13 @@ The bundled Crabbox provider now boots the box and runs
 directory. The Gateway persists one replay-safe setup identity, atomically
 binds the authenticated device identity to the worker environment, pushes the
 current bundle through the node channel, and removes the node role after
-provider teardown. `destroy` = release lease plus pairing cleanup. Codex
-remote-exec fails before allocation because it still requires an SSH-backed
-provider. The replaced reverse-tunnel/rsync cloud carrier has been deleted.
-Distinct stable SSH, OpenShell, Claude, and exec-host contracts remain until
-the missing node exec-server carrier supplies and proves equivalent behavior.
+provider teardown. `destroy` = release lease plus pairing cleanup. Codex now
+supports paired-device `remote-exec` over the approved duplex node carrier;
+disconnect ends the attempt, and reconnect starts a fresh attempt without
+resume. Crabbox cloud profiles remain `worker-turn` only. The replaced
+reverse-tunnel/rsync cloud carrier has been deleted. Distinct stable SSH,
+OpenShell, Claude, and exec-host contracts remain intact; broader replacement
+and reconnect or resume are later work.
 
 ## What the adversarial reviews killed or reshaped
 

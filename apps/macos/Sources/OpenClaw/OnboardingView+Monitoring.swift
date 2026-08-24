@@ -52,11 +52,16 @@ extension OnboardingView {
     }
 
     func startExistingCLIActivationIfNeeded() {
-        guard Self.shouldStartExistingCLIActivation(
-            isLocal: state.connectionMode == .local,
+        guard let setupMode = Self.existingCLISetupMode(
+            connectionMode: state.connectionMode,
             executableReady: cliExecutableReady,
             installing: installingCLI)
         else { return }
+        if setupMode == .remote {
+            cliInstalled = true
+            cliStatus = nil
+            return
+        }
         // Keep the CLI setup gate in the page order until its Gateway is reachable.
         cliInstalled = false
         installingCLI = true
@@ -67,12 +72,13 @@ extension OnboardingView {
         Task { @MainActor in await self.finishExistingCLIActivation() }
     }
 
-    static func shouldStartExistingCLIActivation(
-        isLocal: Bool,
+    static func existingCLISetupMode(
+        connectionMode: AppState.ConnectionMode,
         executableReady: Bool,
-        installing: Bool) -> Bool
+        installing: Bool) -> AppState.ConnectionMode?
     {
-        isLocal && executableReady && !installing
+        guard connectionMode != .unconfigured, executableReady, !installing else { return nil }
+        return connectionMode
     }
 
     static func shouldReviseCLIActivationFailure(
@@ -88,8 +94,24 @@ extension OnboardingView {
         }
     }
 
+    static func shouldResolveInstallPromptForRunningGateway(
+        gatewayStatus: GatewayProcessManager.Status,
+        isLocal: Bool,
+        phase: CLIInstallPhase) -> Bool
+    {
+        guard isLocal, phase == .choosingTarget else { return false }
+        return switch gatewayStatus {
+        case .running, .attachedExisting: true
+        case .stopped, .starting, .failed: false
+        }
+    }
+
     func reviseCLIActivationFailureIfGatewayReady(_ status: GatewayProcessManager.Status) {
-        guard Self.shouldReviseCLIActivationFailure(
+        let resolvesInstallPrompt = Self.shouldResolveInstallPromptForRunningGateway(
+            gatewayStatus: status,
+            isLocal: state.connectionMode == .local,
+            phase: cliInstallPhase)
+        guard resolvesInstallPrompt || Self.shouldReviseCLIActivationFailure(
             gatewayStatus: status,
             isLocal: state.connectionMode == .local,
             executableReady: cliExecutableReady,
@@ -98,6 +120,10 @@ extension OnboardingView {
         cliInstalled = true
         cliStatusKnown = true
         cliStatus = nil
+        if resolvesInstallPrompt {
+            // A running local gateway already fulfills the pending install prompt.
+            OnboardingController.shared.dismissAttachedSheet()
+        }
     }
 
     /// LocalGatewayActivation.failed carries the reason bound to that specific activation
@@ -140,9 +166,6 @@ extension OnboardingView {
     func startCLIInstall() {
         guard self.onboardingVisible, !installingCLI else { return }
         installingCLI = true
-        OnboardingController.shared.setWindowCloseEnabled(false)
-        // Cmd-W bypasses the disabled close button; the delegate asks first.
-        OnboardingController.shared.busyReason = "OpenClaw is installing the Gateway service."
         Task { @MainActor in await self.runCLIInstall() }
     }
 
@@ -153,17 +176,26 @@ extension OnboardingView {
     }
 
     func runCLIInstall() async {
-        self.cliInstallPhase = .installing
+        self.cliInstallPhase = .choosingTarget
         defer {
             self.installingCLI = false
             self.cliInstallPhase = .idle
             OnboardingController.shared.setWindowCloseEnabled(true)
             OnboardingController.shared.busyReason = nil
         }
-        guard let target = CLIInstallPrompter.shared.installTargetForCurrentBuild() else {
+        // Choosing a target is not installation: keep its spinner and close/busy guards inactive.
+        guard let target = await CLIInstallPrompter.shared.installTargetForCurrentBuild(
+            presentingSheetOn: OnboardingController.shared.sheetPresentationWindow)
+        else {
+            // Gateway readiness can resolve onboarding while this sheet is open.
+            guard !cliInstalled else { return }
             cliStatus = "CLI installation cancelled."
             return
         }
+        self.cliInstallPhase = .installing
+        OnboardingController.shared.setWindowCloseEnabled(false)
+        // Cmd-W bypasses the disabled close button; the delegate asks first.
+        OnboardingController.shared.busyReason = "OpenClaw is installing the Gateway service."
         let installed = await CLIInstaller.install(target: target) { message in
             self.cliStatus = message
         }

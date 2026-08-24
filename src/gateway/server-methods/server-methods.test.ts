@@ -15,11 +15,13 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
-  clearContextEnginesForOwner,
   registerContextEngineForOwner,
   resolveContextEngine,
 } from "../../context-engine/registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -888,7 +890,12 @@ describe("sanitizeChatHistoryMessages", () => {
     );
 
     expect(result).toEqual([
-      assistantHistoryMessage(`${prefix}\n...(truncated)...`, { timestamp: 1 }),
+      assistantHistoryMessage(`${prefix}\n...(truncated)...`, {
+        timestamp: 1,
+        // The display cap is recorded structurally so consumers need not sniff
+        // the in-band sentinel to know the row is a bounded preview.
+        __openclaw: { truncated: true, reason: "display-cap" },
+      }),
     ]);
   });
 
@@ -2074,6 +2081,7 @@ describe("projectRecentChatDisplayMessages", () => {
       assistantAudioAttachmentHistoryMessage(
         `${projectedVisibleText.slice(0, 24)}\n...(truncated)...`,
         1,
+        { __openclaw: { truncated: true, reason: "display-cap" } },
       ),
     ]);
   });
@@ -4375,7 +4383,7 @@ describe("gateway healthHandlers.status scope handling", () => {
         includeSensitive,
         includeChannelSummary: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
@@ -4398,12 +4406,13 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeSensitive: false,
       includeChannelSummary: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 });
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
+  let restoreContextEngineRegistryState: () => void;
   const contextEngineTestOwner = "plugin:health-test";
 
   function createHealthSnapshot<T extends Record<string, unknown>>(overrides: T) {
@@ -4502,15 +4511,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   beforeEach(() => {
+    restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     registerLegacyContextEngine();
-    clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    clearContextEnginesForOwner(contextEngineTestOwner);
-    resetContextEngineRuntimeQuarantineForTests();
+    restoreContextEngineRegistryState();
   });
 
   it("rate-limits request-driven refreshes for fresh cached health", async () => {
@@ -4539,6 +4547,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes a cached health snapshot dated after the current clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({ ts: Date.now() + HEALTH_REFRESH_INTERVAL_MS });
+    const fresh = createHealthSnapshot({ ts: Date.now() });
+
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({ cached, fresh });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("restarts request-driven health refreshes when the clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -4573,6 +4608,53 @@ describe("gateway healthHandlers.health cache freshness", () => {
       code: "UNAVAILABLE",
       message: "Error: collector failed",
     });
+  });
+
+  it("rejects cached health when runtime inspection and refresh both fail", async () => {
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
+    const { respond } = await requestHealthSnapshot({
+      cached,
+      refreshHealthSnapshot,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Error: collector failed",
+      }),
+    );
+  });
+
+  it("refreshes cached health when runtime inspection fails", async () => {
+    const cached = createHealthSnapshot({});
+    const fresh = createHealthSnapshot({ ts: cached.ts + 1 });
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {

@@ -162,6 +162,15 @@ export const toolIcons = {
     <circle cx="18" cy="18" r="3" />
     <path d="M13 6h3a2 2 0 0 1 2 2v7" />
     <path d="M6 9v12" />`),
+  gitPullRequestDraft: strokeIcon(svg` <circle cx="6" cy="6" r="3" />
+    <circle cx="18" cy="18" r="3" />
+    <path d="M6 9v12" />
+    <path d="M18 6v.01" />
+    <path d="M18 11v.01" />`),
+  gitPullRequestClosed: strokeIcon(svg` <circle cx="6" cy="6" r="3" />
+    <path d="M6 9v12" />
+    <path d="m15 9 6 6" />
+    <path d="m21 9-6 6" />`),
   gitMerge: strokeIcon(svg` <circle cx="6" cy="6" r="3" />
     <circle cx="18" cy="18" r="3" />
     <path d="M6 21V9a9 9 0 0 0 9 9" />`),
@@ -188,9 +197,13 @@ export const toolIcons = {
   lobster: html`
     <svg viewBox="0 0 120 120" fill="none">
       <defs>
+        <!-- Gradient stops read theme tokens (base.css --lobster-icon-*): the
+             shipped hex pair sank into dark backgrounds, so dark mode brightens
+             both stops while light mode keeps the original artwork. var() is
+             only valid in style="", not presentation attributes. -->
         <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#ff4d4d" />
-          <stop offset="100%" stop-color="#991b1b" />
+          <stop offset="0%" style="stop-color: var(--lobster-icon-body, #ff4d4d)" />
+          <stop offset="100%" style="stop-color: var(--lobster-icon-shade, #991b1b)" />
         </linearGradient>
       </defs>
       <path
@@ -202,10 +215,20 @@ export const toolIcons = {
         d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
         fill="url(#lob-g)"
       />
-      <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <circle cx="45" cy="35" r="6" fill="#050810" />
-      <circle cx="75" cy="35" r="6" fill="#050810" />
+      <path
+        d="M45 15Q35 5 30 8"
+        style="stroke: var(--lobster-icon-body, #ff4d4d)"
+        stroke-width="3"
+        stroke-linecap="round"
+      />
+      <path
+        d="M75 15Q85 5 90 8"
+        style="stroke: var(--lobster-icon-body, #ff4d4d)"
+        stroke-width="3"
+        stroke-linecap="round"
+      />
+      <circle cx="45" cy="35" r="6" style="fill: var(--lobster-icon-eye, #050810)" />
+      <circle cx="75" cy="35" r="6" style="fill: var(--lobster-icon-eye, #050810)" />
       <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
       <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
     </svg>

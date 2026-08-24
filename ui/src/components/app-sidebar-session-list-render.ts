@@ -21,7 +21,6 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { renderPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -37,7 +36,6 @@ type SidebarSessionListHost = SessionListHost & {
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
-  refreshStatus: PanelRefreshStatus;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -59,17 +57,28 @@ function renderSessionSection(params: {
   const { host, section } = params;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
+  const personOwner = section.personOwner;
   // Pinned rows render in the nav zone; renderHeader records whether this list
   // section owns collapse UI or sits directly below the global toolbar.
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
-  const label = section.groups
-    ? t("chat.sidebar.groups")
-    : section.work
-      ? t("chat.sidebar.coding")
-      : group
-        ? group
-        : t("chat.sidebar.otherSessions");
-  const zone = section.groups ? "groups" : section.work ? "coding" : group ? "category" : "threads";
+  const label = personOwner
+    ? personOwner.label || personOwner.id
+    : section.groups
+      ? t("chat.sidebar.groups")
+      : section.work
+        ? t("chat.sidebar.coding")
+        : group
+          ? group
+          : t("chat.sidebar.otherSessions");
+  const zone = personOwner
+    ? "person"
+    : section.groups
+      ? "groups"
+      : section.work
+        ? "coding"
+        : group
+          ? "category"
+          : "threads";
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -83,6 +92,7 @@ function renderSessionSection(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
+  const sectionDropEnabled = groupWriteAccess.allowed && !personOwner;
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -103,19 +113,21 @@ function renderSessionSection(params: {
     <div
       class=${sectionClass}
       data-session-section=${section.id}
-      @dragover=${groupWriteAccess.allowed
+      data-zone=${zone}
+      @dragover=${sectionDropEnabled
         ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
         : nothing}
-      @dragleave=${groupWriteAccess.allowed
+      @dragleave=${sectionDropEnabled
         ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
         : nothing}
-      @drop=${groupWriteAccess.allowed
+      @drop=${sectionDropEnabled
         ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
         : nothing}
     >
       ${section.renderHeader
         ? renderSidebarSessionSectionHeader({
             sectionId: section.id,
+            draggable: !personOwner,
             disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
             onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
             onFinishDrag: () => host.finishSidebarSectionDrag(),
@@ -138,6 +150,19 @@ function renderSessionSection(params: {
                     >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                   >
                 </span>
+                ${personOwner
+                  ? html`<openclaw-viewer-avatar
+                      .user=${{
+                        id: personOwner.id,
+                        name: personOwner.label,
+                        avatarUrl: personOwner.avatarUrl,
+                        watchedSessions: [],
+                      }}
+                      .markAsViewer=${false}
+                      variant="session"
+                      aria-hidden="true"
+                    ></openclaw-viewer-avatar>`
+                  : nothing}
                 <span class="sidebar-recent-sessions__label-text">${label}</span>
                 ${collapsed && totalRowCount > 0
                   ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
@@ -326,6 +351,7 @@ function renderSessionCatalog(params: {
       terminalAvailable: snapshot.terminalAvailable,
       onOpenTerminal: openCatalogSessionInTerminal,
       onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
+      isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),
     })}
   `;
 }
@@ -338,34 +364,21 @@ function renderSessionListBody(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
-  const catalogsVisible = host.sessionsStatusFilter !== "archived";
   const catalogsBySectionId = new Map(
     params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
   );
-  const firstCatalogSectionIndex = catalogsVisible
-    ? params.sections.findIndex((section) => section.id.startsWith("catalog:"))
-    : -1;
-  const catalogStatus = catalogsVisible
-    ? renderPanelRefreshStatus({
-        status: params.catalogs.refreshStatus,
-        onRetry: () => void host.sessionData.refreshSessionCatalogs(),
-        className: "sidebar-session-error sidebar-session-catalog-error",
-      })
-    : nothing;
   return html`
-    ${params.sections.map((section, index) => {
+    ${params.sections.map((section) => {
       if (section.id.startsWith("catalog:")) {
         const catalog = catalogsBySectionId.get(section.id);
-        return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
-          ? params.catalogRenderer
-            ? renderSessionCatalog({
-                host,
-                snapshot: params.catalogs,
-                catalog,
-                renderer: params.catalogRenderer,
-              })
-            : nothing
-          : nothing}`;
+        return catalog && params.catalogRenderer
+          ? renderSessionCatalog({
+              host,
+              snapshot: params.catalogs,
+              catalog,
+              renderer: params.catalogRenderer,
+            })
+          : nothing;
       }
       if (section.id === "work") {
         if (section.totalRowCount === 0) {
@@ -390,7 +403,6 @@ function renderSessionListBody(params: {
         nativeSessionsHaveMore: params.nativeSessionsHaveMore,
       });
     })}
-    ${firstCatalogSectionIndex < 0 ? catalogStatus : nothing}
   `;
 }
 

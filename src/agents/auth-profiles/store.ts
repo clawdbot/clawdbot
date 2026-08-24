@@ -7,6 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
@@ -862,7 +863,7 @@ function mergeRuntimeExternalProfileState(params: {
   return merged;
 }
 
-/** Apply an auth store update inside the SQLite write lock. */
+/** Apply an auth store update inside the SQLite write lock; null only on lock contention. */
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   sharedStoreWrite?: boolean;
@@ -901,6 +902,9 @@ export async function updateAuthProfileStoreWithLock(params: {
       agentDir,
       error: message,
     });
+    if (!isSqliteLockError(error)) {
+      throw error;
+    }
     return null;
   }
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);

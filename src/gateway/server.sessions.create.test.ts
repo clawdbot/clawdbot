@@ -748,6 +748,30 @@ test("incognito webchat rejects a vanished non-default-agent session before disp
   }
 });
 
+test("createGatewaySession rejects explicit and key-derived unconfigured creation owners", async () => {
+  const { createGatewaySession } = await import("./session-create-service.js");
+  const cfg = { agents: { entries: { ops: { default: true } } } };
+  const prepareLifecycle = vi.fn();
+
+  for (const { owner, message } of [
+    { owner: { agentId: "main" }, message: 'Unknown agent id "main"' },
+    {
+      owner: { key: "agent:main:dashboard:unconfigured-owner" },
+      message: 'Unknown agent id "main"',
+    },
+    { owner: { agentId: "   " }, message: 'Unknown agent id "   "' },
+  ]) {
+    await expect(
+      createGatewaySession({ cfg, ...owner, commandSource: "test", prepareLifecycle }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message },
+    });
+  }
+
+  expect(prepareLifecycle).not.toHaveBeenCalled();
+});
+
 test("createGatewaySession rechecks admin scope after incognito inheritance resolves", async () => {
   await createSessionStoreDir();
   try {
@@ -2879,6 +2903,7 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
 
 test("sessions.create stores dashboard model, thinking, and parent linkage, and creates a transcript", async () => {
   const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
   await writeSessionStore({
@@ -3737,6 +3762,7 @@ test("sessions.create resolves the current default instead of inherited runtime 
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
   await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops-agent" }] };
 
   const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
   const created = await directSessionReq<{
@@ -3926,6 +3952,47 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     modelOverride: "gpt-test-b",
     thinkingLevel: "high",
   });
+});
+
+test("sessions.create model change clears a selection the new model does not support", async () => {
+  const { storePath } = await createSessionStoreDir();
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    {
+      id: "gpt-test-a",
+      name: "A",
+      provider: "openai",
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+    },
+    { id: "gpt-test-b", name: "B", provider: "openai" },
+  ];
+  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const existingKey = "agent:main:dashboard:selected-window";
+  await writeSessionStore({
+    entries: {
+      [existingKey]: sessionStoreEntry("sess-selected-window", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        contextWindow: "200k",
+      }),
+    },
+  });
+
+  // Create-with-key adoption omits contextWindow, so the model change must take
+  // the clearing branch for the now-unsupported selection instead of rejecting.
+  const changed = await directSessionReq<{
+    entry?: { modelOverride?: string; contextWindow?: string };
+  }>("sessions.create", { key: existingKey, model: "openai/gpt-test-b" }, { client: adminClient });
+  expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
+  expect(changed.payload?.entry?.modelOverride).toBe("gpt-test-b");
+  expect(changed.payload?.entry?.contextWindow).toBeUndefined();
+  const stored = loadSessionEntry({ sessionKey: existingKey, storePath });
+  expect(stored?.modelOverride).toBe("gpt-test-b");
+  expect(stored?.contextWindow).toBeUndefined();
 });
 
 test("sessions.create stamps trusted operator provenance and records created", async () => {
@@ -4120,6 +4187,8 @@ test("sessions.create adopting an existing key does not restamp node provenance"
 
 test("sessions.create scopes the main alias to the requested agent", async () => {
   const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "longmemeval" }] };
+  testState.agentConfig = { sessionStore: { agentId: "longmemeval" } };
 
   const created = await directSessionReq<{
     key?: string;
@@ -4132,7 +4201,7 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
     agentId: "longmemeval",
   });
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toBe("agent:longmemeval:main");
   expect(created.payload?.entry).not.toHaveProperty("sessionFile");
 
@@ -4197,6 +4266,8 @@ test("sessions.create replaces a dead main entry with a fresh session id", async
 
 test("sessions.create preserves global and unknown sentinel keys", async () => {
   const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "longmemeval" }] };
+  testState.agentConfig = { sessionStore: { agentId: "longmemeval" } };
 
   const globalCreated = await directSessionReq<{
     key?: string;
@@ -4209,7 +4280,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
     agentId: "longmemeval",
   });
 
-  expect(globalCreated.ok).toBe(true);
+  expect(globalCreated.ok, JSON.stringify(globalCreated.error)).toBe(true);
   expect(globalCreated.payload?.key).toBe("global");
   expect(globalCreated.payload?.entry).not.toHaveProperty("sessionFile");
 
@@ -4646,6 +4717,7 @@ test("sessions.create allows plugin runtimes to link their own parent session", 
 
 test("sessions.create rejects unknown parentSessionKey", async () => {
   await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
 
   const created = await directSessionReq("sessions.create", {
     agentId: "ops",

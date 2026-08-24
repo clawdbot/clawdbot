@@ -32,7 +32,7 @@ type NodeTestShardGroup = {
   env?: Record<string, string>;
 };
 
-export type NodeTestShard = {
+type NodeTestShard = {
   checkName: string;
   shardName: string;
   configs: string[];
@@ -44,7 +44,6 @@ export type NodeTestShard = {
   timeoutMinutes?: number;
   planConcurrency?: number;
   predictedSeconds?: number;
-  saveVitestFsCache?: boolean;
 };
 
 type NodeTestPlanOptions = {
@@ -2118,26 +2117,6 @@ export function createNodeTestShardBundles(
   }
 
   return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
-}
-
-/**
- * Mark one semantic cache producer without coupling persistence to matrix order.
- * The broad core unit graph is shared by most shards; precise changed plans
- * fall back to their first (normally only) job.
- */
-export function assignVitestFsCacheWriter<T extends Pick<NodeTestShard, "shardName" | "groups">>(
-  shards: T[],
-): Array<T & { saveVitestFsCache: boolean }> {
-  const preferredIndex = shards.findIndex(
-    (shard) =>
-      shard.shardName.startsWith("core-unit-fast") ||
-      shard.groups?.some((group) => group.shard_name.startsWith("core-unit-fast")),
-  );
-  const writerIndex = preferredIndex >= 0 ? preferredIndex : shards.length > 0 ? 0 : -1;
-  return shards.map((shard, index) => ({
-    ...shard,
-    saveVitestFsCache: index === writerIndex,
-  }));
 }
 
 function listAgentSupportTestFiles(): string[] {

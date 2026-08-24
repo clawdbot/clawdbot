@@ -83,6 +83,34 @@ function ownedDeclaration(params: {
 }
 
 describe("CronService declarative jobs", () => {
+  it("rejects malformed declared triggers without changing persisted jobs", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    await cron.start();
+
+    try {
+      const invalidTrigger = { script: "const x = ;" };
+      const expectedError =
+        "cron trigger script has a syntax error: Unexpected token (line 1, column 10)";
+
+      await expect(cron.add(declaration({ trigger: invalidTrigger }))).rejects.toThrow(
+        expectedError,
+      );
+      expect(await cron.list()).toEqual([]);
+
+      const validTrigger = { script: "return { fire: true }" };
+      const created = declarativeResult(await cron.add(declaration({ trigger: validTrigger })));
+
+      await expect(cron.add(declaration({ trigger: invalidTrigger }))).rejects.toThrow(
+        expectedError,
+      );
+      expect(await cron.readJob(created.id)).toMatchObject({ trigger: validTrigger });
+      expect(await cron.list()).toEqual([expect.objectContaining({ trigger: validTrigger })]);
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("creates, no-ops, and converges in place while preserving state and enablement", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);

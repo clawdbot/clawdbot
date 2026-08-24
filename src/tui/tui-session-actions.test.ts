@@ -1525,6 +1525,7 @@ describe("tui session actions", () => {
     const state = createBaseState({
       currentSessionKey: "agent:main:source",
       sessionInfo: {
+        displayName: "Production incident",
         fastMode: true,
         verboseLevel: "full",
         traceLevel: "raw",
@@ -1546,6 +1547,7 @@ describe("tui session actions", () => {
     await setSession("agent:main:target");
 
     expect(state.sessionInfo).toMatchObject({
+      displayName: undefined,
       fastMode: undefined,
       verboseLevel: undefined,
       traceLevel: undefined,

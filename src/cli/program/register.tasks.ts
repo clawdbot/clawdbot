@@ -15,6 +15,7 @@ import {
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { parseCliEnumFilter } from "../enum-filter.js";
+import { ExpectedCliError } from "../failure-output.js";
 
 type TasksParentOption = "json" | "runtime" | "status";
 const TASKS_PARENT_OPTIONS = ["json", "runtime", "status"] as const;
@@ -56,21 +57,23 @@ function isTaskNotifyPolicy(value: unknown): value is TaskNotifyPolicy {
   return value === "done_only" || value === "state_changes" || value === "silent";
 }
 
+function throwTasksCliError(message: string): never {
+  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
+
 function resolveTasksLeafOptions(
   command: Command,
   leaf: TasksLeaf,
-): { json?: boolean; runtime?: string; status?: string } | undefined {
+): { json?: boolean; runtime?: string; status?: string } {
   const supported: readonly TasksParentOption[] = TASKS_LEAF_OPTION_SUPPORT[leaf];
   const flags = TASKS_PARENT_OPTIONS.filter(
     (name) =>
       !supported.includes(name) && inheritOptionFromParent(command, name, "cli") !== undefined,
   ).map((name) => `--${name}`);
   if (flags.length > 0) {
-    defaultRuntime.error(
+    throwTasksCliError(
       `\`tasks ${leaf}\` does not support inherited ${flags.length === 1 ? "option" : "options"} ${flags.join(", ")}.`,
     );
-    defaultRuntime.exit(1);
-    return undefined;
   }
 
   const resolveLocal = (name: TasksParentOption): unknown => {
@@ -89,12 +92,10 @@ function resolveTasksLeafOptions(
   };
 }
 
-function parseTasksAuditLimit(limit: unknown): number | null | undefined {
+function parseTasksAuditLimit(limit: unknown): number | undefined {
   const parsed = parseStrictPositiveInteger(limit);
   if (limit !== undefined && parsed === undefined) {
-    defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
-    defaultRuntime.exit(1);
-    return null;
+    throwTasksCliError("--limit must be a positive integer, for example --limit 25.");
   }
   return parsed;
 }
@@ -119,9 +120,6 @@ export function registerTasksCommand(program: Command): void {
   addTasksListOptions(tasksCmd.command("list").description("List tracked background tasks")).action(
     async (_opts, command) => {
       const resolved = resolveTasksLeafOptions(command, "list");
-      if (!resolved) {
-        return;
-      }
       await runOwner(loadTasksCommands, ({ tasksListCommand }) =>
         tasksListCommand(
           {
@@ -144,13 +142,7 @@ export function registerTasksCommand(program: Command): void {
     .option("--limit <n>", "Limit displayed findings")
     .action(async (opts, command) => {
       const resolved = resolveTasksLeafOptions(command, "audit");
-      if (!resolved) {
-        return;
-      }
       const limit = parseTasksAuditLimit(opts.limit);
-      if (limit === null) {
-        return;
-      }
       await runOwner(loadTasksCommands, ({ tasksAuditCommand }) =>
         tasksAuditCommand(
           {
@@ -171,9 +163,6 @@ export function registerTasksCommand(program: Command): void {
     .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
     .action(async (opts, command) => {
       const resolved = resolveTasksLeafOptions(command, "maintenance");
-      if (!resolved) {
-        return;
-      }
       await runOwner(loadTasksCommands, ({ tasksMaintenanceCommand }) =>
         tasksMaintenanceCommand(
           { json: Boolean(resolved.json), apply: Boolean(opts.apply) },
@@ -189,9 +178,6 @@ export function registerTasksCommand(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (lookup, _opts, command) => {
       const resolved = resolveTasksLeafOptions(command, "show");
-      if (!resolved) {
-        return;
-      }
       await runOwner(loadTasksCommands, ({ tasksShowCommand }) =>
         tasksShowCommand({ lookup, json: Boolean(resolved.json) }, defaultRuntime),
       );
@@ -203,13 +189,9 @@ export function registerTasksCommand(program: Command): void {
     .argument("<lookup>", "Task id, run id, or session key")
     .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
     .action(async (lookup, notify, _opts, command) => {
-      if (!resolveTasksLeafOptions(command, "notify")) {
-        return;
-      }
+      resolveTasksLeafOptions(command, "notify");
       if (!isTaskNotifyPolicy(notify)) {
-        defaultRuntime.error("Notify policy must be done_only, state_changes, or silent.");
-        defaultRuntime.exit(1);
-        return;
+        throwTasksCliError("Notify policy must be done_only, state_changes, or silent.");
       }
       await runOwner(loadTasksCommands, ({ tasksNotifyCommand }) =>
         tasksNotifyCommand({ lookup, notify }, defaultRuntime),
@@ -221,9 +203,7 @@ export function registerTasksCommand(program: Command): void {
     .description("Cancel a running background task")
     .argument("<lookup>", "Task id, run id, or session key")
     .action(async (lookup, _opts, command) => {
-      if (!resolveTasksLeafOptions(command, "cancel")) {
-        return;
-      }
+      resolveTasksLeafOptions(command, "cancel");
       await runOwner(loadTasksCommands, ({ tasksCancelCommand }) =>
         tasksCancelCommand({ lookup }, defaultRuntime),
       );
@@ -233,9 +213,7 @@ export function registerTasksCommand(program: Command): void {
     .command("retry <lookups...>")
     .description("Retry delivery for up to 10 blocked subagent completions")
     .action(async (lookups: string[], _opts, command) => {
-      if (!resolveTasksLeafOptions(command, "retry")) {
-        return;
-      }
+      resolveTasksLeafOptions(command, "retry");
       await runOwner(loadTasksCommands, ({ tasksRetryCommand }) =>
         tasksRetryCommand({ lookups }, defaultRuntime),
       );
@@ -245,9 +223,7 @@ export function registerTasksCommand(program: Command): void {
     .command("dismiss <lookups...>")
     .description("Dismiss delivery for up to 10 blocked subagent completions")
     .action(async (lookups: string[], _opts, command) => {
-      if (!resolveTasksLeafOptions(command, "dismiss")) {
-        return;
-      }
+      resolveTasksLeafOptions(command, "dismiss");
       await runOwner(loadTasksCommands, ({ tasksDismissCommand }) =>
         tasksDismissCommand({ lookups }, defaultRuntime),
       );
@@ -266,9 +242,6 @@ export function registerTasksCommand(program: Command): void {
     .option("--status <name>", `Filter by status (${TASK_FLOW_STATUSES.join(", ")})`)
     .action(async (_opts, command) => {
       const resolved = resolveTasksLeafOptions(command, "flow list");
-      if (!resolved) {
-        return;
-      }
       await runOwner(loadFlowsCommands, ({ flowsListCommand }) =>
         flowsListCommand({ json: Boolean(resolved.json), status: resolved.status }, defaultRuntime),
       );
@@ -281,9 +254,6 @@ export function registerTasksCommand(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (lookup, _opts, command) => {
       const resolved = resolveTasksLeafOptions(command, "flow show");
-      if (!resolved) {
-        return;
-      }
       await runOwner(loadFlowsCommands, ({ flowsShowCommand }) =>
         flowsShowCommand({ lookup, json: Boolean(resolved.json) }, defaultRuntime),
       );
@@ -294,9 +264,7 @@ export function registerTasksCommand(program: Command): void {
     .description("Cancel a running TaskFlow")
     .argument("<lookup>", "Flow id or owner key")
     .action(async (lookup, _opts, command) => {
-      if (!resolveTasksLeafOptions(command, "flow cancel")) {
-        return;
-      }
+      resolveTasksLeafOptions(command, "flow cancel");
       await runOwner(loadFlowsCommands, ({ flowsCancelCommand }) =>
         flowsCancelCommand({ lookup }, defaultRuntime),
       );

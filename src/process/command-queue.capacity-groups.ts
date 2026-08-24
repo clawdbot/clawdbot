@@ -3,7 +3,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // lanes, with per-member reservations. Split out of command-queue.ts to keep
 // that file within its size budget; the queue supplies its own `drainLane` so
 // this module never has to import back into it.
-import { getQueueState, normalizeLane } from "./command-queue.state.js";
+import { getQueueState, normalizeLane, peekLaneQueue } from "./command-queue.state.js";
 import { CommandLane } from "./lanes.js";
 
 /** Drains a single lane. Supplied by command-queue.ts to avoid a cycle. */
@@ -235,7 +235,7 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
     | undefined;
   for (const lane of group.members) {
     const state = getQueueState().lanes.get(lane);
-    const head = state?.queue[0];
+    const head = state ? peekLaneQueue(state.queue) : undefined;
     if (!state || !head || state.draining || resolveLaneBlockReason(lane) !== null) {
       continue;
     }

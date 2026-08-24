@@ -4,6 +4,7 @@ import {
   configureExecutionIdentityAdmissionSink,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
 
 /** Own one direct-process writer unless a surrounding runtime already owns it. */
 export function startAgentLocalAuditWriter(
@@ -16,9 +17,15 @@ export function startAgentLocalAuditWriter(
     messageMode: "off",
     ...(options.stateDir ? { stateDir: options.stateDir } : {}),
   });
-  const clearSink = configureExecutionIdentityAdmissionSink(recorder.recordExecutionIdentity);
+  const clearAdmissionSink = configureExecutionIdentityAdmissionSink(
+    recorder.recordExecutionIdentity,
+  );
+  const clearRuntimeActionSink = configureRuntimeActionDecisionSink(
+    recorder.recordExecutionDecision,
+  );
   return async () => {
-    clearSink();
+    clearRuntimeActionSink();
+    clearAdmissionSink();
     await recorder.stop();
   };
 }

@@ -375,6 +375,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
+      devicePlacement: this.place.devicePlacementRequirement(),
       deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
     });
     const projectState = resolveProjectChip({

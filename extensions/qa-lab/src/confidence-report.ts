@@ -390,9 +390,8 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const failedCount = readCount(counts?.failed);
   const explicitSkippedCount = readCount(counts?.skipped);
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : undefined;
-  const failedScenarios = scenarios?.filter(
-    (scenario) => isRecord(scenario) && scenario.status === "fail",
-  );
+  const failedScenarioCount =
+    scenarios?.filter((scenario) => isRecord(scenario) && scenario.status === "fail").length ?? 0;
   const skippedScenarioCount =
     scenarios?.filter(
       (scenario) =>
@@ -407,14 +406,19 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
           scenario.status !== "skip" &&
           scenario.status !== "skipped"),
     ).length ?? 0;
-  const hasScenarioRows = scenarios !== undefined && scenarios.length > 0;
+  const hasExecutedScenarios =
+    (failedCount ?? 0) > 0 ||
+    scenarios?.some(
+      (scenario) =>
+        isRecord(scenario) && (scenario.status === "pass" || scenario.status === "fail"),
+    ) === true ||
+    ((scenarios?.length ?? 0) === 0 && (passedCount ?? 0) > 0);
   const gatewayLogSentinels = collectGatewayLogSentinels(payload);
   if (gatewayLogSentinels.length > 0) {
     const allEnvironmentBlocked = gatewayLogSentinels.every(
       (finding) => finding.verdict === "environment-blocked",
     );
-    const suiteHasFailures =
-      (failedCount !== undefined && failedCount > 0) || (failedScenarios?.length ?? 0) > 0;
+    const suiteHasFailures = (failedCount ?? 0) > 0 || failedScenarioCount > 0;
     if (allEnvironmentBlocked && suiteHasFailures) {
       return {
         passed: false,
@@ -436,31 +440,42 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       details: `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(gatewayLogSentinels)}`,
     };
   }
+  if (
+    failedCount !== undefined &&
+    scenarios !== undefined &&
+    Math.floor(failedCount) !== failedScenarioCount
+  ) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: `qa-suite-summary count/scenario mismatch: counts.failed=${Math.max(
+        0,
+        Math.floor(failedCount),
+      )}, failed scenarios=${failedScenarioCount}`,
+    };
+  }
+  if (unknownBlockingScenarioCount > 0) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
+    };
+  }
+  if (failedCount === undefined && scenarios === undefined) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: "qa-suite-summary missing counts.failed and scenarios[]",
+    };
+  }
+  if (!hasExecutedScenarios) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: "qa-suite-summary has no executed scenarios",
+    };
+  }
   if (failedCount !== undefined) {
-    if (failedCount === 0 && !(totalCount !== undefined && totalCount > 0) && !hasScenarioRows) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "qa-suite-summary has no executed scenarios",
-      };
-    }
-    if (failedScenarios !== undefined && Math.floor(failedCount) !== failedScenarios.length) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: `qa-suite-summary count/scenario mismatch: counts.failed=${Math.max(
-          0,
-          Math.floor(failedCount),
-        )}, failed scenarios=${failedScenarios.length}`,
-      };
-    }
-    if (unknownBlockingScenarioCount > 0) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
-      };
-    }
     const inferredSkippedCount =
       totalCount === undefined || passedCount === undefined
         ? undefined
@@ -483,41 +498,11 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       ...(skippedCount === 0 ? {} : { skippedCount: Math.max(0, Math.floor(skippedCount)) }),
     };
   }
-  if (!Array.isArray(payload.scenarios)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary missing counts.failed and scenarios[]",
-    };
-  }
-  if (payload.scenarios.length === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary has no executed scenarios",
-    };
-  }
-  const fallbackFailedScenarios = payload.scenarios.filter(
-    (scenario) => isRecord(scenario) && scenario.status === "fail",
-  );
-  const fallbackUnknownBlockingScenarios = payload.scenarios.filter(
-    (scenario) =>
-      !isRecord(scenario) ||
-      (scenario.status !== "pass" &&
-        scenario.status !== "fail" &&
-        scenario.status !== "skip" &&
-        scenario.status !== "skipped"),
-  );
-  if (fallbackUnknownBlockingScenarios.length > 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary has ${fallbackUnknownBlockingScenarios.length} scenario row(s) with unsupported non-pass status`,
-    };
-  }
+  const skippedCount = Math.max(explicitSkippedCount ?? 0, skippedScenarioCount);
   return {
-    passed: fallbackFailedScenarios.length === 0,
-    details: `qa-suite-summary failed scenarios=${fallbackFailedScenarios.length}`,
+    passed: failedScenarioCount === 0,
+    details: `qa-suite-summary failed scenarios=${failedScenarioCount}`,
+    ...(skippedCount === 0 ? {} : { skippedCount }),
   };
 }
 

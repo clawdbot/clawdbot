@@ -56,6 +56,9 @@ describe("config view", () => {
     themeModeOverridden: false,
     themeModeProvenance: "default" as const,
     themeModeResetValue: "system" as ThemeMode,
+    accent: undefined,
+    accentOverridden: false,
+    accentProvenance: "default" as const,
     systemLocale: "en" as const,
     localeOverride: undefined,
     localeOverridden: false,
@@ -67,6 +70,8 @@ describe("config view", () => {
     resetTheme: vi.fn(),
     setThemeMode: vi.fn(),
     resetThemeMode: vi.fn(),
+    setAccent: vi.fn(),
+    resetAccent: vi.fn(),
     hasCustomTheme: false,
     customThemeLabel: null,
     customThemeSourceUrl: null,
@@ -768,6 +773,48 @@ describe("config view", () => {
     onSectionChange.mockClear();
     selectConfigTab(container, "root");
     expect(onSectionChange).toHaveBeenCalledWith(null);
+  });
+
+  it("exposes accordion category disclosure state and its controlled panel", () => {
+    const overrides: Partial<ConfigProps> = {
+      settingsLayout: "accordion",
+      includeVirtualSections: false,
+      includeSections: ["env"],
+      schema: {
+        type: "object",
+        properties: {
+          env: { type: "object", properties: {} },
+        },
+      },
+    };
+    const collapsed = renderConfigView(overrides);
+    const collapsedHeader = queryRequired(
+      collapsed.container,
+      ".config-accordion-group__header",
+      HTMLButtonElement,
+    );
+    const controlledPanelId = collapsedHeader.getAttribute("aria-controls");
+    const collapsedPanel = queryRequired(
+      collapsed.container,
+      `#${controlledPanelId}`,
+      HTMLDivElement,
+    );
+
+    expect(collapsedHeader.getAttribute("aria-expanded")).toBe("false");
+    expect(controlledPanelId).not.toBeNull();
+    expect(collapsedPanel.hidden).toBe(true);
+
+    const expanded = renderConfigView({ ...overrides, activeSection: "env" });
+    const expandedHeader = queryRequired(
+      expanded.container,
+      ".config-accordion-group__header",
+      HTMLButtonElement,
+    );
+    expect(expandedHeader.getAttribute("aria-expanded")).toBe("true");
+    expect(expandedHeader.getAttribute("aria-controls")).toBe(controlledPanelId);
+    expect(queryRequired(expanded.container, `#${controlledPanelId}`, HTMLDivElement).hidden).toBe(
+      false,
+    );
   });
 
   it("renders the virtual Notifications tab on Notifications settings", () => {

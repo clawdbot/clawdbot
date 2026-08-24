@@ -467,7 +467,8 @@ export class GatewayProtocolClient<TPlan> {
         new Error(`gateway closed (${code}): ${reason}`),
     );
     this.invoke("close", () => this.opts.onClose?.(context, decision));
-    if (decision.retry && !this.stopped) {
+    // A close callback can reconnect synchronously and already own the next socket or retry.
+    if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
       this.scheduleReconnect(decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs);
     }
   }

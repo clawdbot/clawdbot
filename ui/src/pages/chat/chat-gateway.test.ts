@@ -106,7 +106,13 @@ function seedChatSnapshot(
 type SessionTestState = ChatState & {
   [key: string]: unknown;
   chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
-  lastLocalTerminalReconcile?: { sessionStatus: string } | null;
+  knownAgentRunIds: Set<string>;
+  lastLocalTerminalReconcile?: {
+    phase: string;
+    runId: string | null;
+    sessionKey: string;
+    sessionStatus: string;
+  } | null;
   sessionsResult: {
     [key: string]: unknown;
     sessions: Array<Record<string, unknown>>;
@@ -827,6 +833,54 @@ describe("handleChatGatewayEvent", () => {
     ).toMatchObject({
       status: "completed",
       acceptedFinalMessageIdentities: [expect.any(String)],
+    });
+  });
+
+  it("settles an active run when its terminal reply was already accepted", () => {
+    const runId = "run-1";
+    const final = createTextChatMessage("assistant", "Delivered answer");
+    const state = createStateWithRunningSession({
+      sessionKey: "main",
+      chatRunId: runId,
+      chatStream: "Delivered answer",
+      chatStreamStartedAt: 123,
+      chatRunStartup: { state: "activity", runId },
+    }) as SessionTestState & { chatStreamSegments: HistoryToolSegment[] };
+    state.chatStreamSegments = [{ text: "Retained commentary", ts: 122, toolCallId: "call-1" }];
+    state.knownAgentRunIds = new Set([runId]);
+    const scope = { sessionKey: state.sessionKey };
+    const projection = reduceSessionProjection(
+      getChatSessionProjection(state, state.chatMessages, scope),
+      { type: "runTerminal", runId, status: "completed", message: final, scope },
+    );
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [final];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId,
+        sessionKey: "main",
+        state: "final",
+        message: final,
+      }),
+    ).toBe("final");
+
+    expect(state.chatMessages).toEqual([final]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(state.chatRunStartup).toBeNull();
+    expect(state.knownAgentRunIds.has(runId)).toBe(false);
+    expect(state.sessionsResult.sessions[0]).toMatchObject({
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+    });
+    expect(state.lastLocalTerminalReconcile).toMatchObject({
+      runId,
+      sessionKey: "main",
+      phase: "done",
+      sessionStatus: "done",
     });
   });
 

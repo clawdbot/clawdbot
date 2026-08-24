@@ -75,7 +75,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     );
   });
 
-  it("reuses prepared plugin metadata when loading execution-workspace skills", () => {
+  it("reuses prepared plugin metadata for watcher reconciliation and skill loading", () => {
     const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
 
     resolveReusableWorkspaceSkillSnapshot({
@@ -88,6 +88,9 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(loadMergedWorkspaceSkillsMock).toHaveBeenCalledOnce();
     expect(loadMergedWorkspaceSkillsMock.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(
       pluginMetadataSnapshot,
+    );
+    expect(ensureSkillsWatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot }),
     );
   });
 
