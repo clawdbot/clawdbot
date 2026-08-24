@@ -1017,4 +1017,116 @@ describe("plugin loader preferOver activation", () => {
       message: "ceded channel has no registered owner: zzalpha (ceded to zz-replacement)",
     });
   });
+
+  // A declared contest narrows activation's candidate set to the declaring pair, so a third
+  // claimant of the same channel is excluded from the plan without any declaration naming it.
+  // Ceding only the ids the declaration displaced let that claimant — kept enabled through a
+  // second configured channel and discovered first — take zzalpha at runtime while schema
+  // ownership validated the replacement, the exact two-plane split the cede exists to close.
+  it("cedes a contested channel from a claimant the activation plan excludes", () => {
+    const root = makePluginLoaderTempDir();
+    const thirdDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-third",
+      channelIds: ["zzalpha", "zzgamma"],
+      toolName: "zz_third_tool",
+    });
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzgamma: { token: "gamma" } },
+      plugins: { load: { paths: [thirdDir, fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    const owner = (channelId: string) =>
+      registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+    // The plan's winner takes the contested channel even though the excluded claimant loads first.
+    expect(owner("zzalpha")).toBe("zz-replacement");
+    // The excluded claimant stays a full citizen everywhere it is a candidate.
+    expect(owner("zzgamma")).toBe("zz-third");
+    expect(registry.plugins.find((plugin) => plugin.id === "zz-third")?.cededChannelIds).toEqual([
+      "zzalpha",
+    ]);
+    // Yielding by cede is not a duplicate registration, so neither loaded claimant loses tools.
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+      "channel already registered",
+    );
+    expect(registry.tools.map((tool) => tool.pluginId).toSorted()).toEqual([
+      "zz-replacement",
+      "zz-third",
+    ]);
+  });
+
+  // A channel nobody declared anything about keeps its fallback. Both planes settle an undeclared
+  // pair on the first registrant, and the loser stays registerable so a winner that fails during
+  // register does not take the channel down with it. Ceding every claimant the activation plan
+  // leaves out would silently delete that resilience, so the cede stays scoped to channels with a
+  // declared contest.
+  it("keeps the loser of an undeclared pair registerable when the winner fails to load", () => {
+    const root = makePluginLoaderTempDir();
+    const firstDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-first",
+      channelIds: ["zzalpha"],
+      toolName: "zz_first_tool",
+      throwOnRegister: true,
+    });
+    const secondDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-second",
+      channelIds: ["zzalpha", "zzgamma"],
+      toolName: "zz_second_tool",
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzgamma: { token: "gamma" } },
+      plugins: { load: { paths: [firstDir, secondDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(registry.plugins.find((plugin) => plugin.id === "zz-first")?.status).toBe("error");
+    // The failed winner's registrations roll back, and the undeclared loser still serves the
+    // channel instead of leaving it dead.
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
+      "zz-second",
+    );
+    expect(
+      registry.plugins.find((plugin) => plugin.id === "zz-second")?.cededChannelIds,
+    ).toBeUndefined();
+  });
 });

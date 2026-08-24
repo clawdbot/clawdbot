@@ -308,8 +308,8 @@ export function pushPluginValidationError(params: {
  * runtime owner at all instead of the fallback that served it.
  *
  * Built once per load: the policy resolves preferences from the manifest, the built-in channel
- * registration, and any external catalog, and the map is small — a plugin cedes nothing unless
- * another claimant declared a preference over it.
+ * registration, and any external catalog, and the map is small — a plugin cedes nothing on a
+ * channel unless some claimant declared a preference there.
  */
 export function collectCededChannelIdsByPlugin(params: {
   registry: PluginManifestRegistry;
@@ -361,7 +361,25 @@ export function collectCededChannelIdsByPlugin(params: {
       continue;
     }
     cededChannelOwners.set(claimedId, cededTo);
-    for (const pluginId of pluginIds) {
+    // Every claimant the activation plan excludes cedes here, not only the ids the declaration
+    // displaced. A declared contest narrows auto-enable's candidate set to the declaring pair, so
+    // a third claimant of the same channel is inactive there without any preference naming it;
+    // ceding only the displaced ids let such a claimant — kept enabled through another configured
+    // channel and discovered first — take the channel at runtime while schema ownership validated
+    // the winner, the exact two-plane split this map exists to close. A claimant the policy keeps
+    // active — the operator's explicit pick — still registers and settles by registration order,
+    // which for a pair whose declaration was set aside is the same first registrant the schema
+    // plane's keep-current rule retains. The winner passes the same activity check above, so
+    // neither can join the set. The displaced ids stay ceded unconditionally because the pair's
+    // named target remains an activation candidate, and reading activity alone would hand it back
+    // the very channel the declaration takes away.
+    const cedingPluginIds = new Set(pluginIds);
+    for (const claimantId of claimantsByChannel.get(claimedId) ?? []) {
+      if (!policy.isPluginActive(claimantId, claimedId)) {
+        cedingPluginIds.add(claimantId);
+      }
+    }
+    for (const pluginId of cedingPluginIds) {
       const channels = cededChannelIdsByPlugin.get(pluginId) ?? [];
       cededChannelIdsByPlugin.set(pluginId, channels);
       channels.push(channelId);
