@@ -22,6 +22,7 @@ const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+const SQLITE_SNAPSHOT_STAGING_PREFIX = `openclaw-sqlite-readonly-${process.pid}-`;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const pendingTempDirectoryCleanup = new Set<string>();
@@ -50,18 +51,18 @@ type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; 
 
 class SqliteSourceChangedError extends Error {}
 
-function sqliteSnapshotStagingError(tempDir: string, cause: unknown): unknown {
+function sqliteSnapshotStagingError(stagingRoot: string, cause: unknown): unknown {
   const error = isErrno(cause) ? cause : undefined;
   const errcode = error && "errcode" in error ? error.errcode : undefined;
   // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
   if (
     !["ENOSPC", "EDQUOT"].includes(error?.code ?? "") &&
     !(typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) &&
-    !`${error?.path ?? ""}${path.sep}`.startsWith(`${tempDir}${path.sep}`)
+    !`${error?.path ?? ""}${path.sep}`.startsWith(`${stagingRoot}${path.sep}`)
   ) {
     return cause;
   }
-  const message = `${error?.message}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
+  const message = `${error?.message}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${stagingRoot}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
   return new Error(message, { cause });
 }
 
@@ -346,12 +347,15 @@ function recoverPrivateRollbackCopy(snapshotPath: string): void {
 function createStableReadOnlyCopyInTempDirectory(
   pathname: string,
   journalMode: Exclude<SourceJournalMode, "unknown">,
-  tempDir: string,
+  existingTempDir?: string,
 ): PreparedSqliteReadOnlyLocation {
-  const snapshotPath = path.join(tempDir, "database.sqlite");
-  const firstPath = path.join(tempDir, "first");
-  const secondPath = path.join(tempDir, "second");
+  let tempDir = existingTempDir;
+  const stagingRoot = tempDir ? path.dirname(tempDir) : resolvePrivateSqliteSnapshotStagingRoot();
   try {
+    tempDir ??= createPrivateSqliteTempDirectorySync(stagingRoot, SQLITE_SNAPSHOT_STAGING_PREFIX);
+    const snapshotPath = path.join(tempDir, "database.sqlite");
+    const firstPath = path.join(tempDir, "first");
+    const secondPath = path.join(tempDir, "second");
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -397,8 +401,19 @@ function createStableReadOnlyCopyInTempDirectory(
     }
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
-    removeTempDirectory(tempDir);
-    throw sqliteSnapshotStagingError(tempDir, error);
+    if (tempDir) {
+      removeTempDirectory(tempDir);
+    }
+    throw sqliteSnapshotStagingError(stagingRoot, error);
+  }
+}
+
+async function createSqliteSnapshotStagingDirectory(): Promise<string> {
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
+  try {
+    return await createPrivateSqliteTempDirectory(stagingRoot, SQLITE_SNAPSHOT_STAGING_PREFIX);
+  } catch (error) {
+    throw sqliteSnapshotStagingError(stagingRoot, error);
   }
 }
 
@@ -406,31 +421,14 @@ async function createStableReadOnlyCopy(
   pathname: string,
   journalMode: Exclude<SourceJournalMode, "unknown">,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePrivateSqliteSnapshotStagingRoot(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
-  return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
-}
-
-function createStableReadOnlyCopySync(
-  pathname: string,
-  journalMode: Exclude<SourceJournalMode, "unknown">,
-): PreparedSqliteReadOnlyLocation {
-  const tempDir = createPrivateSqliteTempDirectorySync(
-    resolvePrivateSqliteSnapshotStagingRoot(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
+  const tempDir = await createSqliteSnapshotStagingDirectory();
   return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
 }
 
 async function createOnlineReadOnlyBackup(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePrivateSqliteSnapshotStagingRoot(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
+  const tempDir = await createSqliteSnapshotStagingDirectory();
   const snapshotPath = path.join(tempDir, "database.sqlite");
   const sqlite = requireNodeSqlite();
   try {
@@ -463,7 +461,7 @@ async function createOnlineReadOnlyBackup(
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
-    throw sqliteSnapshotStagingError(tempDir, error);
+    throw sqliteSnapshotStagingError(path.dirname(tempDir), error);
   }
 }
 
@@ -577,7 +575,7 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
       continue;
     }
     try {
-      return createStableReadOnlyCopySync(canonicalPath, journalMode);
+      return createStableReadOnlyCopyInTempDirectory(canonicalPath, journalMode);
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;

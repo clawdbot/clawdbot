@@ -227,6 +227,76 @@ describe("prepareSqliteReadOnlyLocation", () => {
     },
   );
 
+  it.each(
+    [
+      {
+        mode: "async backup",
+        prepare: prepareSqliteReadOnlyLocationInProcess,
+        empty: false,
+        sync: false,
+      },
+      {
+        mode: "async copy",
+        prepare: prepareSqliteReadOnlyLocationInProcess,
+        empty: true,
+        sync: false,
+      },
+      {
+        mode: "sync copy",
+        prepare: prepareSqliteReadOnlyLocationSyncInProcess,
+        empty: false,
+        sync: true,
+      },
+    ].flatMap((scenario) =>
+      ["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS"].map((code) =>
+        Object.assign({}, scenario, { code }),
+      ),
+    ),
+  )(
+    "identifies $mode private cache allocation failure $code before backup or copying",
+    async ({ code, empty, prepare, sync }) => {
+      const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-allocation-");
+      const databasePath = createTempDatabasePath();
+      const sqlite = requireNodeSqlite();
+      if (empty) {
+        fs.writeFileSync(databasePath, "");
+      } else {
+        const database = new sqlite.DatabaseSync(databasePath);
+        database.exec("CREATE TABLE probe (value TEXT);");
+        database.close();
+      }
+      const stagingRoot = path.join(cacheRoot, "openclaw");
+      const allocationError = Object.assign(new Error("snapshot directory allocation failed"), {
+        code,
+        path: path.join(stagingRoot, "openclaw-sqlite-readonly-stage"),
+      });
+      const backup = vi.spyOn(sqlite, "backup");
+      const write = vi.spyOn(fs, "writeSync");
+      if (sync) {
+        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+          throw allocationError;
+        });
+      } else {
+        vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(allocationError);
+      }
+
+      await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+        const error = await Promise.resolve()
+          .then(() => prepare(databasePath))
+          .catch((cause: unknown) => cause);
+        expect(error).toMatchObject({
+          cause: allocationError,
+          message: expect.stringContaining(stagingRoot),
+        });
+        expect((error as Error).message).toContain("XDG_CACHE_HOME");
+      });
+
+      expect(backup).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      expect(fs.readdirSync(stagingRoot)).toEqual([]);
+    },
+  );
+
   it.each([
     { label: "SQLite source read", code: "ERR_SQLITE_ERROR", errcode: 266 },
     { label: "SQLite source locking", code: "ERR_SQLITE_ERROR", errcode: 5 },
