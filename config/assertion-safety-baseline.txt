@@ -1497,7 +1497,7 @@ packages/acp-core/src/runtime/session-identity.ts	2
 packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
-packages/agent-core/src/harness/compaction/compaction.ts	5
+packages/agent-core/src/harness/compaction/compaction.ts	3
 packages/agent-core/src/harness/messages.ts	3
 packages/agent-core/src/harness/session/session.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
@@ -1827,7 +1827,7 @@ src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
 src/agents/embedded-agent-runner/replay-history.ts	60
-src/agents/embedded-agent-runner/result-fallback-classifier.ts	3
+src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
 src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	5
@@ -2378,7 +2378,7 @@ src/claws/update-capability-changes.ts	11
 src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
-src/cli/capability-cli/audio.ts	4
+src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	21
 src/cli/capability-cli/model.ts	4
@@ -2473,8 +2473,8 @@ src/cli/program/register.audit.ts	12
 src/cli/program/register.backup.ts	14
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	12
-src/cli/program/register.onboard.ts	37
-src/cli/program/register.setup.ts	10
+src/cli/program/register.onboard.ts	28
+src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
 src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
@@ -2763,7 +2763,7 @@ src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
 src/config/sessions/session-entry-json.ts	1
 src/config/sessions/session-history-eviction.ts	2
-src/config/sessions/session-reset-boundary-event.ts	11
+src/config/sessions/session-reset-boundary-event.ts	5
 src/config/sessions/session-sharing-store.ts	2
 src/config/sessions/session-snapshot-merge.ts	26
 src/config/sessions/session-sqlite-target.ts	3
@@ -3548,7 +3548,7 @@ src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	2
 src/plugins/capability-provider-runtime.ts	16
-src/plugins/captured-registration.ts	3
+src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
 src/plugins/clawhub.ts	10
@@ -4063,7 +4063,6 @@ ui/src/components/session-menu.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
-ui/src/components/sidebar-attention-dismissals.ts	1
 ui/src/components/sidebar-attention.ts	4
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1

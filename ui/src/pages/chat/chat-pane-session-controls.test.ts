@@ -9,6 +9,10 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
 
+const { showToastMock } = vi.hoisted(() => ({ showToastMock: vi.fn() }));
+
+vi.mock("../../lib/toast.ts", () => ({ showToast: showToastMock }));
+
 describe("chat model catalog state", () => {
   const cachedCatalog = [
     {
@@ -83,6 +87,7 @@ describe("chat pane composer controls", () => {
       chatStream: null,
     } as unknown as ChatPageHost;
     const onModelSetup = vi.fn();
+    const toastAnchor = document.createElement("div");
 
     const controls = renderChatPaneComposerControls({
       state,
@@ -92,6 +97,7 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
+      toastAnchor,
       onModelSetup,
     });
     render(controls.composerControls, container);
@@ -141,6 +147,7 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: false,
+      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(renderChatPermissionPicker(controls.permissionPicker), container);
@@ -175,6 +182,66 @@ describe("chat pane composer controls", () => {
     );
   });
 
+  it.each([
+    { label: "running", chatRunId: null, hasActiveRun: true, status: "running", toastCount: 1 },
+    {
+      label: "locally running with a stale idle session row",
+      chatRunId: "run-active",
+      hasActiveRun: false,
+      status: "done",
+      toastCount: 1,
+    },
+    { label: "idle", chatRunId: null, hasActiveRun: false, status: "done", toastCount: 0 },
+  ] as const)("shows the next-run notice only for a $label session", async (sessionCase) => {
+    showToastMock.mockClear();
+    const patch = vi.fn(async () => ({}));
+    const toastAnchor = document.createElement("div");
+    const state = {
+      chatRunId: sessionCase.chatRunId,
+      connected: true,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: { state: { modelOverrides: {} }, patch },
+      chatModelSwitchPromises: {},
+      sessionKey: "agent:main:permission-notice",
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+    } as unknown as ChatPageHost;
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession: {
+        key: state.sessionKey,
+        kind: "direct",
+        permissionMode: "read-only",
+        hasActiveRun: sessionCase.hasActiveRun,
+        status: sessionCase.status,
+      },
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      toastAnchor,
+      onModelSetup: vi.fn(),
+    });
+
+    await controls.permissionPicker.onSelect("guarded");
+
+    expect(showToastMock).toHaveBeenCalledTimes(sessionCase.toastCount);
+    if (sessionCase.toastCount === 1) {
+      expect(showToastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          anchor: toastAnchor,
+          durationMs: 5_000,
+          message: "New permissions apply to the next run.",
+        }),
+      );
+    }
+  });
+
   it("refreshes the configured model catalog when the picker opens", async () => {
     const container = document.createElement("div");
     const request = vi.fn(async () => ({ models: [] }));
@@ -203,6 +270,7 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
+      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(controls.composerControls, container);

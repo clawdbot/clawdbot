@@ -23843,6 +23843,17 @@
       ]
     },
     {
+      "id": "native.apple.55154d93c122c1ac",
+      "source": "Choose the realtime provider, model, voice, and transport in the Control UI.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.e4b13f49bb435884",
       "source": "Choose where the Gateway runs and how this Mac app reaches it.",
       "surface": "apple",
@@ -36503,6 +36514,10 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
         }
       ]
     },
@@ -45631,6 +45646,17 @@
       ]
     },
     {
+      "id": "native.apple.c7d73b77de59d303",
+      "source": "Talk configuration",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.1da1f8b0f2cf232d",
       "source": "Talk failed: %@",
       "surface": "apple",
@@ -48912,6 +48938,17 @@
         {
           "kind": "ui-named-argument",
           "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.2ece20cb05d073cd",
+      "source": "Voice & Talk Settings…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift"
         }
       ]
     },

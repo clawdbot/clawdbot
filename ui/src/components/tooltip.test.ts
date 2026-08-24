@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installNativeTitleGuard } from "./tooltip.ts";
 
 type TooltipElement = HTMLElement & {
+  closeDelay: number;
   content: string;
+  delay: number;
   openOnClick: boolean;
   readonly updateComplete: Promise<boolean>;
 };
@@ -136,6 +138,8 @@ describe("openclaw-tooltip", () => {
     expect(styles).toContain("--wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px)");
     expect(styles).toContain("var(--overlay-border, var(--border-strong))");
     expect(styles).toContain("var(--overlay-shadow, var(--shadow-md))");
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(styles).toContain("animation: none");
   });
 
   it("projects rich content into the Web Awesome tooltip", async () => {
@@ -297,6 +301,42 @@ describe("openclaw-tooltip", () => {
     dispatchTouchPointer(reveal.trigger, "pointerup");
     reveal.trigger.click();
     expectOpenCount(1);
+  });
+
+  it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createRichTooltip("Intentional hovercard");
+    tooltip.delay = 600;
+    tooltip.closeDelay = 300;
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(300);
+    dispatchMousePointer(trigger, "pointerleave");
+    expectOpenCount(0);
+
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(599);
+    expectOpenCount(0);
+    vi.advanceTimersByTime(1);
+    expectOpenCount(1);
+
+    dispatchMousePointer(trigger, "pointerleave");
+    vi.advanceTimersByTime(299);
+    expectOpenCount(1);
+    vi.advanceTimersByTime(1);
+    expectOpenCount(0);
+
+    focusTrigger(trigger);
+    expectOpenCount(1);
+
+    trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true, composed: true }));
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(0);
+    expectOpenCount(0);
+    dispatchMousePointer(trigger, "pointerleave");
   });
 
   it("keeps the accessible description in the trigger document tree", async () => {

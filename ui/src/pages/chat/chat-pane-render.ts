@@ -4,6 +4,7 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
+import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -280,6 +281,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           effortAccess: mutationAccess.effort,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
+          toastAnchor: this,
           onModelSetup: () => this.context.navigate("model-setup"),
         });
     const props: ChatProps = {
@@ -618,6 +620,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       userId: selfUser?.id ?? null,
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
+      personActivity: personActivityRouting(this.context),
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,

@@ -377,9 +377,7 @@ async function sendCommentThreadReply(params: {
     });
     return {
       messageId:
-        (typeof result.reply_id === "string" && result.reply_id) ||
-        (typeof result.comment_id === "string" && result.comment_id) ||
-        "",
+        (result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id) ?? "",
       chatId: target.commentId,
       result,
     };

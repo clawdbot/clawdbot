@@ -324,7 +324,7 @@ Or per session:
 
 Once set, any `exec` call with `host=node` runs on the node host (subject to the node allowlist/approvals).
 
-`host=auto` will not implicitly choose the node on its own, but an explicit per-call `host=node` request is allowed from `auto`. If you want node exec to be the default for the session, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
+`host=auto` will not implicitly choose the node on its own. An explicit per-call `host=node` request is allowed from `auto` only when no sandbox runtime is active; while a sandbox runtime is active, `auto` rejects it. To run on a node from a sandboxed session, or to make node exec the session default, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
 
 Related:
 
@@ -491,10 +491,11 @@ Gateway does not fall back to the node's local OpenClaw package or an older
 supervisor dialect.
 
 This setting enables supervised session turns on the paired device, including
-Gateway-owned workspace transfer and result reconciliation. Each node runs at
-most two worker processes by default. A third launch waits up to 10 seconds for
-a durable slot; while both slots are occupied, the node remains available for
-status and cancellation but is not selected for a new session turn.
+Gateway-owned workspace transfer and result reconciliation. By default, each
+node has one worker slot per available CPU core. Configure the slot count with
+`nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
+for a durable slot; while all slots are occupied, the node remains available
+for status and cancellation but is not selected for a new session turn.
 
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker

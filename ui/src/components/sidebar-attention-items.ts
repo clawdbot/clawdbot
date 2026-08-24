@@ -18,7 +18,7 @@ type SidebarAttentionAction =
   | { kind: "askCustodian"; alert: CustodianAlert };
 
 export type SidebarAttentionItem = {
-  kind: Exclude<SidebarAttentionKind, "updateAvailable">;
+  kind: SidebarAttentionKind;
   severity: "error" | "warning";
   icon: IconName;
   label: string;
