@@ -1039,7 +1039,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             stream_engine_output=False,
             thinking="high",
             tools=True,
-            web_search=False,
+            web_search=True,
         )
         observed: dict[str, object] = {}
 
@@ -1110,6 +1110,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             self.assertIn("features.hooks=false", observed["command"])
             self.assertIn("features.plugins=false", observed["command"])
             self.assertIn("skills.include_instructions=false", observed["command"])
+            self.assertIn("--search", observed["command"])
 
     def test_codex_runs_with_configured_provider_flags_and_environment(self) -> None:
         args = argparse.Namespace(
@@ -1121,7 +1122,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             stream_engine_output=False,
             thinking="high",
             tools=True,
-            web_search=False,
+            web_search=True,
         )
         observed: dict[str, object] = {}
         provider_overrides = [
@@ -1200,6 +1201,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         self.assertNotIn('cli_auth_credentials_store="file"', command)
         self.assertNotIn('forced_login_method="api"', command)
         self.assertIn("--ignore-user-config", command)
+        self.assertNotIn("--search", command)
         self.assertEqual(Path(env["CODEX_HOME"]).name, "codex-home")
         self.assertEqual(env["RELAY_API_KEY"], "test-relay-token")
         self.assertNotIn("OPENAI_API_KEY", env)

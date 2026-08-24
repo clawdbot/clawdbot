@@ -4116,7 +4116,9 @@ def codex_command(
     force_file_auth: bool = False,
 ) -> list[str]:
     cmd = [resolve_command(args.codex_bin, source_repo), "--ask-for-approval", "never"]
-    if args.web_search:
+    # Custom providers inherit transport only; native search would widen that
+    # capability boundary without provider-specific safety metadata.
+    if args.web_search and not provider_flags:
         cmd.append("--search")
     if model:
         cmd.extend(["--model", model])
