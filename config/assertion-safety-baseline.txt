@@ -1279,7 +1279,7 @@ extensions/telegram/src/bot/body-helpers.ts	1
 extensions/telegram/src/bot/delivery.replies.ts	1
 extensions/telegram/src/bot/delivery.resolve-media.ts	1
 extensions/telegram/src/bot/helpers.ts	2
-extensions/telegram/src/button-types.ts	2
+extensions/telegram/src/button-types.ts	1
 extensions/telegram/src/callback-query-answer-state.ts	1
 extensions/telegram/src/channel-actions.ts	1
 extensions/telegram/src/channel.ts	1
