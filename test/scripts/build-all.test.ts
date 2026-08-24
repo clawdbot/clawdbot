@@ -740,6 +740,30 @@ describe("resolveBuildAllSteps", () => {
     expect(labels).not.toContain("check-plugin-sdk-exports");
   });
 
+  it("selects the runtime-only graph from the runner environment", () => {
+    const selectedLabels: string[] = [];
+    const result = runBuildAllSteps("full", {
+      cacheEnabled: false,
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      logger: { error: vi.fn(), warn: vi.fn() },
+      memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+      now: () => 0,
+      resolveCacheState(step) {
+        selectedLabels.push(step.label);
+        return { cacheable: false, fresh: false, reason: "no-cache" };
+      },
+      runStep: () => ({ status: 0 }),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(selectedLabels).toEqual(
+      resolveBuildAllSteps("full", { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }).map(
+        (step) => step.label,
+      ),
+    );
+    expect(selectedLabels).not.toContain("write-plugin-sdk-entry-dts");
+  });
+
   it("uses a source performance profile with QA assets and immutable build provenance", () => {
     expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
       "plugins:assets:build",

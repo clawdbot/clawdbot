@@ -1009,7 +1009,7 @@ export function runBuildAllSteps(
   } = {},
 ) {
   let buildEnv = params.env ?? resolveBuildAllEnvironment();
-  const steps = params.steps ?? resolveBuildAllSteps(profile);
+  const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
   const now = params.now ?? performance.now.bind(performance);
