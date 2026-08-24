@@ -145,14 +145,15 @@ function resolverParams(params: {
   rest: RequestClient;
   accountId: string;
   threadId: string;
-  parentId: string;
+  parentId?: string;
+  parentType?: ChannelType;
 }) {
   return {
     channel: { id: params.threadId },
     client: { rest: params.rest } as unknown as Client,
     accountId: params.accountId,
     parentId: params.parentId,
-    parentType: ChannelType.GuildText,
+    parentType: params.parentType ?? ChannelType.GuildText,
     resolveTimestampMs: () => undefined,
   };
 }
@@ -230,6 +231,30 @@ try {
       parentId: "parent-missing",
     }),
   );
+  const metadataMissingResult = resolveDiscordThreadStarter(
+    resolverParams({
+      rest,
+      accountId: "proof-account-a",
+      threadId: "thread-missing-metadata",
+      parentType: ChannelType.GuildText,
+    }),
+  );
+  const metadataAwareResult = resolveDiscordThreadStarter(
+    resolverParams({
+      rest,
+      accountId: "proof-account-a",
+      threadId: "thread-missing-metadata",
+      parentId: "parent-missing",
+      parentType: ChannelType.GuildText,
+    }),
+  );
+  const [metadataMissing, metadataAware] = await Promise.all([
+    metadataMissingResult,
+    metadataAwareResult,
+  ]);
+  const metadataAwareGets = api.calls.filter((call) =>
+    call.path.endsWith("parent-missing/messages/thread-missing-metadata"),
+  );
   const missingGets = api.calls.filter((call) =>
     call.path.endsWith("parent-missing/messages/thread-missing"),
   );
@@ -260,6 +285,9 @@ try {
     missingSameThreadOtherAccount === null &&
     sameAccountMissingGets === 1 &&
     missingGets.length === 2 &&
+    metadataMissing === null &&
+    metadataAware === null &&
+    metadataAwareGets.length === 1 &&
     validFirst?.text === "Real Discord starter" &&
     validSecond?.text === "Real Discord starter" &&
     validGets.length === 1;
@@ -276,6 +304,11 @@ try {
           sameAccountDiscordGetCalls: sameAccountMissingGets,
           accountScopedOtherAccountGetCalls: 1,
           totalDiscordGetCalls: missingGets.length,
+        },
+        metadataFailure: {
+          missingMetadataResult: metadataMissing,
+          metadataAwareResult: metadataAware,
+          discordGetCalls: metadataAwareGets.length,
         },
         validStarter: {
           firstText: validFirst?.text,

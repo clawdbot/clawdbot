@@ -118,11 +118,15 @@ export async function resolveDiscordThreadStarter(params: {
   if (cached) {
     return cached.kind === "hit" ? cached.starter : null;
   }
+  const messageChannelId = resolveDiscordThreadStarterMessageChannelId(params);
+  if (!messageChannelId) {
+    return null;
+  }
   const inFlight = IN_FLIGHT_DISCORD_THREAD_STARTERS.get(cacheKey);
   if (inFlight) {
     return inFlight;
   }
-  const pending = resolveDiscordThreadStarterUncached(params, cacheKey);
+  const pending = resolveDiscordThreadStarterUncached(params, cacheKey, messageChannelId);
   IN_FLIGHT_DISCORD_THREAD_STARTERS.set(cacheKey, pending);
   try {
     return await pending;
@@ -136,15 +140,12 @@ export async function resolveDiscordThreadStarter(params: {
 async function resolveDiscordThreadStarterUncached(
   params: Parameters<typeof resolveDiscordThreadStarter>[0],
   cacheKey: string,
+  messageChannelId: string,
 ): Promise<DiscordThreadStarter | null> {
   const cacheMiss = () => {
     setCachedThreadStarter(cacheKey, { kind: "miss" }, Date.now());
   };
   try {
-    const messageChannelId = resolveDiscordThreadStarterMessageChannelId(params);
-    if (!messageChannelId) {
-      return null;
-    }
     const starter = await fetchDiscordThreadStarterMessage({
       client: params.client,
       messageChannelId,

@@ -257,6 +257,25 @@ describe("resolveDiscordThreadStarter", () => {
     expect(get).toHaveBeenCalledOnce();
   });
 
+  it("does not coalesce missing metadata with a lookup that has a parent id", async () => {
+    const get = vi.fn().mockResolvedValue(createStarterMessage({ content: "resolved" }));
+    const client = { rest: { get } } as unknown as Client;
+    const params = {
+      channel: { id: `metadata-single-flight-${++threadIdIndex}` },
+      client,
+      accountId: "test-account",
+      parentType: ChannelType.GuildText,
+      resolveTimestampMs: () => undefined,
+    };
+
+    const missingMetadata = resolveDiscordThreadStarter(params);
+    const completeMetadata = resolveDiscordThreadStarter({ ...params, parentId: "parent-1" });
+
+    await expect(missingMetadata).resolves.toBeNull();
+    await expect(completeMetadata).resolves.toMatchObject({ text: "resolved" });
+    expect(get).toHaveBeenCalledOnce();
+  });
+
   it("does not negative-cache transient REST failures", async () => {
     const get = vi
       .fn()
