@@ -52,7 +52,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-56 plugins
+57 plugins
 
 - **[active-memory](/plugins/reference/active-memory)** (`openclaw`) - included in OpenClaw. Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.
 
@@ -91,6 +91,8 @@ Each entry lists the package, distribution route, and description.
 - **[fal](/plugins/reference/fal)** (`@openclaw/fal-provider`) - included in OpenClaw. Adds fal model provider support to OpenClaw.
 
 - **[file-transfer](/plugins/reference/file-transfer)** (`@openclaw/file-transfer`) - included in OpenClaw. Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.
+
+- **[geolocation](/plugins/reference/geolocation)** (`@openclaw/geolocation-plugin`) - included in OpenClaw. Resolves client IP addresses to a coarse city using a locally cached IP-geolocation database.
 
 - **[github-copilot](/plugins/reference/github-copilot)** (`@openclaw/github-copilot-provider`) - included in OpenClaw. Adds GitHub Copilot model provider support to OpenClaw.
 

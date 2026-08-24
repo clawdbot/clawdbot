@@ -552,6 +552,25 @@ openclaw-activity-page {
   font-weight: 600;
 }
 
+.activity-feed__device-location {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The credit is a license term for the default database, so it stays visible
+   next to the value it describes rather than living in a settings page. */
+.activity-feed__device-attribution {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__device-attribution:hover,
+.activity-feed__device-attribution:focus-visible {
+  color: var(--text);
+}
+
 .activity-feed__viewing {
   margin-top: var(--space-4);
 }
