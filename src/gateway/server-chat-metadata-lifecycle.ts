@@ -79,6 +79,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
           return;
         }
         preparedModelRuntimeAvailable = true;
+        runtime.invalidate();
         refreshLogged();
       });
     const unregisterSkillsChange = registerSkillsChangeListener(() => {

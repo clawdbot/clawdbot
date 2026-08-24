@@ -100,7 +100,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("models.list");
       await page.locator("#new-session-where-trigger").click();
 
       const profile = page.locator('[data-value="cloud:aws"]');

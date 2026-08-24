@@ -5,7 +5,7 @@ import type {
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { peekChatMetadata, revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
+import { loadModels, revalidateModels } from "../../lib/chat/model-catalog-store.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
@@ -138,9 +138,8 @@ export class NewSessionModelControl {
   }
 
   private cancelMetadataRequest() {
-    if (!this.activeMetadataRequest) {
-      return;
-    }
+    // Prepared and readiness reads share this generation. Advance it even after
+    // readiness settles so owner changes fence a late prepared response.
     this.activeMetadataRequest = undefined;
     this.metadataRequestId += 1;
   }
@@ -244,27 +243,41 @@ export class NewSessionModelControl {
       client,
       id: requestId,
     };
-    const cached = peekChatMetadata(client, agentId);
-    if (Array.isArray(cached?.models)) {
-      this.publishMetadataCatalog(cached.models, "refreshing");
-    } else {
-      this.updateMetadataState({
-        ...this.metadataState,
-        status: this.metadataState.hasSnapshot ? "refreshing" : "loading",
-      });
-    }
+    this.updateMetadataState({
+      ...this.metadataState,
+      status: this.metadataState.hasSnapshot ? "refreshing" : "loading",
+    });
+    // Prepared rows remain usable while the readiness-confirmed request waits for runtime
+    // publication. This projection never marks or caches the catalog as ready.
+    void loadModels(client, { agentId, preparedOnly: true }).then(
+      (catalog) => {
+        if (this.metadataRequestId !== requestId || this.metadataState.hasSnapshot) {
+          return;
+        }
+        this.metadataState = {
+          catalog,
+          hasSnapshot: true,
+          status: this.metadataState.status === "error" ? "error" : "refreshing",
+        };
+        this.notify();
+      },
+      () => undefined,
+    );
 
-    void revalidateChatMetadata(client, agentId, {
+    void revalidateModels(client, {
+      agentId,
+      preparedOnly: true,
+      waitForRuntimeDiscovery: true,
       startupRetryWindowMs: 60_000,
     }).then(
-      (result) => {
+      (catalog) => {
         // Only the request that still owns the control may publish catalog data
         // or restore preferences.
         if (this.activeMetadataRequest?.id !== requestId) {
           return;
         }
         this.activeMetadataRequest = undefined;
-        this.publishMetadataCatalog(Array.isArray(result.models) ? result.models : [], "ready");
+        this.publishMetadataCatalog(catalog, "ready");
       },
       () => {
         if (this.activeMetadataRequest?.id !== requestId) {
@@ -409,6 +422,8 @@ export class NewSessionModelControl {
       this.notify();
       return;
     }
+    // New Session is an automatic hot path. It may reproject the published
+    // generation, but provider discovery belongs to explicit/background owners.
     this.startMetadataRequest(client, normalizedAgentId);
   }
 
@@ -473,8 +488,10 @@ export class NewSessionModelControl {
         );
     const targetEntry = selectedTarget?.entry ?? defaultTarget?.entry;
     const authoritativeLevels = selected
-      ? targetEntry?.thinkingLevels
-      : (options.agent?.thinkingLevels ?? defaults?.thinkingLevels ?? targetEntry?.thinkingLevels);
+      ? selectedTarget?.entry?.thinkingLevels
+      : (defaultTarget?.entry?.thinkingLevels ??
+        options.agent?.thinkingLevels ??
+        defaults?.thinkingLevels);
     const normalizedThinking = normalizeThinkingOptionValue(thinkingLevel);
     const supported = authoritativeLevels?.some(
       (level) => normalizeThinkingOptionValue(level.id) === normalizedThinking,
@@ -572,10 +589,16 @@ export class NewSessionModelControl {
       model: defaultTarget?.model ?? sourceResult?.defaults.model ?? null,
       contextTokens: sourceResult?.defaults.contextTokens ?? null,
       agentRuntime: options.agent?.agentRuntime ?? sourceResult?.defaults.agentRuntime,
-      thinkingLevels: options.agent?.thinkingLevels ?? sourceResult?.defaults.thinkingLevels,
+      thinkingLevels:
+        defaultTarget?.entry?.thinkingLevels ??
+        options.agent?.thinkingLevels ??
+        sourceResult?.defaults.thinkingLevels,
       thinkingOptions: options.agent?.thinkingOptions ?? sourceResult?.defaults.thinkingOptions,
       thinkingDefault:
-        options.agent?.thinkingDefault ?? sourceResult?.defaults.thinkingDefault ?? "medium",
+        defaultTarget?.entry?.thinkingDefault ??
+        options.agent?.thinkingDefault ??
+        sourceResult?.defaults.thinkingDefault ??
+        "medium",
     };
     return renderChatModelControls({
       activeRunId: null,

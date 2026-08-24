@@ -20,6 +20,26 @@ const authLoaderBySnapshot = new WeakMap<
   (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>
 >();
 
+/** Keeps private auth bindings on immutable projections of the same owner generation. */
+export function inheritPreparedModelRuntimeAuthState<T extends object>(
+  target: T,
+  source: object,
+): T {
+  const authStore = authStoreBySnapshot.get(source);
+  const materializations = materializationsBySnapshot.get(source);
+  const authLoader = authLoaderBySnapshot.get(source);
+  if (authStore) {
+    authStoreBySnapshot.set(target, authStore);
+  }
+  if (materializations) {
+    materializationsBySnapshot.set(target, materializations);
+  }
+  if (authLoader) {
+    authLoaderBySnapshot.set(target, authLoader);
+  }
+  return target;
+}
+
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
 export function setPreparedModelRuntimeAuthStore(
   snapshot: object,

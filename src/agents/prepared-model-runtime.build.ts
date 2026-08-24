@@ -39,6 +39,7 @@ import {
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
+  PreparedModelRuntimeDiscovery,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -48,11 +49,15 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 
 const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
 const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
+const MAX_CONCURRENT_RUNTIME_DISCOVERY_BUILDS = 2;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
+const limitRuntimeDiscoveryBuild = pLimit(MAX_CONCURRENT_RUNTIME_DISCOVERY_BUILDS);
 
 type PreparedModelRuntimeCatalogAccess = Readonly<{
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
   loadFullModelCatalog: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
+  readRuntimeDiscovery: () => PreparedModelRuntimeDiscovery | undefined;
+  loadRuntimeDiscoveryCatalog: (providerIds: readonly string[]) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
 type PreparedModelRuntimeBuildGuards =
@@ -144,13 +149,38 @@ function createFullModelCatalogAccess(params: {
   };
   // Construction is lazy: automatic prepared reads do not start a thread. The first explicit
   // request initializes one registry and reuses that exact plugin generation until retirement.
-  const worker = createPreparedModelCatalogWorker({
-    input: createPreparedModelCatalogWorkerInput({
-      agentFacts: params.agentFacts,
-      pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-    }),
-    isCurrent: params.isCurrent,
-  });
+  const createWorker = (providerDiscoveryProviderIds?: readonly string[]) =>
+    createPreparedModelCatalogWorker({
+      input: createPreparedModelCatalogWorkerInput({
+        agentFacts: params.agentFacts,
+        pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+        ...(providerDiscoveryProviderIds ? { providerDiscoveryProviderIds } : {}),
+      }),
+      isCurrent: params.isCurrent,
+    });
+  const worker = createWorker();
+  let runtimeDiscoveryKey: string | undefined;
+  let runtimeDiscoveryWorker: ReturnType<typeof createWorker> | undefined;
+  let runtimeDiscovery: PreparedModelRuntimeDiscovery | undefined;
+  let pendingRuntimeDiscoveryCatalog: Promise<ModelCatalogSnapshot> | undefined;
+  const loadCatalog = (
+    catalogWorker: ReturnType<typeof createPreparedModelCatalogWorker>,
+    limit: typeof limitFullModelCatalogBuild,
+  ) =>
+    runSerializedPreparedModelRuntimeTask({
+      agentDir: params.agentFacts.input.agentDir,
+      agentBuildCompletions: params.agentBuildCompletions,
+      isCurrent: params.isCurrent,
+      task: async () =>
+        await limit(async () => {
+          // Same-agent builds serialize so a stale plan cannot overlap a replacement. The
+          // supplied process limiter bounds cross-agent full or runtime-discovery fanout.
+          assertCurrent();
+          const catalog = await catalogWorker.loadCatalog();
+          assertCurrent();
+          return catalog;
+        }),
+    });
   return {
     loadAuth: ({ providerIds, profileIds }) => {
       const key = [...new Set(providerIds)]
@@ -197,21 +227,7 @@ function createFullModelCatalogAccess(params: {
         return Promise.resolve(fullCatalog);
       }
       if (!pending) {
-        const build = runSerializedPreparedModelRuntimeTask({
-          agentDir: params.agentFacts.input.agentDir,
-          agentBuildCompletions: params.agentBuildCompletions,
-          isCurrent: params.isCurrent,
-          task: async () =>
-            await limitFullModelCatalogBuild(async () => {
-              // Full inventory belongs to explicit control-plane reads. The generation queue
-              // prevents a stale plan from overlapping or following a replacement build.
-              assertCurrent();
-              const catalog = await worker.loadCatalog();
-              assertCurrent();
-              return catalog;
-            }),
-        });
-        pending = build
+        pending = loadCatalog(worker, limitFullModelCatalogBuild)
           .then((catalog) => {
             fullCatalog = catalog;
             return catalog;
@@ -221,6 +237,78 @@ function createFullModelCatalogAccess(params: {
           });
       }
       return pending;
+    },
+    readRuntimeDiscovery: () => {
+      assertCurrent();
+      return runtimeDiscovery;
+    },
+    loadRuntimeDiscoveryCatalog: (providerDiscoveryProviderIds) => {
+      try {
+        assertCurrent();
+      } catch (error) {
+        return Promise.reject(toStringifiedError(error));
+      }
+      const normalizedProviderIds = [
+        ...new Set(providerDiscoveryProviderIds.map(normalizeProviderId).filter(Boolean)),
+      ].toSorted((left, right) => left.localeCompare(right));
+      if (normalizedProviderIds.length === 0) {
+        return Promise.reject(new Error("runtime discovery requires at least one provider"));
+      }
+      const key = normalizedProviderIds.join("\0");
+      if (runtimeDiscoveryKey && runtimeDiscoveryKey !== key) {
+        return Promise.reject(new Error("runtime discovery scope changed within generation"));
+      }
+      runtimeDiscoveryKey = key;
+      runtimeDiscoveryWorker ??= createWorker(normalizedProviderIds);
+      if (runtimeDiscovery?.pendingProviderIds.length === 0) {
+        return Promise.resolve(runtimeDiscovery.catalog);
+      }
+      if (!pendingRuntimeDiscoveryCatalog) {
+        const activeWorker = runtimeDiscoveryWorker;
+        const runtimePending = loadCatalog(activeWorker, limitRuntimeDiscoveryBuild)
+          .then((catalog) => {
+            const reportedProviderIds = new Set<string>();
+            const unavailableProviderIds = new Set<string>();
+            for (const outcome of catalog.providerOutcomes ?? []) {
+              const providerId = normalizeProviderId(outcome.provider);
+              if (!providerId) {
+                continue;
+              }
+              reportedProviderIds.add(providerId);
+              if (outcome.status === "unavailable") {
+                unavailableProviderIds.add(providerId);
+              }
+            }
+            // A partial catalog can publish, but not become prepared-ready before every selected
+            // provider reports a terminal outcome; otherwise New Session caches incomplete rows.
+            const pendingProviderIds = normalizedProviderIds.filter(
+              (providerId) =>
+                !reportedProviderIds.has(providerId) || unavailableProviderIds.has(providerId),
+            );
+            runtimeDiscovery = { catalog, pendingProviderIds };
+            if (pendingProviderIds.length === 0) {
+              // The runtime publication is newer than any full control-plane cache. Drop that
+              // cache so prepared reads cannot keep serving its pre-recovery provider snapshot.
+              fullCatalog = undefined;
+            }
+            return catalog;
+          })
+          .catch((error: unknown) => {
+            // A crashed or timed-out worker latches its error. Drop only terminal workers so the
+            // lifecycle retry creates a fresh process while ordinary provider failures reuse one.
+            if (activeWorker.isTerminal() && runtimeDiscoveryWorker === activeWorker) {
+              runtimeDiscoveryWorker = undefined;
+            }
+            throw error;
+          })
+          .finally(() => {
+            if (pendingRuntimeDiscoveryCatalog === runtimePending) {
+              pendingRuntimeDiscoveryCatalog = undefined;
+            }
+          });
+        pendingRuntimeDiscoveryCatalog = runtimePending;
+      }
+      return pendingRuntimeDiscoveryCatalog;
     },
   };
 }
@@ -258,6 +346,8 @@ function createSnapshot(
     modelCatalog,
     readFullModelCatalog: catalogAccess.readFullModelCatalog,
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
+    readRuntimeDiscovery: catalogAccess.readRuntimeDiscovery,
+    loadRuntimeDiscoveryCatalog: catalogAccess.loadRuntimeDiscoveryCatalog,
     configuredRuntimeModels,
     inlineProviderModels,
     createStores,

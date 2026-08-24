@@ -43,7 +43,7 @@ const GatewayAgentRuntimeSchema = closedObject({
   ]),
 });
 
-const GatewayThinkingLevelOptionSchema = closedObject({
+export const GatewayThinkingLevelOptionSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
 });
@@ -266,6 +266,8 @@ export const ModelsListParamsSchema = Type.Object(
     includeProviderCapabilities: Type.Optional(Type.Boolean()),
     /** Reuse prepared/cached facts without starting provider discovery. */
     preparedOnly: Type.Optional(Type.Boolean()),
+    /** Return retryable unavailable until post-ready runtime discovery publishes. */
+    waitForRuntimeDiscovery: Type.Optional(Type.Boolean()),
     /** Force replacement of a completed full-catalog generation. */
     refresh: Type.Optional(Type.Boolean()),
     view: Type.Optional(
@@ -279,10 +281,28 @@ export const ModelsListParamsSchema = Type.Object(
   },
   {
     additionalProperties: false,
-    not: {
-      properties: { preparedOnly: { const: true }, refresh: { const: true } },
-      required: ["preparedOnly", "refresh"],
-    },
+    allOf: [
+      {
+        not: {
+          properties: { preparedOnly: { const: true }, refresh: { const: true } },
+          required: ["preparedOnly", "refresh"],
+        },
+      },
+      {
+        anyOf: [
+          {
+            not: {
+              properties: { waitForRuntimeDiscovery: { const: true } },
+              required: ["waitForRuntimeDiscovery"],
+            },
+          },
+          {
+            properties: { preparedOnly: { const: true } },
+            required: ["preparedOnly"],
+          },
+        ],
+      },
+    ],
   },
 );
 

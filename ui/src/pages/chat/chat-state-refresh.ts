@@ -6,6 +6,7 @@ import {
   rememberChatMetadata,
   type ChatMetadataResult,
 } from "../../lib/chat/chat-metadata-store.ts";
+import { loadModels } from "../../lib/chat/model-catalog-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -20,7 +21,6 @@ import {
 } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { loadModels } from "./models.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,

@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { GatewayThinkingLevelOptionSchema } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
@@ -151,6 +152,10 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    thinkingLevel: Type.Optional(NonEmptyString),
+    thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
+    thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
+    thinkingDefault: Type.Optional(NonEmptyString),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },

@@ -16,6 +16,27 @@ const catalogRetryProofDir = path.join(
   "control-ui-e2e",
   "new-session-catalog-retry",
 );
+const dynamicCatalogProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "new-session-dynamic-catalog",
+);
+const configuredCatalogParams = {
+  agentId: "main",
+  preparedOnly: true,
+  view: "configured",
+  waitForRuntimeDiscovery: true,
+};
+
+function configuredCatalogRequests(
+  requests: Array<{ params?: unknown }>,
+): Array<{ params?: unknown }> {
+  return requests.filter(
+    ({ params }) =>
+      (params as { waitForRuntimeDiscovery?: unknown } | null)?.waitForRuntimeDiscovery === true,
+  );
+}
 
 function catalogDiscoveryRequests(
   requests: Array<{ params?: unknown }>,
@@ -92,7 +113,105 @@ suite.define(() => {
     }
   });
 
-  it("shows metadata failure truthfully and recovers when the picker opens", async () => {
+  it("uses the configured catalog for dynamically discovered New Session reasoning", async () => {
+    if (captureCatalogRetryProof) {
+      await mkdir(dynamicCatalogProofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureCatalogRetryProof
+        ? { recordVideo: { dir: dynamicCatalogProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const offOnlyMetadata = {
+      available: true,
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "omniroute",
+      reasoning: true,
+      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingDefault: "off",
+    };
+    const dynamicallyDiscoveredModel = {
+      ...offOnlyMetadata,
+      thinkingDefault: "high",
+      thinkingLevels: ["off", "low", "medium", "high", "xhigh"].map((id) => ({
+        id,
+        label: id,
+      })),
+    };
+    const gateway = await installMockGateway(page, {
+      agentModel: "omniroute/auto",
+      methodResponses: {
+        "chat.metadata": { commands: [], models: [offOnlyMetadata] },
+        "models.list": { models: [dynamicallyDiscoveredModel] },
+      },
+      models: [offOnlyMetadata],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+
+      await expect
+        .poll(
+          async () => configuredCatalogRequests(await gateway.getRequests("models.list")).length,
+        )
+        .toBeGreaterThanOrEqual(1);
+      const firstCatalogRequest = configuredCatalogRequests(
+        await gateway.getRequests("models.list"),
+      )[0];
+      expect(firstCatalogRequest?.params).toEqual(configuredCatalogParams);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await expect
+        .poll(() => page.locator('[data-chat-model-option="omniroute/deepseek-v4-flash"]').count())
+        .toBe(1);
+      await page.locator('[data-chat-model-option="omniroute/deepseek-v4-flash"]').click();
+      await expect.poll(() => modelSelect.textContent()).toContain("DeepSeek V4 Flash");
+
+      const effortSelect = page.locator('[data-chat-thinking-select="true"]');
+      await effortSelect.click();
+      const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe("off,low,medium,high,xhigh");
+      if (captureCatalogRetryProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(dynamicCatalogProofDir, "new-session-dynamic-catalog.png"),
+        });
+      }
+
+      await page.reload();
+      await expect
+        .poll(
+          async () => configuredCatalogRequests(await gateway.getRequests("models.list")).length,
+        )
+        .toBeGreaterThanOrEqual(1);
+      const reloadedCatalogRequest = configuredCatalogRequests(
+        await gateway.getRequests("models.list"),
+      ).at(-1);
+      expect(reloadedCatalogRequest?.params).toEqual(configuredCatalogParams);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await modelSelect.click();
+      await page.locator('[data-chat-model-option="omniroute/deepseek-v4-flash"]').click();
+      await expect.poll(() => modelSelect.textContent()).toContain("DeepSeek V4 Flash");
+      await effortSelect.click();
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe("off,low,medium,high,xhigh");
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows model-catalog failure truthfully and recovers when the picker opens", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -119,19 +238,17 @@ suite.define(() => {
         provider: "openai",
       },
     ];
+    const unavailable = {
+      __mockError: {
+        code: "UNAVAILABLE",
+        message: "metadata request timed out",
+      },
+    };
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-luna",
       methodResponses: {
-        "chat.metadata": {
-          sequence: [
-            {
-              __mockError: {
-                code: "UNAVAILABLE",
-                message: "metadata request timed out",
-              },
-            },
-            { commands: [], models },
-          ],
+        "models.list": {
+          sequence: [unavailable, unavailable, { models }, { models }],
         },
       },
       models,
@@ -139,7 +256,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("chat.metadata");
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       const errorState = page.locator('[data-chat-model-catalog-state="error"]');
@@ -151,10 +268,9 @@ suite.define(() => {
 
       await modelSelect.click();
 
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-      expect((await gateway.getRequests("chat.metadata"))[1]?.params).toMatchObject({
-        agentId: "main",
-      });
+      await expect
+        .poll(async () => configuredCatalogRequests(await gateway.getRequests("models.list")))
+        .toHaveLength(2);
       await expect.poll(() => page.locator("[data-chat-model-option]").count()).toBe(3);
       expect(await page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
     } finally {
@@ -162,7 +278,7 @@ suite.define(() => {
     }
   });
 
-  it("restores the model picker after startup-sidecars metadata becomes available", async () => {
+  it("restores the model picker after startup-sidecars catalog becomes available", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -177,27 +293,32 @@ suite.define(() => {
       reasoning: true,
     };
     const gateway = await installMockGateway(page, {
+      deferredMethods: ["models.list", "models.list"],
       methodResponses: {
-        "chat.metadata": {
-          sequence: [
-            {
-              __mockError: {
-                code: "UNAVAILABLE",
-                details: { reason: "startup-sidecars" },
-                message: "gateway startup sidecars are still initializing",
-                retryable: true,
-                retryAfterMs: 100,
-              },
-            },
-            { commands: [], models: [recoveredModel] },
-          ],
-        },
+        "models.list": { models: [recoveredModel] },
       },
     });
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      const initialRequests = await gateway.getRequests("models.list");
+      expect(initialRequests[0]?.params).toEqual({
+        agentId: "main",
+        preparedOnly: true,
+        view: "configured",
+      });
+      expect(initialRequests[1]?.params).toEqual(configuredCatalogParams);
+      await gateway.resolveDeferred("models.list", { models: [recoveredModel] });
+      await gateway.rejectDeferred("models.list", {
+        code: "UNAVAILABLE",
+        details: { reason: "startup-sidecars" },
+        message: "gateway startup sidecars are still initializing",
+        retryable: true,
+      });
+      await expect
+        .poll(async () => configuredCatalogRequests(await gateway.getRequests("models.list")))
+        .toHaveLength(2);
 
       const modelSelect = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
@@ -208,11 +329,13 @@ suite.define(() => {
         .toContain(recoveredModel.name);
 
       // The picker's own revalidation lands after the rows render, so wait for it.
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
-      expect(await gateway.getRequests("chat.metadata")).toEqual([
-        expect.objectContaining({ params: { agentId: "main" } }),
-        expect.objectContaining({ params: { agentId: "main" } }),
-        expect.objectContaining({ params: { agentId: "main" } }),
+      await expect
+        .poll(async () => configuredCatalogRequests(await gateway.getRequests("models.list")))
+        .toHaveLength(3);
+      expect(configuredCatalogRequests(await gateway.getRequests("models.list"))).toEqual([
+        expect.objectContaining({ params: configuredCatalogParams }),
+        expect.objectContaining({ params: configuredCatalogParams }),
+        expect.objectContaining({ params: configuredCatalogParams }),
       ]);
     } finally {
       await context.close();
@@ -250,7 +373,6 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
       featureMethods: [
-        "chat.metadata",
         "chat.startup",
         "sessions.create",
         "sessions.dispatch",
@@ -298,7 +420,9 @@ suite.define(() => {
         ),
       ).toBe("GPT-5.6 Luna");
       expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      await expect
+        .poll(async () => configuredCatalogRequests(await gateway.getRequests("models.list")))
+        .toHaveLength(2);
       if (captureCatalogRetryProof) {
         await page.screenshot({
           animations: "disabled",
@@ -336,7 +460,9 @@ suite.define(() => {
           catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
         )
         .toHaveLength(3);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      await expect
+        .poll(async () => configuredCatalogRequests(await gateway.getRequests("models.list")))
+        .toHaveLength(3);
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);

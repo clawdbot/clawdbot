@@ -237,7 +237,11 @@ function renderCatalogState(
   errorLabel = t("chat.modelControls.modelsUnavailable"),
   retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
 ) {
-  if (!state || (state.status === "ready" && hasSelectableOptions)) {
+  if (
+    !state ||
+    (state.status === "ready" && hasSelectableOptions) ||
+    (state.status === "refreshing" && hasOptions)
+  ) {
     return nothing;
   }
   if (state.status === "error" && hasOptions) {

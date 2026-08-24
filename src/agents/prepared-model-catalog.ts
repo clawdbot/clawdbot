@@ -15,6 +15,7 @@ import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalo
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
 import {
   getPreparedModelRuntimeAuthMaterializations,
+  inheritPreparedModelRuntimeAuthState,
   loadPreparedModelRuntimeAuth,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
@@ -26,9 +27,11 @@ import {
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
+  isPreparedRuntimeDiscoveryPending,
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
+  readPreparedRuntimeDiscoveryState,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -72,12 +75,19 @@ async function materializeRequestedModelCatalog(
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
+  const runtimeDiscovery =
+    readOnly === true ? readPreparedRuntimeDiscoveryState(snapshot) : undefined;
   const modelCatalog =
     readOnly === true
-      ? snapshot.readFullModelCatalog?.()
+      ? (runtimeDiscovery?.catalog ?? snapshot.readFullModelCatalog?.())
       : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true });
   if (!modelCatalog) {
-    return snapshot;
+    return runtimeDiscovery
+      ? inheritPreparedModelRuntimeAuthState(
+          Object.freeze({ ...snapshot, runtimeDiscoveryPending: runtimeDiscovery.pending }),
+          snapshot,
+        )
+      : snapshot;
   }
   const fullAuth = getPreparedModelFullCatalogAuth(modelCatalog);
   if (!fullAuth) {
@@ -87,6 +97,7 @@ async function materializeRequestedModelCatalog(
     ...snapshot,
     authModes: fullAuth.authModes,
     modelCatalog,
+    ...(runtimeDiscovery ? { runtimeDiscoveryPending: runtimeDiscovery.pending } : {}),
   });
   setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
   // Later explicit auth refreshes stay bound to the original owner generation. Ordinary reads
@@ -203,6 +214,15 @@ export function getPublishedPreparedModelCatalogOwnerSnapshot(
   return getPreparedModelRuntimeSnapshot(activationFull);
 }
 
+/** Reports whether prepared-only reads must wait for post-ready runtime discovery. */
+export function isPreparedModelRuntimeDiscoveryPending(params: {
+  agentId: string;
+  config: OpenClawConfig;
+}): boolean {
+  const owner = getPublishedPreparedModelCatalogOwnerSnapshot(params);
+  return owner ? isPreparedRuntimeDiscoveryPending(owner) : false;
+}
+
 /** Returns the configured catalog for the current generation without starting discovery. */
 export function getPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
@@ -215,7 +235,14 @@ export function getAvailablePreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): ModelCatalogSnapshot | undefined {
   const owner = getPreparedModelCatalogOwnerSnapshot(params);
-  return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
+  if (!owner) {
+    return undefined;
+  }
+  return (
+    readPreparedRuntimeDiscoveryState(owner).catalog ??
+    owner.readFullModelCatalog?.() ??
+    owner.modelCatalog
+  );
 }
 
 async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(

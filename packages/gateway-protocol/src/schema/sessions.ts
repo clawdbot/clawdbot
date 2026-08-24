@@ -8,7 +8,7 @@ import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
-import { SessionOwnerSchema } from "./sessions-row.js";
+import { SessionOwnerSchema, SessionRowSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
@@ -493,6 +493,7 @@ export const SessionsCreateResultSchema = Type.Object(
     key: NonEmptyString,
     sessionId: Type.Optional(NonEmptyString),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    session: Type.Optional(SessionRowSchema),
     runStarted: Type.Optional(Type.Boolean()),
     runId: Type.Optional(NonEmptyString),
     messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),

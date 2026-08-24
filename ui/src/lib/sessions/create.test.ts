@@ -20,18 +20,32 @@ describe("requestSessionCreate", () => {
         runStarted: true,
         runId: "initial-send-id",
         messageSeq: 7,
+        session: {
+          key: "agent:main:dashboard:new",
+          kind: "direct",
+          thinkingLevel: "xhigh",
+        },
       })),
     };
 
     await expect(requestSessionCreate(client as never, { message: "hello" })).resolves.toEqual({
       key: "agent:main:dashboard:new",
+      session: {
+        key: "agent:main:dashboard:new",
+        kind: "direct",
+        thinkingLevel: "xhigh",
+      },
       initialRun: { status: "started", runId: "initial-send-id", messageSeq: 7 },
     });
   });
 
   it("keeps an idle session distinct from a rejected initial run", async () => {
     const idleClient = {
-      request: vi.fn(async () => ({ key: "agent:main:dashboard:idle", runStarted: false })),
+      request: vi.fn(async () => ({
+        key: "agent:main:dashboard:idle",
+        runStarted: false,
+        session: { key: "agent:main:dashboard:other", kind: "direct" },
+      })),
     };
     const rejectedClient = {
       request: vi.fn(async () => ({

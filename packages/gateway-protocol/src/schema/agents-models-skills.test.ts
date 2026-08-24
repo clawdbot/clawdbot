@@ -225,6 +225,13 @@ describe("ModelsListParamsSchema", () => {
         preparedOnly: true,
       },
       {
+        preparedOnly: true,
+        waitForRuntimeDiscovery: true,
+      },
+      {
+        waitForRuntimeDiscovery: false,
+      },
+      {
         refresh: true,
         view: "all",
       },
@@ -234,6 +241,8 @@ describe("ModelsListParamsSchema", () => {
       { view: "provider-route" },
       { agentId: "" },
       { preparedOnly: true, refresh: true },
+      { waitForRuntimeDiscovery: true },
+      { preparedOnly: false, waitForRuntimeDiscovery: true },
     );
   });
 });

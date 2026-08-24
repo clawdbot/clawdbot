@@ -10,6 +10,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function modelListCalls(request: ReturnType<typeof vi.fn>) {
+  return request.mock.calls.filter(([method]) => method === "models.list");
+}
+
+function expectInitialModelListCalls(request: ReturnType<typeof vi.fn>, agentId = "main") {
+  expect(modelListCalls(request).map(([, params]) => params)).toEqual([
+    { agentId, preparedOnly: true, view: "configured" },
+    {
+      agentId,
+      preparedOnly: true,
+      view: "configured",
+      waitForRuntimeDiscovery: true,
+    },
+  ]);
+}
+
 describe("new-session model runtime", () => {
   it.each([
     {
@@ -108,7 +124,8 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", false);
 
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(modelListCalls(request)).toHaveLength(2));
+    expectInitialModelListCalls(request);
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.list", expect.anything());
     expect(
       renderControl(control, context).querySelector("[data-chat-model-target-group]"),
@@ -185,14 +202,20 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(modelListCalls(request)).toHaveLength(2));
 
     const container = renderControl(control, context);
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     picker!.open = true;
     picker!.dispatchEvent(new Event("toggle"));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(3));
+    expect(modelListCalls(request).at(-1)?.[1]).toEqual({
+      agentId: "main",
+      preparedOnly: true,
+      view: "configured",
+      waitForRuntimeDiscovery: true,
+    });
 
     expect(request.mock.calls.some(([method]) => method === "sessions.catalog.list")).toBe(false);
     expect(container.querySelector("[data-chat-model-target-group]")).toBeNull();
@@ -276,18 +299,20 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
 
     expect(control.isRestoringPreference()).toBe(false);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(modelListCalls(request)).toHaveLength(2));
   });
 
   it("renders initial metadata loading without synthesizing the configured default", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
-    request.mockReturnValueOnce(pending.promise);
+    const ready = deferred<{ models: ModelCatalogEntry[] }>();
+    request.mockReturnValueOnce(pending.promise).mockReturnValueOnce(ready.promise);
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
 
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(modelListCalls(request)).toHaveLength(2));
+    expectInitialModelListCalls(request);
     const container = renderControl(control, context);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "Loading models",
@@ -297,9 +322,10 @@ describe("new-session model runtime", () => {
     ).toBe("true");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     pending.resolve({ models: [] });
+    ready.resolve({ models: [] });
   });
 
-  it("does not auth-block a cached all-cold catalog until revalidation completes", async () => {
+  it("keeps a cached all-cold catalog pending until revalidation completes", async () => {
     const models: ModelCatalogEntry[] = [
       {
         id: "gpt-5.6-luna",
@@ -320,14 +346,12 @@ describe("new-session model runtime", () => {
     remountedControl.load(context, "main", true, { agent });
 
     let container = renderControl(remountedControl, context, "main", agent);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
+    expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
     expect(remountedControl.isModelUnavailable(agent)).toBe(false);
     expect(container.textContent).not.toContain(
       "Authentication failed. Review the provider credential or sign-in, then retry.",
     );
-    expect(
-      container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
-    ).not.toBeNull();
+    expect(container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]')).toBeNull();
     refresh.resolve({ models });
     await vi.waitFor(() => expect(remountedControl.isModelUnavailable(agent)).toBe(true));
     container = renderControl(remountedControl, context, "main", agent);
@@ -343,7 +367,7 @@ describe("new-session model runtime", () => {
     ];
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
-    request.mockImplementationOnce((_method, _params, options?: { signal?: AbortSignal }) => {
+    request.mockImplementation((_method, _params, options?: { signal?: AbortSignal }) => {
       options?.signal?.addEventListener(
         "abort",
         () => pending.reject(new DOMException("metadata request aborted", "AbortError")),
@@ -353,7 +377,7 @@ describe("new-session model runtime", () => {
     });
     const firstControl = new NewSessionModelControl(() => undefined);
     firstControl.load(context, "main", true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(2));
 
     firstControl.reset();
     const remountedControl = new NewSessionModelControl(() => undefined);
@@ -367,7 +391,7 @@ describe("new-session model runtime", () => {
         container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
       ).not.toBeNull();
     });
-    expect(request).toHaveBeenCalledOnce();
+    expect(modelListCalls(request)).toHaveLength(2);
   });
 
   it("waits for selected-agent defaults after chat metadata resolves", async () => {
@@ -380,8 +404,8 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
+      expect(modelListCalls(request)).toHaveLength(2);
+      expect(notify).toHaveBeenCalledTimes(3);
     });
 
     let container = renderControl(control, context, "main", null);
@@ -428,8 +452,8 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
     await waitForFast(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
+      expect(modelListCalls(request)).toHaveLength(2);
+      expect(notify).toHaveBeenCalledTimes(3);
     });
 
     const container = renderControl(control, context, "main", {
@@ -475,7 +499,7 @@ describe("new-session model runtime", () => {
     ["request timeout", new Error("gateway request timeout for chat.metadata")],
   ])("renders %s as unavailable instead of a default-only catalog", async (_label, error) => {
     const { context, request } = contextWith([]);
-    request.mockRejectedValueOnce(error);
+    request.mockRejectedValueOnce(error).mockRejectedValueOnce(error);
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
@@ -502,7 +526,9 @@ describe("new-session model runtime", () => {
       { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
     ];
     const { context, request } = contextWith(models);
-    request.mockRejectedValueOnce(new Error("metadata unavailable"));
+    request
+      .mockRejectedValueOnce(new Error("metadata unavailable"))
+      .mockRejectedValueOnce(new Error("metadata unavailable"));
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
@@ -517,7 +543,7 @@ describe("new-session model runtime", () => {
     picker!.open = true;
     picker!.dispatchEvent(new Event("toggle"));
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(4));
     await vi.waitFor(() =>
       expect(
         renderControl(control, context).querySelectorAll("[data-chat-model-option]"),
@@ -544,7 +570,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(modelListCalls(request)).toHaveLength(2));
     await waitForFast(() => {
       const container = renderControl(control, context);
       expect(
@@ -651,20 +677,20 @@ describe("new-session model runtime", () => {
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", available: true },
     ];
     const { context, request } = contextWith(coldModels);
-    const control = new NewSessionModelControl(() => undefined);
+    const notify = vi.fn();
+    const control = new NewSessionModelControl(notify);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => {
+      expect(control.isModelUnavailable(agent)).toBe(true);
+      expect(modelListCalls(request)).toHaveLength(2);
+      expect(notify).toHaveBeenCalledTimes(3);
+    });
 
     request.mockRejectedValueOnce(new Error("refresh failed"));
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, context, "main", agent).querySelector(
-          "[data-chat-model-catalog-state]",
-        ),
-      ).toBeNull(),
-    );
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(3));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(5));
     let container = renderControl(control, context, "main", agent);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "GPT-5.6 Luna",
@@ -674,14 +700,8 @@ describe("new-session model runtime", () => {
 
     request.mockResolvedValueOnce({ models: availableModels });
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, context, "main", agent).querySelector(
-          "[data-chat-model-catalog-state]",
-        ),
-      ).toBeNull(),
-    );
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(4));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(7));
     expect(control.isModelUnavailable(agent)).toBe(false);
     container = renderControl(control, context, "main", agent);
     expect(
@@ -692,7 +712,9 @@ describe("new-session model runtime", () => {
 
   it("preserves the remembered pair when metadata validation fails", async () => {
     const { context, request } = contextWith([]);
-    request.mockRejectedValueOnce(new Error("metadata unavailable"));
+    request
+      .mockRejectedValueOnce(new Error("metadata unavailable"))
+      .mockRejectedValueOnce(new Error("metadata unavailable"));
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true, {
@@ -711,8 +733,8 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(notify);
     control.load(context, "main", true);
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
+      expect(modelListCalls(request)).toHaveLength(2);
+      expect(notify).toHaveBeenCalledTimes(3);
     });
     control.selected = "anthropic/claude-sonnet-4-6";
     control.thinkingLevel = "high";
@@ -721,8 +743,8 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
 
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(notify).toHaveBeenCalledTimes(4);
+      expect(modelListCalls(request)).toHaveLength(3);
+      expect(notify).toHaveBeenCalledTimes(5);
     });
     expect(control.selected).toBe("anthropic/claude-sonnet-4-6");
     expect(control.thinkingLevel).toBe("high");
@@ -755,7 +777,7 @@ describe("new-session model runtime", () => {
     });
 
     let container = renderControl(control, context);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(2);
 
     container
@@ -778,7 +800,7 @@ describe("new-session model runtime", () => {
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     picker!.open = true;
     picker!.dispatchEvent(new Event("toggle"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(4));
     await vi.waitFor(() =>
       expect(
         renderControl(control, context).querySelector("[data-chat-model-catalog-state]"),
@@ -852,7 +874,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.load(context, "research", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(4));
     await vi.waitFor(() =>
       expect(
         renderControl(control, context, "research").querySelector(
@@ -877,14 +899,16 @@ describe("new-session model runtime", () => {
   it("coalesces equivalent concurrent metadata loads", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
-    request.mockReturnValueOnce(pending.promise);
+    const ready = deferred<{ models: ModelCatalogEntry[] }>();
+    request.mockReturnValueOnce(pending.promise).mockReturnValueOnce(ready.promise);
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
     control.load(context, "main", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(2));
     pending.resolve({ models: [] });
+    ready.resolve({ models: [] });
   });
 
   it("drops a stored model and its reasoning override when the model is unavailable", async () => {
@@ -905,7 +929,7 @@ describe("new-session model runtime", () => {
       preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
     });
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(3));
     await vi.waitFor(() => expect(control.selected).toBe(""));
     expect(control.thinkingLevel).toBe("");
     expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
@@ -937,13 +961,39 @@ describe("new-session model runtime", () => {
       preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "retired" },
     });
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(3));
     await vi.waitFor(() => expect(control.thinkingLevel).toBe(""));
     expect(control.selected).toBe("openai/gpt-5.6-sol");
     expect(onSelectionChange).toHaveBeenLastCalledWith({
       model: "openai/gpt-5.6-sol",
       thinkingLevel: "",
     });
+  });
+
+  it("does not validate an explicit model against the default model's thinking levels", async () => {
+    const { context } = contextWith([
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+        reasoning: true,
+      },
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        reasoning: true,
+        thinkingLevels: [{ id: "low", label: "low" }],
+      },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true, {
+      preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
+    });
+
+    await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
+    expect(control.thinkingLevel).toBe("high");
   });
 
   it("clears xhigh when an interactive model switch targets a profile ending at high", async () => {
@@ -970,7 +1020,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(() => undefined, onSelectionChange);
     control.load(context, "main", true);
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledOnce();
+      expect(modelListCalls(request)).toHaveLength(2);
       expect(
         renderControl(control, context).querySelector('[data-chat-model-option="demo/limited"]'),
       ).not.toBeNull();
@@ -1001,7 +1051,7 @@ describe("new-session model runtime", () => {
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(modelListCalls(request)).toHaveLength(2));
     await vi.waitFor(() => {
       control.selected = "openai/gpt-5.6-luna";
       expect(control.resolveAgentRuntime({ context })).toEqual({

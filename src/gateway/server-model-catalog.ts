@@ -140,6 +140,9 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
     }
     return {
       ...projectGatewayModelCatalogSnapshot(owner),
+      ...(candidate.runtimeDiscoveryPending !== undefined
+        ? { runtimeDiscoveryPending: candidate.runtimeDiscoveryPending }
+        : {}),
       authModes: refreshedAuth?.authModes ?? owner.authModes,
       authStore: refreshedAuth?.authStore ?? owner.authStore,
       metadataSnapshot: owner.metadataSnapshot,
@@ -156,6 +159,7 @@ export async function loadGatewayModelCatalogSnapshot(
     authStore: _authStore,
     metadataSnapshot: _metadataSnapshot,
     authMaterializations: _authMaterializations,
+    runtimeDiscoveryPending: _runtimeDiscoveryPending,
     ...snapshot
   } = await loadPreparedGatewayModelCatalogSnapshot(params);
   return snapshot;

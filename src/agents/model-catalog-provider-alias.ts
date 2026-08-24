@@ -20,6 +20,14 @@ function resolvePreparedModelCatalogProvider(
   return normalizedProvider;
 }
 
+/** Canonicalizes a provider alias against the metadata captured with a prepared catalog. */
+export function canonicalizePreparedModelCatalogProvider(
+  provider: string,
+  metadataSnapshot: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): string {
+  return resolvePreparedModelCatalogProvider(provider, metadataSnapshot, () => true);
+}
+
 /** Runtime discovery follows identity aliases, not aliases that change the request route. */
 export function canonicalizePreparedModelRuntimeDiscoveryProvider(
   provider: string,

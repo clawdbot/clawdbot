@@ -2,6 +2,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
@@ -24,6 +25,7 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   input: PreparedModelRuntimeInput;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  providerDiscoveryProviderIds?: readonly string[];
 }>;
 
 export type PreparedModelWorkerRequest =
@@ -97,12 +99,14 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
   input: PreparedModelRuntimeInput;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  providerDiscoveryProviderIds?: readonly string[];
   pluginMetadataSnapshot: PluginMetadataSnapshot;
 }): string {
   return fingerprintPreparedRuntimeFacts({
     input: params.input,
     authStore: params.authStore,
     providerIds: params.providerIds,
+    providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
     pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
   });
 }
@@ -110,6 +114,7 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
 export function createPreparedModelCatalogWorkerInput(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
+  providerDiscoveryProviderIds?: readonly string[];
 }): PreparedModelCatalogWorkerInput {
   const source = params.agentFacts.input;
   // Registries and closures stay process-local. The worker reconstructs them from this exact
@@ -130,17 +135,24 @@ export function createPreparedModelCatalogWorkerInput(params: {
   };
   const authStore = cloneAuthProfileStore(params.agentFacts.authStore);
   const providerIds = [...params.agentFacts.providerIds];
+  const providerDiscoveryProviderIds = params.providerDiscoveryProviderIds
+    ? [
+        ...new Set(params.providerDiscoveryProviderIds.map(normalizeProviderId).filter(Boolean)),
+      ].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
   return {
     kind: "catalog",
     generationFingerprint: fingerprintPreparedModelCatalogGeneration({
       input,
       authStore,
       providerIds,
+      ...(providerDiscoveryProviderIds ? { providerDiscoveryProviderIds } : {}),
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     }),
     input,
     authStore,
     providerIds,
+    ...(providerDiscoveryProviderIds ? { providerDiscoveryProviderIds } : {}),
   };
 }
 
@@ -158,6 +170,7 @@ function resolvePreparedModelCatalogWorkerUrl(currentModuleUrl = import.meta.url
 }
 
 type PreparedModelCatalogWorker = Readonly<{
+  isTerminal: () => boolean;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
   loadCatalog: () => Promise<ModelCatalogSnapshot>;
 }>;
@@ -292,6 +305,7 @@ export function createPreparedModelCatalogWorker(params: {
   };
 
   return {
+    isTerminal: () => terminalError !== undefined,
     loadCatalog: async () => {
       const message = await request({ kind: "catalog" });
       if (message.kind !== "catalog") {

@@ -112,6 +112,38 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.routeVariants).toEqual(snapshot.entries);
   });
 
+  it("preserves provider-owned thinking maps from a discovered model", async () => {
+    const snapshot = await build({
+      entries: [
+        {
+          id: "deepseekv4flash-equivalent",
+          name: "DeepSeek V4 Flash",
+          provider: "omniroute",
+          reasoning: true,
+          thinkingLevelMap: {
+            off: "none",
+            minimal: null,
+            low: "low",
+            medium: "medium",
+            high: "high",
+            xhigh: "xhigh",
+            max: null,
+          },
+        },
+      ],
+    });
+
+    expect(snapshot.entries[0]?.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: null,
+    });
+  });
+
   it("keeps unranked registry rows in deterministic model-id order", async () => {
     const snapshot = await build({
       entries: [

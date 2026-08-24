@@ -6,9 +6,26 @@ import { NewSessionModelControl } from "./model-control.ts";
 const models: ModelCatalogEntry[] = [
   { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
 ];
+const configuredCatalogParams = {
+  agentId: "main",
+  preparedOnly: true,
+  view: "configured",
+  waitForRuntimeDiscovery: true,
+};
+const preparedCatalogParams = {
+  agentId: "main",
+  preparedOnly: true,
+  view: "configured",
+};
 
 function catalogCalls(request: ReturnType<typeof vi.fn>) {
   return request.mock.calls.filter(([method]) => method === "sessions.catalog.list");
+}
+
+function configuredModelCatalogParams(request: ReturnType<typeof vi.fn>) {
+  return request.mock.calls
+    .filter(([method]) => method === "models.list")
+    .map(([, params]) => params);
 }
 
 describe("new-session CLI-agent model targets", () => {
@@ -54,7 +71,13 @@ describe("new-session CLI-agent model targets", () => {
     picker!.dispatchEvent(new Event("toggle"));
 
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
+      const modelCatalogParams = configuredModelCatalogParams(request);
+      expect(modelCatalogParams.length).toBeGreaterThanOrEqual(2);
+      expect(modelCatalogParams).toEqual([
+        preparedCatalogParams,
+        configuredCatalogParams,
+        configuredCatalogParams,
+      ]);
       expect(catalogCalls(request)).toHaveLength(2);
     });
     await vi.waitFor(() => {
@@ -96,7 +119,11 @@ describe("new-session CLI-agent model targets", () => {
     });
 
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
+      expect(configuredModelCatalogParams(request)).toEqual([
+        preparedCatalogParams,
+        configuredCatalogParams,
+        configuredCatalogParams,
+      ]);
       expect(catalogCalls(request)).toHaveLength(2);
     });
     expect(
