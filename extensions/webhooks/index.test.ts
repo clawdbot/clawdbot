@@ -3,6 +3,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function createApi(params?: {
   pluginConfig?: OpenClawPluginApi["pluginConfig"];
@@ -42,6 +43,21 @@ function requireFirstRouteRegistration(mock: ReturnType<typeof vi.fn>) {
 }
 
 describe("webhooks plugin registration", () => {
+  it("binds route secrets to every behavior-bearing route field only", () => {
+    const behaviorBearingFields = Object.keys(manifest.configSchema.$defs.route.properties).filter(
+      (field) => field !== "description",
+    );
+
+    expect(manifest.configContracts.secretInputs.paths).toEqual([
+      {
+        path: "routes.*.secret",
+        expected: "string",
+        ownerKind: "route",
+        ownerContractFields: behaviorBearingFields,
+      },
+    ]);
+  });
+
   it("registers SecretRef-backed routes synchronously", () => {
     const registerHttpRoute = vi.fn();
 

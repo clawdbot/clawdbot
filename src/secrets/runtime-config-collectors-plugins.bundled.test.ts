@@ -24,7 +24,14 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         includeChannelConfigs: false,
         includeSyntheticChannelConfigs: false,
       })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([{ path: "routes.*.secret", expected: "string", ownerKind: "route" }]);
+    ).toEqual([
+      {
+        path: "routes.*.secret",
+        expected: "string",
+        ownerKind: "route",
+        ownerContractFields: ["enabled", "path", "sessionKey", "secret", "controllerId"],
+      },
+    ]);
     const config = {
       agents: explicitMainRoster,
       plugins: {
@@ -36,6 +43,10 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
                 zapier: {
                   sessionKey: "agent:main:main",
                   secret: envRef("WEBHOOK_SECRET"),
+                },
+                "sales.eu": {
+                  sessionKey: "agent:main:sales",
+                  secret: envRef("DOTTED_WEBHOOK_SECRET"),
                 },
               },
             },
@@ -57,6 +68,13 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         path: "plugins.entries.webhooks.config.routes.zapier.secret",
         ownerKind: "plugin-route",
         ownerId: "webhooks:routes.zapier.secret",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+      {
+        path: 'plugins.entries.webhooks.config.routes["sales.eu"].secret',
+        ownerKind: "plugin-route",
+        ownerId: "webhooks:routes%5B%22sales.eu%22%5D.secret",
         requiredForGateway: false,
         disposition: "isolate",
       },
