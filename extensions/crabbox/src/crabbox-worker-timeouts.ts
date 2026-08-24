@@ -24,8 +24,8 @@ export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 // lifecycle budget — a hung binary must fall back to label-only choices
 // promptly instead of stalling the whole cloud picker.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
-// Exceed Machine0's one-minute read backoff while bounding inspect and stop recovery.
-const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 3 * 60_000;
+// Fixed-lease inspection can follow warmup's final read; allow four one-minute retries.
+const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
 // Setup may install an exact candidate CLI and official plugins on a minimal cloud image.
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;

@@ -1702,8 +1702,8 @@ describe("Crabbox worker provider", () => {
     {
       providerId: "machine0",
       warmupTimeoutMs: 50 * 60_000,
-      lifecycleTimeoutMs: 3 * 60_000,
-      provisionTimeoutMs: 71 * 60_000,
+      lifecycleTimeoutMs: 5 * 60_000,
+      provisionTimeoutMs: 75 * 60_000,
     },
   ])(
     "runs one fixed $providerId warmup, ignores its output, and inspects only the canonical id",
@@ -1809,6 +1809,36 @@ describe("Crabbox worker provider", () => {
     },
   );
 
+  it("preserves a full Machine0 inspection window after a near-max warmup", async () => {
+    const profile = { ...PROFILE, provider: "machine0" };
+    let elapsedMs = 0;
+    let initialInspectTimeoutMs = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+    const provider = providerWithRunner(async (argv, options) => {
+      if (argv[1] === "warmup") {
+        elapsedMs = 50 * 60_000;
+        return commandResult();
+      }
+      if (argv[1] === "inspect") {
+        if (initialInspectTimeoutMs === 0) {
+          initialInspectTimeoutMs = options.timeoutMs;
+          elapsedMs += 4 * 60_000;
+        }
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      return commandResult();
+    });
+
+    try {
+      await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
+        leaseId: LEASE_ID,
+      });
+      expect(initialInspectTimeoutMs).toBe(5 * 60_000);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("reserves the full Machine0 cleanup budget after late node enrollment failure", async () => {
     const profile = { ...PROFILE, provider: "machine0" };
     let elapsedMs = 0;
@@ -1836,14 +1866,14 @@ describe("Crabbox worker provider", () => {
             packageSpecs: ["openclaw@2026.8.1"],
             displayName: "Bound worker",
             waitForDeviceId: async () => {
-              elapsedMs = 68 * 60_000;
+              elapsedMs = 70 * 60_000;
               throw new Error("node enrollment expired");
             },
           }),
         }),
       ).rejects.toMatchObject({ code: "cleanup_indeterminate", leaseId: LEASE_ID });
 
-      expect(cleanupTimeoutMs).toBe(3 * 60_000);
+      expect(cleanupTimeoutMs).toBe(5 * 60_000);
       expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(elapsedMs);
     } finally {
       now.mockRestore();
