@@ -1043,6 +1043,44 @@ describe("managed reload transaction ownership", () => {
     expect(hoisted.applyLoggingConfig).toHaveBeenCalledExactlyOnceWith({ level: "debug" });
   });
 
+  it("requests recovery restart when no-op prepared model runtime refresh fails after publication", async () => {
+    const refreshError = new Error("prepared owner rebuild failed");
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockRejectedValueOnce(refreshError);
+
+    const result = await runManagedOwnershipScenario({ kind: "noop", queueRevert: false });
+
+    expect(result.commitTerminalConfig).toHaveBeenCalledOnce();
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
+    expect(result.requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
+      "hot reload recovery: prepared model runtime reload",
+    );
+    expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes prepared model runtime owners for an applied no-op config publication", async () => {
+    const result = await runManagedOwnershipScenario({ kind: "noop", queueRevert: false });
+
+    expect(result.activateRuntimeSecrets).toHaveBeenCalledOnce();
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
+      "prepared model runtime owner is stale before no-op config publication",
+      { waitForReplacement: true },
+    );
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledExactlyOnceWith(
+      result.configA,
+      { allowGatewaySubagentBinding: true, catalogMode: "static" },
+    );
+    expect(result.prepareTerminalConfig).toHaveBeenCalledBefore(
+      hoisted.markPreparedModelRuntimeSnapshotsStale,
+    );
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledBefore(
+      result.commitTerminalConfig,
+    );
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledBefore(
+      hoisted.refreshPreparedModelRuntimeSnapshots,
+    );
+  });
+
   it.each(["noop", "hot", "restart"] as const)(
     "yields stale config A when queued %s config B reverts to the old source",
     async (kind) => {

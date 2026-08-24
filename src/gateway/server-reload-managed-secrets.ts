@@ -1,10 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
+  markPreparedModelRuntimeSnapshotsStale,
+  refreshPreparedModelRuntimeSnapshots,
+  rejectPendingPreparedModelRuntimeReplacement,
+  type PreparedModelRuntimeReplacementGateId,
+} from "../agents/prepared-model-runtime.js";
+import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   clearSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotState,
@@ -298,27 +305,80 @@ export function createManagedReloadSecretHandlers(options: {
         throw new GatewayConfigReloadSupersededError();
       }
       const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
+      let runtimeCommitted = false;
       const publishTerminalConfig = () => {
         transactionOwnership.publishRuntimeEnv();
         transactionOwnership.markRuntimeCommitted(prepared.config, plan);
         params.reconcileTerminalSessions(plan, prepared.config);
+        runtimeCommitted = true;
       };
-      const activated = activateIfCurrent
-        ? await activateIfCurrent(
-            prepared,
-            previousSnapshotRevision,
-            { reason: "reload", activate: true },
-            publishTerminalConfig,
-            transactionOwnership.isCurrent,
-          )
-        : (await activateSecretsRuntimeSnapshotIfCurrent(prepared, previousSnapshotRevision, {
-              canActivate: transactionOwnership.isCurrent,
-              onActivated: publishTerminalConfig,
-            }))
-          ? prepared
-          : null;
-      if (activated) {
-        return;
+      const scheduleNoopRecoveryRestart = (surface: string, error: unknown): boolean => {
+        if (!runtimeCommitted) {
+          return false;
+        }
+        const detail = `: ${formatErrorMessage(error)}`;
+        if (!transactionOwnership.isCurrent()) {
+          params.logReload.warn(
+            `${surface} failed after no-op config publication supersession${detail}; recovery deferred to the newer config`,
+          );
+          return true;
+        }
+        if (params.restartRecoveryAvailable === false || !params.requestRecoveryRestart) {
+          params.logReload.error?.(
+            `no-op config publication committed with unrecovered ${surface} failure${detail}; gateway restart recovery is unavailable; runtime may be inconsistent`,
+          );
+          throw new GatewayHotReloadRecoveryError(surface);
+        }
+        params.logReload.warn(
+          `${surface} failed after no-op config publication${detail}; restarting gateway`,
+        );
+        const restartResult = params.requestRecoveryRestart(`hot reload recovery: ${surface}`);
+        if (restartResult.status === "failed") {
+          throw new GatewayHotReloadRecoveryError(surface);
+        }
+        return true;
+      };
+      let preparedModelRuntimeReplacementGateId: PreparedModelRuntimeReplacementGateId | undefined;
+      try {
+        // No-op reload plans still publish a new runtime config generation. Prepared model owners
+        // intentionally compare the full runtime config hash, so retire the previous owners before
+        // activation and keep readers behind the replacement gate until the matching generation is
+        // rebuilt. This mirrors hot reload's atomic config/prepared-runtime publication boundary.
+        preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
+          "prepared model runtime owner is stale before no-op config publication",
+          { waitForReplacement: true },
+        );
+        const activated = activateIfCurrent
+          ? await activateIfCurrent(
+              prepared,
+              previousSnapshotRevision,
+              { reason: "reload", activate: true },
+              publishTerminalConfig,
+              transactionOwnership.isCurrent,
+            )
+          : (await activateSecretsRuntimeSnapshotIfCurrent(prepared, previousSnapshotRevision, {
+                canActivate: transactionOwnership.isCurrent,
+                onActivated: publishTerminalConfig,
+              }))
+            ? prepared
+            : null;
+        if (activated) {
+          await refreshPreparedModelRuntimeSnapshots(prepared.config, {
+            catalogMode: "static",
+            allowGatewaySubagentBinding: true,
+          });
+          return;
+        }
+        rejectPendingPreparedModelRuntimeReplacement(
+          preparedModelRuntimeReplacementGateId,
+          new GatewayConfigReloadSupersededError(),
+        );
+      } catch (error) {
+        rejectPendingPreparedModelRuntimeReplacement(preparedModelRuntimeReplacementGateId, error);
+        if (scheduleNoopRecoveryRestart("prepared model runtime reload", error)) {
+          return;
+        }
+        throw error;
       }
     }
   };
