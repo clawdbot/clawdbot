@@ -16,8 +16,9 @@ const DISCORD_APPLICATION_ID = "123456789012345678";
 type DiscordCall = { method: string; path: string; status: number };
 
 async function drainRequest(req: IncomingMessage): Promise<void> {
-  for await (const _chunk of req) {
+  for await (const chunk of req) {
     // The production RequestClient may send a body for other methods.
+    void chunk;
   }
 }
 
@@ -32,7 +33,7 @@ function writeJson(res: ServerResponse, status: number, value: unknown): void {
 
 async function startDiscordApi() {
   const calls: DiscordCall[] = [];
-  const server = createServer(async (req, res) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     await drainRequest(req);
     const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
     const method = req.method ?? "GET";
@@ -59,6 +60,9 @@ async function startDiscordApi() {
     }
     calls.push({ method, path: pathname, status: 404 });
     writeJson(res, 404, { message: `unexpected Discord REST request: ${method} ${pathname}` });
+  };
+  const server = createServer((req, res) => {
+    void handleRequest(req, res);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -72,9 +76,15 @@ async function startDiscordApi() {
     baseUrl: `http://127.0.0.1:${address.port}/api`,
     calls,
     stop: async () =>
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      }),
   };
 }
 
@@ -246,7 +256,11 @@ try {
           secondText: validSecond?.text,
           discordGetCalls: validGets.length,
         },
-        restTrace: api.calls.map(({ method, path, status }) => ({ method, path, status })),
+        restTrace: api.calls.map(({ method, path: requestPath, status }) => ({
+          method,
+          path: requestPath,
+          status,
+        })),
       },
       null,
       2,
