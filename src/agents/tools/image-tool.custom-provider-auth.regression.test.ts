@@ -221,10 +221,11 @@ describe("image custom provider auth regression", () => {
         modelHasVision: false,
       });
       expect(typeof tool?.execute).toBe("function");
+      expect(tool?.name).toBe("view_image");
 
       const result = await tool!.execute("regression-1", {
         prompt: "Read this screenshot.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
       const payload = result as { content?: Array<{ type?: string; text?: string }> };
@@ -251,7 +252,7 @@ describe("image custom provider auth regression", () => {
       await expect(
         tool!.execute("regression-2", {
           prompt: "Read this screenshot.",
-          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         }),
       ).rejects.toThrow(/No image model is configured/);
     });

@@ -16,16 +16,41 @@ function createFakeGh(): string {
 set -euo pipefail
 
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  pr_view_count=0
+  if [ -f "$FAKE_PR_VIEW_COUNT_FILE" ]; then
+    IFS= read -r pr_view_count < "$FAKE_PR_VIEW_COUNT_FILE"
+  fi
+  pr_view_count=$((pr_view_count + 1))
+  printf '%s\n' "$pr_view_count" > "$FAKE_PR_VIEW_COUNT_FILE"
+
+  failure_target_matches=0
+  if [ "\${FAKE_PR_VIEW_FAILURE_TARGET:-all}" = "all" ] || {
+    [ "\${FAKE_PR_VIEW_FAILURE_TARGET:-all}" = "head" ] && [[ "$*" != *changedFiles* ]]
+  }; then
+    failure_target_matches=1
+  fi
+  if [ -n "\${FAKE_PR_VIEW_FAILURE_MODE:-}" ] && [ "$failure_target_matches" = "1" ] && {
+    [ "\${FAKE_PR_VIEW_FAILURE_COUNT:--1}" = "-1" ] || [ "$pr_view_count" -le "\${FAKE_PR_VIEW_FAILURE_COUNT}" ]
+  }; then
+    echo "HTTP 503: No server is currently available to service your request. (https://api.github.com/graphql)" >&2
+    case "$FAKE_PR_VIEW_FAILURE_MODE" in
+      empty) exit 0 ;;
+      exit) exit 7 ;;
+      non-json) printf 'upstream unavailable\n'; exit 0 ;;
+      null) printf 'null\n'; exit 0 ;;
+    esac
+  fi
+
   if [[ "$*" == *changedFiles* ]]; then
     if [ "\${FAKE_REJECT_REVIEW_REQUESTS:-0}" = "1" ] && [[ "$*" == *reviewRequests* ]]; then
       echo "GraphQL: Resource not accessible by integration (repository.pullRequest.reviewRequests.nodes.0.requestedReviewer)" >&2
       exit 1
     fi
-    jq -nc --argjson changedFiles "\${FAKE_CHANGED_FILES:-101}" --argjson fileCount "\${FAKE_GRAPHQL_FILE_COUNT:-100}" --argjson includeChangeType "\${FAKE_GRAPHQL_CHANGE_TYPE:-true}" '
+    jq -nc --arg headRefOid "\${FAKE_HEAD_BEFORE-head-a}" --argjson changedFiles "\${FAKE_CHANGED_FILES:-101}" --argjson fileCount "\${FAKE_GRAPHQL_FILE_COUNT:-100}" --argjson includeChangeType "\${FAKE_GRAPHQL_CHANGE_TYPE:-true}" '
       {
         number: 42,
         url: "https://example.test/pr/42",
-        headRefOid: "head-a",
+        headRefOid: $headRefOid,
         changedFiles: $changedFiles,
         files: [
           range(0; $fileCount)
@@ -77,6 +102,10 @@ function readPrMetadata(
     graphqlChangeType?: boolean;
     graphqlFileCount?: string;
     headAfter?: string;
+    headBefore?: string;
+    prViewFailureCount?: string;
+    prViewFailureMode?: "empty" | "exit" | "non-json" | "null";
+    prViewFailureTarget?: "all" | "head";
     rejectReviewRequests?: boolean;
     restFileCount?: string;
   } = {},
@@ -85,7 +114,7 @@ function readPrMetadata(
     "bash",
     [
       "-c",
-      "set -euo pipefail; source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; pr_meta_json 42",
+      "set -euo pipefail; source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; source scripts/pr-lib/common.sh; pr_meta_json 42",
     ],
     {
       cwd: process.cwd(),
@@ -96,6 +125,11 @@ function readPrMetadata(
         FAKE_GRAPHQL_CHANGE_TYPE: options.graphqlChangeType === false ? "false" : "true",
         FAKE_GRAPHQL_FILE_COUNT: options.graphqlFileCount ?? "100",
         FAKE_HEAD_AFTER: options.headAfter ?? "head-a",
+        FAKE_HEAD_BEFORE: options.headBefore ?? "head-a",
+        FAKE_PR_VIEW_COUNT_FILE: join(fakeGhDir, "pr-view-count"),
+        FAKE_PR_VIEW_FAILURE_COUNT: options.prViewFailureCount ?? "-1",
+        FAKE_PR_VIEW_FAILURE_MODE: options.prViewFailureMode ?? "",
+        FAKE_PR_VIEW_FAILURE_TARGET: options.prViewFailureTarget ?? "all",
         FAKE_REJECT_REVIEW_REQUESTS: options.rejectReviewRequests ? "1" : "0",
         FAKE_REST_FILE_COUNT: options.restFileCount ?? "101",
         OPENCLAW_GH_BIN: join(fakeGhDir, "gh"),
@@ -215,5 +249,75 @@ describe("PR metadata", () => {
     expect(result.stderr).toContain(
       "PR head changed while collecting file metadata for #42 (started at head-a, ended at head-b). Retry review initialization.",
     );
+  });
+
+  it("rejects metadata without an observed initial head SHA", () => {
+    const result = readPrMetadata(createFakeGh(), {
+      changedFiles: "2",
+      graphqlFileCount: "2",
+      headBefore: "",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "GitHub PR metadata for #42 did not include a head SHA. Retry review initialization.",
+    );
+    expect(result.stderr).not.toContain("PR head changed");
+  });
+
+  it("rejects a non-numeric changed file count before shell comparison", () => {
+    const result = readPrMetadata(createFakeGh(), { changedFiles: "null" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Invalid PR metadata for #42: changedFiles must be a non-negative integer.",
+    );
+    expect(result.stderr).not.toContain("integer expected");
+    expect(result.stderr).not.toContain("integer expression expected");
+  });
+
+  it.each([
+    ["empty stdout", "empty", "returned empty stdout"],
+    ["a non-zero exit", "exit", "exited with status 7"],
+    ["non-JSON stdout", "non-json", "did not return one JSON object"],
+    ["a non-object JSON value", "null", "did not return one JSON object"],
+  ] as const)("reports a GitHub API failure for %s", (_label, prViewFailureMode, detail) => {
+    const result = readPrMetadata(createFakeGh(), { prViewFailureMode });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `GitHub API failure while reading PR #42: gh pr view ${detail}`,
+    );
+    expect(result.stderr).toContain("HTTP 503: No server is currently available");
+    expect(result.stderr).not.toContain("integer expected");
+    expect(result.stderr).not.toContain("PR head changed");
+  });
+
+  it("reports an API failure when the post-collection head read fails", () => {
+    const result = readPrMetadata(createFakeGh(), {
+      changedFiles: "2",
+      graphqlFileCount: "2",
+      prViewFailureMode: "empty",
+      prViewFailureTarget: "head",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "GitHub API failure while reading PR #42: gh pr view returned empty stdout",
+    );
+    expect(result.stderr).not.toContain("PR head changed");
+  });
+
+  it("recovers when a transient API failure is followed by a valid PR object", () => {
+    const result = readPrMetadata(createFakeGh(), {
+      changedFiles: "2",
+      graphqlFileCount: "2",
+      prViewFailureCount: "1",
+      prViewFailureMode: "empty",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({ headRefOid: "head-a", changedFiles: 2 });
   });
 });

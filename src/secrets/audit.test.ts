@@ -291,6 +291,32 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
+  it("audits inactive Talk speech and realtime provider references independently", async () => {
+    const activeKey = { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER };
+    const providerSelection = (missingKey: string) => ({
+      provider: "openai",
+      providers: {
+        openai: { apiKey: activeKey },
+        inactive: { apiKey: { source: "env", provider: "default", id: missingKey } },
+      },
+    });
+    await writeJsonFile(fixture.configPath, {
+      talk: {
+        ...providerSelection("MISSING_TALK_SPEECH_KEY"),
+        realtime: providerSelection("MISSING_TALK_REALTIME_KEY"),
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(
+      report.findings
+        .filter((finding) => finding.code === "REF_UNRESOLVED")
+        .map((finding) => finding.jsonPath)
+        .toSorted(),
+    ).toEqual(["talk.providers.inactive.apiKey", "talk.realtime.providers.inactive.apiKey"]);
+  });
+
   it("reports plaintext that duplicates the store while resolving store refs", async () => {
     writeSecretStoreEntry({
       scope: { kind: "team" },

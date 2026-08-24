@@ -1,27 +1,19 @@
 // Whatsapp plugin module implements on message behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
-import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
+import type { getReplyFromConfig, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute, buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
-import {
-  requireAdmittedWhatsAppInboundMessage,
-  requireWhatsAppInboundAdmission,
-} from "../../inbound/admission.js";
-import { withDeprecatedWebInboundMessageFlatAliases } from "../../inbound/message-aliases.js";
-import type {
-  AdmittedWebInboundMessage,
-  DeprecatedWebInboundAdmissionTopLevelFields,
-} from "../../inbound/types.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
@@ -36,15 +28,6 @@ import {
   createWhatsAppStatusReactionController,
   type StatusReactionController,
 } from "./status-reaction.js";
-
-function readDeprecatedAccessControlPassed(msg: AdmittedWebInboundMessage): boolean | undefined {
-  // The admitted type hides deprecated flat aliases, but normalized legacy
-  // listener inputs retain this one tri-state proof for preflight safety.
-  return (
-    msg as AdmittedWebInboundMessage &
-      Pick<DeprecatedWebInboundAdmissionTopLevelFields, "accessControlPassed">
-  ).accessControlPassed;
-}
 
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
@@ -61,13 +44,10 @@ export function createWebOnMessageHandler(params: {
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  dispatchReplyFromConfig?: NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>;
 }) {
-  const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean => {
-    if (msg.admission.ingress.decisiveGateId === "legacy-flat-compat") {
-      return readDeprecatedAccessControlPassed(msg) === true;
-    }
-    return msg.admission.ingress.decision === "allow";
-  };
+  const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean =>
+    msg.admission.ingress.decision === "allow";
 
   const withDirectSenderPeer = (
     msg: AdmittedWebInboundMessage,
@@ -86,16 +66,14 @@ export function createWebOnMessageHandler(params: {
     if (!normalized) {
       return msg;
     }
-    return requireAdmittedWhatsAppInboundMessage(
-      withDeprecatedWebInboundMessageFlatAliases({
-        ...msg,
-        platform: {
-          ...msg.platform,
-          sender: { ...msg.platform.sender, e164: normalized },
-          senderE164: normalized,
-        },
-      }),
-    );
+    return {
+      ...msg,
+      platform: {
+        ...msg.platform,
+        sender: { ...msg.platform.sender, e164: normalized },
+        senderE164: normalized,
+      },
+    };
   };
 
   const processForRoute = async (
@@ -127,6 +105,7 @@ export function createWebOnMessageHandler(params: {
       replyLogger: params.replyLogger,
       backgroundTasks: params.backgroundTasks,
       buildContext: params.buildContext,
+      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
     };
     if (opts?.groupHistory !== undefined) {
       processParams.groupHistory = opts.groupHistory;

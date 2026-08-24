@@ -1,6 +1,8 @@
 import { PassThrough, pipeline } from "node:stream";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
   resolveRealtimeVoiceBargeIn,
   type RealtimeVoiceActivationNameTranscriptResult,
   type RealtimeVoiceBridgeEvent,
@@ -24,7 +26,6 @@ const DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_MESSAGES = 32;
 const DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_BYTES = 32 * 1024;
 const DISCORD_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
 const DISCORD_REALTIME_WAKE_ACKS = ["Yeah.", "Mm-hmm.", "Got it.", "One sec."];
-const REALTIME_PCM16_BYTES_PER_SAMPLE = 2;
 const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
 
@@ -50,14 +51,6 @@ function isRealtimeResponseCancellationRace(event: RealtimeVoiceBridgeEvent): bo
 
 function normalizeControlSpeechText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function pcm16MonoDurationMs(audio: Buffer, sampleRate: number): number {
-  if (audio.length === 0 || sampleRate <= 0) {
-    return 0;
-  }
-  const samples = audio.length / REALTIME_PCM16_BYTES_PER_SAMPLE;
-  return (samples * 1000) / sampleRate;
 }
 
 export type DiscordRealtimePlaybackPort = Pick<
@@ -187,7 +180,10 @@ export class DiscordRealtimePlayback<TState> {
       this.exactSpeechState = { ...this.exactSpeechState, audioStarted: true };
     }
     this.params.harness.recordOutputAudio(realtimePcm24kMono, {
-      audioMs: pcm16MonoDurationMs(realtimePcm24kMono, 24_000),
+      audioMs: realtimeVoiceAudioDurationMs(
+        REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        realtimePcm24kMono.byteLength,
+      ),
       sourceAudioBytes: realtimePcm24kMono.length,
       sinkAudioBytes: discordPcm.length,
     });

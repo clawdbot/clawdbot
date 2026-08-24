@@ -4,8 +4,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, defaultRuntime } from "../runtime.js";
+import {
+  listAgentProvenance,
+  readAgentProvenance,
+  type AgentProvenance,
+} from "../state/agent-provenance.js";
 import { shortenHomePath } from "../utils.js";
 import { describeBinding } from "./agents.bindings.js";
 import type { AgentSummary } from "./agents.config.js";
@@ -21,15 +25,20 @@ import { requireValidConfig } from "./config-validation.js";
 type AgentsListOptions = {
   json?: boolean;
   bindings?: boolean;
+  tree?: boolean;
 };
+
+function formatSummaryHeader(summary: AgentSummary): string {
+  const safe = sanitizeTerminalText;
+  const defaultTag = summary.isDefault ? " (default)" : "";
+  return summary.name && summary.name !== summary.id
+    ? `${safe(summary.id)}${defaultTag} (${safe(summary.name)})`
+    : `${safe(summary.id)}${defaultTag}`;
+}
 
 function formatSummary(summary: AgentSummary) {
   const safe = sanitizeTerminalText;
-  const defaultTag = summary.isDefault ? " (default)" : "";
-  const header =
-    summary.name && summary.name !== summary.id
-      ? `${safe(summary.id)}${defaultTag} (${safe(summary.name)})`
-      : `${safe(summary.id)}${defaultTag}`;
+  const header = formatSummaryHeader(summary);
 
   const identityParts = [];
   if (summary.identityEmoji) {
@@ -76,6 +85,42 @@ function formatSummary(summary: AgentSummary) {
   return lines.join("\n");
 }
 
+function formatAgentTree(summaries: AgentSummary[], provenance: AgentProvenance[]): string[] {
+  const summaryById = new Map(summaries.map((summary) => [summary.id, summary]));
+  const provenanceById = new Map(provenance.map((record) => [record.agentId, record]));
+  const childrenById = new Map<string, AgentSummary[]>();
+  const roots: AgentSummary[] = [];
+
+  for (const summary of summaries) {
+    const creatorAgentId = provenanceById.get(summary.id)?.creatorAgentId;
+    if (creatorAgentId && creatorAgentId !== summary.id && summaryById.has(creatorAgentId)) {
+      const children = childrenById.get(creatorAgentId) ?? [];
+      children.push(summary);
+      childrenById.set(creatorAgentId, children);
+    } else {
+      roots.push(summary);
+    }
+  }
+
+  const lines: string[] = [];
+  const visited = new Set<string>();
+  const append = (summary: AgentSummary, depth: number): void => {
+    if (visited.has(summary.id)) {
+      return;
+    }
+    visited.add(summary.id);
+    lines.push(`${"  ".repeat(depth)}- ${formatSummaryHeader(summary)}`);
+    for (const child of childrenById.get(summary.id) ?? []) {
+      append(child, depth + 1);
+    }
+  };
+  roots.forEach((summary) => append(summary, 0));
+  // Corrupt or manually rewritten provenance can form a cycle. Keep every
+  // configured agent visible by promoting the first unseen member to a root.
+  summaries.forEach((summary) => append(summary, 0));
+  return lines;
+}
+
 /** Print configured agent summaries with optional binding/provider detail enrichment. */
 export async function agentsListCommand(
   opts: AgentsListOptions,
@@ -87,6 +132,17 @@ export async function agentsListCommand(
   }
 
   const summaries = buildAgentSummaries(cfg);
+  const provenance = opts.tree ? listAgentProvenance() : [];
+  if (opts.json) {
+    for (const summary of summaries) {
+      const record = readAgentProvenance(summary.id);
+      if (record) {
+        summary.createdVia = record.createdVia;
+        summary.creatorAgentId = record.creatorAgentId;
+        summary.createdAt = record.createdAtMs;
+      }
+    }
+  }
   const bindingMap = new Map<string, AgentRouteBinding[]>();
   for (const binding of listRouteBindings(cfg)) {
     const agentId = normalizeAgentId(binding.agentId);
@@ -106,11 +162,10 @@ export async function agentsListCommand(
 
   // Provider details are only used for human text output
   // (`summary.providers` is rendered in the text formatter). JSON callers
-  // (dashboards, monitors, IDE plugins) poll the config-derived fields, so skip
-  // the provider detail pass unless they explicitly ask for binding/provider
-  // enrichment with --bindings. Combined with `loadPlugins: "text-only"` in the
-  // catalog entry, this keeps `agents list --json` on the config-only path.
-  const includeProviderDetails = !opts.json || opts.bindings === true;
+  // (dashboards, monitors, IDE plugins) poll the config/state-derived fields, so
+  // skip the provider detail pass unless they explicitly ask for enrichment.
+  // This keeps JSON and tree output off the bundled plugin runtime path.
+  const includeProviderDetails = (!opts.json && !opts.tree) || opts.bindings === true;
   const providerStatus = includeProviderDetails ? await buildProviderStatusIndex(cfg) : null;
   const providerMetadata = includeProviderDetails ? buildProviderSummaryMetadataIndex(cfg) : null;
 
@@ -139,6 +194,11 @@ export async function agentsListCommand(
 
   if (opts.json) {
     writeRuntimeJson(runtime, summaries);
+    return;
+  }
+
+  if (opts.tree) {
+    runtime.log(["Agents:", ...formatAgentTree(summaries, provenance)].join("\n"));
     return;
   }
 

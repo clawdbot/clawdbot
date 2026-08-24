@@ -162,7 +162,7 @@ function runCleanupTestSuite(params: {
 }
 
 describe("runtime parity suite transport cleanup", () => {
-  it("keeps parent artifacts discoverable when owned lab cleanup fails", async () => {
+  it("does not publish parent artifacts when owned lab cleanup fails", async () => {
     const cleanupError = Object.assign(new Error("owned lab shutdown reset"), {
       code: "ECONNRESET",
     });
@@ -205,20 +205,16 @@ describe("runtime parity suite transport cleanup", () => {
       }).catch((error: unknown) => error);
 
       expect(cleanup).toHaveBeenCalledOnce();
-      expect(setLatestReport).toHaveBeenCalledWith(
-        expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
-      );
-      expect(setLatestReport.mock.invocationCallOrder[0]).toBeLessThan(
-        stopLab.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+      expect(setLatestReport).not.toHaveBeenCalled();
+      expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: "completed" }),
       );
       expect((thrown as Error).message.split("\n")[0]).toBe(
         "QA scenarios passed, but cleanup failed",
       );
       expect((thrown as Error).message).toContain(
         "failed cleanup phases: lab stop: owned lab shutdown reset",
-      );
-      expect((thrown as Error).message).toContain(
-        "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json evidence=/qa-output/qa-evidence.json",
       );
       expect((thrown as Error).cause).toBe(cleanupError);
       expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
@@ -286,7 +282,7 @@ describe("runtime parity suite transport cleanup", () => {
         fastMode: childParams.fastMode ?? true,
         channelDriver: childParams.channelDriver,
         enabledPluginIds: childParams.enabledPluginIds ?? [],
-        gatewayConfigPatch: undefined,
+        gatewayConfigPatches: [],
         gatewayRuntimeOptions: undefined,
         concurrency: 1,
         progressEnabled: true,

@@ -22,7 +22,6 @@ export { getMaxChatHistoryMessagesBytes } from "../../gateway/server-constants.j
 export {
   augmentChatHistoryWithCanvasBlocks,
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
 } from "../../gateway/server-methods/chat.js";
 export {

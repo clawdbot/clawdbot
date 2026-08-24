@@ -16,6 +16,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -197,7 +199,7 @@ export async function prepareGatewayPluginBootstrap(params: {
  */
 export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
-  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
@@ -225,10 +227,24 @@ export async function loadGatewayStartupPluginRuntime(params: {
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   startupTrace?: GatewayStartupTrace;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  resolveGatewayContext?: GatewayContextResolver;
+  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
+  getCurrentPluginRegistry?: () => PluginRegistry;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
+  await params.pluginRuntimeClaim?.waitForUnblocked();
+  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
+    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
+    if (!currentPluginRegistry) {
+      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
+    }
+    return {
+      pluginRegistry: currentPluginRegistry,
+      gatewayMethods: params.baseMethods,
+    };
+  }
   const loaded = loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
@@ -244,6 +260,9 @@ export async function loadGatewayStartupPluginRuntime(params: {
     channelPluginLoadIntent: "full",
     startupTrace: params.startupTrace,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
   });
   warnUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.cfg,

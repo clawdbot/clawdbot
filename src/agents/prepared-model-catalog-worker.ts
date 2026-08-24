@@ -12,12 +12,10 @@ import type {
   PreparedModelRuntimeAuth,
   PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import {
-  fingerprintPreparedRuntimeFacts,
-  markPreparedModelCatalogFull,
-  type PreparedModelRuntimeAgentFacts,
-} from "./prepared-model-runtime.facts.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
+import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{

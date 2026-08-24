@@ -4,13 +4,16 @@ import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./d
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
+  archiveStaleDashboardEntries,
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
+  normalizeResolvedMaintenanceConfigInput,
   type ResolvedSessionMaintenanceConfig,
+  type ResolvedSessionMaintenanceConfigInput,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -19,6 +22,7 @@ export type SessionMaintenanceApplyReport = {
   mode: ResolvedSessionMaintenanceConfig["mode"];
   beforeCount: number;
   afterCount: number;
+  archived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;
@@ -59,7 +63,7 @@ type FileBackedSessionStoreMaintenanceParams = {
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
   onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   log: SessionMaintenanceLogger;
   artifacts: RemovedSessionArtifactCleanup;
   commitReducedStore?: () => Promise<void>;
@@ -76,7 +80,10 @@ function resolveMaintenanceForOperation(
   >,
 ): ResolvedSessionMaintenanceConfig {
   return params.maintenanceConfig
-    ? { ...params.maintenanceConfig, ...params.maintenanceOverride }
+    ? {
+        ...normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig),
+        ...params.maintenanceOverride,
+      }
     : { ...resolveMaintenanceConfig(), ...params.maintenanceOverride };
 }
 
@@ -112,6 +119,7 @@ async function applyWarnOnlyMaintenance(params: {
       pruneAfterMs: params.maintenance.pruneAfterMs,
       maxEntries: params.maintenance.maxEntries,
       preserveKeys: params.preserveSessionKeys,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
     });
     if (warning) {
       params.operation.log.warn(
@@ -139,6 +147,7 @@ async function applyWarnOnlyMaintenance(params: {
     mode: params.maintenance.mode,
     beforeCount: params.beforeCount,
     afterCount: Object.keys(params.operation.store).length,
+    archived: 0,
     modelRunPruned: 0,
     pruned: 0,
     capped: 0,
@@ -214,13 +223,20 @@ async function applyEnforcedMaintenance(params: {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
         preserveKeys: params.preserveSessionKeys,
+        preserveRecentMs: params.maintenance.preserveRecentMs,
       })
     : 0;
+  const archived = archiveStaleDashboardEntries(
+    params.operation.store,
+    params.maintenance.archiveDashboardAfterMs,
+    { preserveKeys: params.preserveSessionKeys },
+  );
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
     onPruned: ({ entry }) => {
       rememberRemovedSessionFile(removedSessionFiles, entry);
     },
     preserveKeys: params.preserveSessionKeys,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
   });
   const countAfterPrune = Object.keys(params.operation.store).length;
   const shouldRunCapMaintenance =
@@ -235,6 +251,7 @@ async function applyEnforcedMaintenance(params: {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
         preserveKeys: params.preserveSessionKeys,
+        preserveRecentMs: params.maintenance.preserveRecentMs,
       })
     : 0;
   const referencedSessionIds = collectReferencedSessionIds(params.operation.store);
@@ -262,6 +279,7 @@ async function applyEnforcedMaintenance(params: {
     mode: params.maintenance.mode,
     beforeCount: params.beforeCount,
     afterCount: Object.keys(params.operation.store).length,
+    archived,
     modelRunPruned,
     pruned,
     capped,
@@ -269,7 +287,11 @@ async function applyEnforcedMaintenance(params: {
   });
   return {
     changedStore:
-      modelRunPruned > 0 || pruned > 0 || capped > 0 || (diskBudget?.removedEntries ?? 0) > 0,
+      archived > 0 ||
+      modelRunPruned > 0 ||
+      pruned > 0 ||
+      capped > 0 ||
+      (diskBudget?.removedEntries ?? 0) > 0,
   };
 }
 

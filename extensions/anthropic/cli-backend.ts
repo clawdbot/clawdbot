@@ -11,6 +11,7 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
 import { parseClaudeCliJsonlEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -21,6 +22,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
 
 type ClaudeCliAuthCredential =
@@ -115,7 +117,12 @@ function resolveClaudeCliAuthInput(
 }
 
 /** Build the Claude CLI backend plugin descriptor. */
-export function buildAnthropicCliBackend(): CliBackendPlugin {
+export function buildAnthropicCliBackend(
+  options: {
+    ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
+    supportsDynamicSystemPromptSections?: () => boolean;
+  } = {},
+): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,
     modelProvider: "anthropic",
@@ -245,32 +252,43 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveModelId: ({ modelId, contextWindow }) =>
+      resolveClaudeCliContextWindowModelId(modelId, contextWindow),
     authEpochMode: "profile-only",
     prepareExecution: (context) => {
-      const credentialContext = context as typeof context & {
-        authCredential?: ClaudeCliAuthCredential;
-        isolatedCompletionPrompt?: string;
-        isolatedCompletionSystemPrompt?: string;
+      const prepare = () => {
+        const credentialContext = context as typeof context & {
+          authCredential?: ClaudeCliAuthCredential;
+          isolatedCompletionPrompt?: string;
+          isolatedCompletionSystemPrompt?: string;
+        };
+        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+        const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
+        const env = {
+          ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+          ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...authInput?.env,
+        };
+        return Object.keys(env).length > 0 || isolatedCompletion
+          ? {
+              env,
+              // The paired side-question argv projection disables settings, memory,
+              // hooks, session persistence, and tools before process launch.
+              ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
+              ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+              ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+              ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+            }
+          : undefined;
       };
-      const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
-      const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
-      const env = {
-        ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
-        ...authInput?.env,
-      };
-      return Object.keys(env).length > 0 || isolatedCompletion
-        ? {
-            env,
-            // The paired side-question argv projection disables settings, memory,
-            // hooks, session persistence, and tools before process launch.
-            ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
-            ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
-            ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
-            ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-          }
-        : undefined;
+      const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
+      return supportProbe ? supportProbe.then(prepare) : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
-    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
+    resolveExecutionArgs: (context) =>
+      resolveClaudeCliExecutionArgs(context, {
+        excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),
+      }),
   };
 }

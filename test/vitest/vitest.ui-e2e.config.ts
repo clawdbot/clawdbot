@@ -7,6 +7,7 @@ import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
 const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+  "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
 ];
 

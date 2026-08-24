@@ -280,7 +280,6 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 type OfficialExternalProviderContract =
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "webFetchProviders";
 

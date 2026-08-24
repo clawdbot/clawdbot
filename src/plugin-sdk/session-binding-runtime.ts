@@ -4,6 +4,7 @@ export {
   testing as __testing,
   testing,
   getSessionBindingService,
+  inspectSessionBindingByConversation,
   registerSessionBindingAdapter,
   type SessionBindingRecord,
   type SessionBindingService,

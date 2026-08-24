@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 
 const taskTracking = vi.hoisted(() => ({
   createBackgroundExecTask: vi.fn(),
@@ -9,6 +10,7 @@ vi.mock("./bash-tools.exec-task-tracking.js", () => taskTracking);
 
 import { getFinishedSession } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 describe("exec background task wiring", () => {
   beforeEach(() => {
@@ -36,6 +38,62 @@ describe("exec background task wiring", () => {
       handle: null,
       outcome: expect.objectContaining({ status: "completed" }),
     });
+  });
+
+  it("does not background a terminal process while sandbox finalization is pending", async () => {
+    const yieldMs = 250;
+    const finalizationStarted = createDeferred();
+    const finalization = createDeferred();
+    const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {
+      finalizationStarted.resolve();
+      await finalization.promise;
+    });
+    vi.useFakeTimers();
+
+    try {
+      const tool = createExecTool({
+        host: "sandbox",
+        security: "full",
+        ask: "off",
+        allowBackground: true,
+        sessionKey: "agent:main:main",
+        sandbox: {
+          containerName: "sandbox",
+          workspaceDir: process.cwd(),
+          containerWorkdir: process.cwd(),
+          buildExecSpec: async () => ({
+            argv: [process.execPath, "-e", ""],
+            env: process.env,
+            stdinMode: "pipe-closed",
+            finalizeToken: "sandbox-token",
+          }),
+          finalizeExec,
+        },
+      });
+
+      const execution = tool.execute("terminal-during-finalize", {
+        command: "sandbox-command",
+        yieldMs,
+      });
+      const executionSettled = vi.fn();
+      void execution.then(executionSettled, executionSettled);
+      await finalizationStarted.promise;
+      await vi.advanceTimersByTimeAsync(yieldMs + 1);
+
+      expect(executionSettled).not.toHaveBeenCalled();
+      expect(taskTracking.createBackgroundExecTask).not.toHaveBeenCalled();
+      finalization.resolve();
+      const result = await execution;
+
+      expect(result.details.status).toBe("completed");
+      expect(taskTracking.finalizeBackgroundExecTask).toHaveBeenCalledWith({
+        handle: null,
+        outcome: expect.objectContaining({ status: "completed" }),
+      });
+    } finally {
+      finalization.resolve();
+      vi.useRealTimers();
+    }
   });
 
   it.each([

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const excludeOptionalEnv = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" } as const;
@@ -443,6 +444,28 @@ describe("copyBundledPluginMetadata", () => {
     copyBundledPluginMetadata({ repoRoot });
 
     expect(fs.existsSync(staleDistDir)).toBe(false);
+  });
+
+  it("preserves isolated source-checkout output for an external plugin", () => {
+    const repoRoot = makeRepoRoot("openclaw-external-plugin-local-dist-meta-");
+    createPlugin(repoRoot, {
+      id: "sms",
+      packageName: "@openclaw/sms",
+      packageOpenClaw: {
+        extensions: ["./index.ts"],
+        build: { bundledDist: false },
+        release: { publishToNpm: true },
+      },
+    });
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "sms");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(distPluginDir, "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(distPluginDir, "openclaw.plugin.json"))).toBe(true);
+    expect(readBundledPackageJson(repoRoot, "sms").openclaw?.extensions).toEqual(["./index.js"]);
   });
 
   it("preserves manifest-less runtime support package outputs and copies package metadata", () => {

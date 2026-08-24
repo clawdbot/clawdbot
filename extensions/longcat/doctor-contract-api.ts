@@ -69,11 +69,15 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   config: OpenClawConfig;
   changes: string[];
 } {
-  const models = asObjectRecord(cfg.models);
-  const providers = asObjectRecord(models?.providers);
-  const provider = asObjectRecord(providers?.longcat);
+  const models = cfg.models;
+  const providers = models?.providers;
+  const provider = providers?.longcat;
   const configuredModels = provider?.models;
-  if (!hasLegacyStockLongCatModel(configuredModels) || !Array.isArray(configuredModels)) {
+  if (
+    !provider ||
+    !hasLegacyStockLongCatModel(configuredModels) ||
+    !Array.isArray(configuredModels)
+  ) {
     return { config: cfg, changes: [] };
   }
 
@@ -81,10 +85,8 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (!isLegacyStockLongCatModel(model)) {
       return model;
     }
-    const row = asObjectRecord(model) ?? {};
-    const cost = asObjectRecord(row.cost) ?? {};
-    return Object.assign({}, row, {
-      cost: Object.assign({}, cost, { cacheWrite: 0 }),
+    return Object.assign({}, model, {
+      cost: Object.assign({}, model.cost, { cacheWrite: 0 }),
     });
   });
 
@@ -97,7 +99,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
           ...providers,
           longcat: { ...provider, models: nextModels },
         },
-      } as unknown as OpenClawConfig["models"],
+      },
     },
     changes: ["Updated the historical stock LongCat-2.0 cache-write price from $0.75 to $0."],
   };

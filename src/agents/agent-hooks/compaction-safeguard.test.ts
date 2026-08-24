@@ -74,14 +74,28 @@ const actualCompactionQualityModule = await vi.importActual<typeof compactionQua
 const mockAuditSummaryQuality = vi.mocked(compactionQualityModule.auditSummaryQuality);
 
 function summaryResult(text: string) {
-  return { kind: "summary" as const, text };
+  return text;
+}
+
+// Local projections of the surviving primitives (the .text/.summary wrapper
+// helpers were deleted with their prod-dead exports).
+function budgetCompactionSummaryText(
+  body: string,
+  suffix: string,
+  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
+): string {
+  return (budgetCompactionSummary(body, suffix, maxChars) as { summary: string }).summary;
+}
+
+function preservedTurnsText(messages: AgentMessage[]): string {
+  return (buildPreservedTurnsSection(messages) as { text: string }).text;
 }
 
 const {
   collectToolFailures,
   formatToolFailuresSection,
   splitPreservedRecentTurns,
-  formatPreservedTurnsSection,
+  buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
@@ -91,14 +105,12 @@ const {
   extractOpaqueIdentifiers,
   auditSummaryQuality: auditSummaryQualityOwner,
   capCompactionSummary,
-  capCompactionSummaryPreservingSuffix,
+  budgetCompactionSummary,
   formatFileOperations,
   computeAdaptiveChunkRatio,
-  isOversizedForSummary,
   readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
@@ -540,7 +552,7 @@ describe("compaction-safeguard summary budgets", () => {
       "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
     const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
 
-    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+    const capped = budgetCompactionSummaryText(body, suffix);
 
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(capped).toContain("<workspace-critical-rules>");
@@ -554,7 +566,7 @@ describe("compaction-safeguard summary budgets", () => {
       "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
     const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
 
-    const capped = capCompactionSummaryPreservingSuffix(body, diagnosticSuffix);
+    const capped = budgetCompactionSummaryText(body, diagnosticSuffix);
 
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(capped).toContain("## Tool Failures");
@@ -567,10 +579,7 @@ describe("compaction-safeguard summary budgets", () => {
     const bodyNoNewline = "## Exact identifiers\nNone.";
     const suffixNoLeadingNewline = "## Tool Failures\n- exec: failed";
 
-    const capped = capCompactionSummaryPreservingSuffix(
-      bodyNoNewline,
-      `\n\n${suffixNoLeadingNewline}`,
-    );
+    const capped = budgetCompactionSummaryText(bodyNoNewline, `\n\n${suffixNoLeadingNewline}`);
 
     expect(capped).toContain("None.\n\n## Tool Failures");
     expect(capped).not.toMatch(/None\.## Tool Failures/);
@@ -591,7 +600,7 @@ describe("compaction-safeguard summary budgets", () => {
       SUMMARY_TRUNCATED_MARKER,
     );
     expect(
-      capCompactionSummaryPreservingSuffix(
+      budgetCompactionSummaryText(
         "",
         "oversized suffix".repeat(10),
         CONTEXT_TRUNCATED_MARKER.length,
@@ -608,7 +617,7 @@ describe("compaction-safeguard summary budgets", () => {
       "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
     const oversizedSuffix = preservedTurns + criticalTail;
 
-    const capped = capCompactionSummaryPreservingSuffix("short body", oversizedSuffix);
+    const capped = budgetCompactionSummaryText("short body", oversizedSuffix);
 
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(capped).toContain("<workspace-critical-rules>");
@@ -676,49 +685,6 @@ describe("computeAdaptiveChunkRatio", () => {
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
     expect(ratio).toBeGreaterThanOrEqual(MIN_CHUNK_RATIO);
     expect(ratio).toBeLessThanOrEqual(BASE_CHUNK_RATIO);
-  });
-});
-
-describe("isOversizedForSummary", () => {
-  const CONTEXT_WINDOW = 200_000;
-
-  it("returns false for small messages", () => {
-    const msg: AgentMessage = {
-      role: "user",
-      content: "Hello, world!",
-      timestamp: Date.now(),
-    };
-
-    expect(isOversizedForSummary(msg, CONTEXT_WINDOW)).toBe(false);
-  });
-
-  it("returns true for messages > 50% of context", () => {
-    // Message with ~120K tokens (60% of 200K context)
-    // After safety margin (1.2x), effective is 144K which is > 100K (50%)
-    const msg: AgentMessage = {
-      role: "user",
-      content: "x".repeat(120_000 * 4),
-      timestamp: Date.now(),
-    };
-
-    expect(isOversizedForSummary(msg, CONTEXT_WINDOW)).toBe(true);
-  });
-
-  it("applies safety margin", () => {
-    // Message at exactly 50% of context before margin
-    // After SAFETY_MARGIN (1.2), it becomes 60% which is > 50%
-    const halfContextChars = (CONTEXT_WINDOW * 0.5) / SAFETY_MARGIN;
-    const msg: AgentMessage = {
-      role: "user",
-      content: "x".repeat(Math.floor(halfContextChars * 4)),
-      timestamp: Date.now(),
-    };
-
-    // With safety margin applied, this should be at the boundary
-    // The function checks if tokens * SAFETY_MARGIN > contextWindow * 0.5
-    const isOversized = isOversizedForSummary(msg, CONTEXT_WINDOW);
-    // Due to token estimation, this could be either true or false at the boundary
-    expect(typeof isOversized).toBe("boolean");
   });
 });
 
@@ -846,17 +812,17 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("preserves the most recent user/assistant messages", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "older ask", timestamp: 1 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "older answer" }],
         timestamp: 2,
-      } as unknown as AgentMessage,
+      }),
       { role: "user", content: "recent ask", timestamp: 3 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "recent answer" }],
         timestamp: 4,
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -866,7 +832,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(split.preservedMessages).toHaveLength(2);
     expect(split.summarizableMessages).toHaveLength(2);
-    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain(
+    expect(preservedTurnsText(split.preservedMessages)).toContain(
       "## Recent turns preserved verbatim",
     );
   });
@@ -874,36 +840,36 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("drops orphaned tool results from preserved assistant turns", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "older ask", timestamp: 1 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_old", name: "read", arguments: {} }],
         timestamp: 2,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "toolResult",
         toolCallId: "call_old",
         toolName: "read",
         content: [{ type: "text", text: "old result" }],
         timestamp: 3,
-      } as unknown as AgentMessage,
+      }),
       { role: "user", content: "recent ask", timestamp: 4 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
         timestamp: 5,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "toolResult",
         toolCallId: "call_recent",
         toolName: "read",
         content: [{ type: "text", text: "recent result" }],
         timestamp: 6,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "recent final answer" }],
         timestamp: 7,
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -935,34 +901,34 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const split = splitPreservedRecentTurns({
       messages: [
         { role: "user", content: "older ask", timestamp: 1 },
-        {
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "text", text: "older answer" }],
           timestamp: 2,
-        } as unknown as AgentMessage,
+        }),
         { role: "user", content: "recent ask", timestamp: 3 },
-        {
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
           timestamp: 4,
-        } as unknown as AgentMessage,
-        {
+        }),
+        castAgentMessage({
           role: "toolResult",
           toolCallId: "call_recent",
           toolName: "read",
           content: [{ type: "text", text: "recent raw output" }],
           timestamp: 5,
-        } as unknown as AgentMessage,
-        {
+        }),
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "text", text: "recent final answer" }],
           timestamp: 6,
-        } as unknown as AgentMessage,
+        }),
       ],
       recentTurnsPreserve: 1,
     });
 
-    const section = formatPreservedTurnsSection(split.preservedMessages);
+    const section = preservedTurnsText(split.preservedMessages);
     expect(section).toContain("- Tool result (read): recent raw output");
     expect(section).toContain("- User: recent ask");
   });
@@ -977,32 +943,31 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const split = splitPreservedRecentTurns({
       messages: [
         { role: "user", content: "recent ask", timestamp: 1 },
-        { role: "assistant", content: toolCalls, timestamp: 2 } as unknown as AgentMessage,
-        ...toolCalls.map(
-          (toolCall, index) =>
-            ({
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: "read",
-              content: [
-                {
-                  type: "text",
-                  text: `paired-result-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
-                },
-              ],
-              timestamp: index + 3,
-            }) as unknown as AgentMessage,
+        castAgentMessage({ role: "assistant", content: toolCalls, timestamp: 2 }),
+        ...toolCalls.map((toolCall, index) =>
+          castAgentMessage({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: "read",
+            content: [
+              {
+                type: "text",
+                text: `paired-result-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
+              },
+            ],
+            timestamp: index + 3,
+          }),
         ),
-        {
+        castAgentMessage({
           role: "assistant",
           content: [{ type: "text", text: "terminal answer survives" }],
           timestamp: 33,
-        } as unknown as AgentMessage,
+        }),
       ],
       recentTurnsPreserve: 1,
     });
 
-    const section = formatPreservedTurnsSection(split.preservedMessages) as string;
+    const section = preservedTurnsText(split.preservedMessages) as string;
 
     expect(section.length).toBeLessThanOrEqual(MAX_SPLIT_TURN_CONTEXT_CHARS);
     expect(section).toContain("[Earlier preserved messages truncated]");
@@ -1014,17 +979,17 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("formats preserved non-text messages with placeholders", () => {
-    const section = formatPreservedTurnsSection([
-      {
+    const section = preservedTurnsText([
+      castAgentMessage({
         role: "user",
         content: [{ type: "image", data: "abc", mimeType: "image/png" }],
         timestamp: 1,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
         timestamp: 2,
-      } as unknown as AgentMessage,
+      }),
     ]);
 
     expect(section).toContain("- User: [non-text content: image]");
@@ -1032,15 +997,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("keeps non-text placeholders for mixed-content preserved messages", () => {
-    const section = formatPreservedTurnsSection([
-      {
+    const section = preservedTurnsText([
+      castAgentMessage({
         role: "user",
         content: [
           { type: "text", text: "caption text" },
           { type: "image", data: "abc", mimeType: "image/png" },
         ],
         timestamp: 1,
-      } as unknown as AgentMessage,
+      }),
     ]);
 
     expect(section).toContain("- User: caption text");
@@ -1048,7 +1013,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("keeps bounded preserved-turn text UTF-16 safe", () => {
-    const section = formatPreservedTurnsSection([
+    const section = preservedTurnsText([
       {
         role: "user",
         content: `${"x".repeat(599)}🚀tail`,
@@ -1060,12 +1025,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("does not add non-text placeholders for text-only content blocks", () => {
-    const section = formatPreservedTurnsSection([
-      {
+    const section = preservedTurnsText([
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "plain text reply" }],
         timestamp: 1,
-      } as unknown as AgentMessage,
+      }),
     ]);
 
     expect(section).toContain("- Assistant: plain text reply");
@@ -1075,46 +1040,46 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("caps preserved tail when user turns are below preserve target", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "single user prompt", timestamp: 1 },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-1" }],
         timestamp: 2,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-2" }],
         timestamp: 3,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-3" }],
         timestamp: 4,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-4" }],
         timestamp: 5,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-5" }],
         timestamp: 6,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-6" }],
         timestamp: 7,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-7" }],
         timestamp: 8,
-      } as unknown as AgentMessage,
-      {
+      }),
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "assistant-8" }],
         timestamp: 9,
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -1130,8 +1095,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
           msg.role === "user" && (msg as { content?: unknown }).content === "single user prompt",
       ),
     ).toBe(true);
-    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain("assistant-8");
-    expect(formatPreservedTurnsSection(split.preservedMessages)).not.toContain("assistant-2");
+    expect(preservedTurnsText(split.preservedMessages)).toContain("assistant-8");
+    expect(preservedTurnsText(split.preservedMessages)).not.toContain("assistant-2");
   });
 
   it("trim-starts preserved section when history summary is empty", () => {
@@ -1968,7 +1933,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -2312,14 +2277,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          {
+          castAgentMessage({
             role: "custom",
             customType: "openclaw.runtime-context",
             content: "secret runtime context",
             display: false,
             timestamp: 1.5,
-          } as unknown as AgentMessage,
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          }),
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: preservedUserText, timestamp: 3 },
         ],
         turnPrefixMessages: [],
@@ -2411,13 +2376,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          {
+          castAgentMessage({
             role: "assistant",
             content: "latest assistant reply",
             timestamp: 4,
-          } as unknown as AgentMessage,
+          }),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -2474,13 +2439,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          {
+          castAgentMessage({
             role: "assistant",
             content: [{ type: "text", text: "latest assistant reply" }],
             timestamp: 4,
-          } as unknown as AgentMessage,
+          }),
         ],
         turnPrefixMessages: [
           { role: "user", content: "prefix request that was split out", timestamp: 0 },
@@ -2539,11 +2504,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "latest user ask", timestamp: 1 },
-          {
+          castAgentMessage({
             role: "assistant",
             content: [{ type: "text", text: "latest assistant reply" }],
             timestamp: 2,
-          } as unknown as AgentMessage,
+          }),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -2645,54 +2610,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.summary).not.toContain("Old duplicated section");
   });
 
-  it("preserves the prior summary when staged summarization returns a generic fallback", async () => {
-    mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue({
-      kind: "generic-fallback",
-      text: "Context contained 4 messages. Summary unavailable due to size limits.",
-    });
-
-    const sessionManager = stubSessionManager();
-    const model = createAnthropicModelFixture();
-    setCompactionSafeguardRuntime(sessionManager, {
-      model,
-      recentTurnsPreserve: 0,
-    });
-
-    const compactionHandler = createCompactionHandler();
-    const mockContext = createCompactionContext({
-      sessionManager,
-      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
-    });
-    const event = {
-      preparation: {
-        messagesToSummarize: [{ role: "user", content: "latest ask status", timestamp: 1 }],
-        turnPrefixMessages: [],
-        firstKeptEntryId: "entry-1",
-        tokensBefore: 1_500,
-        fileOps: {
-          read: [],
-          edited: [],
-          written: [],
-        },
-        settings: { reserveTokens: 4_000 },
-        previousSummary: "## Goal\nKnown context that must survive the outage.",
-        isSplitTurn: false,
-      },
-      customInstructions: "",
-      signal: new AbortController().signal,
-    };
-
-    const result = (await compactionHandler(event, mockContext)) as {
-      cancel?: boolean;
-      compaction?: { summary?: string };
-    };
-
-    expect(result.cancel).not.toBe(true);
-    expect(result.compaction?.summary).toContain("Known context that must survive the outage.");
-    expect(result.compaction?.summary).toContain("Summary unavailable due to size limits.");
-  });
-
   it("falls back to LLM when provider throws a provider-side AbortError with signal not aborted", async () => {
     // Reproduce the undici AbortError("This operation was aborted") shape that
     // arrives when the compaction provider's HTTP connection drops mid-stream while
@@ -2724,7 +2641,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
         ],
         turnPrefixMessages: [] as AgentMessage[],
         firstKeptEntryId: "entry-1",
@@ -2816,7 +2733,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
-          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
           {
             role: "assistant",
@@ -3080,31 +2997,30 @@ describe("compaction-safeguard recent-turn preservation", () => {
     }));
     const turnPrefixMessages = [
       { role: "user" as const, content: "raw tool request", timestamp: 100 },
-      {
+      castAgentMessage({
         role: "assistant" as const,
         content: toolCalls,
         timestamp: 101,
-      } as unknown as AgentMessage,
-      ...toolCalls.map(
-        (toolCall, index) =>
-          ({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: "read",
-            content: [
-              {
-                type: "text",
-                text: `finalizer-tool-output-${index}-${"r".repeat(600)}`,
-              },
-            ],
-            timestamp: index + 102,
-          }) as unknown as AgentMessage,
+      }),
+      ...toolCalls.map((toolCall, index) =>
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: toolCall.id,
+          toolName: "read",
+          content: [
+            {
+              type: "text",
+              text: `finalizer-tool-output-${index}-${"r".repeat(600)}`,
+            },
+          ],
+          timestamp: index + 102,
+        }),
       ),
-      {
+      castAgentMessage({
         role: "assistant" as const,
         content: [{ type: "text", text: "raw terminal answer survives" }],
         timestamp: 114,
-      } as unknown as AgentMessage,
+      }),
     ];
     const event = {
       preparation: {
@@ -4008,10 +3924,12 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(false);
 
     expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "reasoning", summary: [] }],
-      } as unknown as AgentMessage),
+      testing.hasMeaningfulConversationContent(
+        castAgentMessage({
+          role: "assistant",
+          content: [{ type: "reasoning", summary: [] }],
+        }),
+      ),
     ).toBe(false);
   });
 

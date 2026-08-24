@@ -226,7 +226,7 @@ describe("readSubagentOutput", () => {
     );
   });
 
-  it("returns only the latest assistant turn, not trailing tool output", async () => {
+  it("does not reuse assistant progress that issued a trailing tool call", async () => {
     installOutputDeps({
       messages: [
         {
@@ -244,12 +244,10 @@ describe("readSubagentOutput", () => {
       ],
     });
 
-    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "Mapped the code path.",
-    );
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it("keeps earlier visible assistant text across a trailing empty assistant turn", async () => {
+  it("does not keep earlier visible progress across a trailing tool-only turn", async () => {
     installOutputDeps({
       messages: [
         {
@@ -268,8 +266,30 @@ describe("readSubagentOutput", () => {
       ],
     });
 
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("returns a final assistant reply emitted after trailing tool activity", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Mapped the code path." },
+            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+          ],
+        },
+        { role: "toolResult", content: "tool result" },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "The fix is complete." }],
+        },
+      ],
+    });
+
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "Mapped the code path.",
+      "The fix is complete.",
     );
   });
 
@@ -465,6 +485,21 @@ describe("buildChildCompletionFindings", () => {
     expect(block!.endsWith("[child result truncated]")).toBe(true);
   });
 
+  it("sanitizes child results before applying their escaped output budget", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:control-prefix",
+        task: "control-prefixed result",
+        createdAt: 1,
+        completion: { resultText: `${"\u0000".repeat(700)}useful child result` },
+        execution: { outcome: { status: "ok" } },
+      },
+    ]);
+
+    expect(findings).toContain("useful child result");
+    expect(findings).not.toContain("[child result truncated]");
+  });
+
   it("retains a later actionable failure when earlier children exceed the remaining budget", () => {
     // Bounding each child's escaped output (this fix) shrank a single
     // oversized child from ~4x the 512-char budget down to ~512, so it now
@@ -575,13 +610,13 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("ANNOUNCE_SKIP");
   });
 
-  it("uses frozen child completion text when normalized completion is absent", () => {
+  it("uses the canonical captured child completion text", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         task: "child task",
         createdAt: 1,
-        frozenResultText: "final child output",
+        completion: { resultText: "final child output" },
         execution: { outcome: { status: "ok" } },
       },
     ]);
@@ -621,6 +656,72 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("findings captured before the wake");
     expect(findings).not.toContain("NO_REPLY");
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
+      resultText: "older captured output",
+      expected: "authoritative final output",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+      expected: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: undefined,
+    },
+  ])(
+    "keeps producer-owned $name terminal evidence authoritative over older fallback",
+    ({ terminalReply, resultText, expected }) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: {
+            required: true,
+            resultText,
+            fallbackResultText: "older captured fallback",
+            terminalReply,
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      if (expected === undefined) {
+        expect(findings).toBeUndefined();
+      } else {
+        expect(findings).toContain(expected);
+        expect(findings).not.toContain("older captured output");
+      }
+    },
+  );
+
+  it.each(["silent", "empty"] as const)(
+    "treats %s terminal evidence without retained text as an intentional non-result",
+    (disposition) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: {
+            resultText: disposition === "silent" ? "NO_REPLY" : null,
+            terminalReply: { disposition },
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      expect(findings).toBeUndefined();
+    },
+  );
 
   it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
     "does not override an intentional %s completion with fallback output",
@@ -788,6 +889,92 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome).toEqual({
       status: "error",
       error: "subagent run terminated",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it.each(["restart", "aborted"] as const)(
+    "keeps %s stop reasons as cancellation even when liveness is blocked",
+    (stopReason) => {
+      // classifySubagentTerminalOutcome must win over the generic classifier
+      // here: blocked liveness alone would read as a failure, but an explicit
+      // restart/aborted stop reason owns the outcome (openclaw#125407).
+      const applied = applySubagentWaitOutcome({
+        wait: {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 150,
+          stopReason,
+          livenessState: "blocked",
+          error: "Context overflow: prompt too large for the model.",
+        },
+        outcome: undefined,
+      });
+
+      expect(applied.outcome).toEqual({
+        status: "error",
+        error: "subagent run terminated",
+        startedAt: 100,
+        endedAt: 150,
+        elapsedMs: 50,
+      });
+    },
+  );
+
+  it("keeps the failure cause on pending-error timeout wait snapshots", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        pendingError: true,
+        error: "model returned an unrecoverable tool-call sequence",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      error: "model returned an unrecoverable tool-call sequence",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("leaves genuine budget timeouts without a cause", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("ignores wait error text when the run did not end in a pending error", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        error: "waited too long",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,

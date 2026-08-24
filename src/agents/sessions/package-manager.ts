@@ -15,9 +15,10 @@ import {
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { minimatch } from "minimatch";
 import { isDefaultStateDir } from "../../config/paths.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import {
   addIgnoreRules,
   normalizeNativePathSeparators,
@@ -550,13 +551,8 @@ function resolveRealPathIfPossible(path: string): string {
   }
 }
 
-function isPathWithinRoot(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel));
-}
-
 function isRealPathWithinRoot(root: string, candidate: string): boolean {
-  return isPathWithinRoot(
+  return isPathInside(
     resolveRealPathIfPossible(resolve(root)),
     resolveRealPathIfPossible(candidate),
   );
@@ -1209,10 +1205,10 @@ export class DefaultPackageManager implements PackageManager {
     const realRoot = resolveRealPathIfPossible(resolvedRoot);
     return paths.filter((path) => {
       const resolvedPath = resolve(path);
-      if (!isPathWithinRoot(resolvedRoot, resolvedPath)) {
+      if (!isPathInside(resolvedRoot, resolvedPath)) {
         return false;
       }
-      return isPathWithinRoot(realRoot, resolveRealPathIfPossible(resolvedPath));
+      return isPathInside(realRoot, resolveRealPathIfPossible(resolvedPath));
     });
   }
 

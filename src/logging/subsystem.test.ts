@@ -1,10 +1,11 @@
 // Subsystem logger tests cover per-subsystem log routing and filtering.
 import fs from "node:fs";
 import path from "node:path";
+import { Logger as TsLogger } from "tslog";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "./logger.js";
+import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -40,6 +41,7 @@ afterEach(() => {
   loggingState.rawConsole = null;
   resetLogger();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -354,5 +356,41 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(fs.readFileSync(firstDay, "utf8")).toContain("first day subsystem log");
     expect(fs.readFileSync(secondDay, "utf8")).toContain("second day subsystem log");
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day subsystem log");
+  });
+
+  it("reuses its file child until logger invalidation advances the generation", () => {
+    const firstFile = logPathTracker.nextPath();
+    const secondFile = logPathTracker.nextPath();
+    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: firstFile });
+    const log = createSubsystemLogger("diagnostics");
+
+    log.info("first line");
+    log.info("second line");
+    expect(getSubLogger).toHaveBeenCalledTimes(1);
+
+    resetLogger();
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: secondFile });
+    log.info("after reset");
+    expect(getSubLogger).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes applied config and rebuilds its child for the new generation", () => {
+    const firstFile = logPathTracker.nextPath();
+    const secondFile = logPathTracker.nextPath();
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    applyLoggingConfig({ level: "info", consoleLevel: "silent", file: firstFile });
+    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
+    const log = createSubsystemLogger("diagnostics");
+
+    log.info("first line");
+    log.info("second line");
+    expect(getSubLogger).toHaveBeenCalledTimes(1);
+    expect(log.isEnabled("debug", "file")).toBe(false);
+
+    applyLoggingConfig({ level: "debug", consoleLevel: "silent", file: secondFile });
+    expect(log.isEnabled("debug", "file")).toBe(true);
+    log.debug("after applied config");
+    expect(getSubLogger).toHaveBeenCalledTimes(2);
   });
 });

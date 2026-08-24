@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import {
   collectBundledPluginPublicSurfaceArtifacts,
@@ -218,11 +219,6 @@ function listBundledPluginEntryBaseDirs(params: {
   return uniqueStrings(baseDirs);
 }
 
-function isPathInsideRoot(rootDir: string, targetPath: string): boolean {
-  const relative = path.relative(rootDir, targetPath);
-  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
 function listBundledPluginEntryRoots(params: {
   rootDir: string;
   pluginDirName?: string;
@@ -257,7 +253,7 @@ function listBundledPluginEntrySearchPaths(
     }
     const normalizedEntry = path.normalize(rawEntry);
     for (const root of roots) {
-      if (!isPathInsideRoot(root, normalizedEntry)) {
+      if (!isPathInside(root, normalizedEntry)) {
         continue;
       }
       const relativeEntry = path.relative(root, normalizedEntry);
@@ -314,8 +310,7 @@ function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string):
   const candidate = path.isAbsolute(normalizedEntryPath)
     ? path.normalize(normalizedEntryPath)
     : path.resolve(baseDir, normalizedEntryPath);
-  const relative = path.relative(baseDir, candidate);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!isPathInside(baseDir, candidate)) {
     return null;
   }
   return candidate;

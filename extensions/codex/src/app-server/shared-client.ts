@@ -847,13 +847,14 @@ function createSharedCodexAppServerClientStartup(params: {
     onStartedClient: (startedClient) => {
       const state = getSharedCodexAppServerClientState();
       params.entry.client = startedClient;
-      state.entriesByClient.set(startedClient, params.entry);
       // Graceful retirement detaches active clients from the acquisition map,
       // so global teardown tracks physical lifetime until the close notification.
       state.liveClients.add(startedClient);
       startedClient.addCloseHandler((closedClient) => {
-        getSharedCodexAppServerClientState().liveClients.delete(closedClient);
-        clearSharedClientEntryIfCurrent(params.key, closedClient);
+        state.liveClients.delete(closedClient);
+        if (state.entriesByClient.get(closedClient) === params.entry) {
+          clearSharedClientEntryIfCurrent(params.key, closedClient);
+        }
       });
       for (const callback of params.entry.onStartedClientCallbacks) {
         callback(startedClient);
@@ -863,7 +864,9 @@ function createSharedCodexAppServerClientStartup(params: {
     onInitializedClient: () => initialized.resolve(),
   }).then(
     (client) => {
+      const state = getSharedCodexAppServerClientState();
       params.entry.client = client;
+      state.entriesByClient.set(client, params.entry);
       return client;
     },
     (error: unknown) => {

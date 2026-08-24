@@ -19,9 +19,9 @@ import {
   parseFfprobeCodecAndSampleRate,
   runFfmpeg,
   runFfprobe,
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  unlinkIfExists,
 } from "openclaw/plugin-sdk/media-runtime";
-import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
-import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
@@ -405,6 +405,7 @@ export async function sendDiscordVoiceMessage(
   request: DiscordRetryRunner,
   silent?: boolean,
   token?: string,
+  onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
@@ -480,6 +481,7 @@ export async function sendDiscordVoiceMessage(
   try {
     return (await request(
       async () => {
+        await onPlatformSendDispatch?.();
         try {
           return (await rest.post(`/channels/${channelId}/messages`, {
             body: messagePayload,

@@ -27,7 +27,6 @@ type DeliveryDeps = Omit<
 type Testing = {
   setDepsForTest(overrides?: Partial<DeliveryDeps>): void;
   hasAnnounceSendEvidence(error: unknown): boolean;
-  hasWriterClaimReboundAnnounceError(error: unknown): boolean;
   isWriterClaimReboundAnnounceError(error: unknown): boolean;
 };
 
@@ -40,8 +39,6 @@ function getTesting(): Testing {
 export const testing: Testing = {
   setDepsForTest: (overrides) => getTesting().setDepsForTest(overrides),
   hasAnnounceSendEvidence: (error) => getTesting().hasAnnounceSendEvidence(error),
-  hasWriterClaimReboundAnnounceError: (error) =>
-    getTesting().hasWriterClaimReboundAnnounceError(error),
   isWriterClaimReboundAnnounceError: (error) =>
     getTesting().isWriterClaimReboundAnnounceError(error),
 };

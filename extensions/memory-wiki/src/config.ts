@@ -8,8 +8,12 @@ import {
   resolveSessionAgentId,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
-import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
-import type { OpenClawConfig } from "../api.js";
+import {
+  buildPluginConfigSchema,
+  z,
+  type OpenClawPluginConfigSchema,
+  type OpenClawConfig,
+} from "../api.js";
 
 const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 const WIKI_VAULT_SCOPES = ["global", "agent"] as const;

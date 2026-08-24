@@ -35,7 +35,12 @@ export {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-export { BrowserToolOutputSchema, BrowserToolSchema } from "./browser-tool.schema.js";
+export {
+  BrowserToolOutputSchema,
+  createBrowserToolSchema,
+  resolveBrowserToolCapabilities,
+} from "./browser-tool.schema.js";
+export type { BrowserToolCapabilities } from "./browser-tool.schema.js";
 export {
   browserAct,
   browserArmDialog,
@@ -52,6 +57,7 @@ export {
   browserDoctor,
   browserFocusTab,
   browserImportProfile,
+  normalizeBrowserTabsResult,
   browserOpenTab,
   browserProfiles,
   browserSystemProfiles,
@@ -61,12 +67,13 @@ export {
   browserStop,
   browserTabs,
 } from "./browser/client.js";
+export type { BrowserTabsResult } from "./browser/client.js";
 export { fetchBrowserJson } from "./browser/client-fetch.js";
 export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { resolveExistingUploadPaths } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
-export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
+export { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 export { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 export {
   touchSessionBrowserTab,

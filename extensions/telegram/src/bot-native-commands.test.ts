@@ -17,7 +17,6 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
 type TelegramInlineKeyboardReplyMarkup = {
@@ -76,7 +75,6 @@ registerTelegramNativeCommands(createNativeCommandTestParams({}));
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());

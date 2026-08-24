@@ -314,7 +314,10 @@ describe("native bootstrap timeout", () => {
   it("bounds a stuck native call and leaves status retryable", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("crypto", {
-      randomUUID: vi.fn(() => "00112233-4455-6677-8899-aabbccddeeff"),
+      getRandomValues: vi.fn((bytes: Uint8Array) => {
+        bytes.set(Uint8Array.from({ length: 16 }, (_, index) => index * 17));
+        return bytes;
+      }),
     });
     const stored: Record<string, unknown> = {};
     let onDisconnect = () => {};

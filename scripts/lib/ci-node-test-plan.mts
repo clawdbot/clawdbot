@@ -7,6 +7,7 @@ import {
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import {
   gatewayServerExcludedTestFiles,
+  gatewayServerIsolatedTestFiles,
   isGatewayServerBackedHttpTestFile,
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
@@ -26,24 +27,25 @@ type NodeTestShardGroup = {
   shard_name: string;
   configs: string[];
   includePatterns?: string[];
+  pretestBuildMode?: NodeTestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
   env?: Record<string, string>;
 };
 
-export type NodeTestShard = {
+type NodeTestShard = {
   checkName: string;
   shardName: string;
   configs: string[];
   runner: string;
   requiresDist: boolean;
+  pretestBuildMode?: NodeTestPretestBuildMode;
   includePatterns?: string[];
   env?: Record<string, string>;
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
   planConcurrency?: number;
   predictedSeconds?: number;
-  saveVitestFsCache?: boolean;
 };
 
 type NodeTestPlanOptions = {
@@ -56,6 +58,15 @@ type NodeTestPlanOptions = {
 };
 
 type CompactNodeTestPlanMode = "pull-request" | "push";
+type NodeTestPretestBuildMode = "private-qa" | "runtime";
+
+const PRETEST_RUNTIME_BUILD_FILES = new Set([
+  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+]);
+
+function resolvePretestBuildMode(paths: readonly string[]): NodeTestPretestBuildMode | undefined {
+  return paths.some((file) => PRETEST_RUNTIME_BUILD_FILES.has(file)) ? "runtime" : undefined;
+}
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
@@ -165,19 +176,18 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// The group hints below are loaded-fleet CI walls. Three-way striping plus a
-// Blacksmith keeps the proven 200s/276s admission caps and 28-worker ceiling.
-// Standard 4-core GitHub runners use direct hosted wall hints below. These
-// budgets target roughly 160 seconds of predicted body work, leaving the
-// measured ~70-second setup overhead inside a roughly 230-second lane.
+// Default Blacksmith plans pack the Blacksmith base hints with 200s/276s
+// admission caps. GitHub-hosted plans use direct hosted hints with 90s/95s
+// packing caps. Hybrid keeps the expanded topology but packs its attempt-1
+// Blacksmith rows with the refit Blacksmith estimates below.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
 const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 90;
 const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 95;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
-// Wall-time ceiling per hosted lane: with ~70s of fixed setup, a 150-second
-// body keeps every Node lane inside a ~220-second job. The former 210-second
-// ceiling let single fat groups own ~280-second critical paths.
+const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
+// Split groups above this hosted prediction before packing. Hybrid reuses the
+// hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
 const COMPACT_GITHUB_NODE_TEST_JOB_CAP = 96;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
@@ -265,6 +275,8 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-gateway-core-1", 99],
   ["agentic-gateway-core-2", 99],
   ["agentic-gateway-core-3", 99],
+  // One small file that pays a full cold module graph because it runs isolated.
+  ["agentic-gateway-server-isolated", 30],
   ["agentic-gateway-methods", 157],
   ["agentic-plugin-sdk", 45],
   ["auto-reply-core-top-level", 27],
@@ -530,6 +542,25 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-unit-support", 32],
 ]);
 
+// Hybrid-specific Blacksmith observations, plus the gateway-core-3 139.5s spike
+// in 31938297538 that must stay singleton.
+// Sum a shard's per-config Duration lines before taking a median; pooling them
+// reads as a large over-prediction that is not there. Normalize each run by its
+// own VM speed (median of every shard's duration over that shard's cross-run
+// median) before comparing, or a slow draw looks like a hint miss.
+// Values below are VM-normalized medians over runs 32316204633, 32317242374,
+// 32318250756, and 32320063231 (2026-08-20). Across 100 groups the GitHub hints
+// run 0.64x on Blacksmith, so only the ones that overshoot are pinned here:
+// leaving these low packs partners onto the tallest bins, which set the wall.
+const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
+  ["agentic-agents-core-models", 81],
+  ["agentic-cli-process", 110],
+  ["agentic-commands-doctor", 83],
+  ["agentic-gateway-core-3", 140],
+  ["core-runtime-cron-service", 108],
+  ["core-runtime-infra-process", 35],
+]);
+
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
 // from single-file local runs (M4 Max) and static import-graph size. Packing
 // only: a stale entry skews stripe balance but never correctness. Unlisted
@@ -551,6 +582,10 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/auto-reply/reply/commands-status.test.ts", 12],
   ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
   ["src/gateway/dashboard-session-title.test.ts", 23],
+  // Successful run 32172905415: 26.9s and 15.9s. Without direct hints the
+  // hosted agent-chat splitter prices both at 3s and puts them in one stripe.
+  ["src/gateway/server.sessions.create.test.ts", 27],
+  ["src/gateway/server.chat.gateway-server-chat.test.ts", 16],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
@@ -631,8 +666,19 @@ function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
   return DEFAULT_WHOLE_GROUP_SECONDS;
 }
 
-function usesGithubRunnerProfile(runnerBackend: string | undefined): boolean {
+function usesExpandedRunnerProfile(runnerBackend: string | undefined): boolean {
   return runnerBackend === "github" || runnerBackend === "hybrid";
+}
+
+function estimateHybridCompactGroupSeconds(group: NodeTestShardGroup, seconds: number): number {
+  // The 4,723s Blacksmith push hint sum measured 3,742.046s/3,756.674s
+  // (79.230%/79.540%) in runs 31945998653/31949756966. A 0.87 scale keeps
+  // 9.379% headroom above the higher ratio. With direct outlier hints, it sits
+  // one point above the 0.86 packing cliff.
+  return (
+    COMPACT_HYBRID_GROUP_SECONDS_HINTS.get(group.shard_name) ??
+    Math.round(seconds * COMPACT_HYBRID_GROUP_SECONDS_SCALE)
+  );
 }
 
 function estimateCompactGroupSeconds(
@@ -640,7 +686,13 @@ function estimateCompactGroupSeconds(
   runnerBackend: string | undefined,
 ): number {
   const defaultSeconds = estimateDefaultCompactGroupSeconds(group);
-  if (!usesGithubRunnerProfile(runnerBackend)) {
+  // Hybrid attempt 1 runs on Blacksmith. It keeps the expanded topology for
+  // hosted retries, but its packing weights must describe the runner that
+  // normally executes the plan.
+  if (runnerBackend === "hybrid") {
+    return estimateHybridCompactGroupSeconds(group, defaultSeconds);
+  }
+  if (runnerBackend !== "github") {
     return defaultSeconds;
   }
   return (
@@ -653,13 +705,15 @@ function estimateCompactStripeSeconds(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
 ): number {
-  if (usesGithubRunnerProfile(runnerBackend)) {
+  if (runnerBackend === "github") {
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
-  return (
+  const blacksmithSeconds =
     COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name) ??
-    estimateDefaultCompactGroupSeconds(group)
-  );
+    estimateDefaultCompactGroupSeconds(group);
+  return runnerBackend === "hybrid"
+    ? estimateHybridCompactGroupSeconds(group, blacksmithSeconds)
+    : blacksmithSeconds;
 }
 
 // Equal-weight sibling stripes can otherwise land in one bin and recreate the
@@ -1504,12 +1558,19 @@ function createToolingSplitShards(): NodeTestSplitShard[] {
       listCompactToolingTestFiles(),
       COMPACT_TOOLING_NODE_TEST_GROUPS,
       stripeFileWeight,
-    ).map((includePatterns, index) => ({
-      shardName: `core-tooling-${index + 1}`,
-      configs: [TOOLING_CONFIG],
-      includePatterns,
-      requiresDist: false,
-    })),
+    ).map((includePatterns, index) => {
+      const pretestBuildMode = resolvePretestBuildMode(includePatterns);
+      const shard: NodeTestSplitShard = {
+        shardName: `core-tooling-${index + 1}`,
+        configs: [TOOLING_CONFIG],
+        includePatterns,
+        requiresDist: false,
+      };
+      if (pretestBuildMode) {
+        shard.pretestBuildMode = pretestBuildMode;
+      }
+      return shard;
+    }),
     {
       shardName: "core-tooling-isolated",
       configs: ["test/vitest/vitest.tooling-docker.config.ts", TOOLING_ISOLATED_CONFIG],
@@ -1596,7 +1657,10 @@ function createCoreRuntimeMediaUiSplitShards(): NodeTestSplitShard[] {
 
 function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  const excludedGatewayFiles = new Set(gatewayServerExcludedTestFiles);
+  const excludedGatewayFiles = new Set([
+    ...gatewayServerExcludedTestFiles,
+    ...gatewayServerIsolatedTestFiles,
+  ]);
   const gatewayFiles = listTestFiles("src/gateway").filter(
     (file) =>
       isStripeEligibleTestFile(file, unitFastFiles) &&
@@ -1706,6 +1770,11 @@ const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([
     "agentic",
     [
       ...createGatewayServerSplitShards(),
+      {
+        shardName: "agentic-gateway-server-isolated",
+        configs: ["test/vitest/vitest.gateway-server-isolated.config.ts"],
+        requiresDist: false,
+      },
       // Split per config: the combined pair owned a ~206s hosted wall that no
       // bin packing could shorten, while the halves fit normal lanes.
       {
@@ -1813,6 +1882,9 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
             configs: splitConfigs,
             ...(splitShard.env ? { env: splitShard.env } : {}),
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
+            ...(splitShard.pretestBuildMode
+              ? { pretestBuildMode: splitShard.pretestBuildMode }
+              : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
           },
@@ -1997,7 +2069,13 @@ export function createNodeTestShardBundles(
   const unbundled: NodeTestShard[] = [];
   const groups = new Map<
     string,
-    { configs: string[]; requiresDist: boolean; runner: string; shards: NodeTestShard[] }
+    {
+      configs: string[];
+      pretestBuildMode?: NodeTestPretestBuildMode;
+      requiresDist: boolean;
+      runner: string;
+      shards: NodeTestShard[];
+    }
   >();
 
   for (const shard of shards) {
@@ -2015,9 +2093,10 @@ export function createNodeTestShardBundles(
       continue;
     }
 
-    const key = JSON.stringify([shard.configs, shard.requiresDist, runner]);
+    const key = JSON.stringify([shard.configs, shard.pretestBuildMode, shard.requiresDist, runner]);
     const group = groups.get(key) ?? {
       configs: shard.configs,
+      ...(shard.pretestBuildMode ? { pretestBuildMode: shard.pretestBuildMode } : {}),
       requiresDist: shard.requiresDist,
       runner,
       shards: [],
@@ -2059,6 +2138,7 @@ export function createNodeTestShardBundles(
         shardName,
         configs: group.configs,
         includePatterns: bin.includePatterns.toSorted((a, b) => a.localeCompare(b)),
+        ...(group.pretestBuildMode ? { pretestBuildMode: group.pretestBuildMode } : {}),
         runner: group.runner,
         requiresDist: group.requiresDist,
       });
@@ -2066,26 +2146,6 @@ export function createNodeTestShardBundles(
   }
 
   return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
-}
-
-/**
- * Mark one semantic cache producer without coupling persistence to matrix order.
- * The broad core unit graph is shared by most shards; precise changed plans
- * fall back to their first (normally only) job.
- */
-export function assignVitestFsCacheWriter<T extends Pick<NodeTestShard, "shardName" | "groups">>(
-  shards: T[],
-): Array<T & { saveVitestFsCache: boolean }> {
-  const preferredIndex = shards.findIndex(
-    (shard) =>
-      shard.shardName.startsWith("core-unit-fast") ||
-      shard.groups?.some((group) => group.shard_name.startsWith("core-unit-fast")),
-  );
-  const writerIndex = preferredIndex >= 0 ? preferredIndex : shards.length > 0 ? 0 : -1;
-  return shards.map((shard, index) => ({
-    ...shard,
-    saveVitestFsCache: index === writerIndex,
-  }));
 }
 
 function listAgentSupportTestFiles(): string[] {
@@ -2111,20 +2171,24 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
 
 function splitOversizedGithubCompactGroup(
   group: NodeTestShardGroup,
+  runnerBackend: string | undefined,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
-  const seconds = estimateCompactGroupSeconds(group, "github");
-  if (seconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
-    return [{ group, seconds }];
+  // Hybrid retries run hosted, so retain hosted-derived striping even though
+  // Blacksmith timings own its attempt-1 packing weights.
+  const githubSeconds = estimateCompactGroupSeconds(group, "github");
+  const profileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
+  if (githubSeconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
+    return [{ group, seconds: profileSeconds }];
   }
 
   const includePatterns =
     group.includePatterns ?? WHOLE_CONFIG_SPLIT_FILE_LISTERS.get(group.shard_name)?.();
   if (!includePatterns || includePatterns.length === 0) {
-    return [{ group, seconds }];
+    return [{ group, seconds: profileSeconds }];
   }
 
-  const stripeCount = Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS);
-  const splitSeconds = Math.ceil(seconds / stripeCount);
+  const stripeCount = Math.ceil(githubSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS);
+  const splitSeconds = Math.ceil(profileSeconds / stripeCount);
   return createStripedBatches(includePatterns, stripeCount, stripeFileWeight).map(
     (patterns, index) => ({
       group: {
@@ -2145,7 +2209,7 @@ function createCompactNodeTestShardBundles(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
   const groupsByRunner = new Map<string, NodeTestShardGroup[]>();
-  const hostedSplitSeconds = new Map<string, number>();
+  const synthesizedSplitSeconds = new Map<string, number>();
 
   for (const shard of shards) {
     const runner = resolveCiNodeTestRunner(shard);
@@ -2155,17 +2219,20 @@ function createCompactNodeTestShardBundles(
       configs: shard.configs,
       ...(shard.env ? { env: shard.env } : {}),
       ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+      ...(shard.pretestBuildMode ? { pretestBuildMode: shard.pretestBuildMode } : {}),
       requiresDist: shard.requiresDist,
       runner,
       shard_name: shard.shardName,
     });
-    const plannedGroups = usesGithubRunnerProfile(options.runnerBackend)
-      ? splitOversizedGithubCompactGroup(group)
+    const plannedGroups = usesExpandedRunnerProfile(options.runnerBackend)
+      ? splitOversizedGithubCompactGroup(group, options.runnerBackend)
       : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       groups.push(planned.group);
-      if (usesGithubRunnerProfile(options.runnerBackend)) {
-        hostedSplitSeconds.set(planned.group.shard_name, planned.seconds);
+      // Synthesized hosted stripes need their divided parent weight. Native
+      // groups must reach the runner-specific stripe estimator during rebalance.
+      if (planned.group.shard_name !== group.shard_name) {
+        synthesizedSplitSeconds.set(planned.group.shard_name, planned.seconds);
       }
     }
     groupsByRunner.set(key, groups);
@@ -2173,10 +2240,10 @@ function createCompactNodeTestShardBundles(
 
   const compactJobs: CompactNodeTestShard[] = [];
   const estimateGroupSeconds = (group: NodeTestShardGroup) =>
-    hostedSplitSeconds.get(group.shard_name) ??
+    synthesizedSplitSeconds.get(group.shard_name) ??
     estimateCompactGroupSeconds(group, options.runnerBackend);
   const estimateStripeSeconds = (group: NodeTestShardGroup) =>
-    hostedSplitSeconds.get(group.shard_name) ??
+    synthesizedSplitSeconds.get(group.shard_name) ??
     estimateCompactStripeSeconds(group, options.runnerBackend);
   for (const groups of groupsByRunner.values()) {
     // First-fit decreasing sets the existing registration count from the
@@ -2192,7 +2259,7 @@ function createCompactNodeTestShardBundles(
       const exclusive = isExclusiveCompactGroup(group);
       const secondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
-        : usesGithubRunnerProfile(options.runnerBackend)
+        : usesExpandedRunnerProfile(options.runnerBackend)
           ? group.runner.includes("-8vcpu-")
             ? COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS
             : COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS
@@ -2261,6 +2328,11 @@ function createCompactNodeTestShardBundles(
       compactJobs.push({
         checkName,
         groups: bin.groups,
+        ...(bin.groups.some((group) => group.pretestBuildMode === "private-qa")
+          ? { pretestBuildMode: "private-qa" }
+          : bin.groups.some((group) => group.pretestBuildMode === "runtime")
+            ? { pretestBuildMode: "runtime" }
+            : {}),
         requiresDist: firstGroup.requiresDist,
         runner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
@@ -2280,7 +2352,7 @@ function createCompactNodeTestShardBundles(
   }
 
   if (
-    usesGithubRunnerProfile(options.runnerBackend) &&
+    usesExpandedRunnerProfile(options.runnerBackend) &&
     compactJobs.length > COMPACT_GITHUB_NODE_TEST_JOB_CAP
   ) {
     throw new Error(

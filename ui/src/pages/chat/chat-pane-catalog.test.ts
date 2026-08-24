@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
@@ -10,13 +9,10 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { createSessionContext, createTestChatPane } from "./chat-pane.test-support.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 
 function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
@@ -47,49 +43,6 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
 }
 
 describe("chat pane catalog session lifecycle", () => {
-  it("shows the eligible catalog terminal action and dispatches its typed reference", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = {
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-101",
-    } satisfies CatalogSessionKey;
-    state.sessionKey = buildCatalogSessionKey(key);
-    state.terminalAvailable = true;
-    pane.catalogSession = {
-      threadId: key.threadId,
-      status: "idle",
-      archived: false,
-      canContinue: true,
-      canArchive: true,
-      canOpenTerminal: true,
-    };
-    const container = document.createElement("div");
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        undefined,
-        true,
-        undefined,
-        false,
-      ),
-      container,
-    );
-    let detail: unknown;
-    const listener = (event: Event) => {
-      detail = (event as CustomEvent).detail;
-    };
-    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-    try {
-      (container.querySelector('[aria-label="Open in terminal"]') as HTMLElement).click();
-    } finally {
-      window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-    }
-    expect(detail).toEqual({ open: true, agentId: "main", catalog: key });
-  });
-
   it("finds continuation metadata on a later catalog page", async () => {
     const key = {
       catalogId: "codex",
@@ -283,7 +236,7 @@ describe("chat pane catalog session lifecycle", () => {
     const readPage: SessionsCatalogReadResult = {
       hostId: "gateway:local",
       threadId: "thread-1",
-      items: [{ id: "u1", type: "userMessage", text: "hi" }],
+      items: [{ id: "x1", type: "other" }],
       // Same cursor the request was made with: a stale provider that would loop.
       nextCursor: "cursor-1",
     };
@@ -303,6 +256,31 @@ describe("chat pane catalog session lifecycle", () => {
 
     expect(progressed).toBe(false);
     // Cursor cleared → hasOlderMessages() is false, so the observer will not refire.
+    expect(pane.catalogCursor).toBeUndefined();
+  });
+
+  it("counts visible messages on an exhausted final page as progress", async () => {
+    const readPage: SessionsCatalogReadResult = {
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      items: [{ id: "u1", type: "userMessage", text: "oldest message" }],
+    };
+    const client = {
+      request: vi.fn(async () => readPage),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    state.sessionKey = key;
+    pane.sessionKey = key;
+    pane.catalogCursor = "final-page";
+
+    const progressed = await pane.loadCatalogSession(
+      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
+      true,
+    );
+
+    expect(progressed).toBe(true);
+    expect(pane.catalogMessages).toHaveLength(1);
     expect(pane.catalogCursor).toBeUndefined();
   });
 

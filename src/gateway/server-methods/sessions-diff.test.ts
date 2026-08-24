@@ -17,6 +17,7 @@ import {
 } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
 }));
 
@@ -134,6 +136,23 @@ describe("loadSessionDiff", () => {
     mockSession(repoRoot);
     const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
     expect(result.unavailableReason).toBe("not_git");
+  });
+
+  it("shows the full diff without mutating a pending baseline claim", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");
+    mockSession(repoRoot, {
+      sessionDiffBaselineCapture: {
+        version: 1,
+        captureId: "pending-capture",
+        status: "pending",
+      },
+    });
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(["pending.txt"]);
+    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it("uses the persisted fixed-store owner for a bare session checkout", async () => {
@@ -558,6 +577,7 @@ describe("ensureSessionDiffBaseline", () => {
       sessionId: "existing-session",
       updatedAt: Date.now(),
     };
+    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
 
     const result = await ensureSessionDiffBaseline({
       cwd: "/unused",

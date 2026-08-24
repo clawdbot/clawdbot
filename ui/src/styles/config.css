@@ -334,47 +334,107 @@
 
 /* Preview swatches are theme-invariant and must not inherit the active theme. */
 /* stylelint-disable color-no-hex */
-.settings-theme-card--claw {
+.settings-theme-card--claw,
+.settings-accent-theme--claw {
   --theme-chip-bg: #0e1015;
   --theme-chip-accent: #ff5c5c;
   --theme-chip-accent-2: #14b8a6;
 }
 
-.settings-theme-card--knot {
+.settings-theme-card--knot,
+.settings-accent-theme--knot {
   --theme-chip-bg: #080808;
   --theme-chip-accent: #e5243b;
   --theme-chip-accent-2: #8b1a2b;
 }
 
-.settings-theme-card--dash {
+.settings-theme-card--dash,
+.settings-accent-theme--dash {
   --theme-chip-bg: #1a1210;
   --theme-chip-accent: #b47840;
   --theme-chip-accent-2: #a88050;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--claw {
+:root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
   --theme-chip-bg: #faf9f7;
   --theme-chip-accent: #bd4531;
   --theme-chip-accent-2: #0d9488;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--knot {
+:root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
   --theme-chip-bg: #f9f9fb;
   --theme-chip-accent: #c41e30;
   --theme-chip-accent-2: #7a1420;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--dash {
+:root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
   --theme-chip-bg: #f7f2ec;
   --theme-chip-accent: #6e4828;
   --theme-chip-accent-2: #6a4e30;
 }
 /* stylelint-enable color-no-hex */
 
-.settings-theme-card--custom {
+.settings-theme-card--custom,
+.settings-accent-theme--custom {
   --theme-chip-bg: var(--bg);
   --theme-chip-accent: var(--accent);
   --theme-chip-accent-2: var(--accent-2);
+}
+
+.settings-accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-accent-swatch {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 50%;
+  background: var(--settings-accent-swatch, var(--accent));
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-accent-swatch--active {
+  box-shadow:
+    0 0 0 2px var(--bg-elevated),
+    0 0 0 4px var(--accent);
+}
+
+.settings-accent-swatch__check {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--accent-foreground);
+}
+
+.settings-accent-swatch__check svg {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-accent-swatch--custom {
+  overflow: hidden;
+}
+
+.settings-accent-swatch--custom::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.settings-accent-swatch--custom::-webkit-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+.settings-accent-swatch--custom::-moz-color-swatch {
+  border: 0;
+  border-radius: 50%;
 }
 
 .settings-theme-import {
@@ -741,13 +801,24 @@
   gap: 0;
 }
 
+/* Memory subviews vary substantially in height. Keep the shared hero anchored
+   when switching between a view that needs the content scrollbar and one that
+   does not. */
+.shell--settings .content:has(.memory-page) {
+  scrollbar-gutter: stable;
+}
+
 .memory-page__panel {
   display: grid;
   gap: 14px;
 }
 
-.shell--settings .content:has(.settings-page) .content-header.hub-page-header {
+/* Overview and Memories render a .settings-page descendant, while Dreams does
+   not. Keep the shared header on the settings-page padding rhythm regardless
+   of which tab is active so its title and actions do not jump by one space. */
+.shell--settings .content:has(.memory-page) .content-header.hub-page-header {
   max-width: 1120px;
+  padding-inline: var(--space-4);
 }
 
 .memory-page__panel .settings-page,

@@ -10,7 +10,7 @@ import {
   requireQaBusMessageForAccount,
   searchQaBusMessages,
 } from "./bus-queries.js";
-import { createQaBusWaiterStore } from "./bus-waiters.js";
+import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
 import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 import type {
   QaBusAttachment,
@@ -86,6 +86,7 @@ export function createQaBusState() {
   const events: QaBusEvent[] = [];
   const acknowledgedPollCursors = new Map<string, number>();
   let cursor = 0;
+  let assertWritable = () => {};
   const waiters = createQaBusWaiterStore(() =>
     buildQaBusSnapshot({
       cursor,
@@ -125,6 +126,7 @@ export function createQaBusState() {
   const requireActiveMessageForAccount = (
     input: Pick<QaBusReadMessageInput, "accountId" | "messageId">,
   ): QaBusMessage => {
+    assertWritable();
     const message = requireQaBusMessageForAccount({ messages, input });
     if (message.deleted) {
       throw new Error(`qa-bus message was deleted: ${input.messageId}`);
@@ -149,6 +151,7 @@ export function createQaBusState() {
     nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
     toolCalls?: QaBusToolCall[];
   }): QaBusMessage => {
+    assertWritable();
     const thread = params.threadId ? threads.get(params.threadId) : undefined;
     if (
       thread &&
@@ -192,14 +195,15 @@ export function createQaBusState() {
   };
 
   return {
-    reset() {
+    reset(terminal = false) {
+      assertWritable = terminal ? throwQaBusClosed : assertWritable;
       conversations.clear();
       threads.clear();
       messages.clear();
       events.length = 0;
       // Keep the cursor monotonic across resets so long-poll clients do not
-      // miss fresh events and retained restart acknowledgements remain valid.
-      waiters.reset();
+      // miss events; terminal reset also fences late waiter timers.
+      waiters.reset(undefined, terminal);
     },
     getSnapshot() {
       return buildQaBusSnapshot({
@@ -263,6 +267,7 @@ export function createQaBusState() {
       return cloneMessage(message);
     },
     createThread(input: QaBusCreateThreadInput) {
+      assertWritable();
       const accountId = normalizeAccountId(input.accountId);
       const thread: QaBusThread = {
         id: `thread-${randomUUID()}`,
@@ -340,6 +345,7 @@ export function createQaBusState() {
       return searchQaBusMessages({ messages, input });
     },
     resolvePollCursor(input: QaBusPollInput = {}) {
+      assertWritable();
       const accountId = normalizeAccountId(input.accountId);
       const requestedCursor = input.cursor ?? 0;
       const acknowledgedCursor = acknowledgedPollCursors.get(accountId) ?? 0;

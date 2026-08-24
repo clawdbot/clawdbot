@@ -67,9 +67,7 @@ export function prepareInitialUserMessageHandoff(
       : undefined;
   const message: ApplicationInitialUserMessage = {
     role: "user",
-    content: buildUserChatMessageContentBlocks(item.text, durableAttachments, {
-      renderInlineImageDataUrls: true,
-    }),
+    content: buildUserChatMessageContentBlocks(item.text, durableAttachments),
     timestamp: item.createdAt,
     __openclaw: {
       idempotencyKey: `${runId}:user`,

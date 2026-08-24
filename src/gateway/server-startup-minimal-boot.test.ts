@@ -3,10 +3,12 @@
 // gateway boot tests do) hides startup work that materializes plugin runtime,
 // which is exactly how a startup stall shipped green while hanging every
 // ui-e2e suite that boots a minimal test gateway.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
+import { readLoggingConfig } from "../logging/config.js";
+import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 
@@ -16,8 +18,10 @@ import { getFreePort } from "../test-utils/ports.js";
 const BOOT_BUDGET_MS = 90_000;
 
 afterEach(() => {
+  resetLogger();
+  vi.unstubAllEnvs();
   resetConfigRuntimeState();
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 describe("gateway minimal boot smoke", () => {
@@ -38,7 +42,11 @@ describe("gateway minimal boot smoke", () => {
       },
     });
     const token = "gateway-bootstrap-test-token";
-    await state.writeConfig({ gateway: { auth: { mode: "token", token } }, plugins: {} });
+    await state.writeConfig({
+      gateway: { auth: { mode: "token", token } },
+      logging: { level: "debug" },
+      plugins: {},
+    });
     state.applyEnv();
 
     try {
@@ -60,6 +68,11 @@ describe("gateway minimal boot smoke", () => {
       });
 
       expect(bootstrap.ambientEnvTriggers).toBe("suppress");
+      vi.stubEnv(
+        "OPENCLAW_CONFIG_PATH",
+        `/tmp/openclaw-bootstrap-missing-${process.pid}-${Date.now()}.json`,
+      );
+      expect(readLoggingConfig()).toMatchObject({ level: "debug" });
     } finally {
       await state.cleanup();
     }

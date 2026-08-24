@@ -150,10 +150,18 @@ export default definePluginEntry({
     const registerWrite = (method: string, run: (params: unknown) => unknown) =>
       api.registerGatewayMethod(method, handle(run), { scope: "operator.write" });
 
+    // Process-wide service health does not read or mutate a user's durable profile/session state.
+    api.registerGatewayMethod(
+      "logbook.status",
+      handle(() => requireService().status()),
+      {
+        scope: "operator.read",
+        profileAccess: "independent",
+      },
+    );
+
     // Raw frame bytes are the most sensitive payload (full screen contents),
     // so they require write scope while derived text stays readable.
-    registerRead("logbook.status", () => requireService().status());
-
     registerRead("logbook.days", () => ({ days: requireService().listDays() }));
 
     registerRead("logbook.timeline", (params) => {

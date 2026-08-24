@@ -95,7 +95,7 @@ describe("worker admission", () => {
     ["environment-mismatch", () => admission({ environmentId: " worker-1 " })],
     ["bundle-mismatch", () => admission({ handshake: { ...RECEIPT, bundleHash: "b".repeat(64) } })],
     ["version-mismatch", () => admission({ handshake: { ...RECEIPT, openclawVersion: "other" } })],
-    ["session-mismatch", () => admission({ sessionId: "session-other", runId: "run-other" })],
+    ["placement-mismatch", () => admission({ sessionId: "session-other", runId: "run-other" })],
     ["owner-epoch-mismatch", () => admission({ ownerEpoch: 2 })],
     ["rpc-set-mismatch", () => admission({ rpcSetVersion: 2 })],
     [

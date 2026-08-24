@@ -24,6 +24,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
@@ -38,7 +39,10 @@ export function renderChannels(props: ChannelsProps) {
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
-  const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
+  const partialWarnings =
+    props.snapshot?.warnings
+      ?.filter((warning) => warning.trim())
+      .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
 
@@ -98,7 +102,10 @@ export function renderChannels(props: ChannelsProps) {
           description: t("channels.hub.addSubtitle"),
         },
         html`
-          ${available.map((key) => renderAvailableRow(key, props))} ${renderBrowseAllRow(props)}
+          ${!props.canAdmin
+            ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
+            : html`${available.map((key) => renderAvailableRow(key, props))}
+              ${renderBrowseAllRow(props)}`}
         `,
       )}
     `)}
@@ -112,24 +119,26 @@ export function renderChannels(props: ChannelsProps) {
           onSetup: () => props.onStartSetup(selected),
         })
       : nothing}
-    ${renderChannelWizard({
-      wizard: props.wizard,
-      channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
-      multiselectValues: props.wizardMultiselect,
-      onToggleMultiselect: props.onWizardToggleMultiselect,
-      textValue: props.wizardTextValue,
-      secretVisible: props.wizardSecretVisible,
-      onTextInput: props.onWizardTextInput,
-      onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
-      onAnswer: props.onWizardAnswer,
-      onClose: props.onWizardClose,
-      whatsappQrDataUrl: props.whatsappQrDataUrl,
-      whatsappMessage: props.whatsappMessage,
-      whatsappConnected: props.whatsappConnected,
-      whatsappBusy: props.whatsappBusy,
-      onWhatsAppStart: props.onWhatsAppStart,
-      onWhatsAppWait: props.onWhatsAppWait,
-    })}
+    ${props.canAdmin
+      ? renderChannelWizard({
+          wizard: props.wizard,
+          channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
+          multiselectValues: props.wizardMultiselect,
+          onToggleMultiselect: props.onWizardToggleMultiselect,
+          textValue: props.wizardTextValue,
+          secretVisible: props.wizardSecretVisible,
+          onTextInput: props.onWizardTextInput,
+          onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
+          onAnswer: props.onWizardAnswer,
+          onClose: props.onWizardClose,
+          whatsappQrDataUrl: props.whatsappQrDataUrl,
+          whatsappMessage: props.whatsappMessage,
+          whatsappConnected: props.whatsappConnected,
+          whatsappBusy: props.whatsappBusy,
+          onWhatsAppStart: props.onWhatsAppStart,
+          onWhatsAppWait: props.onWhatsAppWait,
+        })
+      : nothing}
     ${renderChannelPairingPrompt(props)}
   `;
 }

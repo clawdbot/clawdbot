@@ -81,4 +81,28 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       { recordId: record.id, status: "expired", requestCommand: "echo expired" },
     ]);
   });
+
+  it("rejects ask-fallback replay of a run-aborted cancellation", async () => {
+    installTimerMocks();
+    const manager = new ExecApprovalManager();
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-cancelled");
+    const decisionPromise = manager.register(record, 60_000);
+
+    // Dispatch fencing / run abort ends decision-less like a timeout, but its
+    // authority closed deliberately — replay must not re-admit through it.
+    const denied = manager.forceDenyDetailed(
+      "approval-cancelled",
+      "run-aborted",
+      { kind: "system", id: "worker-dispatch" },
+      "cancelled",
+    );
+    expect(denied.outcome).toBe("denied");
+    await expect(decisionPromise).resolves.toBeNull();
+
+    expect(manager.getSnapshot("approval-cancelled")).toMatchObject({
+      status: "cancelled",
+      terminalReason: "run-aborted",
+    });
+    expect(manager.consumeAskFallback("approval-cancelled")).toBe(false);
+  });
 });

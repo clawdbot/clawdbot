@@ -721,6 +721,19 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.isInsideReasoning()).toBe(false);
   });
 
+  it("distinguishes buffered syntax from strict visible text", () => {
+    const syntax = createReasoningTagTextPartitioner();
+    const visible = createReasoningTagTextPartitioner();
+
+    expect(syntax.pushVisible("Use `<thi")).toEqual([]);
+    expect(syntax.hasPendingSyntax()).toBe(true);
+
+    visible.markStrict();
+    expect(visible.pushVisible("Interim answer.")).toEqual([]);
+    expect(visible.hasPending()).toBe(true);
+    expect(visible.hasPendingSyntax()).toBe(false);
+  });
+
   it("accepts later content after an intermediate flush boundary", () => {
     const partitioner = createReasoningTagTextPartitioner();
 

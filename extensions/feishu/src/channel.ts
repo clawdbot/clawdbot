@@ -1,5 +1,6 @@
 // Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import {
@@ -22,7 +23,7 @@ import {
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
-  projectConfigAccountIdWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -331,6 +332,12 @@ const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningC
     ];
   },
 });
+const collectFeishuOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectFeishuSecurityWarnings,
+  checkId: "channels.feishu.groups.open",
+  severity: "critical",
+  title: "Feishu security warning",
+});
 
 function describeFeishuMessageTool({
   cfg,
@@ -347,7 +354,7 @@ function describeFeishuMessageTool({
     enabledAccounts.length > 0 ||
     (!accountId &&
       cfg.channels?.feishu?.enabled !== false &&
-      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined)));
+      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined, cfg)));
   if (enabledAccounts.length === 0) {
     return {
       actions: [],
@@ -663,10 +670,7 @@ function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionConte
   if (!configured) {
     return undefined;
   }
-  const agentId = (ctx.agentId?.trim() || "main").toLowerCase();
-  const identityName = ctx.cfg.agents?.list
-    ?.find((agent) => agent.id.trim().toLowerCase() === agentId)
-    ?.identity?.name?.trim();
+  const identityName = resolveAgentConfig(ctx.cfg, ctx.agentId ?? "main")?.identity?.name?.trim();
   const resolved =
     configured === "auto"
       ? identityName
@@ -989,6 +993,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
       },
       conversationBindings: {
+        bindingStore: "adapter",
         defaultTopLevelPlacement: "current",
         buildModelOverrideParentCandidates: ({ parentConversationId }) =>
           buildFeishuModelOverrideParentCandidates(parentConversationId),
@@ -1050,6 +1055,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         collectRuntimeConfigAssignments,
       },
       actions: {
+        providerOwnedReadGates: true,
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
@@ -1808,10 +1814,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       message: feishuMessageAdapter,
     },
     security: {
-      collectWarnings: projectConfigAccountIdWarningCollector<{
-        cfg: ClawdbotConfig;
-        accountId?: string | null;
-      }>(collectFeishuSecurityWarnings),
+      collectWarnings: ({ cfg, accountId }) => collectFeishuOpenGroupFindings({ cfg, accountId }),
       collectAuditFindings: ({ cfg }) => collectFeishuSecurityAuditFindings({ cfg }),
     },
     pairing: {

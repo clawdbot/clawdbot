@@ -21,6 +21,7 @@ import {
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
   WORKSPACE_VANISHED_ERROR_CODE,
 } from "./workspace.js";
@@ -112,6 +113,20 @@ describe("workspace setup-only SQLite safety", () => {
       code: WORKSPACE_VANISHED_ERROR_CODE,
       name: "WorkspaceVanishedError",
     });
+  });
+
+  it("accepts a customized profile with migrated setup-only state", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
+    await fs.writeFile(identityPath, "# Existing identity\n");
+    mergeWorkspaceSetupState(tempDir, {
+      setupCompletedAt: "2026-07-15T10:01:00.000Z",
+    });
+
+    await expect(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    ).resolves.toMatchObject({ dir: tempDir });
+    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe("# Existing identity\n");
   });
 
   it("does not mistake an old generated template for setup-only customization", async () => {

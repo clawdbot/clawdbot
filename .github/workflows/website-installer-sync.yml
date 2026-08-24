@@ -38,9 +38,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Install ShellCheck
-        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
-
       - name: Shell syntax
         run: bash -n scripts/install.sh scripts/install-cli.sh
 
@@ -262,6 +259,60 @@ jobs:
         with:
           node-version: 24
 
+      - name: install.ps1 strict option binding
+        shell: pwsh
+        run: |
+          $scriptPath = (Resolve-Path ".\scripts\install.ps1").Path
+          $env:OPENCLAW_DRY_RUN = "1"
+          $env:OPENCLAW_NO_ONBOARD = "1"
+
+          function Invoke-InstallerProbe {
+            param(
+              [string]$HostCommand,
+              [string[]]$InstallerArgs
+            )
+
+            $output = @(& $HostCommand -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scriptPath @InstallerArgs 2>&1 | ForEach-Object { $_.ToString() })
+            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
+          }
+
+          foreach ($hostCommand in @("powershell.exe", "pwsh.exe")) {
+            if (-not (Get-Command $hostCommand -ErrorAction SilentlyContinue)) {
+              throw "Required PowerShell host is unavailable: $hostCommand"
+            }
+
+            $invalidCases = @(
+              @{ Label = "unknown option"; Args = @("-DryRnu") },
+              @{ Label = "positional argument"; Args = @("-DryRun", "beta") }
+            )
+            foreach ($invalidCase in $invalidCases) {
+              $result = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs $invalidCase.Args
+              if ($result.ExitCode -eq 0 -or $result.Output -match '\[OK\] Windows detected') {
+                throw "$hostCommand accepted $($invalidCase.Label).`n$($result.Output)"
+              }
+            }
+
+            $env:OPENCLAW_INSTALL_METHOD = "bogus"
+            try {
+              $invalidEnvironment = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-NoOnboard")
+              if ($invalidEnvironment.ExitCode -eq 0 -or $invalidEnvironment.Output -match '\[OK\] Windows detected') {
+                throw "$hostCommand accepted invalid OPENCLAW_INSTALL_METHOD.`n$($invalidEnvironment.Output)"
+              }
+            } finally {
+              Remove-Item Env:OPENCLAW_INSTALL_METHOD -ErrorAction SilentlyContinue
+            }
+
+            $help = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-?")
+            if ($help.ExitCode -ne 0 -or $help.Output -match '\[OK\] Windows detected') {
+              throw "$hostCommand failed to handle -? before installer startup.`n$($help.Output)"
+            }
+
+            $valid = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-DryRun", "-NoOnboard", "-InstallMethod", "npm")
+            if ($valid.ExitCode -ne 0 -or $valid.Output -notmatch '\[OK\] Install method: npm') {
+              throw "$hostCommand rejected documented named options.`n$($valid.Output)"
+            }
+          }
+
       - name: install.ps1 dry run
         shell: pwsh
         run: .\scripts\install.ps1 -DryRun -NoOnboard -InstallMethod npm
@@ -332,10 +383,6 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
-
-      - name: Install ShellCheck
-        if: steps.changes.outputs.changed == 'true'
-        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
 
       - name: Verify website with synced installers
         if: steps.changes.outputs.changed == 'true'

@@ -11,6 +11,7 @@ import {
   managedImageCacheProofDir,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -836,7 +837,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -907,16 +908,10 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      // Collapsed rails render nothing; the title-bar toggle carries the
-      // changed-file badge.
-      const opener = page.locator(".chat-workspace-toggle");
-      await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await opener.click();
-      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
-      await expect.poll(() => opener.getAttribute("aria-expanded")).toBe("true");
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -936,22 +931,17 @@ suite.define(() => {
         }),
       ).toBe(0);
 
-      await page.locator(".chat-workspace-rail__collapse-toggle").click();
-      await opener.waitFor({ timeout: 10_000 });
+      await page.getByRole("button", { name: "Close Files" }).click();
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await opener.click();
-      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
-      await page.setViewportSize({ height: 900, width: 760 });
-      const workbench = page.locator(".chat-workbench");
-      await expect
-        .poll(() => workbench.getAttribute("class"))
-        .toContain("chat-workbench--dock-bottom");
+      await page.setViewportSize({ height: 900, width: 640 });
+      await page.locator(".side-panel--narrow").waitFor();
       const workspaceRail = page.locator(".chat-workspace-rail");
       await expect
         .poll(async () => {
@@ -995,7 +985,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });

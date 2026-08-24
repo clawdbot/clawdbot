@@ -15,8 +15,10 @@ import {
   type DiscoverAuthStorageOptions,
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
-import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
-import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
+import type {
+  PluginModelCatalogMetadataSnapshot,
+  PersistedPluginModelCatalog,
+} from "./plugin-model-catalog.js";
 import {
   AuthStorage,
   ModelRegistry,

@@ -16,7 +16,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
-  agentCfgContextTokens?: number;
   cfg?: OpenClawConfig;
   provider?: string;
 }): number {
@@ -25,7 +24,6 @@ export function resolveMemoryFlushContextWindowTokens(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.modelId,
-      contextTokensOverride: params.agentCfgContextTokens,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
@@ -76,7 +74,6 @@ export function resolveResponsesServerCompactionThreshold(params: {
         baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
         contextWindow:
           configuredModel?.contextWindow ??
-          providerConfig?.contextWindow ??
           resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
       },
       extraParams,
@@ -84,6 +81,11 @@ export function resolveResponsesServerCompactionThreshold(params: {
   }
   const defaultOpenAIBaseUrl =
     normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
+  const activeContextTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider,
+    modelId,
+  });
   return resolveOpenAIResponsesServerCompactionPlan(
     {
       provider,
@@ -93,10 +95,8 @@ export function resolveResponsesServerCompactionThreshold(params: {
         (normalizedProvider === "openai" ? "openai-responses" : undefined),
       baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
       compat: configuredModel?.compat,
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.contextWindow ??
-        resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+      contextTokens: configuredModel?.contextTokens ?? activeContextTokens,
+      contextWindow: configuredModel?.contextWindow ?? activeContextTokens,
     },
     extraParams,
   ).threshold;

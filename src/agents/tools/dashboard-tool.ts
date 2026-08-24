@@ -40,7 +40,10 @@ const BOARD_PLUGIN_KIND_REGEX = /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,
 
 const DashboardToolSchema = Type.Object(
   {
-    action: Type.String({ enum: [...DASHBOARD_ACTIONS], description: "Dashboard action" }),
+    action: Type.String({
+      enum: [...DASHBOARD_ACTIONS],
+      description: "Dashboard action; widget_put creates or updates trusted plugin widgets only",
+    }),
     tabId: Type.Optional(
       Type.String({ pattern: BOARD_TAB_ID_PATTERN, description: "Stable tab slug" }),
     ),
@@ -72,7 +75,8 @@ const DashboardToolSchema = Type.Object(
     pluginKind: Type.Optional(
       Type.String({
         pattern: BOARD_PLUGIN_KIND_PATTERN,
-        description: "Plugin widget kind, for example workboard:card or workboard:mini",
+        description:
+          "Plugin widget kind, for example session:progress, workboard:card, workboard:mini, or workboard:board",
       }),
     ),
     props: Type.Optional(
@@ -242,11 +246,40 @@ function emitBoardCommand(params: {
   return connIds.size;
 }
 
+const WIDGET_CONTENT_UPDATE_PATHS = {
+  html: "Use its HTML authoring capability; discover it in the tool catalog and update the same name.",
+  plugin: "Use widget_put with the same name and pluginKind.",
+  registered:
+    "Use its registered-source authoring capability; discover it in the tool catalog and update the same source kind and name.",
+  "mcp-app": "Update through the originating MCP app.",
+} as const;
+
 function snapshotResult(snapshot: BoardSnapshot) {
+  const contentUpdatePaths: Record<string, string> = {};
+  for (const widget of snapshot.widgets) {
+    if (!widget.contentOwner) {
+      throw new ToolInputError(`dashboard widget ${widget.name} is missing content ownership`);
+    }
+    contentUpdatePaths[widget.contentOwner] = WIDGET_CONTENT_UPDATE_PATHS[widget.contentOwner];
+  }
+  const details = {
+    ...snapshot,
+    ...(snapshot.widgets.length > 0 ? { contentUpdatePaths } : {}),
+  };
   return textResult(
-    `Dashboard revision ${snapshot.revision}: ${snapshot.tabs.length} tabs, ${snapshot.widgets.length} widgets\n${JSON.stringify(snapshot)}`,
-    snapshot,
+    `Dashboard revision ${snapshot.revision}: ${snapshot.tabs.length} tabs, ${snapshot.widgets.length} widgets\n${JSON.stringify(details)}`,
+    details,
   );
+}
+
+function commandResult(delivered: number) {
+  return delivered === 0
+    ? textResult("Dashboard unavailable. Connect Control UI and retry.", {
+        status: "unavailable",
+        code: "UNAVAILABLE",
+        message: "Connect Control UI and retry.",
+      })
+    : textResult(`Dashboard command sent to ${delivered} client(s)`, { ok: true, delivered });
 }
 
 export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTool {
@@ -256,7 +289,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). Widgets use stable names. Create trusted plugin widgets with widget_put; examples: workboard:card props {cardId}, workboard:mini props {boardId, limit}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Keep one ad hoc visualization inline; use only for an explicit dashboard request or multiple non-code visualizations. Read layout; widget_put updates plugin widgets only. Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). focus_tab and set_chat_dock require a connected Control UI. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Plugin examples: session:progress props {sessionKey?} renders the session's live progress card (omit sessionKey for the current session), workboard:card props {cardId}, workboard:mini props {boardId, limit}, workboard:board props {boardId}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -279,10 +312,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
             tabId: readTabId(params),
           },
         });
-        return textResult(`Dashboard command sent to ${delivered} client(s)`, {
-          ok: true,
-          delivered,
-        });
+        return commandResult(delivered);
       }
       if (action === "set_chat_dock") {
         const dock = readDock(params, "dock");
@@ -294,10 +324,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
           agentId: opts.agentId,
           command: { kind: "set_chat_dock", dock },
         });
-        return textResult(`Dashboard command sent to ${delivered} client(s)`, {
-          ok: true,
-          delivered,
-        });
+        return commandResult(delivered);
       }
       if (action === "widget_put") {
         const pluginKind = readToolStringParam(params, "pluginKind", { required: true });

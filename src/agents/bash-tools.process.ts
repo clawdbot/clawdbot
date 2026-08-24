@@ -11,6 +11,7 @@ import { cancelBackgroundExecSession } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
   type ProcessSession,
+  compareProcessSessionStartOrder,
   deleteSession,
   drainFinishedSession,
   drainSession,
@@ -316,9 +317,26 @@ export function createProcessTool(
       };
 
       if (params.action === "list") {
-        const running = listRunningSessions()
+        const sessions = [...listRunningSessions(), ...listFinishedSessions()]
           .filter((s) => isInScope(s))
+          .toSorted(compareProcessSessionStartOrder)
           .map((s) => {
+            if ("endedAt" in s) {
+              return {
+                sessionId: s.id,
+                status: s.status,
+                startedAt: s.startedAt,
+                endedAt: s.endedAt,
+                runtimeMs: s.endedAt - s.startedAt,
+                cwd: s.cwd,
+                command: s.command,
+                name: deriveSessionName(s.command),
+                tail: s.tail,
+                truncated: s.truncated,
+                exitCode: s.exitCode ?? undefined,
+                exitSignal: s.exitSignal ?? undefined,
+              };
+            }
             const runtime = describeRunningSession(s);
             return {
               sessionId: s.id,
@@ -337,31 +355,13 @@ export function createProcessTool(
               lastOutputAt: runtime.lastOutputAt,
             };
           });
-        const finished = listFinishedSessions()
-          .filter((s) => isInScope(s))
-          .map((s) => ({
-            sessionId: s.id,
-            status: s.status,
-            startedAt: s.startedAt,
-            endedAt: s.endedAt,
-            runtimeMs: s.endedAt - s.startedAt,
-            cwd: s.cwd,
-            command: s.command,
-            name: deriveSessionName(s.command),
-            tail: s.tail,
-            truncated: s.truncated,
-            exitCode: s.exitCode ?? undefined,
-            exitSignal: s.exitSignal ?? undefined,
-          }));
-        const lines = [...running, ...finished]
-          .toSorted((a, b) => b.startedAt - a.startedAt)
-          .map((s) => {
-            const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
-            const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
-            return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
-              formatDurationCompact(s.runtimeMs) ?? "n/a"
-            }${marker} :: ${label}`;
-          });
+        const lines = sessions.map((s) => {
+          const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+          const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
+          return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
+            formatDurationCompact(s.runtimeMs) ?? "n/a"
+          }${marker} :: ${label}`;
+        });
         return {
           content: [
             {
@@ -369,7 +369,7 @@ export function createProcessTool(
               text: lines.join("\n") || "No running or recent sessions.",
             },
           ],
-          details: { status: "completed", sessions: [...running, ...finished] },
+          details: { status: "completed", sessions },
         };
       }
 
@@ -665,6 +665,8 @@ export function createProcessTool(
             );
           }
           resetPollRetrySuggestion(params.sessionId);
+          // The kill was performed; "failed" here would flag a successful
+          // action as a tool error and invite the model to retry it.
           return {
             content: [
               {
@@ -673,7 +675,7 @@ export function createProcessTool(
               },
             ],
             details: {
-              status: "failed",
+              status: "completed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
@@ -716,6 +718,8 @@ export function createProcessTool(
             scopedSession.backgrounded = false;
             deleteSession(params.sessionId);
             resetPollRetrySuggestion(params.sessionId);
+            // Removal succeeded (termination requested + registry row dropped);
+            // match the finished-session remove branch's success shape.
             return {
               content: [
                 {
@@ -724,7 +728,7 @@ export function createProcessTool(
                 },
               ],
               details: {
-                status: "failed",
+                status: "completed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
               },
             };

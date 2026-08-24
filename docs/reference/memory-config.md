@@ -179,13 +179,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 `/v1/embeddings` server that should not inherit global OpenAI chat credentials.
 
 <ParamField path="remote.baseUrl" type="string">
-  Custom API base URL.
+  Custom API base URL. Provider credentials and headers are inherited only when this resolves to the provider's configured destination.
 </ParamField>
 <ParamField path="remote.apiKey" type="string">
-  Override API key.
+  API key owned by the remote destination. Set this when `remote.baseUrl` points somewhere other than the provider's configured destination.
 </ParamField>
 <ParamField path="remote.headers" type="object">
-  Extra HTTP headers (merged with provider defaults).
+  Extra HTTP headers owned by the remote destination. Provider defaults are merged only for the provider's configured destination.
 </ParamField>
 
 ```json5
@@ -459,7 +459,7 @@ Index session transcripts and surface them via `memory_search`:
 | `sources`                     | `string[]` | `["memory"]`                                               | Add `"sessions"` to include transcripts  |
 
 <Warning>
-Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
+Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Active transcripts live in the agent's SQLite database, while retained transcript artifacts can live on disk. Treat access to both as part of the same trust boundary.
 </Warning>
 
 <Note>
@@ -476,10 +476,11 @@ when you intentionally want both representations.
 
 Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
-`tree` visibility exposes the current session, sessions it spawned, and
-same-agent group sessions watched through ambient group awareness. Other
-unrelated sessions require `agent` visibility (or `all` only when cross-agent
-recall is also required and agent-to-agent policy allows it).
+`tree` visibility exposes the current session and sessions it spawned. When
+the caller is the canonical main session, it covers every same-agent session.
+Non-main callers require `agent` visibility for unrelated same-agent sessions
+(or `all` when cross-agent recall is also required and agent-to-agent policy
+allows it).
 
 `rememberAcrossConversations` does not widen that setting. It supplies a
 separate runtime-only authorization limited to same-agent private

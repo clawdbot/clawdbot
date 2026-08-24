@@ -6,6 +6,7 @@ import type {
   AgentsFilesListResult,
   AgentsFilesSetResult,
 } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 
 type AgentFilesState = {
   client: GatewayBrowserClient | null;
@@ -38,7 +39,7 @@ export async function loadAgentFileContent(
   state: AgentFilesState,
   agentId: string,
   name: string,
-  opts?: { force?: boolean; preserveDraft?: boolean },
+  opts?: { force?: boolean },
 ): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected || state.agentFilesLoading) {
@@ -61,21 +62,16 @@ export async function loadAgentFileContent(
       const content = res.file.content ?? "";
       const previousBase = state.agentFileContents[name] ?? "";
       const currentDraft = state.agentFileDrafts[name];
-      const preserveDraft = opts?.preserveDraft ?? true;
       state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      if (
-        !preserveDraft ||
-        !Object.hasOwn(state.agentFileDrafts, name) ||
-        currentDraft === previousBase
-      ) {
+      if (!Object.hasOwn(state.agentFileDrafts, name) || currentDraft === previousBase) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
       return true;
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = String(err);
+      state.agentFilesError = formatUiError(err);
     }
     return false;
   } finally {
@@ -119,7 +115,7 @@ export async function saveAgentFile(
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = String(err);
+      state.agentFilesError = formatUiError(err);
     }
     return false;
   } finally {

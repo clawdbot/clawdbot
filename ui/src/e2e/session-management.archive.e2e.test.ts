@@ -312,6 +312,8 @@ suite.define(() => {
     });
     const selected = sessionRows[2]!;
     const selectedWithoutDerivedTitle = { ...selected, derivedTitle: undefined };
+    const archivedAt = baseTime + 1_000;
+    const archivedBy = { type: "human" as const, id: "profile-mira", label: "Mira" };
     const batchRows = [sessionRows[0]!, sessionRows[1]!, sessionRows[3]!];
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -451,7 +453,7 @@ suite.define(() => {
 
       const selectedRow = rowFor(selected.key);
       await gateway.setMethodResponse("sessions.describe", {
-        session: { ...selectedWithoutDerivedTitle, archived: true },
+        session: { ...selectedWithoutDerivedTitle, archived: true, archivedAt, archivedBy },
       });
       await selectedRow.hover();
       await selectedRow.getByRole("button", { name: "Open session menu" }).click();
@@ -469,6 +471,8 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
         archived: true,
+        archivedAt,
+        archivedBy,
         reason: "update",
         sessionKey: selected.key,
       });
@@ -524,6 +528,12 @@ suite.define(() => {
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
       await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
+      const archiveEvent = activePane.locator(".chat-notice", { hasText: "Archived by Mira" });
+      await archiveEvent.waitFor({ state: "visible", timeout: 10_000 });
+      await captureUiProof(page, "archive-attribution-notice-after.png");
+      await expect
+        .poll(() => activePane.locator(".chat-bubble", { hasText: "Archived by Mira" }).count())
+        .toBe(0);
 
       await archiveToast.getByRole("button", { name: "Dismiss" }).click();
       await archiveToast.waitFor({ state: "detached" });
@@ -535,12 +545,15 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
         archived: false,
+        archivedAt: null,
+        archivedBy: null,
         reason: "update",
         sessionKey: selected.key,
       });
 
       await assertSelectedRoute();
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
       await expect
         .poll(() =>
@@ -847,6 +860,7 @@ suite.define(() => {
       expect(requireRecord(request.params)).toMatchObject({
         archivedOnly: true,
         deleteTranscript: true,
+        expectedSessionId: `session:${key}`,
         key,
       });
       await row.waitFor({ state: "visible" });

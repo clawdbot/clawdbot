@@ -254,6 +254,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       }),
     );
     expect(result.state).toEqual({
+      currentTurnImageFailureCount: 0,
       prePromptMessageCount: 2,
       promptCache: undefined,
       systemPromptText: "runtime prompt",
@@ -283,6 +284,9 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(guardInput.getPromptCache()).toEqual({ cacheRead: 3 });
     expect(guardInput.getPromptCacheRetention()).toBe("long");
     expect(guardInput.getSystemPrompt()).toBe("updated prompt");
+    guardInput.onCurrentTurnImageFailure(2);
+    guardInput.onCurrentTurnImageFailure(1);
+    expect(result.state.currentTurnImageFailureCount).toBe(2);
   });
 
   it("publishes every cleanup owner before a later transport failure", async () => {

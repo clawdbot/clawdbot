@@ -20,8 +20,7 @@ import {
   scoreMatrixCryptoStateInStore,
 } from "../crypto-state-store.js";
 import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
-import type { MatrixAuth } from "./types.js";
-import type { MatrixStoragePaths } from "./types.js";
+import type { MatrixAuth, MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";

@@ -62,6 +62,9 @@
       "openclaw/plugin-sdk/file-access-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/file-access-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/node-selection-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/node-selection-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/heartbeat-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/heartbeat-runtime.d.ts"
       ],
@@ -95,6 +98,9 @@
       "openclaw/plugin-sdk/media-generation-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/media-generation-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/meeting-page-script-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/meeting-page-script-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/conversation-binding-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/conversation-binding-runtime.d.ts"
       ],
@@ -112,6 +118,9 @@
       ],
       "openclaw/plugin-sdk/tts-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/tts-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/channel-secret-owner-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-owner-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/channel-secret-tts-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-tts-runtime.d.ts"
@@ -355,9 +364,6 @@
       ],
       "openclaw/plugin-sdk/video-generation-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/video-generation-core": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-core.d.ts"
       ],
       "openclaw/plugin-sdk/realtime-transcription": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-transcription.d.ts"

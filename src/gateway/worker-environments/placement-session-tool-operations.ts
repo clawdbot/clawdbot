@@ -10,16 +10,9 @@ import {
 import { find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 
-type WorkerTurnToolBinding = {
-  sessionId: string;
-  environmentId: string;
-  ownerEpoch: number;
-  runId: string;
-};
-
 type WorkerSessionToolOperationStart =
-  | { kind: "execute"; claimId: string; operationSeed: string; childSessionKey?: string }
-  | { kind: "in-progress"; claimId: string }
+  | { kind: "execute"; operationSeed: string; childSessionKey?: string }
+  | { kind: "in-progress" }
   | { kind: "completed"; resultJson: string }
   | { kind: "unknown" }
   | { kind: "capacity" }
@@ -185,77 +178,47 @@ async function waitForWorkerSessionToolOperations(params: {
 
 export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRuntime) {
   const { instanceId, path, now, read, write } = runtime;
-  const exactWorkerClaim = (
-    db: DatabaseSync,
-    claim: WorkerSessionTurnClaim,
-  ): ReturnType<typeof getRequired> => {
-    if (claim.owner.kind !== "worker") {
-      throw new Error(`Session ${claim.sessionId} turn is not worker-owned`);
-    }
-    const current = getRequired(db, required(claim.sessionId, "session id"));
-    const persisted = current.turnClaim;
-    if (
-      (current.state !== "active" && current.state !== "draining") ||
-      current.environmentId !== claim.owner.environmentId ||
-      current.activeOwnerEpoch !== claim.owner.ownerEpoch ||
-      !persisted ||
-      persisted.owner !== "worker" ||
-      persisted.claimId !== claim.claimId ||
-      persisted.runId !== claim.runId ||
-      persisted.generation !== claim.placementGeneration ||
-      persisted.ownerEpoch !== claim.owner.ownerEpoch
-    ) {
+  const currentWorkerClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
+    const current = find(db, required(claim.sessionId, "session id"));
+    return claim.owner.kind === "worker" && current && isCurrentPlacementTurnClaim(current, claim)
+      ? current
+      : undefined;
+  };
+  const exactWorkerClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim): void => {
+    if (!currentWorkerClaim(db, claim)) {
       throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
     }
-    return current;
   };
-  const exactBindingClaim = (db: DatabaseSync, binding: WorkerTurnToolBinding) => {
-    const current = find(db, required(binding.sessionId, "session id"));
-    const persisted = current?.turnClaim;
-    if (
-      !current ||
-      (current.state !== "active" && current.state !== "draining") ||
-      current.environmentId !== binding.environmentId ||
-      current.activeOwnerEpoch !== binding.ownerEpoch ||
-      persisted?.owner !== "worker" ||
-      persisted.runId !== binding.runId ||
-      persisted.ownerEpoch !== binding.ownerEpoch
-    ) {
-      return undefined;
-    }
-    return { current, persisted };
-  };
-  const hasToolAuthority = (db: DatabaseSync, binding: WorkerTurnToolBinding, toolName: string) => {
-    const claim = exactBindingClaim(db, binding);
-    if (!claim) {
-      return undefined;
+  const hasToolAuthority = (db: DatabaseSync, claim: WorkerSessionTurnClaim, toolName: string) => {
+    if (!currentWorkerClaim(db, claim) || claim.owner.kind !== "worker") {
+      return false;
     }
     const authority = executeSqliteQuerySync(
       db,
       query(db)
         .selectFrom("worker_turn_tool_authorities")
         .selectAll()
-        .where("session_id", "=", binding.sessionId),
+        .where("session_id", "=", claim.sessionId),
     ).rows[0];
     if (
       !authority ||
-      authority.environment_id !== binding.environmentId ||
-      authority.owner_epoch !== binding.ownerEpoch ||
-      authority.placement_generation !== claim.persisted.generation ||
-      authority.claim_id !== claim.persisted.claimId ||
-      authority.run_id !== claim.persisted.runId
+      authority.environment_id !== claim.owner.environmentId ||
+      authority.owner_epoch !== claim.owner.ownerEpoch ||
+      authority.placement_generation !== claim.placementGeneration ||
+      authority.claim_id !== claim.claimId ||
+      authority.run_id !== claim.runId
     ) {
-      return undefined;
+      return false;
     }
     try {
       const names: unknown = JSON.parse(authority.tool_names_json);
-      return Array.isArray(names) &&
+      return (
+        Array.isArray(names) &&
         names.every((name) => typeof name === "string") &&
         names.includes(toolName)
-        ? claim
-        : undefined;
+      );
     } catch {
-      return undefined;
+      return false;
     }
   };
   return {
@@ -298,8 +261,21 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       });
     },
 
-    isWorkerTurnToolAuthorized(binding: WorkerTurnToolBinding, toolName: string): boolean {
-      return Boolean(hasToolAuthority(read(), binding, toolName));
+    isWorkerTurnToolAuthorized(claim: WorkerSessionTurnClaim, toolName: string): boolean {
+      return hasToolAuthority(read(), claim, toolName);
+    },
+
+    closeWorkerTurnToolAdmission(claim: WorkerSessionTurnClaim): void {
+      if (claim.owner.kind !== "worker") {
+        return;
+      }
+      write((db) => {
+        exactWorkerClaim(db, claim);
+        closeWorkerTurnToolAdmission(db, {
+          sessionId: claim.sessionId,
+          claimId: claim.claimId,
+        });
+      });
     },
 
     async closeWorkerTurnToolState(claim: WorkerSessionTurnClaim): Promise<void> {
@@ -334,24 +310,23 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
     },
 
     beginWorkerSessionToolOperation(params: {
-      binding: WorkerTurnToolBinding;
+      claim: WorkerSessionTurnClaim;
       toolName: "sessions_spawn" | "sessions_send";
       toolCallId: string;
       requestDigest: string;
       childSessionKey?: string;
     }): WorkerSessionToolOperationStart {
       return write((db) => {
-        const claim = hasToolAuthority(db, params.binding, params.toolName);
-        if (!claim) {
+        if (!hasToolAuthority(db, params.claim, params.toolName)) {
           return { kind: "unauthorized" };
         }
-        const claimId = claim.persisted.claimId;
+        const claimId = params.claim.claimId;
         const existing = executeSqliteQuerySync(
           db,
           query(db)
             .selectFrom("worker_session_tool_operations")
             .selectAll()
-            .where("source_session_id", "=", params.binding.sessionId)
+            .where("source_session_id", "=", params.claim.sessionId)
             .where("source_claim_id", "=", claimId)
             .where("tool_call_id", "=", params.toolCallId),
         ).rows[0];
@@ -374,7 +349,7 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
             return { kind: "unknown" };
           }
           if (existing.gateway_instance_id === instanceId) {
-            return { kind: "in-progress", claimId };
+            return { kind: "in-progress" };
           }
           // A second store can observe the row in tests and unsupported
           // multi-Gateway embeddings. Observation must not revoke the live
@@ -386,7 +361,7 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
           query(db)
             .selectFrom("worker_session_tool_operations")
             .select("tool_call_id")
-            .where("source_session_id", "=", params.binding.sessionId)
+            .where("source_session_id", "=", params.claim.sessionId)
             .where("source_claim_id", "=", claimId)
             .where("status", "=", "running"),
         ).rows.length;
@@ -400,7 +375,7 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
           query(db)
             .insertInto("worker_session_tool_operations")
             .values({
-              source_session_id: params.binding.sessionId,
+              source_session_id: params.claim.sessionId,
               source_claim_id: claimId,
               tool_call_id: params.toolCallId,
               tool_name: params.toolName,
@@ -416,7 +391,6 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
         );
         return {
           kind: "execute",
-          claimId,
           operationSeed,
           ...(params.childSessionKey ? { childSessionKey: params.childSessionKey } : {}),
         };

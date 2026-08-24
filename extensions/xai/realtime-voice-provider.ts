@@ -27,7 +27,7 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
         prefixPaddingMs: config.prefixPaddingMs,
         reasoningEffort: config.reasoningEffort,
         sessionResumption: config.sessionResumption,
-        resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg),
+        resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg, req.agentId),
       });
     },
   };

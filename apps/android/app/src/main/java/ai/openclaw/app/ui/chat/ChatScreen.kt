@@ -17,8 +17,8 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatPlanStepStatus
+import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
@@ -63,9 +63,9 @@ import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
-import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import ai.openclaw.app.ui.sessionPresentationTitle
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -168,7 +168,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -304,7 +303,7 @@ fun ChatScreen(
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
-  val planSteps by viewModel.chatPlanSteps.collectAsState()
+  val progressCard by viewModel.chatProgressCard.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val swarmGroups by viewModel.chatSwarmGroups.collectAsState()
   val sessionBranches by viewModel.chatSessionBranches.collectAsState()
@@ -789,8 +788,8 @@ fun ChatScreen(
       modifier = Modifier.weight(1f),
     )
 
-    if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
-      PlanChecklistPill(steps = planSteps)
+    progressCard?.let { card ->
+      ProgressCardPill(card = card)
     }
 
     ChatSwarmProgress(groups = swarmGroups)
@@ -1714,6 +1713,18 @@ internal fun ChatBubble(
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
+  val speaker =
+    when {
+      isUser -> nativeString("You")
+      normalizedRole == "system" -> nativeString("System")
+      else -> nativeString("OpenClaw")
+    }
+  val caption =
+    when {
+      live -> nativeString("OpenClaw · Live")
+      normalizedRole == "system" -> nativeString("System")
+      else -> null
+    }
   var visibleImageCount = 0
   val displayableContent =
     content.filter { part ->
@@ -1757,29 +1768,36 @@ internal fun ChatBubble(
       enabled = !live,
       listenActive = messageSpeech != null,
       onToggleListen = toggleListen,
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
+      modifier =
+        Modifier
+          .fillMaxWidth(if (isUser) 0.78f else 0.94f)
+          .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(7.dp),
-        color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
+        color = if (isUser) ClawTheme.colors.accentSoft else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
         contentColor = ClawTheme.colors.text,
-        border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
+        border =
+          BorderStroke(
+            1.dp,
+            when {
+              isUser -> ClawTheme.colors.accentBorder
+              live -> ClawTheme.colors.borderStrong
+              else -> ClawTheme.colors.border.copy(alpha = 0.45f)
+            },
+          ),
         tonalElevation = 1.dp,
         shadowElevation = 2.dp,
       ) {
         Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(
-            text =
-              when {
-                live -> nativeString("OpenClaw · Live")
-                isUser -> nativeString("You")
-                normalizedRole == "system" -> nativeString("System")
-                else -> nativeString("OpenClaw")
-              },
-            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
-            color = ClawTheme.colors.text,
-          )
+          caption?.let {
+            Text(
+              text = it,
+              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+              color = ClawTheme.colors.text,
+            )
+          }
           if (collapsibleUserText && messageText.isNotBlank()) {
             ChatUserMessageText(
               textParts = displayableContent.mapNotNull { it.text },
@@ -1904,7 +1922,7 @@ private fun ChatUserMessageText(
   if (preview != null && !expanded) {
     Text(
       text = preview,
-      style = mobileCallout,
+      style = ClawTheme.type.body,
       color = ClawTheme.colors.text,
     )
   } else {
@@ -1926,7 +1944,7 @@ private fun ChatUserMessageText(
     ) {
       Text(
         text = toggleLabel,
-        style = mobileCallout.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+        style = ClawTheme.type.body.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       )
     }
@@ -2108,12 +2126,13 @@ private fun ChatNotice(
 }
 
 @Composable
-private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
+private fun ProgressCardPill(card: ChatProgressCard) {
   var expanded by rememberSaveable { mutableStateOf(false) }
+  val steps = card.steps
   val currentStep =
     steps.firstOrNull { it.status == ChatPlanStepStatus.InProgress }
+      ?: steps.firstOrNull { it.status == ChatPlanStepStatus.Pending }
       ?: steps.lastOrNull { it.status == ChatPlanStepStatus.Completed }
-      ?: steps.first()
   val completedCount = steps.count { it.status == ChatPlanStepStatus.Completed }
 
   Surface(
@@ -2131,24 +2150,26 @@ private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
+        currentStep?.let { PlanStepMarker(status = it.status) }
         Text(
-          text = currentStep.step,
+          text = currentStep?.step ?: nativeString("Progress note"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.text,
           modifier = Modifier.weight(1f),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        Text(
-          text = "$completedCount/${steps.size}",
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-        )
+        if (steps.isNotEmpty()) {
+          Text(
+            text = "$completedCount/${steps.size}",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+          )
+        }
         Icon(
           imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-          contentDescription = if (expanded) nativeString("Collapse plan checklist") else nativeString("Expand plan checklist"),
+          contentDescription = if (expanded) nativeString("Collapse progress card") else nativeString("Expand progress card"),
           modifier = Modifier.size(16.dp),
           tint = ClawTheme.colors.textSubtle,
         )
@@ -2157,6 +2178,13 @@ private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
       if (expanded) {
         HorizontalDivider(color = ClawTheme.colors.border)
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+          card.markdown?.let { markdown ->
+            ChatMarkdown(
+              text = markdown,
+              textColor = ClawTheme.colors.text,
+              isStreaming = false,
+            )
+          }
           steps.forEach { step ->
             val textColor =
               when (step.status) {
@@ -2173,30 +2201,34 @@ private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-              Box(modifier = Modifier.width(14.dp), contentAlignment = Alignment.Center) {
-                when (step.status) {
-                  ChatPlanStepStatus.Completed ->
-                    Text(
-                      text = "✓",
-                      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Bold),
-                      color = ClawTheme.colors.success,
-                    )
-                  ChatPlanStepStatus.InProgress ->
-                    Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
-                  ChatPlanStepStatus.Pending ->
-                    Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.textSubtle, CircleShape))
-                }
-              }
+              PlanStepMarker(status = step.status)
               Text(
                 text = step.step,
                 style = textStyle,
                 color = textColor,
-                textDecoration = if (step.status == ChatPlanStepStatus.Completed) TextDecoration.LineThrough else null,
               )
             }
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun PlanStepMarker(status: ChatPlanStepStatus) {
+  Box(modifier = Modifier.width(14.dp), contentAlignment = Alignment.Center) {
+    when (status) {
+      ChatPlanStepStatus.Completed ->
+        Text(
+          text = "✓",
+          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Bold),
+          color = ClawTheme.colors.success,
+        )
+      ChatPlanStepStatus.InProgress ->
+        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
+      ChatPlanStepStatus.Pending ->
+        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.textSubtle, CircleShape))
     }
   }
 }
@@ -3005,18 +3037,21 @@ private fun currentSessionTitle(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
 ): String {
-  val entry = sessions.firstOrNull { it.key == sessionKey }
-  val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return nativeString("New chat")
+  val entry = sessions.firstOrNull { it.key == sessionKey } ?: return nativeString("New chat")
+  val name = sessionPresentationTitle(entry) { nativeString("New chat") }
   return friendlySessionName(name)
 }
 
-private fun chatSessionChipText(
+internal fun chatSessionChipText(
   entry: ChatSessionEntry,
   mainSessionKey: String,
 ): String {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return nativeString("Main")
-  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+  val name =
+    sessionPresentationTitle(entry) {
+      entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+    }
   return friendlySessionName(name)
 }
 

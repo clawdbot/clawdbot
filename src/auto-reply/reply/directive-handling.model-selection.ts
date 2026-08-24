@@ -122,6 +122,8 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const explicit = resolveModelRefFromString({
+    cfg: params.cfg,
+    agentId: params.agentId,
     raw: modelRaw,
     defaultProvider: params.defaultProvider,
     aliasIndex: params.aliasIndex,

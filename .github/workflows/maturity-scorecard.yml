@@ -25,7 +25,7 @@ on:
       allow_failures:
         description: Allow rendering from valid incomplete QA evidence
         required: false
-        default: false
+        default: true
         type: boolean
   workflow_call:
     inputs:
@@ -96,6 +96,45 @@ jobs:
       workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
       workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
+      # Protect both direct dispatches and reusable calls before the workflow reaches the
+      # secret-bearing QA evidence workflow.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
       # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the non-secret
       # job context, validate those identity facts, and pass only checked outputs forward.
       - name: Resolve job workflow identity
@@ -367,6 +406,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -405,21 +445,24 @@ jobs:
           QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
         run: |
           set -euo pipefail
-          mapfile -t evidence_paths < <(find .artifacts/maturity-evidence -type f -name qa-evidence.json | sort)
-          if [[ "${#evidence_paths[@]}" -eq 0 ]]; then
-            echo "Expected a qa-evidence.json file in the downloaded QA evidence artifact." >&2
+          mapfile -t manifest_paths < <(
+            find .artifacts/maturity-evidence -type f -name qa-profile-evidence-manifest.json | sort
+          )
+          if [[ "${#manifest_paths[@]}" -ne 1 ]]; then
+            echo "Expected exactly one aggregate QA evidence manifest, found ${#manifest_paths[@]}:" >&2
+            printf '%s\n' "${manifest_paths[@]}" >&2
             exit 1
           fi
-          if [[ "${#evidence_paths[@]}" -gt 1 ]]; then
-            echo "Expected exactly one qa-evidence.json file, found ${#evidence_paths[@]}:" >&2
-            printf '%s\n' "${evidence_paths[@]}" >&2
+          evidence_path="$(dirname "${manifest_paths[0]}")/qa-evidence.json"
+          if [[ ! -f "$evidence_path" || -L "$evidence_path" ]]; then
+            echo "Aggregate QA evidence is missing next to ${manifest_paths[0]}." >&2
             exit 1
           fi
-          echo "qa_evidence_path=${evidence_paths[0]}" >> "$GITHUB_OUTPUT"
+          echo "qa_evidence_path=${evidence_path}" >> "$GITHUB_OUTPUT"
           {
             echo "### QA evidence"
             echo
-            echo "- Evidence path: \`${evidence_paths[0]}\`"
+            echo "- Evidence path: \`${evidence_path}\`"
             echo "- Evidence source run: \`${QA_EVIDENCE_RUN_ID:-$GITHUB_RUN_ID}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -548,6 +591,16 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare aggregate QA evidence for rendering
+        env:
+          QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
+        run: |
+          set -euo pipefail
+          render_evidence_dir=".artifacts/maturity-render-evidence"
+          rm -rf "$render_evidence_dir"
+          mkdir -p "$render_evidence_dir"
+          install -m 0644 "$QA_EVIDENCE_PATH" "$render_evidence_dir/qa-evidence.json"
+
       - name: Validate maturity score sources
         run: |
           node --import tsx --input-type=module <<'NODE'
@@ -575,7 +628,7 @@ jobs:
             --output-dir .artifacts/maturity-docs \
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
             --scores qa/maturity-scores.yaml \
-            --evidence-dir .artifacts/maturity-evidence \
+            --evidence-dir .artifacts/maturity-render-evidence \
             --strict-inputs \
             "${allow_failures_args[@]}"
           {
@@ -600,7 +653,7 @@ jobs:
           pnpm maturity:render -- \
             --output-dir docs \
             --scores qa/maturity-scores.yaml \
-            --evidence-dir .artifacts/maturity-evidence \
+            --evidence-dir .artifacts/maturity-render-evidence \
             --strict-inputs \
             "${allow_failures_args[@]}"
 

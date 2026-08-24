@@ -1,4 +1,5 @@
 // Channel setup flow configures channels, auth, and workspace bindings.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
@@ -54,17 +55,36 @@ import {
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
 
-export function createChannelOnboardingPostWriteHookCollector() {
+export function createChannelSetupTransaction(params: {
+  runtime: RuntimeEnv;
+  beforePersistentEffect?: () => Promise<void>;
+}) {
   const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
+  const runPostWriteHooks = async (cfg: OpenClawConfig) => {
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: [...hooks.values()],
+      cfg,
+      runtime: params.runtime,
+      ...(params.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
+    });
+    hooks.clear();
+  };
   return {
-    collect(hook: ChannelOnboardingPostWriteHook) {
+    onPostWriteHook: (hook: ChannelOnboardingPostWriteHook) => {
       hooks.set(`${hook.channel}:${hook.accountId}`, hook);
     },
-    drain(): ChannelOnboardingPostWriteHook[] {
-      const next = [...hooks.values()];
-      hooks.clear();
-      return next;
+    async commit(
+      nextConfig: OpenClawConfig,
+      write: (config: OpenClawConfig) => Promise<OpenClawConfig>,
+    ): Promise<OpenClawConfig> {
+      await params.beforePersistentEffect?.();
+      const committedConfig = await write(nextConfig);
+      await runPostWriteHooks(committedConfig);
+      return committedConfig;
     },
+    runPostWriteHooks,
   };
 }
 
@@ -451,14 +471,33 @@ export async function setupChannels(
         previousCfg,
       });
       if (postWriteHook) {
-        options?.onPostWriteHook?.(postWriteHook);
+        if (!options?.onPostWriteHook) {
+          throw new Error(
+            `Channel setup internal error: ${channel} produced a post-write hook without a transaction sink.`,
+          );
+        }
+        options.onPostWriteHook(postWriteHook);
       }
     }
     addSelection(channel);
     if (channel === targetedChannel) {
       finishSetupRequested = true;
     }
-    await refreshStatus(channel);
+    try {
+      await refreshStatus(channel);
+    } catch (error) {
+      const detail = sanitizeTerminalText(formatErrorMessage(error));
+      statusByChannel.set(channel, {
+        channel,
+        configured: isChannelConfigured(next, channel),
+        statusLines: [],
+        selectionHint: "status unavailable",
+      });
+      await prompter.note(
+        `Status unavailable (${detail}).\nRetry: ${formatCliCommand(`openclaw channels status --channel ${channel}`)}`,
+        t("wizard.channels.statusTitle"),
+      );
+    }
   };
 
   const applyCustomSetupResult = async (

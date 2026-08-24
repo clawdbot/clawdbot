@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -34,10 +34,11 @@ import {
   setPreparedModelRuntimeAuthLoader,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const PROVIDER_ID = "worker-catalog-fixture";
+const HARNESS_ID = "worker-catalog-fixture-harness";
 const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 const PLUGIN_ID = "worker-catalog-fixture";
 const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
@@ -97,6 +98,19 @@ function writeFixturePlugin(params: {
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
+    api.registerAgentHarness({
+      id: ${JSON.stringify(HARNESS_ID)},
+      label: "Worker catalog fixture harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => ({ ok: false, error: "unused" }),
+      loadModelCatalog: async () => [{
+        provider: ${JSON.stringify(PROVIDER_ID)},
+        id: "account-scoped-model",
+        name: "Account scoped model",
+        api: "openai-completions",
+        baseUrl: "https://worker-catalog.invalid/v1",
+      }],
+    });
     api.registerProvider({
       id: ${JSON.stringify(PROVIDER_ID)},
       label: "Worker catalog fixture",
@@ -210,7 +224,14 @@ async function createStaticSnapshot(
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
   const config = {
-    agents: { defaults: { model: `${PROVIDER_ID}/sqlite-model` } },
+    agents: {
+      defaults: {
+        model: `${PROVIDER_ID}/sqlite-model`,
+        models: {
+          [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+        },
+      },
+    },
     plugins: {
       allow: [PLUGIN_ID],
       load: { paths: [pluginFile] },
@@ -293,6 +314,23 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
+  it("publishes account-scoped harness models only in the full catalog", async () => {
+    const fixture = await createStaticSnapshot(0);
+
+    expect(fixture.snapshot.modelCatalog.entries).not.toContainEqual(
+      expect.objectContaining({ id: "account-scoped-model" }),
+    );
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "account-scoped-model",
+      }),
+    );
+  });
+
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {
     const fixture = await createStaticSnapshot(0);
     saveAuthProfileStore(
@@ -535,6 +573,9 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("makes a post-startup Codex login available to direct models.list", async () => {
+    // A developer's ambient OpenAI key would count as usable openai auth and
+    // mark the route available before the staged Codex login exists.
+    vi.stubEnv("OPENAI_API_KEY", undefined);
     const codexHome = tempDirs.make("openclaw-models-list-codex-");
     const fixture = await createStaticSnapshot(0, { CODEX_HOME: codexHome });
     const route = {
@@ -556,6 +597,16 @@ describe("prepared model catalog worker boundary", () => {
             workspace: fixture.workspaceDir,
           },
         ],
+      },
+      plugins: {
+        ...fixture.config.plugins,
+        entries: {
+          ...fixture.config.plugins?.entries,
+          // This test proves auth-store refresh, not harness discovery. A live
+          // model/list against a developer's real Codex login would mark the
+          // route available before the staged auth.json exists.
+          codex: { config: { discovery: { enabled: false } } },
+        },
       },
     } satisfies OpenClawConfig;
     const owner = Object.freeze({
@@ -744,6 +795,7 @@ describe("prepared model catalog worker boundary", () => {
         providerIds: [PROVIDER_ID],
         configuredModelRefs: [],
         configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
         configuredGeneratedCatalogPluginIds: [],
         templateAuthStorage: AuthStorage.inMemory({}),
       } satisfies PreparedModelRuntimeAgentFacts,

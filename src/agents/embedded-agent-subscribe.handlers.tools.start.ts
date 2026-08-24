@@ -202,19 +202,19 @@ export function buildToolCallSummary(
   args: unknown,
   meta: string | undefined,
   instanceReplaySafe: boolean,
+  ownerKey: string | undefined,
   structuredReplaySafe: boolean,
 ): ToolCallSummary {
-  const mutation = buildToolMutationState(toolName, args, meta);
+  const mutation = buildToolMutationState(toolName, args, ownerKey ? { ownerKey } : undefined);
   return {
     meta,
     commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
+    ...(ownerKey ? { ownerKey } : {}),
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||
       (structuredReplaySafe && mutation.replaySafe),
-    actionFingerprint: mutation.actionFingerprint,
-    fileTarget: mutation.fileTarget,
   };
 }
 
@@ -320,6 +320,7 @@ export function handleToolExecutionStart(
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
+    lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
@@ -457,7 +458,14 @@ export function handleToolExecutionStart(
       evt.replaySafe === true ||
       ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
       ctx.params.replaySafeToolNames?.has(toolName) === true;
-    const callSummary = buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false);
+    const callSummary = buildToolCallSummary(
+      toolName,
+      args,
+      meta,
+      instanceReplaySafe,
+      ctx.params.sideEffectToolOwners?.get(toolName),
+      false,
+    );
     ctx.state.toolMetaById.set(toolCallId, callSummary);
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
@@ -609,7 +617,10 @@ export function handleToolExecutionStart(
     }
   };
 
-  // Flush pending block replies to preserve message boundaries before tool execution.
+  // Only the outer provider tool owns the block-reply presentation boundary.
+  if (evt.lifecycleProvenance === "nested") {
+    return continueToolExecutionStart();
+  }
   let flushBlockReplyBufferResult: void | Promise<void>;
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();

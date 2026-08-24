@@ -18,6 +18,11 @@ describe("package git fixture", () => {
         {
           dependencies: { "@openclaw/ai": "2026.6.11", chalk: "5.6.2" },
           bundleDependencies: ["@openclaw/ai", "chalk"],
+          scripts: {
+            build: "node build.mjs",
+            openclaw: "node scripts/run-node.mjs",
+            postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          },
         },
         null,
         2,
@@ -48,6 +53,10 @@ describe("package git fixture", () => {
     const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     expect(packageJson.dependencies["@openclaw/ai"]).toBe("file:.openclaw-fixture/packages/ai");
     expect(packageJson.bundleDependencies).toEqual(["chalk"]);
+    expect(packageJson.scripts).toEqual({
+      build: "node build.mjs",
+      openclaw: "node openclaw.mjs",
+    });
     const relocatedAiPackage = JSON.parse(
       readFileSync(path.join(root, ".openclaw-fixture", "packages", "ai", "package.json"), "utf8"),
     );
@@ -78,5 +87,38 @@ describe("package git fixture", () => {
     expect(staged.status).toBe(0);
     expect(staged.stdout).not.toContain("node_modules");
     expect(staged.stdout).not.toContain("pnpm-lock.yaml");
+  });
+
+  it("uses the packed entrypoint without a bundled ai runtime", () => {
+    const root = tempDirs.make("openclaw-package-git-fixture-no-ai-");
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify(
+        {
+          dependencies: { chalk: "5.6.2" },
+          scripts: {
+            lint: "node lint.mjs",
+            openclaw: "node scripts/run-node.mjs",
+            postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(packageJson.scripts).toEqual({
+      lint: "node lint.mjs",
+      openclaw: "node openclaw.mjs",
+    });
+    expect(packageJson.dependencies).not.toHaveProperty("@openclaw/ai");
   });
 });

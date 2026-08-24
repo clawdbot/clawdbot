@@ -8,6 +8,42 @@ type FeishuSender = FeishuMessageEvent["sender"];
 type TestConfigBase = Record<string, unknown> & {
   channels?: Record<string, unknown>;
 };
+type FeishuSecretRefPolicyCase = {
+  name: string;
+  provider: string;
+  providers: NonNullable<NonNullable<ClawdbotConfig["secrets"]>["providers"]>;
+  configured: boolean;
+};
+
+export const FEISHU_SELECTED_SECRET_ENV = "FEISHU_SECRET_REF_SELECTED_TEST";
+export const FEISHU_SIBLING_SECRET_ENV = "FEISHU_SECRET_REF_SIBLING_TEST";
+
+export const feishuSecretRefPolicyCases: FeishuSecretRefPolicyCase[] = [
+  {
+    name: "unconfigured provider alias",
+    provider: "unconfigured",
+    providers: {},
+    configured: false,
+  },
+  {
+    name: "provider configured with a non-env source",
+    provider: "corp-env",
+    providers: { "corp-env": { source: "file", path: "/unused" } },
+    configured: false,
+  },
+  {
+    name: "provider allowlist excluding the selected credential",
+    provider: "corp-env",
+    providers: { "corp-env": { source: "env", allowlist: [FEISHU_SIBLING_SECRET_ENV] } },
+    configured: false,
+  },
+  {
+    name: "configured env provider allowing the selected credential",
+    provider: "corp-env",
+    providers: { "corp-env": { source: "env", allowlist: [FEISHU_SELECTED_SECRET_ENV] } },
+    configured: true,
+  },
+];
 
 export function createFeishuTestConfig(
   feishu: FeishuConfig,
@@ -17,6 +53,27 @@ export function createFeishuTestConfig(
     ...base,
     channels: { ...base.channels, feishu },
   } as ClawdbotConfig;
+}
+
+export function createFeishuSecretRefPolicyConfig({
+  provider,
+  providers,
+}: FeishuSecretRefPolicyCase): ClawdbotConfig {
+  return createFeishuTestConfig(
+    {
+      accounts: {
+        selected: {
+          appId: "selected-app",
+          appSecret: { source: "env", provider, id: FEISHU_SELECTED_SECRET_ENV },
+        },
+        sibling: {
+          appId: "sibling-app",
+          appSecret: { source: "env", provider: "default", id: FEISHU_SIBLING_SECRET_ENV },
+        },
+      },
+    },
+    { secrets: { providers } },
+  );
 }
 
 export function createFeishuTestEvent(params: {

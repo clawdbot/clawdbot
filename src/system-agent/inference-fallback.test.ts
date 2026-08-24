@@ -34,6 +34,22 @@ const config: OpenClawConfig = {
 };
 
 describe("system-agent inference fallback", () => {
+  it("does not claim providers are unconfigured when no route can be verified", async () => {
+    const result = await verifySystemAgentInferenceWithFallback({
+      runtime,
+      deps: {
+        readConfig: async () => ({}),
+        resolveRoute: async () => null,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: "unknown",
+      error: "OpenClaw could not verify a usable inference route. Check model setup and try again.",
+    });
+  });
+
   it("tries the system-agent route first, then authenticated providers by provider id", async () => {
     const attempts: string[] = [];
     const verify = vi.fn(async ({ agentId }: { agentId: string }) => {

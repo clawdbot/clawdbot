@@ -2,17 +2,82 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import {
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
+  hasCoreExtensionImpact,
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
+  resolveChangedDockerSeedLanes,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  listExtensionTestFilesForRoots,
+  resolveExtensionTestConfig,
+} from "../../scripts/lib/extension-test-plan.mts";
 import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
+
+const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
+
+function expectBoundedCodexFallback(
+  shards: ReturnType<typeof createChangedExtensionFallbackShards>,
+) {
+  const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+
+  expect(shards.length).toBeGreaterThan(1);
+  expect(
+    shards.every(
+      (shard) =>
+        shard.configs[0] === "test/vitest/vitest.extension-codex.config.ts" &&
+        (shard.includePatterns?.length ?? 0) > 0 &&
+        (shard.includePatterns?.length ?? 0) <= CODEX_TEST_PROCESS_FILE_LIMIT,
+    ),
+  ).toBe(true);
+  expect(targets).toEqual(listExtensionTestFilesForRoots(["extensions/codex"]));
+  expect(new Set(targets).size).toBe(targets.length);
+}
+
+function expectAllExtensionConfigs(
+  shards: ReturnType<typeof createChangedExtensionFallbackShards>,
+) {
+  const configs = new Set(shards.flatMap((shard) => shard.configs));
+  const expectedConfigs = new Set(
+    listAvailableExtensionIds().map((extensionId) =>
+      resolveExtensionTestConfig(`extensions/${extensionId}`),
+    ),
+  );
+
+  expect(configs).toEqual(expectedConfigs);
+  expect(configs).toContain("test/vitest/vitest.extension-codex.config.ts");
+}
+
+const allDockerSeedLanes = ["mcp-channels", "cron-mcp-cleanup", "mcp-code-mode-gateway"];
+it.each([
+  [["scripts/e2e/mcp-channels-seed.ts"], ["mcp-channels"]],
+  [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
+  [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/docker-openai-seed.ts"], allDockerSeedLanes],
+  [
+    [
+      "scripts/e2e/mcp-code-mode-gateway-seed.ts",
+      "scripts/e2e/mcp-channels-seed.ts",
+      "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
+      "scripts/e2e/cron-mcp-cleanup-seed.ts",
+    ],
+    allDockerSeedLanes,
+  ],
+  [[".github/workflows/ci.yml"], allDockerSeedLanes],
+  [["scripts/lib/ci-changed-node-test-plan.mts"], allDockerSeedLanes],
+  [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
+])("resolves Docker seed lanes for %j", (changedPaths, expected) => {
+  expect(resolveChangedDockerSeedLanes(changedPaths)).toEqual(expected);
+});
 
 describe("CI changed Node test plan", () => {
   it("routes Control UI style changes through source-scanning policy tests", () => {
@@ -274,15 +339,54 @@ describe("CI changed Node test plan", () => {
     ];
 
     expect(createChangedNodeTestShards(changedPaths)).toBeNull();
-    expect(createChangedExtensionFallbackShards(changedPaths)).toEqual([
+    expectBoundedCodexFallback(createChangedExtensionFallbackShards(changedPaths));
+  });
+
+  it("covers every extension config when core changes can impact extension consumers", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "src/gateway/tool-resolution.ts",
+      "src/agents/openclaw-tools.ts",
+      "extensions/discord/src/channel.ts",
+    ]);
+
+    expectAllExtensionConfigs(shards);
+  });
+
+  it("covers every extension config when the fallback planner itself changes", () => {
+    expectAllExtensionConfigs(
+      createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
+    );
+  });
+
+  it("covers every extension config when the extension inventory changes", () => {
+    expectAllExtensionConfigs(
+      createChangedExtensionFallbackShards(["scripts/lib/changed-extensions.mts"]),
+    );
+  });
+
+  it("classifies core and fallback-gate extension impact", () => {
+    expect(hasCoreExtensionImpact(["src/agents/openclaw-tools.ts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/changed-extensions.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/extension-test-plan.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["extensions/discord/src/channel.ts"])).toBe(false);
+    expect(hasCoreExtensionImpact(["docs/ci.md"])).toBe(false);
+  });
+
+  it("keeps extension-only fallbacks scoped to the changed extension config", () => {
+    expect(createChangedExtensionFallbackShards(["extensions/discord/src/channel.ts"])).toEqual([
       {
         checkName: "checks-node-changed-extensions-config",
-        configs: ["test/vitest/vitest.extension-codex.config.ts"],
+        configs: ["test/vitest/vitest.extension-discord.config.ts"],
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
       },
     ]);
+  });
+
+  it("does not create extension fallback shards for docs-only diffs", () => {
+    expect(createChangedExtensionFallbackShards(["docs/ci.md"])).toEqual([]);
   });
 
   it.each([
@@ -339,31 +443,18 @@ describe("CI changed Node test plan", () => {
     expect(new Set(targets).size).toBe(targets.length);
   });
 
-  it("skips extension fallback when no extension paths changed", () => {
-    expect(
-      createChangedExtensionFallbackShards([
-        "packages/gateway-protocol/src/frame-guards.ts",
-        "src/agents/live-model-filter.ts",
-      ]),
-    ).toEqual([]);
+  it("skips extension fallback when the core-impact predicate does not fire", () => {
+    expect(createChangedExtensionFallbackShards(["src/agents/live-model-filter.ts"])).toEqual([]);
   });
 
-  it("falls back to the affected extension config for deleted sources", () => {
+  it("falls back to bounded Codex config shards for deleted sources", () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-extension-fallback-"));
     try {
-      expect(
+      expectBoundedCodexFallback(
         createChangedExtensionFallbackShards(["extensions/codex/src/deleted-session-runtime.ts"], {
           cwd,
         }),
-      ).toEqual([
-        {
-          checkName: "checks-node-changed-extensions-config",
-          configs: ["test/vitest/vitest.extension-codex.config.ts"],
-          requiresDist: false,
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          shardName: "changed-extensions-config",
-        },
-      ]);
+      );
       expect(
         createChangedExtensionFallbackShards(
           ["extensions/codex/src/deleted-session-runtime.test.ts"],
@@ -387,6 +478,15 @@ describe("CI changed Node test plan", () => {
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
       },
+    ]);
+  });
+
+  it("prebuilds private QA dist before the QA Lab extension fallback", () => {
+    expect(createChangedExtensionFallbackShards(["extensions/qa-lab/src/cli.runtime.ts"])).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-qa.config.ts"],
+        pretestBuildMode: "private-qa",
+      }),
     ]);
   });
 

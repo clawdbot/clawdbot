@@ -24,7 +24,11 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
-    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {},
+    })),
   };
 });
 
@@ -512,6 +516,7 @@ describe("sessions.usage", () => {
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
     vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      durableTargets: [],
       storePath: "(multiple)",
       store: {
         "agent:main:s-opus": {
@@ -543,6 +548,7 @@ describe("sessions.usage", () => {
       mockStoredSession("agent:opus:main", "main");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           "agent:opus:main": {
@@ -596,6 +602,7 @@ describe("sessions.usage", () => {
         updatedAt: 999,
       };
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           global: sessionEntry,
@@ -634,6 +641,7 @@ describe("sessions.usage", () => {
       const sessionFile = writeSessionFile("shared.jsonl");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           "agent:main:shared": {
@@ -679,6 +687,7 @@ describe("sessions.usage", () => {
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           [storeKey]: {
@@ -713,6 +722,7 @@ describe("sessions.usage", () => {
       mockStoredSession(storeKey, "current");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           [storeKey]: {
@@ -792,6 +802,7 @@ describe("sessions.usage", () => {
       mockStoredSession(preferredKey, "run-dup");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           [preferredKey]: {

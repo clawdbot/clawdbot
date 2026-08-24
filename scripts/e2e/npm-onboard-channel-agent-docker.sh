@@ -165,7 +165,6 @@ dump_debug_logs() {
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
     /tmp/openclaw-onboard.json \
-    /tmp/openclaw-channel-add.log \
     /tmp/openclaw-channels-status.json \
     /tmp/openclaw-channels-status.err \
     /tmp/openclaw-status.txt \
@@ -214,7 +213,7 @@ node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-sta
 openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
-openclaw channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}" >/tmp/openclaw-channel-add.log 2>&1
+openclaw_e2e_run_logged channel-add "$OPENCLAW_E2E_CLI_BIN" channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}"
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "${CHANNEL_CONFIG_TOKENS[@]}"
 
 echo "Checking status surfaces for $CHANNEL..."

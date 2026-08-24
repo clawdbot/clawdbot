@@ -569,6 +569,35 @@ describe("chrome MCP page parsing", () => {
     expect(calls).toEqual(["list_pages", "close_page"]);
   });
 
+  it("rejects a close result when Chrome MCP kept the target open", async () => {
+    const pages: SessionPage[] = [{ id: 1, url: "https://a.example", selected: true }];
+    const session = createPageSession({
+      pid: 131,
+      pages,
+      onTool: (call) =>
+        call.name === "close_page"
+          ? {
+              structuredContent: {
+                message: "The last open page cannot be closed. It is fine to keep it open.",
+                pages,
+              },
+            }
+          : undefined,
+    });
+    const factory = vi.fn(async () => session);
+    setChromeMcpSessionFactoryForTest(factory);
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+
+    await expect(closeChromeMcpTab("chrome-live", targetId)).rejects.toThrow(
+      "The last open page cannot be closed",
+    );
+    await expect(listChromeMcpTabs("chrome-live")).resolves.toEqual([
+      expect.objectContaining({ targetId, url: "https://a.example" }),
+    ]);
+    expect(factory).toHaveBeenCalledOnce();
+    expect((session.client.close as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+  });
+
   it("retires a closed target and issues a new handle when Chrome reuses its page id", async () => {
     const pages: SessionPage[] = [
       { id: 1, url: "https://a.example" },

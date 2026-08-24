@@ -143,7 +143,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     ) {
       return false;
     }
-    if (resolved.entry.configFile === "auth-profiles.json") {
+    if (resolved.entry.configFile === "auth-profile-store") {
       if (typeof candidate.agentId !== "string" || candidate.agentId.trim().length === 0) {
         return false;
       }

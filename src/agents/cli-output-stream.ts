@@ -30,6 +30,7 @@ import {
   decodeCliRecords,
   isClaudeStreamJsonDialect,
   isClaudeStreamJsonResult,
+  isClaudeSubagentRecord,
   isGeminiStreamJsonDialect,
   isStreamJsonDialect,
   missingMessageBoundarySeparator,
@@ -139,7 +140,10 @@ export function normalizeClaudeCliStreamJsonRecord(
   return normalized ? { line: JSON.stringify(parsed), omittedRawChars } : undefined;
 }
 
-function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
+export function streamJsonOutputLimitErrorText(
+  kind: "raw" | "line" | "lines",
+  limit: number,
+): string {
   if (kind === "line") {
     return `CLI JSONL line exceeded ${limit} characters; refusing to parse output.`;
   }
@@ -368,7 +372,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
-    if (parsed.type === "assistant" && isRecord(parsed.message)) {
+    if (
+      parsed.type === "assistant" &&
+      isRecord(parsed.message) &&
+      !isClaudeSubagentRecord(parsed)
+    ) {
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
       if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {

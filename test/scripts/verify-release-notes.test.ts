@@ -55,6 +55,7 @@ describe("release-note verification", () => {
     expect(isEligibleHandle("steipete")).toBe(false);
     expect(isEligibleHandle("steipete-oai")).toBe(false);
     expect(isEligibleHandle("hugin-bot")).toBe(false);
+    expect(isEligibleHandle("roboclaw-bot")).toBe(false);
   });
 
   it("accepts only canonical commit PR suffixes", () => {

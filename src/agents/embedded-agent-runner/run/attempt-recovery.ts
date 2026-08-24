@@ -220,6 +220,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     runtimeAuthPlan: runtimePlan.auth,
     resolvedSessionKey: runInput.resolvedSessionKey,
     sessionAgentId: input.sessionAgentId,
+    contextEngineAgentId: runInput.contextEngineAgentId,
     agentDir: runInput.agentDir,
     workspaceDir: runInput.workspaceDir,
     provider: compactionSelection.provider,

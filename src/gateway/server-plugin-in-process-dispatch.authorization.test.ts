@@ -5,10 +5,17 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestOptions,
+} from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
@@ -104,6 +111,129 @@ describe("typed in-process agent authorization", () => {
     waitForTurn.mockReset();
   });
 
+  it.each([
+    {
+      name: "non-synthetic client",
+      method: "node.invoke",
+      options: { pluginRuntimeOwnerId: "duplex-fixture" },
+    },
+    {
+      name: "ownerless synthetic client",
+      method: "node.invoke",
+      options: { forceSyntheticClient: true },
+    },
+    {
+      name: "different gateway method",
+      method: "node.list",
+      options: { forceSyntheticClient: true, pluginRuntimeOwnerId: "duplex-fixture" },
+    },
+  ])("rejects node duplex hooks on an $name", async ({ method, options }) => {
+    const onDispatchReady = vi.fn();
+
+    await expect(
+      dispatchGatewayMethodInProcess(
+        method,
+        {},
+        {
+          ...options,
+          nodeInvokeStream: {
+            onProgress: vi.fn(),
+            onDispatchReady,
+            isRuntimeCurrent: () => true,
+          },
+          resolveGatewayContext: createContext,
+        },
+      ),
+    ).rejects.toThrow("owner-bound trusted synthetic client");
+
+    expect(onDispatchReady).not.toHaveBeenCalled();
+  });
+
+  it("retains the authenticated caller and its closure-bound authority for node duplex", async () => {
+    const client = createOperatorClient({
+      profileId: "duplex-owner",
+      scopes: ["operator.write", "operator.approvals"],
+    });
+    const operationalRunInstance = createOperationalRunInstanceRef("duplex-owned-run");
+    const agentRuntimeIdentity = {
+      kind: "agentRuntime" as const,
+      agentId: "main",
+      sessionKey: "agent:main:duplex-owner",
+      operationalRunInstance,
+      delegatedAuthority: {
+        kind: "local" as const,
+        operationalRunInstance,
+        lifecycleGeneration: "duplex-generation",
+        claimId: "duplex-claim",
+      },
+    };
+    client.isDeviceTokenAuth = true;
+    client.internal = {
+      agentRuntimeIdentity,
+      approvalRuntime: true,
+      senderAttribution: { id: "duplex-sender" },
+    };
+    let authorityCurrent = true;
+    const dispatched: { client: GatewayRequestOptions["client"] } = { client: null };
+    const context = createContext();
+    context.validateAgentRuntimeApprovalAuthority = (identity) =>
+      authorityCurrent && identity === agentRuntimeIdentity;
+    const methodRegistry = createGatewayMethodRegistry([
+      {
+        name: "node.invoke",
+        scope: "operator.write",
+        owner: { kind: "core", area: "nodes" },
+        handler: ({ client: resolvedClient, respond }: GatewayRequestHandlerOptions) => {
+          dispatched.client = resolvedClient;
+          respond(true, { ok: true });
+        },
+      },
+    ]);
+    context.getGatewayMethodRegistry = () => methodRegistry;
+
+    await withPluginRuntimeGatewayRequestScope(
+      { client, context, isWebchatConnect: () => false },
+      async () =>
+        await dispatchGatewayMethodInProcess(
+          "node.invoke",
+          {},
+          {
+            forceSyntheticClient: true,
+            pluginRuntimeOwnerId: "duplex-fixture",
+            syntheticScopes: ["operator.write", "operator.approvals"],
+            nodeInvokeStream: {
+              onProgress: vi.fn(),
+              onDispatchReady: vi.fn(),
+              isRuntimeCurrent: () => true,
+            },
+          },
+        ),
+    );
+
+    expect(dispatched.client).toMatchObject({
+      connId: "conn-duplex-owner",
+      authenticatedUserId: "duplex-owner@example.com",
+      authenticatedUserProfile: { profileId: "duplex-owner" },
+      isDeviceTokenAuth: true,
+      connect: { scopes: ["operator.write", "operator.approvals"] },
+      internal: {
+        syntheticClient: true,
+        pluginRuntimeOwnerId: "duplex-fixture",
+        approvalRuntime: true,
+        senderAttribution: { id: "duplex-sender" },
+      },
+    });
+    expect(dispatched.client?.internal?.agentRuntimeIdentity).toBe(agentRuntimeIdentity);
+    expect(
+      resolveNodeInvokeRuntimeAuthorityError({ context, client: dispatched.client }),
+    ).toBeUndefined();
+
+    authorityCurrent = false;
+    expect(resolveNodeInvokeRuntimeAuthorityError({ context, client: dispatched.client })).toBe(
+      "agent runtime approval authority closed before node dispatch",
+    );
+  });
+
   it("rejects a scoped agent turn without operator.write", async () => {
     await expect(
       dispatchScopedAgent({
@@ -111,6 +241,19 @@ describe("typed in-process agent authorization", () => {
         context: createContext(),
       }),
     ).rejects.toThrow("missing scope: operator.write");
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("applies the pending-profile gate to typed in-process agent dispatch", async () => {
+    const client = createOperatorClient({ profileId: "pending", scopes: ["operator.write"] });
+    delete client.authenticatedUserProfile;
+    client.authenticatedGitHubIdentitySync = vi
+      .fn()
+      .mockRejectedValue(new Error("private provider detail"));
+
+    await expect(dispatchScopedAgent({ client, context: createContext() })).rejects.toThrow(
+      "Authenticated profile verification is unavailable",
+    );
     expect(startTurn).not.toHaveBeenCalled();
   });
 

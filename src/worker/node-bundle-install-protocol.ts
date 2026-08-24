@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  WORKER_BUNDLE_PREWARM_VERSION,
   validateWorkerAdmissionHandshake,
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -21,6 +22,7 @@ const WorkerBuildSchema = z.custom<WorkerAdmissionHandshake>(
 const BundleInstallInputSchema = z
   .object({
     gatewayNamespace: z.string().regex(GATEWAY_NAMESPACE_PATTERN),
+    bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
     build: WorkerBuildSchema,
     archive: z
       .object({

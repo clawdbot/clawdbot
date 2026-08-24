@@ -2,7 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const messageCommandMock = vi.fn(async () => {});
+const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
@@ -52,7 +52,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   runGlobalGatewayStopSafely: runGlobalGatewayStopSafelyMock,
 }));
 
-const exitMock = vi.fn((): never => {
+const exitMock = vi.fn((_code: number): never => {
   throw new Error("exit");
 });
 const errorMock = vi.fn();
@@ -137,7 +137,7 @@ describe("runMessageAction", () => {
     hasHooksMock.mockClear().mockReturnValue(false);
     runGatewayStopMock.mockClear().mockResolvedValue(undefined);
     runGlobalGatewayStopSafelyMock.mockClear();
-    exitMock.mockClear().mockImplementation((): never => {
+    exitMock.mockClear().mockImplementation((_code: number): never => {
       throw new Error("exit");
     });
   });
@@ -508,6 +508,43 @@ describe("runMessageAction", () => {
 
     expect(runGatewayStopMock).toHaveBeenCalledWith({ reason: "cli message action complete" }, {});
     expect(exitMock).toHaveBeenCalledWith(1);
+  });
+
+  it("runs gateway_stop hooks before exit(1) for a failed broadcast result", async () => {
+    const order: string[] = [];
+    hasHooksMock.mockReturnValueOnce(true);
+    messageCommandMock.mockResolvedValueOnce({
+      kind: "broadcast",
+      channel: "telegram",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          { channel: "telegram", to: "123", ok: true },
+          { channel: "telegram", to: "456", ok: false, error: "delivery failed" },
+        ],
+      },
+      dryRun: false,
+    });
+    runGatewayStopMock.mockImplementationOnce(async () => {
+      order.push("stop");
+    });
+    exitMock.mockImplementationOnce((code: number): never => {
+      order.push(`exit:${code}`);
+      throw new Error("exit");
+    });
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        channel: "telegram",
+        targets: ["123", "456"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(order).toEqual(["stop", "exit:1"]);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
   it("logs gateway_stop failure and still exits with success code", async () => {

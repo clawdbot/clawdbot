@@ -90,10 +90,10 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { githubApiToken } = await import("../gateway/control-ui-github-api.js");
-  if (!githubApiToken(ctx.env ?? process.env)) {
+  const { hasConfiguredGitHubApiCredential } = await import("../gateway/control-ui-github-api.js");
+  if (!hasConfiguredGitHubApiCredential(ctx.env ?? process.env, ctx.cfg)) {
     note(
-      "Set GH_TOKEN in the Gateway environment to enable authenticated GitHub project search, including private repositories.",
+      "Prefer gateway.controlUi.github.token for Gateway-owned GitHub project access, or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment. Without either, search is public-only.",
       "GitHub projects",
     );
   }

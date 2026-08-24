@@ -1,13 +1,71 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatCountdown } from "../lib/format.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 
 export type ApplicationStatusBanner = {
   tone: "danger" | "warn" | "info";
   text: string;
 };
+
+export type RecordedUpdateAttempt = {
+  timestampMs: number;
+  status: string;
+  reason: string;
+  installKind: string | null;
+  installedVersion: string | null;
+  installedSha: string | null;
+  targetVersion: string | null;
+  targetSha: string | null;
+  failure: UpdateFailureCause | null;
+};
+
+/**
+ * Structural leaf contract, not `Pick<ApplicationContext, ...>`: `context.ts`
+ * reaches this module through `overlays-types.ts`, so naming the context type
+ * here closes an import cycle. Naming only the fields the watcher reads keeps
+ * every real context assignable.
+ */
+type UpdateProgressSources = {
+  gateway: {
+    snapshot: { phase: string };
+    subscribe: (listener: () => void) => () => void;
+  };
+  overlays: {
+    snapshot: {
+      updateRunning: boolean;
+      updateReconciliationPending: boolean;
+      updateStatusBanner: ApplicationStatusBanner | null;
+    };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
+
+export function createUpdateProgressWatcher(
+  context: UpdateProgressSources,
+): (listener: (progress: UpdateProgress) => void) => () => void {
+  return (listener) => {
+    const emit = () => {
+      const update = context.overlays.snapshot;
+      const banner = update.updateStatusBanner;
+      listener({
+        busy: update.updateRunning || update.updateReconciliationPending,
+        connected: context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = context.overlays.subscribe(emit);
+    const stopGateway = context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
+}
 
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
@@ -62,8 +120,11 @@ export type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
+    ts?: number;
     stats?: {
+      mode?: string | null;
       reason?: string | null;
+      before?: { sha?: string | null; version?: string | null } | null;
       after?: { sha?: string | null; version?: string | null } | null;
       steps?: UpdateSentinelStep[] | null;
     } | null;
@@ -73,6 +134,32 @@ export type UpdateRestartStatusResponse = {
 };
 
 type UpdateFailureCause = { step: string; detail: string };
+
+function readRecordedUpdateAttempt(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): RecordedUpdateAttempt | null {
+  if (
+    sentinel?.kind !== "update" ||
+    !sentinel.status ||
+    sentinel.status === "ok" ||
+    isPendingUpdateHandoffSentinel(sentinel) ||
+    typeof sentinel.ts !== "number"
+  ) {
+    return null;
+  }
+  const stats = sentinel.stats;
+  return {
+    timestampMs: sentinel.ts,
+    status: sentinel.status,
+    reason: stats?.reason?.trim() || "unexpected-error",
+    installKind: stats?.mode?.trim() || null,
+    installedVersion: stats?.before?.version?.trim() || null,
+    installedSha: stats?.before?.sha?.trim() || null,
+    targetVersion: stats?.after?.version?.trim() || null,
+    targetSha: stats?.after?.sha?.trim() || null,
+    failure: readUpdateFailureCause(sentinel),
+  };
+}
 
 function lastLogLine(tail: string | null | undefined): string | null {
   const lines = (tail ?? "")
@@ -98,7 +185,7 @@ function readUpdateFailureCause(
     : undefined;
   const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
   const step = failed?.name?.trim();
-  return step && detail ? { step, detail } : null;
+  return step && detail ? { step, detail: formatUiExternalText(detail) } : null;
 }
 
 export type UpdateRunResponse = {
@@ -116,10 +203,15 @@ export type UpdateRunResponse = {
 async function requestUpdateRestartStatus(
   client: Pick<GatewayBrowserClient, "request">,
   timeoutMs: number,
+  request: { refreshCheckout?: true } = {},
+  onError?: (error: unknown) => void,
 ): Promise<UpdateRestartStatusResponse | null> {
   try {
-    return await client.request<UpdateRestartStatusResponse>("update.status", {}, { timeoutMs });
-  } catch {
+    return await client.request<UpdateRestartStatusResponse>("update.status", request, {
+      timeoutMs,
+    });
+  } catch (error) {
+    onError?.(error);
     return null;
   }
 }
@@ -129,17 +221,38 @@ export function createUpdateStatusRefresher(params: {
   getEpoch: () => number;
   canRefresh: () => boolean;
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onRefreshing: (refreshing: boolean) => void;
   onStatus: (response: UpdateRestartStatusResponse) => void;
+  onError: (error: unknown) => void;
 }) {
+  let generation = 0;
   return async () => {
     const client = params.getClient();
     const epoch = params.getEpoch();
     if (!client || !params.canRefresh()) {
       return;
     }
-    const response = await requestUpdateRestartStatus(client, 5_000);
-    if (response && params.isCurrent(client, epoch)) {
-      params.onStatus(response);
+    const operationGeneration = ++generation;
+    const isCurrent = () => operationGeneration === generation && params.isCurrent(client, epoch);
+    params.onRefreshing(true);
+    try {
+      const response = await requestUpdateRestartStatus(
+        client,
+        5_000,
+        { refreshCheckout: true },
+        (error) => {
+          if (isCurrent()) {
+            params.onError(error);
+          }
+        },
+      );
+      if (response && isCurrent()) {
+        params.onStatus(response);
+      }
+    } finally {
+      if (isCurrent()) {
+        params.onRefreshing(false);
+      }
     }
   };
 }
@@ -221,6 +334,11 @@ export function createUpdateVerificationController(params: {
   getHello: () => GatewayHelloOk | null;
   publish: () => void;
   publishBanner: (banner: ApplicationStatusBanner | null) => void;
+  publishRecordedAttempt?: (attempt: RecordedUpdateAttempt | null) => void;
+  publishRecordedFailure: (params: {
+    attempt: RecordedUpdateAttempt | null;
+    banner: ApplicationStatusBanner;
+  }) => void;
   onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
 }) {
   let generation = 0;
@@ -285,13 +403,14 @@ export function createUpdateVerificationController(params: {
       }
       if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
         params.clearPending();
-        params.publishBanner(
-          resolveUpdateStatusBanner({
+        params.publishRecordedFailure({
+          attempt: readRecordedUpdateAttempt(sentinel),
+          banner: resolveUpdateStatusBanner({
             status: "error",
             ...(sentinel.stats?.reason ? { reason: sentinel.stats.reason } : {}),
             cause: readUpdateFailureCause(sentinel),
           }),
-        );
+        });
         return;
       }
       const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
@@ -304,6 +423,7 @@ export function createUpdateVerificationController(params: {
         const hasActualIdentity = actualVersion !== null || actualSha !== null;
         if (versionMatches && shaMatches && (hasActualIdentity || !hasExpectedIdentity)) {
           params.clearPending();
+          params.publishRecordedAttempt?.(null);
           params.onVerifiedInstall?.({ version: actualVersion, sha: actualSha });
           params.publishBanner(null);
           return;
@@ -416,10 +536,12 @@ export function projectUpdateStatusResponse(
   response: UpdateRestartStatusResponse,
   current: {
     updateStatusBanner: ApplicationStatusBanner | null;
+    recordedUpdateAttempt: RecordedUpdateAttempt | null;
     heldUpdateCampaignId: string | null;
   },
 ): {
   updateStatusBanner: ApplicationStatusBanner | null;
+  recordedUpdateAttempt: RecordedUpdateAttempt | null;
   updateAvailable?: UpdateAvailable | null;
   updateSchedule?: UpdateScheduleState | null;
   heldUpdateCampaignId?: string | null;
@@ -439,6 +561,10 @@ export function projectUpdateStatusResponse(
               cause: readUpdateFailureCause(sentinel),
             })
         : current.updateStatusBanner,
+    recordedUpdateAttempt:
+      sentinel?.kind === "update" && sentinel.status
+        ? readRecordedUpdateAttempt(sentinel)
+        : current.recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
       : {}),
@@ -494,6 +620,21 @@ export function formatUpdateTargetLabel(
   }
   const version = target?.kind === "package" ? target.version : updateAvailable?.latestVersion;
   return version ? t("updates.target.version", { version }) : null;
+}
+
+export function isUpdateActionable(
+  updateAvailable: UpdateAvailable | null | undefined,
+  updateSchedule: UpdateScheduleState | null | undefined,
+  updateBusy: boolean,
+): boolean {
+  const target = updateSchedule?.target;
+  return Boolean(
+    updateBusy ||
+    updateSchedule?.campaign ||
+    (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
+    (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
+    (target?.kind === "git" && target.commitsBehind > 0),
+  );
 }
 
 export function resolveUpdateStatusBanner(params: {

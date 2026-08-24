@@ -25,15 +25,13 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../infra/session-cost-usage-totals.js";
-import type {
-  CostUsageSummary,
-  CostUsageTotals,
-  SessionCostSummary,
-  SessionDailyModelUsage,
-  SessionMessageCounts,
-  SessionModelUsage,
-} from "../../infra/session-cost-usage.js";
 import {
+  type CostUsageSummary,
+  type CostUsageTotals,
+  type SessionCostSummary,
+  type SessionDailyModelUsage,
+  type SessionMessageCounts,
+  type SessionModelUsage,
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummariesFromCache,
@@ -520,21 +518,6 @@ const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts
     monthIndex: date.getUTCMonth(),
     day: date.getUTCDate(),
   };
-};
-
-/**
- * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
- * Returns undefined if invalid.
- */
-const parseDateToMs = (
-  raw: unknown,
-  interpretation: DateInterpretation = { mode: "utc" },
-): number | undefined => {
-  const parts = parseDateParts(raw);
-  if (!parts) {
-    return undefined;
-  }
-  return datePartsToStartMs(parts, interpretation);
 };
 
 const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
@@ -1141,9 +1124,6 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseUtcOffsetToMinutes,
-  parseDateToMs,
-  parseDays,
   resolveDateRange,
   loadCostUsageSummaryCached,
   costUsageCache,

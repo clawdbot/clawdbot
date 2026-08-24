@@ -57,7 +57,10 @@ import {
   createInternalExecutionPreparer,
   readInternalExecutionControl,
 } from "./agent-tools.execution-preparer.js";
-import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
+import {
+  readInternalToolExecutionValidation,
+  validateToolExecutionParams,
+} from "./agent-tools.execution-validation.js";
 import {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
@@ -81,6 +84,7 @@ import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
+  registerTrustedToolNoStartError,
 } from "./tool-result-error.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -123,7 +127,7 @@ export function finalizeBeforeToolCallExecutionParams(params: {
   finalizerMode: "adapter" | "wrapped";
 }): unknown {
   const reconciledParams = reconcileCodeModeExecBeforeHookParams({
-    tool: params.tool,
+    owner: { tool: params.tool },
     originalParams: params.preparedParams,
     hookParams: params.hookParams,
     adjustedParams: params.adjustedParams,
@@ -171,6 +175,7 @@ class BeforeToolCallFailureError extends Error {
 function tagBeforeToolCallFailure(
   error: unknown,
   signal?: AbortSignal,
+  stage?: "tool_preparation" | "before_tool_call",
 ): BeforeToolCallFailureError {
   try {
     if (error instanceof BeforeToolCallFailureError) {
@@ -181,7 +186,11 @@ function tagBeforeToolCallFailure(
   }
   const message = formatToolExecutionErrorMessage(error, "before_tool_call failed");
   const disposition = resolveToolErrorDiagnostic(error, signal).terminalReason;
-  return new BeforeToolCallFailureError(message, disposition, error);
+  const tagged = new BeforeToolCallFailureError(message, disposition, error);
+  if (stage === "tool_preparation" && isTrustedToolExecutionPreflightError(error)) {
+    registerTrustedToolNoStartError(tagged);
+  }
+  return tagged;
 }
 
 /** Return the closed terminal disposition carried by a before-tool failure. */
@@ -304,6 +313,13 @@ export function wrapToolWithBeforeToolCallHook(
       if (prepareControl) {
         executionArgs.pop();
       }
+      const onUpdateValidation = readInternalToolExecutionValidation(onUpdate);
+      const internalValidation =
+        onUpdateValidation ?? readInternalToolExecutionValidation(executionArgs.at(-1));
+      const forwardedOnUpdate = onUpdateValidation ? undefined : onUpdate;
+      if (!onUpdateValidation && internalValidation) {
+        executionArgs.pop();
+      }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
       const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
@@ -417,7 +433,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, params, "tool_preparation");
-        throw tagBeforeToolCallFailure(error, signal);
+        throw tagBeforeToolCallFailure(error, signal, "tool_preparation");
       }
       const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
       const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
@@ -434,7 +450,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, hookParams, "before_tool_call");
-        throw tagBeforeToolCallFailure(error, signal);
+        throw tagBeforeToolCallFailure(error, signal, "before_tool_call");
       }
       if (outcome.blocked) {
         if (outcome.kind !== "veto") {
@@ -466,6 +482,9 @@ export function wrapToolWithBeforeToolCallHook(
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
+        if (internalValidation?.toolCallId === toolCallId) {
+          await internalValidation.validate(executeParams);
+        }
         await reconcileLoopCallExecutionParams({
           ctx,
           toolName: normalizedToolName,
@@ -474,7 +493,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
-        throw tagBeforeToolCallFailure(error, signal);
+        throw tagBeforeToolCallFailure(error, signal, "tool_preparation");
       }
       let onImplementationStart: (() => void) | undefined;
       if (prepareControl) {
@@ -519,7 +538,7 @@ export function wrapToolWithBeforeToolCallHook(
             toolCallId,
             executeParams,
             signal,
-            onUpdate,
+            forwardedOnUpdate,
             ...executionArgs,
           );
         } catch (error) {

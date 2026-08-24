@@ -8,7 +8,7 @@ import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 
 describe("session model override lifecycle", () => {
-  it("clears optimistic and settled model overrides when its connection epoch retires", async () => {
+  it("retains a confirmed patch without publishing its retired optimistic state", async () => {
     const stalePatch = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
@@ -36,10 +36,14 @@ describe("session model override lifecycle", () => {
     publish(false);
     expect(sessions.state.modelOverrides).toEqual({});
     publish(true);
-    stalePatch.resolve({});
+    stalePatch.resolve({ ok: true, path: "", key, entry: {} });
 
-    await expect(operation).resolves.toBeNull();
+    await expect(operation).resolves.toMatchObject({ ok: true, key });
     expect(sessions.state.modelOverrides).toEqual({});
+    expect(sessions.state.error).toContain("completed on the previous connection");
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.list").length,
+    ).toBeGreaterThan(0);
     sessions.dispose();
   });
 

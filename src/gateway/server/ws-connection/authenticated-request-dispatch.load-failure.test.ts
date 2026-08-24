@@ -33,7 +33,7 @@ describe("authenticated request dispatcher load failures", () => {
     }));
     const { createGatewayAuthenticatedRequestDispatcher } =
       await import("./authenticated-request-dispatch.js");
-    const send = vi.fn();
+    const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
     const dispatcher = createGatewayAuthenticatedRequestDispatcher({
       handler: {
         connId: "stale-install-dispatch",

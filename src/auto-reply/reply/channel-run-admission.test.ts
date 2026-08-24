@@ -41,6 +41,7 @@ describe("channel run admission", () => {
   it("consumes once across fallback admission and closes the exact prepared owner", async () => {
     const identityWork: unknown[] = [];
     const decisions: unknown[] = [];
+    const admittedContexts: unknown[] = [];
     const clearCollection = configureChannelAdmissionEvidenceCollection(true);
     const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
       identityWork.push(work);
@@ -62,6 +63,7 @@ describe("channel run admission", () => {
         ingressKind: "channel",
         boundary: "test.channel",
         evidence,
+        onAdmitted: (context) => admittedContexts.push(context),
       });
 
       const first = await prepared.admit("embedded");
@@ -70,6 +72,7 @@ describe("channel run admission", () => {
       expect(fallback).toBe(first);
       expect(identityWork).toHaveLength(1);
       expect(decisions).toHaveLength(1);
+      expect(admittedContexts).toEqual([first]);
       expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({
         ingressState: "unknown",
       });

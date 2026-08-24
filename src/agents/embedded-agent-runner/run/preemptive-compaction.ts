@@ -14,6 +14,7 @@ import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
   bashExecutionToText,
+  calculateContextTokens,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
   IMAGE_BLOCK_TOKENS,
@@ -155,6 +156,9 @@ function estimateContentTokenPressure(
 }
 
 function estimateMessageTokenPressure(message: AgentMessage): number {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return 0;
+  }
   // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
   const legacy: Record<string, unknown> = isRecord(message) ? message : {};
   let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
@@ -168,9 +172,6 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   }
 
   if (message.role === "bashExecution") {
-    if (message.excludeFromContext === true) {
-      return 0;
-    }
     const bashMessage: BashExecutionMessage = message;
     tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
     return tokens;
@@ -230,19 +231,72 @@ function estimateRenderedPromptTokens(params: { systemPrompt?: string; prompt: s
   );
 }
 
+type TranscriptBoundaryTokenPressure = {
+  estimatedPromptTokens: number;
+  source: "provider_context_usage" | "transcript_estimate";
+};
+
+function isProviderContextUsageBarrier(message: AgentMessage): boolean {
+  if (message.role !== "assistant" || !message.usage) {
+    return false;
+  }
+  // Zero unavailable and legacy CLI records describe a newer context without
+  // provider provenance; scanning past them can undercount the active transcript.
+  return (
+    (message.api === "cli" && message.usage.contextUsage === undefined) ||
+    (message.usage.contextUsage?.state === "unavailable" &&
+      calculateContextTokens(message.usage) === 0)
+  );
+}
+
+function resolveProviderContextBoundary(
+  messages: AgentMessage[],
+): { index: number; totalTokens: number } | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message && isProviderContextUsageBarrier(message)) {
+      return undefined;
+    }
+    const contextUsage = message?.role === "assistant" ? message.usage?.contextUsage : undefined;
+    if (
+      contextUsage?.state === "available" &&
+      Number.isFinite(contextUsage.totalTokens) &&
+      contextUsage.totalTokens > 0
+    ) {
+      return { index, totalTokens: Math.ceil(contextUsage.totalTokens) };
+    }
+  }
+  return undefined;
+}
+
+function estimateTranscriptBoundaryTokenPressure(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+}): TranscriptBoundaryTokenPressure {
+  const boundary = resolveProviderContextBoundary(params.messages);
+  // The provider total owns transcript items through its assistant record. It has
+  // no system-prompt provenance, so the current rendered prompt stays local too.
+  const messagesForPressure = boundary
+    ? params.messages.slice(boundary.index + 1)
+    : params.messages;
+  const locallyEstimatedTokens = messagesForPressure.reduce(
+    (sum, message) => sum + estimateMessageTokenPressure(message),
+    estimateRenderedPromptTokens(params),
+  );
+  return {
+    estimatedPromptTokens:
+      (boundary?.totalTokens ?? 0) + Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN),
+    source: boundary ? "provider_context_usage" : "transcript_estimate",
+  };
+}
+
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
 }): number {
-  const historyTokens = params.messages.reduce(
-    (sum, message) => sum + estimateMessageTokenPressure(message),
-    0,
-  );
-  return Math.max(
-    0,
-    Math.ceil((historyTokens + estimateRenderedPromptTokens(params)) * SAFETY_MARGIN),
-  );
+  return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
 
 /** Estimates only the rendered prompt/system portion when history has already been accounted for. */
@@ -288,24 +342,29 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
   );
+  const transcriptTokenPressure = llmBoundaryTokenPressure
+    ? undefined
+    : estimateTranscriptBoundaryTokenPressure({
+        messages: params.messages,
+        systemPrompt: params.systemPrompt,
+        prompt: params.prompt,
+      });
   let estimatedPromptTokens =
     llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimateLlmBoundaryTokenPressure({
-      messages: params.messages,
-      systemPrompt: params.systemPrompt,
-      prompt: params.prompt,
-    });
-  let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
+    transcriptTokenPressure?.estimatedPromptTokens ??
+    0;
+  let pressureSource =
+    llmBoundaryTokenPressure?.source ?? transcriptTokenPressure?.source ?? "transcript_estimate";
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+    const unwindowedTokenPressure = estimateTranscriptBoundaryTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
-    if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
-      estimatedPromptTokens = unwindowedEstimatedPromptTokens;
+    if (unwindowedTokenPressure.estimatedPromptTokens > estimatedPromptTokens) {
+      estimatedPromptTokens = unwindowedTokenPressure.estimatedPromptTokens;
       messagesForPressure = params.unwindowedMessages;
-      pressureSource = "unwindowed_transcript_estimate";
+      pressureSource = `unwindowed_${unwindowedTokenPressure.source}`;
     }
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));

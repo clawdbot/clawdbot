@@ -5,7 +5,10 @@ import {
   resolveActiveEmbeddedRunSessionId,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveSessionAgentIds,
+  tryResolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -56,6 +59,7 @@ import {
   buildDisabledAppsConfigPatch,
   mergeCodexThreadConfigs,
 } from "./app-server/plugin-thread-config.js";
+import { buildCodexProjectDocThreadConfig } from "./app-server/project-doc-thread-config.js";
 import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
 import type {
   CodexServiceTier,
@@ -588,12 +592,10 @@ function codexConversationSandboxOrPermissions(
   const disabledApps = mergeCodexThreadConfigs(buildDisabledAppsConfigPatch(), {
     "features.apps": false,
   })!;
-  if (networkProxy) {
-    return {
-      config: mergeCodexThreadConfigs(networkProxy.configPatch, disabledApps),
-    };
-  }
-  return { sandbox, config: disabledApps };
+  const config = buildCodexProjectDocThreadConfig(
+    mergeCodexThreadConfigs(networkProxy?.configPatch, disabledApps),
+  );
+  return networkProxy ? { config } : { sandbox, config };
 }
 
 async function requestNewConversationBindingThread(
@@ -1463,19 +1465,7 @@ function isDefaultAgentSessionKeyForAgent(params: {
   config: ResolvedCodexConversationConfig;
   agentId: string;
 }): boolean {
-  return normalizeAgentId(params.agentId) === resolveDefaultPolicyAgentId(params.config);
-}
-
-function resolveDefaultPolicyAgentId(config: ResolvedCodexConversationConfig): string {
-  const agents = (config.agents?.list ?? []).filter(
-    (
-      entry,
-    ): entry is NonNullable<
-      NonNullable<ResolvedCodexConversationConfig["agents"]>["list"]
-    >[number] => entry !== null && typeof entry === "object",
-  );
-  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
-  return normalizeAgentId(defaultEntry?.id);
+  return normalizeAgentId(params.agentId) === tryResolveDefaultAgentId(params.config);
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {

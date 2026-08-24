@@ -423,7 +423,7 @@ export function installContextEngineLoopHook(params: {
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
-        messages: providerMessages,
+        messages: providerMessages.slice(),
         tokenBudget,
         model: modelId,
         runtimeSettings: params.runtimeSettings,

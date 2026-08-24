@@ -7,6 +7,7 @@ function snapshot(params: {
   methods?: string[];
   scopes?: string[];
   includeAuth?: boolean;
+  includeScopes?: boolean;
 }): Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> {
   const connected = params.connected ?? true;
   return {
@@ -16,7 +17,14 @@ function snapshot(params: {
       features: { methods: params.methods ?? ["sessions.create"] },
       ...(params.includeAuth === false
         ? {}
-        : { auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] } }),
+        : {
+            auth: {
+              role: "operator",
+              ...(params.includeScopes === false
+                ? {}
+                : { scopes: params.scopes ?? ["operator.write"] }),
+            },
+          }),
     } as ApplicationGatewaySnapshot["hello"],
   };
 }
@@ -41,6 +49,40 @@ describe("readSessionMethodAccess", () => {
       cause: "missing-scope",
       requiredScope: "operator.admin",
     });
+  });
+
+  it.each([
+    ["sessions.dispatch", { key: "agent:main:device", deviceId: "runner" }],
+    ["sessions.dispatch", { key: "agent:main:auto", autoDevice: true }],
+    ["sessions.move", { key: "agent:main:device", target: { kind: "device", deviceId: "runner" } }],
+  ])("allows write-scoped device placement through %s", (method, params) => {
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
+        method,
+        params,
+        requiredScope: "operator.write",
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.write" });
+  });
+
+  it.each([
+    ["sessions.dispatch", { key: "agent:main:cloud", profileId: "aws" }],
+    ["sessions.move", { key: "agent:main:cloud", target: { kind: "profile", profileId: "aws" } }],
+  ])("keeps profile placement admin-only through %s", (method, params) => {
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
+        method,
+        params,
+        requiredScope: "operator.admin",
+      }),
+    ).toMatchObject({ allowed: false, requiredScope: "operator.admin" });
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.admin"] }), {
+        method,
+        params,
+        requiredScope: "operator.admin",
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.admin" });
   });
 
   it("keeps model and effort patch access independent", () => {
@@ -96,13 +138,16 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
-  it("preserves legacy snapshots without advertised auth scopes", () => {
+  it.each([
+    ["auth", { includeAuth: false }],
+    ["scopes", { includeScopes: false }],
+  ])("rejects snapshots without advertised %s", (_name, params) => {
     expect(
-      readSessionMethodAccess(snapshot({ includeAuth: false }), {
+      readSessionMethodAccess(snapshot(params), {
         method: "sessions.create",
         params: { agentId: "main" },
-      }).allowed,
-    ).toBe(true);
+      }),
+    ).toMatchObject({ allowed: false, cause: "missing-scope" });
   });
 
   it("rejects disconnected and unadvertised calls before scope checks", () => {
@@ -116,14 +161,14 @@ describe("readSessionMethodAccess", () => {
     ).toMatchObject({ allowed: false, cause: "method-unavailable" });
   });
 
-  it("allows legacy snapshots without method metadata", () => {
-    const legacy = snapshot({});
-    legacy.hello = { auth: legacy.hello?.auth } as ApplicationGatewaySnapshot["hello"];
+  it("rejects snapshots without method metadata", () => {
+    const incomplete = snapshot({});
+    incomplete.hello = { auth: incomplete.hello?.auth } as ApplicationGatewaySnapshot["hello"];
     expect(
-      readSessionMethodAccess(legacy, {
+      readSessionMethodAccess(incomplete, {
         method: "sessions.groups.put",
         requiredScope: "operator.write",
-      }).allowed,
-    ).toBe(true);
+      }),
+    ).toMatchObject({ allowed: false, cause: "method-unavailable" });
   });
 });

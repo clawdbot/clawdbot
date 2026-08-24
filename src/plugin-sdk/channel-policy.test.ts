@@ -171,6 +171,7 @@ describe("createRestrictSendersChannelSecurity", () => {
       groupPolicyPath: "channels.line.groupPolicy",
       groupAllowFromPath: "channels.line.groupAllowFrom",
       mentionGated: false,
+      findingTitle: "LINE security warning",
       policyPathSuffix: "dmPolicy",
       dmRouting,
     });
@@ -206,7 +207,13 @@ describe("createRestrictSendersChannelSecurity", () => {
         },
       }),
     ).toEqual([
-      '- LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.',
+      {
+        checkId: "channels.line.groups.open",
+        severity: "critical",
+        title: "LINE security warning",
+        detail:
+          'LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.',
+      },
     ]);
   });
 });

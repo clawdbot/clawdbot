@@ -1,10 +1,12 @@
 // Ollama tests cover provider models plugin behavior.
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "./defaults.js";
 import {
   buildOllamaProvider,
   buildOllamaModelDefinition,
@@ -49,6 +51,68 @@ describe("ollama provider models", () => {
   it("strips /v1 when resolving the Ollama API base", () => {
     expect(resolveOllamaApiBase("http://127.0.0.1:11434/v1")).toBe("http://127.0.0.1:11434");
     expect(resolveOllamaApiBase("http://127.0.0.1:11434///")).toBe("http://127.0.0.1:11434");
+  });
+
+  it("declares every exact currently served Ollama Cloud model id", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      modelCatalog: {
+        providers: Record<
+          string,
+          {
+            models: Array<{
+              id: string;
+              status?: string;
+              contextWindow: number;
+              input: string[];
+              reasoning: boolean;
+              cost?: {
+                input?: number;
+                output?: number;
+                cacheRead?: number;
+              };
+            }>;
+          }
+        >;
+      };
+    };
+    const models = manifest.modelCatalog.providers["ollama-cloud"]?.models ?? [];
+    const declared = new Map(models.map((model) => [model.id, model]));
+
+    const servedModels = [
+      ["glm-5.1", 202_752, ["text"], true],
+      ["glm-5.2", 1_000_000, ["text"], true],
+      ["minimax-m2.7", 196_608, ["text"], true],
+      ["deepseek-v4-flash", 1_048_576, ["text"], true],
+      ["deepseek-v4-flash:0731", 1_048_576, ["text"], true],
+      ["deepseek-v4-flash:preview", 1_048_576, ["text"], true],
+      ["deepseek-v4-pro", 1_048_576, ["text"], true],
+      ["deepseek-v4-pro:0813", 1_048_576, ["text"], true],
+      ["deepseek-v4-pro:preview", 524_288, ["text"], true],
+      ["gemma4", 262_144, ["text", "image"], true],
+      ["gemma4:31b", 262_144, ["text", "image"], true],
+      ["gpt-oss:120b", 131_072, ["text"], true],
+      ["gpt-oss:20b", 131_072, ["text"], true],
+      ["kimi-k2.6", 262_144, ["text", "image"], true],
+      ["kimi-k2.7-code", 262_144, ["text", "image"], true],
+      ["kimi-k3", 1_048_576, ["text", "image"], true],
+      ["minimax-m3", 524_288, ["text", "image"], true],
+      ["mistral-large-3:675b", 262_144, ["text", "image"], false],
+      ["nemotron-3-nano:30b", 262_144, ["text"], true],
+      ["nemotron-3-super", 262_144, ["text"], true],
+      ["nemotron-3-ultra", 262_144, ["text"], true],
+      ["qwen3.5", 262_144, ["text", "image"], true],
+      ["qwen3.5:397b", 262_144, ["text", "image"], true],
+    ] as const;
+    servedModels.forEach(([id, contextWindow, input, reasoning]) => {
+      expect(declared.get(id)).toMatchObject({ contextWindow, input, reasoning });
+    });
+    expect([...declared.keys()].toSorted()).toEqual(
+      [...servedModels.map(([id]) => id), "kimi-k2.5"].toSorted(),
+    );
+    expect(declared.get("kimi-k2.5")).toMatchObject({ status: "deprecated" });
+    expect(declared.get("kimi-k3")?.cost).toEqual({ input: 3, output: 15, cacheRead: 0.3 });
   });
 
   it("inspects local models using Ollama's canonical model request field", async () => {
@@ -246,6 +310,22 @@ describe("ollama provider models", () => {
         contextWindow: 1_000_000,
         maxTokens: 8192,
       }),
+    );
+  });
+
+  it("resolves known cloud context windows for bare and :cloud model refs", () => {
+    // A suffixed ref must not silently drop to the generic default when live
+    // inspection is unavailable; both spellings name the same cloud model.
+    for (const modelId of ["kimi-k3", "kimi-k3:cloud"]) {
+      expect(buildOllamaModelDefinition(modelId)).toEqual(
+        expect.objectContaining({ id: modelId, contextWindow: 1_048_576 }),
+      );
+    }
+  });
+
+  it("keeps the generic default for cloud models with no known context window", () => {
+    expect(buildOllamaModelDefinition("not-a-known-model:cloud")).toEqual(
+      expect.objectContaining({ contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW }),
     );
   });
 

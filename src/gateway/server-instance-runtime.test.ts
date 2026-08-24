@@ -8,7 +8,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { waitForActiveGatewayRootWork } from "../process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
@@ -105,7 +105,11 @@ describe("createGatewayInstanceRuntime", () => {
       internalDeliverySuppressText: true,
       pluginRuntimeOwnerId: "memory-core",
       delegatedToolPolicyHandoffId: "handoff-1",
-      sessionCreation: { via: "spawn", actor: { type: "agent", id: "agent:main:main" } },
+      sessionCreation: {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
+      },
     });
 
     const principal = captureAgentTurnPrincipal(client);
@@ -321,7 +325,7 @@ describe("createGatewayInstanceRuntime", () => {
         expect((caught as Error).message).toContain("gateway request timeout for send");
       } finally {
         finishHandler();
-        await waitForActiveGatewayRootWork();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         runtime.close();
       }
     } finally {

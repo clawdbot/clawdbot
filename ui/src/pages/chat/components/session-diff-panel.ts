@@ -7,9 +7,13 @@ import type {
   SessionDiffFile,
   SessionsDiffResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
+import {
+  localEditorFilePath,
+  observeNativeGateway,
+} from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
 import {
   expandSessionDiffGap,
   splitSessionDiffFileText,
@@ -23,6 +27,7 @@ import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/s
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
@@ -124,10 +129,6 @@ function splitPath(filePath: string): { directory: string; name: string } {
     : { directory: normalized.slice(0, separator), name: normalized.slice(separator + 1) };
 }
 
-function absolutePath(root: string, filePath: string): string {
-  return `${root.replace(/[\\/]+$/, "")}/${filePath.replace(/^[\\/]+/, "")}`;
-}
-
 function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
@@ -153,6 +154,7 @@ function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
 }
 
 class SessionDiffPanel extends OpenClawLightDomElement {
+  @property({ attribute: false }) execNode: string | null = null;
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
   @property({ attribute: false }) loadFileText: SessionDiffFileTextLoader | null = null;
   @property({ attribute: false }) openFile: ((path: string) => void) | null = null;
@@ -168,6 +170,13 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   private readonly fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
   private readonly unavailableFileText = new WeakSet<FileView>();
   private prefetchedDiffResult: SessionsDiffResult | null = null;
+
+  constructor() {
+    super();
+    observeNativeGateway(this, () => {
+      this.menu = null;
+    });
+  }
 
   private readonly diffTask = new Task(this, {
     args: () =>
@@ -476,7 +485,9 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const { file } = view;
     const collapsed = this.collapsedPaths.has(file.path);
     const { directory, name } = splitPath(file.path);
-    const absPath = result.root ? absolutePath(result.root, file.path) : undefined;
+    const absPath = result.root
+      ? (localEditorFilePath({ root: result.root, path: file.path }, this.execNode) ?? undefined)
+      : undefined;
     const pathTitle = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
     return html`
       <section class="session-diff__file" data-status=${file.status}>
@@ -576,9 +587,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   private renderBody(): TemplateResult {
     if (this.diffTask.status === TaskStatus.ERROR) {
       const error = this.diffTask.error;
-      return html`<div class="callout danger">
-        ${error instanceof Error ? error.message : String(error)}
-      </div>`;
+      return html`<div class="callout danger">${formatUiError(error)}</div>`;
     }
     const value = this.diffTask.value;
     if (!value) {

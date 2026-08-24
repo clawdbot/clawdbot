@@ -30,7 +30,10 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
 } from "./openclaw-state-db-maintenance.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 import {
   inspectOpenClawStateOwnershipFromDatabase,
   type OpenClawExternalStateOwnership,
@@ -153,7 +156,10 @@ function readWriterAppVersion(database: DatabaseSync): string | undefined {
   }
 }
 
-function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
+function readRegisteredAgentDatabases(
+  database: DatabaseSync,
+  registryPath: string,
+): Array<{
   agentId: string;
   path: string;
 }> {
@@ -169,7 +175,12 @@ function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
     db.selectFrom("agent_databases").select(["agent_id", "path"]),
   ).rows.flatMap((row) =>
     typeof row.agent_id === "string" && typeof row.path === "string"
-      ? [{ agentId: row.agent_id, path: row.path }]
+      ? [
+          {
+            agentId: row.agent_id,
+            path: resolveOpenClawRegisteredAgentDatabasePath(registryPath, row.path),
+          },
+        ]
       : [],
   );
 }
@@ -340,7 +351,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
 
     let registeredDatabases: ReturnType<typeof readRegisteredAgentDatabases>;
     try {
-      registeredDatabases = readRegisteredAgentDatabases(stateDatabase);
+      registeredDatabases = readRegisteredAgentDatabases(stateDatabase, statePath);
     } catch (error) {
       result.indeterminate.push({
         kind: "state",
