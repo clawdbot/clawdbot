@@ -147,6 +147,12 @@ async function navigateToClaudeCatalog(page: Page) {
   await expandCodingSection(page);
 }
 
+function claudeCatalogSessionLink(page: Page, name: string) {
+  return page
+    .locator('[data-session-section="catalog:claude"]')
+    .getByRole("link", { name, exact: true });
+}
+
 async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
@@ -542,7 +548,8 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
     await page.locator('[data-session-catalog-load-more="claude"]').click();
-    await page.getByText("Older remote review", { exact: true }).waitFor();
+    const olderRemoteReview = claudeCatalogSessionLink(page, "Older remote review");
+    await olderRemoteReview.waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
       catalogId: "claude",
@@ -560,8 +567,14 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);
-    await page.getByText("Older remote review", { exact: true }).waitFor();
-    await page.getByText("Remote architecture review", { exact: true }).click();
+    await olderRemoteReview.waitFor();
+    const remoteArchitectureReview = claudeCatalogSessionLink(page, "Remote architecture review");
+    await remoteArchitectureReview.hover();
+    await page
+      .locator(".session-progress-hovercard")
+      .getByText("Remote architecture review", { exact: true })
+      .waitFor();
+    await remoteArchitectureReview.click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
     const catalogPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     const thread = catalogPane.locator(".chat-thread");
