@@ -30,14 +30,17 @@ const MATTERMOST_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
 };
 
 // Skin tones and variation selectors must not prevent their base glyph lookup.
-const EMOJI_DECORATION_RE = /[\u{1F3FB}-\u{1F3FF}\u{FE00}-\u{FE0F}]/gu;
+const EMOJI_SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
+const EMOJI_VARIATION_SELECTOR_RE = /[\u{FE00}-\u{FE0F}]/gu;
 
 export function normalizeMattermostEmojiName(raw: string | undefined): string | undefined {
   const withoutColons = raw?.trim().replace(/^:+|:+$/g, "");
   if (!withoutColons) {
     return undefined;
   }
-  const glyphKey = withoutColons.replace(EMOJI_DECORATION_RE, "");
+  const glyphKey = withoutColons
+    .replace(EMOJI_SKIN_TONE_MODIFIER_RE, "")
+    .replace(EMOJI_VARIATION_SELECTOR_RE, "");
   return Object.hasOwn(MATTERMOST_EMOJI_SHORTNAME_BY_GLYPH, glyphKey)
     ? MATTERMOST_EMOJI_SHORTNAME_BY_GLYPH[glyphKey]
     : withoutColons;
