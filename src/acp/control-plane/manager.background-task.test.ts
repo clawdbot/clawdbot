@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
+import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import {
   resetTaskRegistryForTests,
   resetTaskFlowRegistryForTests,
@@ -164,4 +165,70 @@ describe("ACP background task execution binding", () => {
       },
     );
   });
+
+  it.each(["missing", "mismatched"] as const)(
+    "does not bind a live parent flow when the task owner is %s",
+    async (taskOwnerState) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: `openclaw-acp-${taskOwnerState}-task-binding-` },
+        async () => {
+          resetTaskRegistryForTests();
+          resetTaskFlowRegistryForTests();
+          const admitted: AdmittedRunContext = {
+            operationalRunInstance: { instanceId: "instance-acp", runId: "run-acp" },
+            executionIdentityToken: createExecutionIdentityAdmissionToken("run-acp", {
+              contextId: "context-acp",
+              executionId: "execution-acp",
+            }),
+          };
+          const record = createBackgroundTaskRecord(
+            {
+              requesterSessionKey: "agent:main:main",
+              childSessionKey: "agent:qa:child",
+              runId: "run-acp",
+              task: "private",
+            },
+            100,
+          );
+          const task = findTaskByRunId("run-acp");
+          if (!record || !task?.parentFlowId) {
+            throw new Error("expected ACP task and owner flow");
+          }
+          const db = openOpenClawStateDatabase().db;
+          if (taskOwnerState === "missing") {
+            db.prepare("DELETE FROM task_runs WHERE task_id = ?").run(task.taskId);
+          } else {
+            expect(
+              bindTaskRunExecution({
+                taskId: task.taskId,
+                admitted: {
+                  operationalRunInstance: { instanceId: "instance-other", runId: "run-other" },
+                  executionIdentityToken: createExecutionIdentityAdmissionToken("run-other", {
+                    contextId: "context-other",
+                    executionId: "execution-other",
+                  }),
+                },
+              }),
+            ).toBe("bound");
+          }
+
+          bindBackgroundTaskExecution(record, admitted);
+
+          if (taskOwnerState === "missing") {
+            expect(tableExists(db, "execution_owner_lifecycle_bindings")).toBe(false);
+          } else {
+            expect(
+              db
+                .prepare(
+                  `SELECT context_id, execution_id
+                   FROM execution_owner_lifecycle_bindings
+                   WHERE owner_kind = 'flow' AND owner_id = ?`,
+                )
+                .get(task.parentFlowId),
+            ).toBeUndefined();
+          }
+        },
+      );
+    },
+  );
 });

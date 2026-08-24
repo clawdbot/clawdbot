@@ -1,6 +1,7 @@
 /** Mirrors child ACP turns into detached-task status for requester-facing progress. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import { isRetainedExecutionOwnerBinding } from "../../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -181,7 +182,9 @@ export function bindBackgroundTaskExecution(
   try {
     const taskResult = bindTaskRunExecution({ admitted, taskId: record.taskId });
     const flowResult = record.parentFlowId
-      ? bindTaskFlowExecution({ admitted, flowId: record.parentFlowId })
+      ? isRetainedExecutionOwnerBinding(taskResult)
+        ? bindTaskFlowExecution({ admitted, flowId: record.parentFlowId })
+        : taskResult
       : undefined;
     if ([taskResult, flowResult].some((result) => result === "mismatch" || result === "missing")) {
       logVerbose("acp-manager: exact task execution binding was not retained");
