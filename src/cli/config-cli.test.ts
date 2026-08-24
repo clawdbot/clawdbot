@@ -70,7 +70,9 @@ vi.mock("../config/config.js", () => ({
     ...args: Parameters<typeof mockReadConfigFileSnapshot>
   ) => ({
     snapshot: await mockReadConfigFileSnapshot(...args),
-    pluginMetadataSnapshot: createPluginMetadataSnapshot(),
+    // Routed through the swappable registry mock so `config get` tests can inject claimant
+    // manifests; the beforeEach default keeps this the same empty snapshot as before.
+    pluginMetadataSnapshot: mockLoadPluginMetadataSnapshot(undefined),
   }),
   readConfigFileSnapshotForWrite: async () => ({
     snapshot: await mockReadConfigFileSnapshot(),
@@ -98,44 +100,64 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
 }));
 
+// The static schema below keeps this suite hermetic. The channel-ownership regression test
+// swaps in the real builder because the defect it guards lives in how `runConfigGet`
+// constructs the ownership policy this function receives, which a canned schema cannot see.
+const runtimeSchemaBuildOverride = vi.hoisted(() => ({
+  current: undefined as
+    | undefined
+    | ((
+        ...args: Parameters<
+          (typeof import("../config/runtime-schema.js"))["buildRuntimeConfigSchemaFromRegistry"]
+        >
+      ) => ReturnType<
+        (typeof import("../config/runtime-schema.js"))["buildRuntimeConfigSchemaFromRegistry"]
+      >),
+}));
+
 vi.mock("../config/runtime-schema.js", () => ({
-  buildRuntimeConfigSchemaFromRegistry: () => ({
-    schema: {
-      type: "object",
-      properties: {
-        models: {
-          type: "object",
-          properties: {
-            providers: {
-              type: "object",
-              additionalProperties: {
+  buildRuntimeConfigSchemaFromRegistry: (
+    ...args: Parameters<
+      (typeof import("../config/runtime-schema.js"))["buildRuntimeConfigSchemaFromRegistry"]
+    >
+  ) =>
+    runtimeSchemaBuildOverride.current?.(...args) ?? {
+      schema: {
+        type: "object",
+        properties: {
+          models: {
+            type: "object",
+            properties: {
+              providers: {
                 type: "object",
-                properties: {
-                  models: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: { id: { type: "string" } },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    models: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: { id: { type: "string" } },
+                      },
                     },
                   },
                 },
               },
             },
           },
-        },
-        gateway: {
-          type: "object",
-          properties: {
-            bind: { type: "string" },
-            port: { type: "number" },
+          gateway: {
+            type: "object",
+            properties: {
+              bind: { type: "string" },
+              port: { type: "number" },
+            },
           },
         },
       },
+      uiHints: {},
+      version: "test",
+      generatedAt: "2026-03-25T00:00:00.000Z",
     },
-    uiHints: {},
-    version: "test",
-    generatedAt: "2026-03-25T00:00:00.000Z",
-  }),
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
 
@@ -1454,6 +1476,104 @@ describe("config cli", () => {
         },
       });
       expect(mockExit).toHaveBeenCalledWith(1);
+    });
+
+    it("reports a replacement-only field as valid but unset when validation seeded the fallback's entry config", async () => {
+      // Regression: `runConfigGet` built the channel ownership policy from the runtime config
+      // alone. Once the authored config carries a `plugins` key, validation seeds
+      // `plugins.entries.<id>.config` from each enabled plugin's own config schema, so claimants
+      // the operator never configured still carry a materialized entry in that config. Explicit
+      // selection counts any entry with a `config` record, so both claimants read as
+      // operator-selected, the replacement's `preferOver` edge was set aside, the first
+      // registrant's schema surfaced for the contested channel, and a replacement-only unset
+      // field was reported as an unknown path. The policy must read explicit selection from the
+      // authored `snapshot.sourceConfig`.
+      const actualRuntimeSchema = await vi.importActual<
+        typeof import("../config/runtime-schema.js")
+      >("../config/runtime-schema.js");
+      runtimeSchemaBuildOverride.current = actualRuntimeSchema.buildRuntimeConfigSchemaFromRegistry;
+      try {
+        mockLoadPluginMetadataSnapshot.mockReturnValue(
+          createPluginMetadataSnapshot({
+            diagnostics: [],
+            plugins: [
+              // First registrant: registration order hands it the contested channel unless the
+              // replacement's `preferOver` edge displaces it.
+              createPluginManifestRecord({
+                id: "voxchat-classic",
+                origin: "global",
+                channels: ["voxchat", "legacychat"],
+                channelConfigs: {
+                  voxchat: {
+                    schema: {
+                      type: "object",
+                      properties: { botToken: { type: "string" } },
+                      additionalProperties: false,
+                    },
+                  },
+                  legacychat: {
+                    schema: {
+                      type: "object",
+                      properties: { botToken: { type: "string" } },
+                      additionalProperties: false,
+                    },
+                  },
+                },
+              }),
+              createPluginManifestRecord({
+                id: "voxchat-next",
+                origin: "global",
+                channels: ["voxchat"],
+                channelConfigs: {
+                  voxchat: {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        botToken: { type: "string" },
+                        // The discriminating field: only the replacement's schema has it.
+                        replyMode: { type: "string", enum: ["thread", "direct"] },
+                      },
+                      additionalProperties: false,
+                    },
+                    preferOver: ["voxchat-classic"],
+                  },
+                },
+              }),
+            ],
+          }),
+        );
+        // Authored config: a `plugins` key with no entries. The key is what opens the seeding
+        // path — `validateExplicitPluginConfig` is gated on it — while the operator still
+        // hand-picked nothing.
+        const authored: OpenClawConfig = {
+          channels: { legacychat: { botToken: "tok" } },
+          plugins: {},
+        } as OpenClawConfig;
+        // Runtime config: validation seeded an entry config for every enabled claimant. An empty
+        // record is what a schema carrying no defaults seeds, and is enough on its own to read as
+        // an operator choice.
+        const materialized: OpenClawConfig = {
+          ...authored,
+          plugins: {
+            entries: { "voxchat-classic": { config: {} }, "voxchat-next": { config: {} } },
+          },
+        };
+        setSnapshot(authored, materialized);
+
+        await expect(
+          runConfigCommand(["config", "get", "channels.voxchat.replyMode"]),
+        ).rejects.toThrow(ExitError);
+
+        expectErrorIncludes(
+          "Config path is valid but unset: channels.voxchat.replyMode. The runtime default applies until you set an authored value with openclaw config set channels.voxchat.replyMode <value>.",
+        );
+        expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+          "Unknown config path",
+        );
+        expect(mockExit).toHaveBeenCalledWith(1);
+      } finally {
+        runtimeSchemaBuildOverride.current = undefined;
+      }
     });
 
     it.each([

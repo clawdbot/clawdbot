@@ -174,12 +174,20 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     if (!pluginMetadataSnapshot) {
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
-    // Redaction hints must come from the owner the operator's config actually selects; the raw
-    // file is the source config here, so explicit selection reads correctly without a snapshot.
+    // Redaction hints must come from the owner the operator's config actually selects, so the
+    // policy needs both halves. `snapshot.config` is runtime-shaped: once the authored config
+    // carries a `plugins` key, validation seeds `plugins.entries.<id>.config` from the plugin's
+    // own config schema for every plugin enabled at validation time that declares one, not only
+    // for the ones the operator configured. Explicit selection counts any entry carrying a
+    // `config` record, so letting the runtime half stand in for the authored config meant reading
+    // a seeded default as an operator choice, which suppressed a replacement's `preferOver` edge
+    // and reported a replacement-only unset field as an unknown path. The authored half is
+    // `snapshot.sourceConfig`; the runtime half stays for effective policy disablement.
     const { schema, uiHints } = buildRuntimeConfigSchemaFromRegistry(
       pluginMetadataSnapshot.manifestRegistry,
       createConfiguredChannelOwnershipPolicy({
         config: snapshot.config,
+        sourceConfig: snapshot.sourceConfig,
         registry: pluginMetadataSnapshot.manifestRegistry,
         env: process.env,
       }),
