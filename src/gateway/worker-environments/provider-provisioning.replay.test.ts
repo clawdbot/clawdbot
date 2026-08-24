@@ -361,11 +361,9 @@ describe("worker environment service provision replay", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("preserves an allocated lease after indeterminate provision cleanup across restart", async () => {
+  it.each([true, false])("recovers indeterminate cleanup (released: %s)", async (released) => {
     const leaseId = "lease:worker-provision-cleanup";
-    let releaseCommitted = false;
     const provision = vi.fn(async () => {
-      releaseCommitted = true;
       throw WorkerProviderError.cleanupIndeterminate(
         leaseId,
         new Error("worker enrollment failed"),
@@ -373,7 +371,7 @@ describe("worker environment service provision replay", () => {
       );
     });
     const inspect = vi.fn(async () => ({
-      status: releaseCommitted ? ("destroyed" as const) : ("active" as const),
+      status: released ? ("destroyed" as const) : ("active" as const),
     }));
     const destroy = vi.fn(async () => {});
     const provider = support.createProvider({ provision, inspect, destroy });
@@ -416,7 +414,10 @@ describe("worker environment service provision replay", () => {
 
     expect(provision).toHaveBeenCalledTimes(1);
     expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
-    expect(destroy).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledTimes(released ? 0 : 1);
+    if (!released) {
+      expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    }
     expect(support.testState.store.get(pending.environmentId)).toMatchObject({
       state: "failed",
       leaseId: null,

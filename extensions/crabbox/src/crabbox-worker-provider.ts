@@ -48,6 +48,7 @@ import {
   CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
+  resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
@@ -170,7 +171,7 @@ async function inspectWithContext(params: {
     ],
     binary: params.context.binary,
     runCommand: params.runCommand,
-    timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.context.provider),
   });
   if (result.termination === "exit" && result.code === 0) {
     // A successful but malformed response cannot attest the fixed lease. Command failures and
@@ -254,7 +255,10 @@ async function waitForProvisionReady(
       expectedLeaseId: inspect.id,
       id: inspect.id,
       runCommand: params.runCommand,
-      timeoutMs: remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS),
+      timeoutMs: remainingProvisionTimeout(
+        params.deadline,
+        resolveCrabboxLifecycleTimeoutMs(params.provider),
+      ),
     });
     if (replay.status === "unknown") {
       throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
@@ -345,7 +349,7 @@ async function stopProvisionId(params: {
     provider: params.provider,
     runCommand: params.runCommand,
     // Cleanup gets its own budget so an exhausted provision deadline cannot leak a lease.
-    timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: resolveCrabboxLifecycleTimeoutMs(params.provider),
   });
 }
 
@@ -571,7 +575,10 @@ export function createCrabboxWorkerProvider(
           expectedLeaseId: leaseId,
           id: leaseId,
           runCommand,
-          timeoutMs: remainingProvisionTimeout(deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS),
+          timeoutMs: remainingProvisionTimeout(
+            deadline,
+            resolveCrabboxLifecycleTimeoutMs(parsed.provider),
+          ),
         });
       } catch (error) {
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
@@ -707,7 +714,11 @@ export function createCrabboxWorkerProvider(
       const context = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
       heartbeats.stop(context.id);
-      await stopCrabboxLease({ ...context, runCommand });
+      await stopCrabboxLease({
+        ...context,
+        runCommand,
+        timeoutMs: resolveCrabboxLifecycleTimeoutMs(context.provider),
+      });
     },
   };
 }

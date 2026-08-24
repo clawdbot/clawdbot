@@ -1686,80 +1686,123 @@ describe("Crabbox worker provider", () => {
     },
   );
 
-  it("runs one fixed warmup, ignores its output, and inspects only the canonical id", async () => {
-    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
-    const provider = providerWithRunner(async (argv, options) => {
-      calls.push({ argv, options });
-      return argv[1] === "warmup"
-        ? commandResult({ stdout: "warmup completed without a lease token\n" })
-        : commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
-    });
+  it.each([
+    {
+      providerId: "aws",
+      warmupTimeoutMs: 50 * 60_000,
+      lifecycleTimeoutMs: 60_000,
+      provisionTimeoutMs: 67 * 60_000,
+    },
+    {
+      providerId: "hetzner",
+      warmupTimeoutMs: 50 * 60_000,
+      lifecycleTimeoutMs: 60_000,
+      provisionTimeoutMs: 67 * 60_000,
+    },
+    {
+      providerId: "machine0",
+      warmupTimeoutMs: 50 * 60_000,
+      lifecycleTimeoutMs: 3 * 60_000,
+      provisionTimeoutMs: 69 * 60_000,
+    },
+  ])(
+    "runs one fixed $providerId warmup, ignores its output, and inspects only the canonical id",
+    async ({ providerId, warmupTimeoutMs, lifecycleTimeoutMs, provisionTimeoutMs }) => {
+      const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+      const provider = providerWithRunner(async (argv, options) => {
+        calls.push({ argv, options });
+        return argv[1] === "warmup"
+          ? commandResult({ stdout: "warmup completed without a lease token\n" })
+          : commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      });
+      const profile = { ...PROFILE, provider: providerId };
 
-    await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
-      leaseId: LEASE_ID,
-    });
-    expect(calls).toHaveLength(4);
-    expect(calls[0]?.argv).toEqual([
-      SIBLING_BINARY,
-      "warmup",
-      "--provider",
-      "aws",
-      "--network",
-      "public",
-      "--tailscale=false",
-      "--class",
-      "standard",
-      "--ttl",
-      "24h",
-      "--idle-timeout",
-      "60m",
-      "--lease-id",
-      LEASE_ID,
-      "--slug",
-      expect.stringMatching(/^openclaw-[a-f0-9]{32}$/u),
-      "--keep=true",
-    ]);
-    expect(calls[0]?.options).toEqual({
-      timeoutMs: 50 * 60_000,
-      maxOutputBytes: 65_536,
-      killProcessTree: true,
-    });
-    expect(calls[1]?.argv).toEqual([
-      SIBLING_BINARY,
-      "inspect",
-      "--provider",
-      "aws",
-      "--network",
-      "public",
-      "--id",
-      LEASE_ID,
-      "--json",
-    ]);
-    expect(calls[2]?.argv[1]).toBe("run");
-    expect(String(calls[2]?.options.input)).toContain("openclaw@2026.8.1");
-    expect(String(calls[2]?.options.input)).toContain("'OpenClaw 2026.8.1'|'OpenClaw 2026.8.1 '*");
-    expect(String(calls[2]?.options.input)).toContain(
-      'npx --yes --package "$package_spec" -- openclaw',
-    );
-    expect(String(calls[2]?.options.input)).toContain(
-      "OpenClaw worker bootstrap could not install Gateway version 2026.8.1",
-    );
-    expect(String(calls[2]?.options.input)).toContain(
-      'connect --target-file "$setup_code_file" --ephemeral',
-    );
-    expect(String(calls[2]?.options.input)).toContain("setsid -f sh -c");
-    expect(String(calls[2]?.options.input)).not.toContain("config set nodeHost.workerRuns.enabled");
-    expect(String(calls[2]?.options.input)).not.toContain("nohup");
-    expect(String(calls[2]?.options.input)).not.toContain("secret-setup-value");
-    expect(calls[2]?.options.env).toMatchObject({
-      CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
-    });
-    expect(calls[2]?.argv).toEqual(
-      expect.arrayContaining(["--allow-env", "CRABBOX_WORKER_SETUP_CODE"]),
-    );
-    expect(calls[2]?.argv.join(" ")).not.toContain("setup-code");
-    expect(calls[3]?.argv[1]).toBe("inspect");
-  });
+      await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
+        leaseId: LEASE_ID,
+      });
+      expect(calls).toHaveLength(4);
+      expect(calls[0]?.argv).toEqual([
+        SIBLING_BINARY,
+        "warmup",
+        "--provider",
+        providerId,
+        "--network",
+        "public",
+        "--tailscale=false",
+        "--class",
+        "standard",
+        "--ttl",
+        "24h",
+        "--idle-timeout",
+        "60m",
+        "--lease-id",
+        LEASE_ID,
+        "--slug",
+        expect.stringMatching(/^openclaw-[a-f0-9]{32}$/u),
+        "--keep=true",
+      ]);
+      expect({
+        warmupOptions: calls[0]?.options,
+        provisionTimeoutMs: provider.resolveProvisionTimeoutMs?.(profile),
+      }).toEqual({
+        warmupOptions: {
+          timeoutMs: warmupTimeoutMs,
+          maxOutputBytes: 65_536,
+          killProcessTree: true,
+        },
+        provisionTimeoutMs,
+      });
+      expect(calls[1]?.argv).toEqual([
+        SIBLING_BINARY,
+        "inspect",
+        "--provider",
+        providerId,
+        "--network",
+        "public",
+        "--id",
+        LEASE_ID,
+        "--json",
+      ]);
+      expect(calls[1]?.options.timeoutMs).toBe(lifecycleTimeoutMs);
+      expect(calls[2]?.argv[1]).toBe("run");
+      expect(String(calls[2]?.options.input)).toContain("openclaw@2026.8.1");
+      expect(String(calls[2]?.options.input)).toContain(
+        "'OpenClaw 2026.8.1'|'OpenClaw 2026.8.1 '*",
+      );
+      expect(String(calls[2]?.options.input)).toContain(
+        'npx --yes --package "$package_spec" -- openclaw',
+      );
+      expect(String(calls[2]?.options.input)).toContain(
+        "OpenClaw worker bootstrap could not install Gateway version 2026.8.1",
+      );
+      expect(String(calls[2]?.options.input)).toContain(
+        'connect --target-file "$setup_code_file" --ephemeral',
+      );
+      expect(String(calls[2]?.options.input)).toContain("setsid -f sh -c");
+      expect(String(calls[2]?.options.input)).not.toContain(
+        "config set nodeHost.workerRuns.enabled",
+      );
+      expect(String(calls[2]?.options.input)).not.toContain("nohup");
+      expect(String(calls[2]?.options.input)).not.toContain("secret-setup-value");
+      expect(calls[2]?.options.env).toMatchObject({
+        CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
+      });
+      expect(calls[2]?.argv).toEqual(
+        expect.arrayContaining(["--allow-env", "CRABBOX_WORKER_SETUP_CODE"]),
+      );
+      expect(calls[2]?.argv.join(" ")).not.toContain("setup-code");
+      expect(calls[3]?.argv[1]).toBe("inspect");
+      expect(calls[3]?.options.timeoutMs).toBe(lifecycleTimeoutMs);
+
+      const lease = lifecycleLease(LEASE_ID, profile);
+      await expect(provider.inspect(lease)).resolves.toEqual({ status: "active" });
+      await expect(provider.destroy(lease)).resolves.toBeUndefined();
+      expect(calls.slice(4).map(({ argv, options }) => [argv[1], options.timeoutMs])).toEqual([
+        ["inspect", lifecycleTimeoutMs],
+        ["stop", lifecycleTimeoutMs],
+      ]);
+    },
+  );
 
   it("overrides the configured class for one provision operation", async () => {
     const calls: string[][] = [];
@@ -2036,7 +2079,7 @@ describe("Crabbox worker provider", () => {
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
       sleep: async () => {
-        nowMs += resolveCrabboxProvisionBaseTimeoutMs({}) + 1;
+        nowMs += resolveCrabboxProvisionBaseTimeoutMs(PROFILE) + 1;
       },
       wallpaperPath: WORKER_WALLPAPER_PATH,
     });

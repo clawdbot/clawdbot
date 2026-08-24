@@ -1,4 +1,5 @@
 type CrabboxProvisionTimeoutProfile = {
+  provider: string;
   desktop?: boolean;
   setup?: string;
 };
@@ -23,10 +24,18 @@ export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 // lifecycle budget — a hung binary must fall back to label-only choices
 // promptly instead of stalling the whole cloud picker.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
+// Exceed Machine0's one-minute read backoff while bounding inspect and stop recovery.
+const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 3 * 60_000;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
 // Setup may install an exact candidate CLI and official plugins on a minimal cloud image.
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
+
+export function resolveCrabboxLifecycleTimeoutMs(provider: string): number {
+  return provider === "machine0"
+    ? CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS
+    : CRABBOX_LIFECYCLE_TIMEOUT_MS;
+}
 
 export function resolveCrabboxProvisionBaseTimeoutMs(
   profile: CrabboxProvisionTimeoutProfile,
@@ -34,7 +43,7 @@ export function resolveCrabboxProvisionBaseTimeoutMs(
   const warmupTimeoutMs = profile.desktop
     ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
     : CRABBOX_WARMUP_TIMEOUT_MS;
-  return warmupTimeoutMs + CRABBOX_LIFECYCLE_TIMEOUT_MS;
+  return warmupTimeoutMs + resolveCrabboxLifecycleTimeoutMs(profile.provider);
 }
 
 export function countCrabboxProvisionSetupPhases(profile: CrabboxProvisionTimeoutProfile): number {
