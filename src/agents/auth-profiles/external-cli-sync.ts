@@ -46,6 +46,11 @@ type ExternalCliSyncProvider = {
   readCredentials: (
     options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt">,
   ) => OAuthCredential | null;
+  // Uncached, non-prompting read used to prove refresh ownership. It must reach
+  // every backend the CLI can store credentials in, including the macOS
+  // Keychain, and must not reuse a cached value whose freshness is tracked by
+  // file mtime alone. Only providers that define it can own a persisted slot.
+  readCurrentCredentials?: () => OAuthCredential | null;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
@@ -92,6 +97,17 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
       const credential = readClaudeCliCredentialsCached({
         ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
         allowKeychainPrompt: options?.allowKeychainPrompt,
+      });
+      if (credential?.type !== "oauth") {
+        return null;
+      }
+      return { ...credential, provider: "claude-cli" };
+    },
+    readCurrentCredentials: () => {
+      const credential = readClaudeCliCredentialsCached({
+        ttlMs: 0,
+        allowKeychainPrompt: false,
+        tryKeychainWithoutPrompt: true,
       });
       if (credential?.type !== "oauth") {
         return null;
@@ -333,8 +349,9 @@ function listScopedExternalCliProfileIds(params: {
  * against the current CLI read, so a logged-out, cleared, or re-logged-in CLI
  * still surfaces normally:
  *
- * - the CLI store must still hold an OAuth credential (a `claude logout`
- *   removes it, and ownership is refused),
+ * - a current, uncached read of the CLI store, across every backend it may use,
+ *   must still return an OAuth credential (a `claude logout` removes it, and
+ *   ownership is refused),
  * - that credential must still carry refresh material, and
  * - its refresh material must match the persisted slot, which is the only proof
  *   that the stored profile IS this CLI login and that this refresh token is
@@ -347,7 +364,6 @@ function listScopedExternalCliProfileIds(params: {
 function isLiveExternalCliRefreshOwner(params: {
   profileId: string;
   credential: AuthProfileCredential | undefined;
-  allowKeychainPrompt?: boolean;
 }): boolean {
   const { credential } = params;
   if (credential?.type !== "oauth") {
@@ -357,12 +373,15 @@ function isLiveExternalCliRefreshOwner(params: {
     profileId: params.profileId,
     credential,
   });
-  if (!providerConfig || providerConfig.bootstrapOnly) {
+  if (!providerConfig?.readCurrentCredentials || providerConfig.bootstrapOnly) {
     return false;
   }
-  const live = providerConfig.readCredentials({
-    allowKeychainPrompt: params.allowKeychainPrompt,
-  });
+  // A usable credential raises no re-login warning, so there is nothing to
+  // suppress and no reason to pay for a credential read.
+  if (hasUsableOAuthCredential(credential)) {
+    return false;
+  }
+  const live = providerConfig.readCurrentCredentials();
   if (live?.type !== "oauth" || !live.refresh?.trim()) {
     return false;
   }
@@ -378,17 +397,10 @@ function isLiveExternalCliRefreshOwner(params: {
  * Scoped to the canonical built-in CLI slot registry, so a user-owned profile
  * or another CLI provider keeps its expiry visible.
  */
-export function listLiveExternalCliOwnedProfileIds(
-  store: AuthProfileStore,
-  options?: { allowKeychainPrompt?: boolean },
-): string[] {
+export function listLiveExternalCliOwnedProfileIds(store: AuthProfileStore): string[] {
   return listExternalCliProfileMetadataIds()
     .filter((profileId) =>
-      isLiveExternalCliRefreshOwner({
-        profileId,
-        credential: store.profiles[profileId],
-        allowKeychainPrompt: options?.allowKeychainPrompt,
-      }),
+      isLiveExternalCliRefreshOwner({ profileId, credential: store.profiles[profileId] }),
     )
     .toSorted();
 }

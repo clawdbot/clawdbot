@@ -781,6 +781,27 @@ describe("models.authStatus", () => {
       expect(provider?.profiles[0]).toMatchObject({ profileId, status: "expired" });
     });
 
+    it("reads the CLI credential fresh and across every storage backend", async () => {
+      // macOS keeps the Claude CLI login in the Keychain rather than a file, and
+      // the cached reader tracks freshness by file mtime only. Skipping the
+      // Keychain leaves those logins false-expired, and reusing a cached value
+      // can report a logged-out CLI as healthy for the length of the TTL.
+      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+        type: "oauth",
+        provider: "anthropic",
+        access: "idle-access",
+        refresh: "cli-owned-refresh",
+        expires: 1,
+      });
+      setPersistedClaudeCliStore();
+
+      await firstAuthStatusProvider();
+
+      expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
+        expect.objectContaining({ ttlMs: 0, tryKeychainWithoutPrompt: true }),
+      );
+    });
+
     it("keeps the re-login warning when the CLI is logged out", async () => {
       mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
       setPersistedClaudeCliStore();
