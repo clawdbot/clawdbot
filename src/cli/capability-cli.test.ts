@@ -14,6 +14,14 @@ const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createIsomBrandBuffer(brand: "hevc" | "msf1"): Buffer {
+  const buffer = Buffer.alloc(24);
+  buffer.writeUInt32BE(buffer.length, 0);
+  buffer.write("ftyp", 4, "ascii");
+  buffer.write(brand, 8, "ascii");
+  return buffer;
+}
+
 async function runCap(...argv: string[]): Promise<void> {
   const program = new Command();
   await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
@@ -1282,6 +1290,54 @@ describe("capability cli", () => {
     expect(inputs).toHaveLength(1);
     expect(inputs[0]?.path).toBe(tempInput);
     expect(inputs[0]?.mimeType).toBe("image/jpeg");
+  });
+
+  it("normalizes sniffed HEIC sequences to JPEG before local model probes", async () => {
+    const source = createIsomBrandBuffer("hevc");
+    const tempInput = path.join(tempDirs.make("openclaw-model-run-heic-sequence-"), "opaque.bin");
+    await fs.writeFile(tempInput, source);
+
+    await runCapability("model", "run", "--prompt", "describe this", "--file", tempInput, "--json");
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(source);
+    const call = firstCompletionCall();
+    expect(call?.context?.messages?.[0]?.content).toEqual([
+      { type: "text", text: "describe this" },
+      {
+        type: "image",
+        data: Buffer.from("jpeg-normalized").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    ]);
+    expect(firstJsonOutput()?.inputs).toEqual([{ path: tempInput, mimeType: "image/jpeg" }]);
+  });
+
+  it("normalizes sniffed HEIF sequences to JPEG before gateway model probes", async () => {
+    const source = createIsomBrandBuffer("msf1");
+    const tempInput = path.join(tempDirs.make("openclaw-model-run-heif-sequence-"), "opaque.bin");
+    await fs.writeFile(tempInput, source);
+
+    await runCapability(
+      "model",
+      "run",
+      "--prompt",
+      "describe this",
+      "--file",
+      tempInput,
+      "--gateway",
+      "--json",
+    );
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(source);
+    expect(firstGatewayCall()?.params?.attachments).toEqual([
+      {
+        type: "image",
+        fileName: "opaque.bin",
+        mimeType: "image/jpeg",
+        content: Buffer.from("jpeg-normalized").toString("base64"),
+      },
+    ]);
+    expect(firstJsonOutput()?.inputs).toEqual([{ path: tempInput, mimeType: "image/jpeg" }]);
   });
 
   it("rejects non-image files for model probes", async () => {

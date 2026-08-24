@@ -10,6 +10,7 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { readSessionDefaults } from "../../app/gateway-store.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -647,6 +648,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         canAdmin &&
         !gatewayTooOld &&
         isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
+      modelConfigured: snapshot.hello
+        ? readSessionDefaults(snapshot.hello)?.modelConfigured === true
+        : false,
       gatewayTooOld,
       refreshWarning: this.setupRefreshWarning,
       actionsDisabled: this.actionsDisabled(),

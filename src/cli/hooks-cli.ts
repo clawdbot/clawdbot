@@ -29,7 +29,7 @@ import { defaultRuntime } from "../runtime.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
-import { rethrowExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
 import {
   formatHookInfo,
   formatHookMissingSummary,
@@ -209,13 +209,6 @@ function buildConfigWithHookEnabled(params: {
   };
 }
 
-function exitHooksCliWithError(err: unknown): never {
-  rethrowExpectedCliError(err);
-  defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
-  defaultRuntime.exit(1);
-  throw new Error("unreachable");
-}
-
 function writeHooksOutput(value: string, json: boolean | undefined): void {
   if (json) {
     defaultRuntime.writeStdout(value);
@@ -224,16 +217,21 @@ function writeHooksOutput(value: string, json: boolean | undefined): void {
   defaultRuntime.log(value);
 }
 
-async function runHooksCliAction<T>(action: () => Promise<T> | T): Promise<T> {
-  try {
-    return await action();
-  } catch (err) {
-    return exitHooksCliWithError(err);
-  }
-}
-
-async function runOneShotHooksCliAction(action: () => Promise<number | void>): Promise<void> {
-  const result = await runHooksCliAction(action);
+async function runOneShotHooksCliAction(
+  action: () => Promise<number | void>,
+  failureOwner: "command" | "root" = "command",
+): Promise<void> {
+  const result = await action().catch((err: unknown) => {
+    rethrowExpectedCliError(err);
+    const message = formatErrorMessage(err);
+    const humanOutput = `${theme.error("Error:")} ${message}`;
+    if (failureOwner === "root") {
+      throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
+    }
+    defaultRuntime.error(humanOutput);
+    defaultRuntime.exit(1);
+    throw new Error("unreachable");
+  });
   const exitCode = typeof result === "number" ? result : 0;
   // CLI setup and handlers can leave ref'd handles behind. Defer exit until
   // runCli finishes shared teardown and drains both output streams.
@@ -326,7 +324,7 @@ export function registerHooksCli(program: Command): void {
         const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
         writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
-      }),
+      }, "root"),
     );
 
   hooks
@@ -340,7 +338,7 @@ export function registerHooksCli(program: Command): void {
         const json = hasJsonOutput(opts);
         writeHooksOutput(formatHookInfo(report, name, { ...opts, json }), json);
         return report.hooks.some((hook) => hook.name === name || hook.hookKey === name) ? 0 : 1;
-      }),
+      }, "root"),
     );
 
   hooks
@@ -353,7 +351,7 @@ export function registerHooksCli(program: Command): void {
         const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
         writeHooksOutput(formatHooksCheck(report, { ...opts, json }), json);
-      }),
+      }, "root"),
     );
 
   hooks
@@ -440,6 +438,6 @@ export function registerHooksCli(program: Command): void {
       const report = await loadHooksReport(resolveHooksAgentOption(command));
       const json = hasJsonOutput(opts);
       writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
-    }),
+    }, "root"),
   );
 }

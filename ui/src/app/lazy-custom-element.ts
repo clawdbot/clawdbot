@@ -42,6 +42,11 @@ export type OptionalCustomElement = {
 type UpdatingHost = {
   requestUpdate: () => unknown;
   readonly updateComplete?: Promise<unknown>;
+  /**
+   * Render-root lookup used to gate action replay on the element actually
+   * being rendered. Hosts without it replay unconditionally.
+   */
+  queryRenderedElement?: (tagName: string) => Element | null;
 };
 
 type LazyCustomElementRequestState =
@@ -182,7 +187,19 @@ export class LazyCustomElementRequestController {
         this.host.requestUpdate();
         await this.host.updateComplete;
         if (this.current === request) {
-          request.action?.();
+          // Replay only once the host has actually rendered the element.
+          // During boot the shell can still be splash-gated after this update;
+          // replaying then re-dispatches an event nothing handles, which
+          // re-enters this controller in a microtask cycle that starves the
+          // render (and the Gateway socket) forever. The skipped action stays
+          // persisted as the pending lazy shell action and replays through
+          // restorePendingLazyAction on a later context update.
+          const replayable =
+            !this.host.queryRenderedElement ||
+            this.host.queryRenderedElement(request.element.tagName) !== null;
+          if (replayable) {
+            request.action?.();
+          }
           if (this.current === request) {
             this.abandon();
           }
