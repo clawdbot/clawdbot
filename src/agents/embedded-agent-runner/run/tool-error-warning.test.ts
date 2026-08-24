@@ -246,6 +246,32 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   });
 
   it.each([
+    [false, "off", "⚠️ 🛠️ Exec blocked (exit 7)"],
+    [false, "full", "⚠️ 🛠️ Exec blocked: `make build`: Command exited with code 7"],
+    [true, "off", "⚠️ 🛠️ Exec failed (exit 7)"],
+    [true, "full", "⚠️ 🛠️ Exec failed: `make build`: Command exited with code 7"],
+    [undefined, "off", "⚠️ 🛠️ Exec failed (exit 7)"],
+    [undefined, "full", "⚠️ 🛠️ Exec failed: `make build`: Command exited with code 7"],
+  ] as const)(
+    "renders executionStarted=%s at %s verbosity from structured state",
+    (executionStarted, verboseLevel, expected) => {
+      expectSinglePayloadText(
+        buildPayloads({
+          lastToolError: {
+            toolName: "exec",
+            executionStarted,
+            meta: "run make build",
+            error: "Command exited with code 7",
+          },
+          toolResultFormat: "markdown",
+          verboseLevel,
+        }),
+        expected,
+      );
+    },
+  );
+
+  it.each([
     {
       title: "prefers raw exec metadata when tool progress detail includes it",
       meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
