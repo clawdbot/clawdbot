@@ -9,7 +9,12 @@ import {
   getPendingSubmitAcceptedRunId,
   hasPendingSubmit,
 } from "./tui-submit-state.js";
-import type { AgentEvent, TuiHistoryRunOutcome, TuiStateAccess } from "./tui-types.js";
+import type {
+  AgentEvent,
+  SessionChangedEvent,
+  TuiHistoryRunOutcome,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
@@ -231,8 +236,17 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     return true;
   };
 
-  const clearStaleStreamingIfNoTrackedRunRemains = (authoritativeIdle = false) => {
-    if (!authoritativeIdle && (state.activityStatus !== "streaming" || sessionRuns.size > 0)) {
+  const clearStaleStreamingIfNoTrackedRunRemains = (event?: SessionChangedEvent) => {
+    const authoritativeIdle =
+      Array.isArray(event?.activeRunIds) &&
+      event.activeRunIds.length === 0 &&
+      (typeof event.sessionId !== "string" ||
+        !state.currentSessionId ||
+        event.sessionId === state.currentSessionId);
+    if (
+      (event && !authoritativeIdle) ||
+      (!event && (state.activityStatus !== "streaming" || sessionRuns.size > 0))
+    ) {
       return;
     }
     if (authoritativeIdle) {
