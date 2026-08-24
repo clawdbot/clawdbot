@@ -508,6 +508,28 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        // Endpoint admission is the authority boundary for target headers,
+        // same contract as /tools/invoke and the WS `agent` method: a caller
+        // without chat-send admission is rejected before any dispatch or I/O.
+        agentCommandMock.mockClear();
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          {
+            "x-openclaw-scopes": "operator.read",
+            "x-openclaw-message-to": "channel:24514",
+            "x-openclaw-account-id": "acct-7",
+            "x-openclaw-thread-id": "thread-42",
+          },
+        );
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as { error?: { message?: string; type?: string } };
+        expect(json.error?.type).toBe("forbidden");
+        expect(json.error?.message).toBe("missing scope: operator.write");
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
+      }
+
+      {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,

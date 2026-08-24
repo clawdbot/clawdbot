@@ -838,6 +838,28 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(optsTargetHeaders.deliver).toBe(false);
       await ensureResponseConsumed(resTargetHeaders);
 
+      // Endpoint admission is the authority boundary for target headers,
+      // same contract as /tools/invoke and the WS `agent` method: a caller
+      // without chat-send admission is rejected before any dispatch or I/O.
+      agentCommandMock.mockClear();
+      const resReadOnlyTarget = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        {
+          "x-openclaw-scopes": "operator.read",
+          "x-openclaw-message-to": "channel:24514",
+          "x-openclaw-account-id": "acct-7",
+          "x-openclaw-thread-id": "thread-42",
+        },
+      );
+      expect(resReadOnlyTarget.status).toBe(403);
+      const readOnlyJson = (await resReadOnlyTarget.json()) as {
+        error?: { message?: string; type?: string };
+      };
+      expect(readOnlyJson.error?.type).toBe("forbidden");
+      expect(readOnlyJson.error?.message).toBe("missing scope: operator.write");
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
+
       mockAgentOnce([{ text: "hello" }]);
       const resModelOverride = await postResponses(
         port,

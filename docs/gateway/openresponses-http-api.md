@@ -24,7 +24,7 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - Use `x-openclaw-model` to override the selected agent's backend model (requires `operator.admin` on identity-bearing auth paths).
 - Use `x-openclaw-session-key` for explicit session routing (rejected with `400 invalid_request_error` if it uses a reserved namespace: `subagent:`, `cron:`, `acp:`).
 - Use `x-openclaw-message-channel` for a non-default synthetic ingress channel context.
-- Use `x-openclaw-message-to` (optionally with `x-openclaw-account-id` / `x-openclaw-thread-id`) to record a delivery target for the session, so later out-of-turn output such as [sub-agent completion announces](/tools/subagents) can reach a channel. Same optional header family as [/tools/invoke](/gateway/tools-invoke-http-api) and the WS `agent` method's `to` param; the turn's own reply is still returned only in the HTTP response.
+- Use `x-openclaw-message-to` (optionally with `x-openclaw-account-id` / `x-openclaw-thread-id`) to record a delivery target for the session, so later out-of-turn output such as [sub-agent completion announces](/tools/subagents) can reach a channel. Pass it together with `x-openclaw-message-channel` naming a deliverable channel — the default synthetic `webchat` context cannot deliver. Same optional header family as [/tools/invoke](/gateway/tools-invoke-http-api) and the WS `agent` method's `to` param; the turn's own reply is still returned only in the HTTP response.
 
 For the canonical explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
 
