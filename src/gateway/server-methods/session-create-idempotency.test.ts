@@ -213,8 +213,8 @@ describe("sessions.create process-lifetime idempotency", () => {
     expect(failed.execute).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects new keys at capacity without evicting an existing successful creation", async () => {
-    const { execute, invoke } = createFixture();
+  it("enforces capacity per owner without evicting retained successful creations", async () => {
+    const { client, execute, invoke } = createFixture();
     for (let index = 0; index < DEDUPE_MAX; index += 1) {
       await invoke({ agentId: "main", idempotencyKey: `create-${index}` }).done;
     }
@@ -227,7 +227,45 @@ describe("sessions.create process-lifetime idempotency", () => {
     );
     expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX);
 
-    await invoke({ agentId: "main", idempotencyKey: "create-0" }).done;
+    const retained = invoke({ agentId: "main", idempotencyKey: "create-0" });
+    await retained.done;
+    expect(retained.respond).toHaveBeenCalledWith(true, { key: "agent:main:create-0" }, undefined, {
+      cached: true,
+    });
     expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX);
+
+    const otherOwner = { ...client, authenticatedUserId: "other-owner" };
+    const otherCreation = invoke({ agentId: "main", idempotencyKey: "create-0" }, otherOwner);
+    await otherCreation.done;
+    expect(otherCreation.respond).toHaveBeenCalledWith(
+      true,
+      { key: "agent:main:create-0" },
+      undefined,
+      undefined,
+    );
+    expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
+
+    const otherReplay = invoke({ agentId: "main", idempotencyKey: "create-0" }, otherOwner);
+    await otherReplay.done;
+    expect(otherReplay.respond).toHaveBeenCalledWith(
+      true,
+      { key: "agent:main:create-0" },
+      undefined,
+      { cached: true },
+    );
+    expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
+
+    for (let index = 1; index < DEDUPE_MAX; index += 1) {
+      await invoke({ agentId: "main", idempotencyKey: `create-${index}` }, otherOwner).done;
+    }
+    const thirdOwner = { ...client, authenticatedUserId: "third-owner" };
+    const processOverflow = invoke({ agentId: "main", idempotencyKey: "create-0" }, thirdOwner);
+    await processOverflow.done;
+    expect(processOverflow.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+    expect(execute).toHaveBeenCalledTimes(DEDUPE_MAX * 2);
   });
 });

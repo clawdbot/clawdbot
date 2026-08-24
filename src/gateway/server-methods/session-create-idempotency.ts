@@ -22,7 +22,7 @@ type SessionCreateEntry = {
 
 const sessionCreatesByContext = new WeakMap<
   GatewayRequestContext,
-  Map<string, SessionCreateEntry>
+  Map<string, Map<string, SessionCreateEntry>>
 >();
 
 export function idempotentSessionCreate(handler: GatewayRequestHandler): GatewayRequestHandler {
@@ -31,17 +31,6 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     if (typeof idempotencyKey !== "string" || !idempotencyKey) {
       await handler(request);
       return;
-    }
-    let entries = sessionCreatesByContext.get(request.context);
-    if (!entries) {
-      entries = new Map();
-      sessionCreatesByContext.set(request.context, entries);
-    }
-    const now = Date.now();
-    for (const [key, entry] of entries) {
-      if (entry.state.kind === "completed" && entry.expiresAt <= now) {
-        entries.delete(key);
-      }
     }
     const principal =
       request.client?.authenticatedUserProfile?.profileId ?? request.client?.authenticatedUserId;
@@ -58,7 +47,26 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       return;
     }
     const owner = principal ? `principal:${principal}` : `device:${deviceId}`;
-    const key = `${owner}:${idempotencyKey}`;
+    let entriesByOwner = sessionCreatesByContext.get(request.context);
+    if (!entriesByOwner) {
+      entriesByOwner = new Map();
+      sessionCreatesByContext.set(request.context, entriesByOwner);
+    }
+    const now = Date.now();
+    let retainedEntryCount = 0;
+    for (const [entryOwner, ownerEntries] of entriesByOwner) {
+      for (const [key, entry] of ownerEntries) {
+        if (entry.state.kind === "completed" && entry.expiresAt <= now) {
+          ownerEntries.delete(key);
+        }
+      }
+      if (ownerEntries.size === 0) {
+        entriesByOwner.delete(entryOwner);
+      } else {
+        retainedEntryCount += ownerEntries.size;
+      }
+    }
+    let entries = entriesByOwner.get(owner);
     const requestIdentity = createHash("sha256")
       .update(stableStringify(request.params))
       .digest("hex");
@@ -66,7 +74,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       role: request.client?.connect.role ?? null,
       scopes: request.client?.connect.scopes?.toSorted() ?? [],
     };
-    const existing = entries.get(key);
+    const existing = entries?.get(idempotencyKey);
     if (existing) {
       if (existing.requestIdentity !== requestIdentity) {
         request.respond(
@@ -109,7 +117,8 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       });
       return;
     }
-    if (entries.size >= DEDUPE_MAX) {
+    // Reserve a full owner's capacity for other principals while bounding process-wide state.
+    if ((entries?.size ?? 0) >= DEDUPE_MAX || retainedEntryCount >= DEDUPE_MAX * 2) {
       request.respond(
         false,
         undefined,
@@ -117,6 +126,16 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       );
       return;
     }
+    if (!entries) {
+      entries = new Map();
+      entriesByOwner.set(owner, entries);
+    }
+    const releaseEntry = () => {
+      entries.delete(idempotencyKey);
+      if (entries.size === 0) {
+        entriesByOwner.delete(owner);
+      }
+    };
     // The entry is installed before work begins; in-flight identity is never TTL/cap-evictable.
     const work = Promise.resolve().then(async (): Promise<GatewayInflightResult> => {
       try {
@@ -135,11 +154,11 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
           entry.expiresAt = Date.now() + SESSION_CREATE_IDEMPOTENCY_RETENTION_MS;
           entry.state = { kind: "completed", result };
         } else {
-          entries.delete(key);
+          releaseEntry();
         }
         return result;
       } catch (error) {
-        entries.delete(key);
+        releaseEntry();
         throw error;
       }
     });
@@ -149,7 +168,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       expiresAt: now + SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
       state: { kind: "inflight", work },
     };
-    entries.set(key, entry);
+    entries.set(idempotencyKey, entry);
     const result = await work;
     request.respond(result.ok, result.payload, result.error, result.meta);
   };
