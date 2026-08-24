@@ -2106,7 +2106,9 @@ describe("Crabbox worker provider", () => {
           return commandResult({ stdout: inspectJson() });
         }
         if (argv[1] === "heartbeat") {
-          await new Promise((resolve) => setTimeout(resolve, 60_012));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 60_012);
+          });
           return commandResult({ code: null, killed: true, termination: "timeout" });
         }
         return commandResult();
