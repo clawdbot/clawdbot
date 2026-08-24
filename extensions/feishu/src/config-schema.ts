@@ -356,16 +356,18 @@ export const FeishuConfigSchema = buildMultiAccountChannelSchema(FeishuConfigSch
       }
     }
 
-    const effectiveDmPolicy = account.dmPolicy ?? dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.feishu.accounts.*.dmPolicy="open" requires channels.feishu.accounts.*.allowFrom (or channels.feishu.allowFrom) to include "*"',
-    });
+    if (value.enabled !== false && account.enabled !== false) {
+      const effectiveDmPolicy = account.dmPolicy ?? dmPolicy;
+      const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
+      requireOpenAllowFrom({
+        policy: effectiveDmPolicy,
+        allowFrom: effectiveAllowFrom,
+        ctx,
+        path: ["accounts", accountId, "allowFrom"],
+        message:
+          'channels.feishu.accounts.*.dmPolicy="open" requires channels.feishu.accounts.*.allowFrom (or channels.feishu.allowFrom) to include "*"',
+      });
+    }
   }
 });
 
