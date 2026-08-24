@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-transport-cli.js";
+import { runWithMantisCliInterrupts } from "./cli-interrupts.js";
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
 import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
@@ -30,36 +31,10 @@ async function runDiscordSmoke(opts: MantisDiscordSmokeOptions) {
 }
 
 async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
-  const abortController = new AbortController();
-  let interruptedBy: "SIGINT" | "SIGTERM" | undefined;
-  const interrupt = (signal: "SIGINT" | "SIGTERM") => {
-    if (interruptedBy) {
-      return;
-    }
-    interruptedBy = signal;
-    abortController.abort(new Error(`Mantis interrupted by ${signal}`));
-  };
-  const onSigint = () => interrupt("SIGINT");
-  const onSigterm = () => interrupt("SIGTERM");
-
-  // Mantis commands own detached POSIX process groups, so keep signal ownership
-  // until AbortSignal cleanup finishes or Ctrl-C can orphan live QA work.
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
-  try {
+  await runWithMantisCliInterrupts(async (signal) => {
     const runtime = await loadMantisCliRuntime();
-    await runtime.runMantisBeforeAfterCommand({ ...opts, signal: abortController.signal });
-  } catch (error) {
-    if (!interruptedBy) {
-      throw error;
-    }
-  } finally {
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-    if (interruptedBy) {
-      process.exitCode = interruptedBy === "SIGINT" ? 130 : 143;
-    }
-  }
+    await runtime.runMantisBeforeAfterCommand({ ...opts, signal });
+  });
 }
 
 async function runDesktopBrowserSmoke(opts: MantisDesktopBrowserSmokeOptions) {
