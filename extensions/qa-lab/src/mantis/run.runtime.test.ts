@@ -81,7 +81,7 @@ describe("mantis before/after runtime", () => {
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
         if (args[1] === "remove") {
-          await fs.rm(String(args[4]), { force: true, recursive: true });
+          await fs.rm(execution.cwd, { force: true, recursive: true });
         }
         return successfulCommandResult();
       }
@@ -177,7 +177,7 @@ describe("mantis before/after runtime", () => {
     expect(commands[1]?.args[1]).toBe(baselineWorktreeDir);
     expect(commands[1]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
     expect(commands[2]?.command).toBe("git");
-    expect(commands[2]?.args).toEqual(["worktree", "remove", "--force", "--", baselineWorktreeDir]);
+    expect(commands[2]?.args).toEqual(["worktree", "remove", "--force", "--", "."]);
     expect(commands[3]?.args).toEqual(["worktree", "list", "--porcelain", "-z"]);
     expect(commands[4]?.command).toBe("git");
     expect(commands[4]?.args).toEqual([
@@ -193,13 +193,7 @@ describe("mantis before/after runtime", () => {
     expect(commands[5]?.args[1]).toBe(candidateWorktreeDir);
     expect(commands[5]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
     expect(commands[6]?.command).toBe("git");
-    expect(commands[6]?.args).toEqual([
-      "worktree",
-      "remove",
-      "--force",
-      "--",
-      candidateWorktreeDir,
-    ]);
+    expect(commands[6]?.args).toEqual(["worktree", "remove", "--force", "--", "."]);
     expect(commands[7]?.args).toEqual(["worktree", "list", "--porcelain", "-z"]);
 
     const comparison = JSON.parse(await fs.readFile(result.comparisonPath, "utf8")) as {
@@ -240,7 +234,7 @@ describe("mantis before/after runtime", () => {
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
         if (args[1] === "remove") {
-          await fs.rm(String(args[4]), { force: true, recursive: true });
+          await fs.rm(execution.cwd, { force: true, recursive: true });
         }
         return successfulCommandResult();
       }
@@ -339,7 +333,7 @@ describe("mantis before/after runtime", () => {
         await fs.mkdir(String(args[4]), { recursive: true });
       }
       if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "remove") {
-        await fs.rm(String(args[4]), { force: true, recursive: true });
+        await fs.rm(execution.cwd, { force: true, recursive: true });
       }
       if (command === "pnpm" && args.includes("openclaw")) {
         await writeLegacyLaneSummary({ args, scenario });
@@ -387,7 +381,7 @@ describe("mantis before/after runtime", () => {
         await fs.mkdir(String(args[4]), { recursive: true });
       }
       if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "remove") {
-        await fs.rm(String(args[4]), { force: true, recursive: true });
+        await fs.rm(execution.cwd, { force: true, recursive: true });
       }
       if (command === "pnpm" && args.includes("openclaw")) {
         await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
@@ -425,7 +419,7 @@ describe("mantis before/after runtime", () => {
     }
   });
 
-  it("does not dispatch a lane command when already aborted", async () => {
+  it("does not dispatch worktree add when already aborted and still verifies cleanup", async () => {
     const controller = new AbortController();
     controller.abort();
     const runner = vi.fn(async () => successfulCommandResult());
@@ -442,7 +436,16 @@ describe("mantis before/after runtime", () => {
         skipInstall: true,
       }),
     ).rejects.toThrow("baseline worktree-add aborted");
-    expect(runner).not.toHaveBeenCalled();
+    expect(runner.mock.calls.map((call) => ({ args: call[1], stage: call[2]?.stage }))).toEqual([
+      {
+        args: ["worktree", "remove", "--force", "--", "."],
+        stage: "worktree-cleanup",
+      },
+      {
+        args: ["worktree", "list", "--porcelain", "-z"],
+        stage: "worktree-cleanup",
+      },
+    ]);
   });
 
   it("cleans up the exact worktree path after worktree-add times out", async () => {
@@ -471,7 +474,7 @@ describe("mantis before/after runtime", () => {
         return timedOutCommandResult();
       }
       if (execution.stage === "worktree-cleanup" && args[1] === "remove") {
-        await fs.rm(String(args[4]), { force: true, recursive: true });
+        await fs.rm(execution.cwd, { force: true, recursive: true });
         registered = false;
       }
       if (execution.stage === "worktree-cleanup" && args[1] === "list") {
@@ -504,14 +507,7 @@ describe("mantis before/after runtime", () => {
         timeoutMs: 123,
       },
       {
-        args: ["worktree", "list", "--porcelain", "-z"],
-        command: "git",
-        signal: undefined,
-        stage: "worktree-cleanup",
-        timeoutMs: expect.any(Number),
-      },
-      {
-        args: ["worktree", "remove", "--force", "--", baselineWorktreeDir],
+        args: ["worktree", "remove", "--force", "--", "."],
         command: "git",
         signal: undefined,
         stage: "worktree-cleanup",
@@ -548,7 +544,7 @@ describe("mantis before/after runtime", () => {
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
         if (args[1] === "remove") {
-          await fs.rm(String(args[4]), { force: true, recursive: true });
+          await fs.rm(execution.cwd, { force: true, recursive: true });
         }
         return successfulCommandResult();
       }
@@ -625,7 +621,7 @@ describe("mantis before/after runtime", () => {
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
         if (args[1] === "remove") {
-          await fs.rm(String(args[4]), { force: true, recursive: true });
+          await fs.rm(execution.cwd, { force: true, recursive: true });
         }
         return successfulCommandResult();
       }
@@ -689,8 +685,8 @@ describe("mantis before/after runtime", () => {
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
         if (args[1] === "remove") {
-          removedWorktreeDirs.push(String(args[4]));
-          await fs.rm(String(args[4]), { force: true, recursive: true });
+          removedWorktreeDirs.push(execution.cwd);
+          await fs.rm(execution.cwd, { force: true, recursive: true });
           return failedCommandResult();
         }
         return successfulCommandResult("");
@@ -754,7 +750,7 @@ describe("mantis before/after runtime", () => {
       expect(aggregate.errors[0]).toBe(aggregate.cause);
       expect(aggregate.errors[1]).toBeInstanceOf(Error);
       expect((aggregate.errors[1] as Error).message).toContain(
-        "baseline worktree-cleanup failed to run",
+        "baseline worktree cleanup could not verify complete registration state",
       );
     }
   });
@@ -779,8 +775,8 @@ describe("mantis before/after runtime", () => {
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
         if (args[1] === "remove") {
-          events.push(`remove:${String(args[4])}`);
-          await fs.rm(String(args[4]), { force: true, recursive: true });
+          events.push(`remove:${execution.cwd}`);
+          await fs.rm(execution.cwd, { force: true, recursive: true });
         }
         return successfulCommandResult();
       }

@@ -12,7 +12,7 @@ import {
   readMantisLaneResult,
   type LaneResult,
 } from "./run-artifacts.runtime.js";
-import { removeMantisWorktree } from "./run-cleanup.runtime.js";
+import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import {
   assertMantisCommandNotAborted,
   defaultMantisCommandRunner,
@@ -201,30 +201,31 @@ async function runLane(params: {
     timeoutMs: params.commandTimeouts["worktree-add"],
   } satisfies MantisCommandExecution;
   let worktreeOwnership: MantisDirectoryOwnership | undefined;
-  let worktreeAddStarted = false;
+  let worktreePrepared = false;
   let workloadFailed = false;
   let workloadError: unknown;
   let cleanupFailed = false;
   let cleanupError: unknown;
 
-  assertMantisCommandNotAborted({
-    command: "git",
-    args: worktreeAddArgs,
-    execution: worktreeAddExecution,
-    lane: params.lane,
-  });
   try {
-    worktreeAddStarted = true;
+    await fs.mkdir(worktreeDir, { mode: 0o700 });
+    worktreeOwnership = await captureMantisDirectoryOwnership({
+      directoryPath: worktreeDir,
+      repoRoot: params.repoRoot,
+    });
+    worktreePrepared = true;
+    assertMantisCommandNotAborted({
+      command: "git",
+      args: worktreeAddArgs,
+      execution: worktreeAddExecution,
+      lane: params.lane,
+    });
     await runMantisCommand({
       command: "git",
       args: worktreeAddArgs,
       execution: worktreeAddExecution,
       lane: params.lane,
       runner: params.runner,
-    });
-    worktreeOwnership = await captureMantisDirectoryOwnership({
-      directoryPath: worktreeDir,
-      repoRoot: params.repoRoot,
     });
     if (!params.opts.skipInstall) {
       await runMantisCommand({
@@ -304,7 +305,7 @@ async function runLane(params: {
     workloadFailed = true;
     workloadError = error;
   } finally {
-    if (worktreeAddStarted) {
+    if (worktreePrepared) {
       try {
         await removeMantisWorktree({
           commandTimeouts: params.commandTimeouts,
@@ -408,6 +409,12 @@ export async function runMantisBeforeAfter(
   const reportPath = path.join(generationDir, "mantis-report.md");
 
   try {
+    await removeLegacyMantisWorktrees({
+      commandTimeouts,
+      outputDir,
+      repoRoot,
+      runner,
+    });
     const commonOpts = {
       credentialRole: trimToValue(opts.credentialRole) ?? DEFAULT_CREDENTIAL_ROLE,
       credentialSource: trimToValue(opts.credentialSource) ?? DEFAULT_CREDENTIAL_SOURCE,

@@ -18,7 +18,7 @@ function createSuccessfulMantisRunner() {
       return successfulCommandResult();
     }
     if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "remove") {
-      await fs.rm(String(args[4]), { force: true, recursive: true });
+      await fs.rm(execution.cwd, { force: true, recursive: true });
       return successfulCommandResult();
     }
     if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "list") {

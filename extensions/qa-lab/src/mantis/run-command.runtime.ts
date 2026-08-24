@@ -12,6 +12,7 @@ type MantisCommandStage = "worktree-add" | "install" | "build" | "qa" | "worktre
 export type MantisCommandExecution = {
   cwd: string;
   env: NodeJS.ProcessEnv;
+  expectedCwdIdentity?: { dev: bigint; ino: bigint };
   signal?: AbortSignal;
   stage: MantisCommandStage;
   timeoutMs: number;
@@ -29,6 +30,21 @@ const DEFAULT_WORKTREE_ADD_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_INSTALL_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_BUILD_TIMEOUT_MS = 30 * 60_000;
 const QA_COMMAND_TIMEOUT_GRACE_MS = 5 * 60_000;
+const OWNER_BOUND_CWD_COMMAND_SCRIPT = String.raw`
+const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const [expectedDevice, expectedInode, command, ...args] = process.argv.slice(1);
+const current = fs.lstatSync(".", { bigint: true });
+if (!current.isDirectory() || current.dev !== BigInt(expectedDevice) || current.ino !== BigInt(expectedInode)) {
+  process.stderr.write("Mantis owner-bound command refused a replaced working directory\n");
+  process.exit(78);
+}
+const result = spawnSync(command, args, { stdio: "inherit", windowsHide: true });
+if (result.error) {
+  throw result.error;
+}
+process.exit(result.status ?? 1);
+`;
 
 function resolveQaCommandTimeoutMs(scenarioId: string): number {
   const scenario = readQaScenarioById(scenarioId);
@@ -86,20 +102,42 @@ function isWorktreeListCommand(command: string, args: readonly string[]): boolea
   );
 }
 
+function capturesMantisCommandOutput(command: string, args: readonly string[]): boolean {
+  return (
+    isWorktreeListCommand(command, args) ||
+    (command === "git" &&
+      args.length === 2 &&
+      args[0] === "rev-parse" &&
+      args[1] === "--git-common-dir")
+  );
+}
+
 export async function defaultMantisCommandRunner(
   command: string,
   args: readonly string[],
   execution: MantisCommandExecution,
 ): Promise<MantisCommandResult> {
-  const capturesWorktreeList = isWorktreeListCommand(command, args);
-  return await runCommandWithTimeout([command, ...args], {
+  const capturesOutput = capturesMantisCommandOutput(command, args);
+  const commandArgv = execution.expectedCwdIdentity
+    ? [
+        process.execPath,
+        "--input-type=commonjs",
+        "--eval",
+        OWNER_BOUND_CWD_COMMAND_SCRIPT,
+        execution.expectedCwdIdentity.dev.toString(),
+        execution.expectedCwdIdentity.ino.toString(),
+        command,
+        ...args,
+      ]
+    : [command, ...args];
+  return await runCommandWithTimeout(commandArgv, {
     cwd: execution.cwd,
     env: execution.env,
     killProcessTree: true,
-    outputCapture: capturesWorktreeList ? { stdout: "head", stderr: "tail" } : "discard",
+    outputCapture: capturesOutput ? { stdout: "head", stderr: "tail" } : "discard",
     signal: execution.signal,
     timeoutMs: execution.timeoutMs,
-    ...(capturesWorktreeList
+    ...(capturesOutput
       ? {}
       : {
           onOutputChunk(chunk, stream) {

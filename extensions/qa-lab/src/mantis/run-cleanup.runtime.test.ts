@@ -40,9 +40,9 @@ describe("Mantis worktree cleanup", () => {
       directoryPath: worktreeDir,
       repoRoot,
     });
-    const runner = vi.fn(async (_command: string, args: readonly string[]) => {
+    const runner = vi.fn(async (_command: string, args: readonly string[], execution) => {
       if (args[1] === "remove") {
-        await fs.rm(worktreeDir, { force: true, recursive: true });
+        await fs.rm(execution.cwd, { force: true, recursive: true });
       }
       return successfulCommandResult();
     });
@@ -59,10 +59,15 @@ describe("Mantis worktree cleanup", () => {
     ).resolves.toBeUndefined();
 
     await expect(fs.stat(worktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(runner.mock.calls.map((call) => call[1]?.slice(0, 3))).toEqual([
-      ["worktree", "remove", "--force"],
-      ["worktree", "list", "--porcelain"],
-    ]);
+    expect(runner.mock.calls[0]?.[1]).toEqual(["worktree", "remove", "--force", "--", "."]);
+    expect(runner.mock.calls[0]?.[2]).toMatchObject({
+      cwd: worktreeDir,
+      expectedCwdIdentity: {
+        dev: ownership.targetDevice,
+        ino: ownership.targetInode,
+      },
+    });
+    expect(runner.mock.calls[1]?.[1]).toEqual(["worktree", "list", "--porcelain", "-z"]);
   });
 
   it("preserves a replacement introduced after the ownership check", async () => {
@@ -115,16 +120,10 @@ describe("Mantis worktree cleanup", () => {
     await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("partial");
   });
 
-  it("captures a registered worktree after an add command reports failure", async () => {
-    let registered = true;
+  it("does not adopt an existing registered path without an ownership receipt", async () => {
     const runner = vi.fn(async (_command: string, args: readonly string[]) => {
       if (args[1] === "list") {
-        return successfulCommandResult(registered ? worktreeListOutput(worktreeDir) : "");
-      }
-      if (args[1] === "remove") {
-        await fs.rm(worktreeDir, { force: true, recursive: true });
-        registered = false;
-        return successfulCommandResult();
+        return successfulCommandResult(worktreeListOutput(worktreeDir));
       }
       throw new Error(`unexpected git command: ${args.join(" ")}`);
     });
@@ -137,7 +136,8 @@ describe("Mantis worktree cleanup", () => {
         runner,
         worktreeDir,
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("Mantis preserved the path because Git no longer owns it");
+    await expect(fs.lstat(worktreeDir)).resolves.toBeDefined();
   });
 
   it("keeps one total deadline across Git removal and registration verification", async () => {

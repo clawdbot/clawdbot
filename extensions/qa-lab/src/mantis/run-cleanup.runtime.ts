@@ -1,4 +1,5 @@
 // Qa Lab plugin module owns bounded Mantis worktree cleanup.
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertNoSymlinkParents } from "openclaw/plugin-sdk/security-runtime";
@@ -267,6 +268,136 @@ async function listRegisteredWorktreePaths(params: {
   );
 }
 
+async function isDirectoryEmptyBeforeDeadline(
+  directoryPath: string,
+  deadline: MantisCleanupDeadline,
+): Promise<boolean> {
+  const entries = await runBeforeMantisCleanupDeadline(
+    deadline,
+    "checking an unregistered worktree directory",
+    async () => await fs.readdir(directoryPath),
+  );
+  return entries.length === 0;
+}
+
+async function resolveRegisteredWorktreeAdminDir(params: {
+  createExecution: () => MantisCommandExecution;
+  deadline: MantisCleanupDeadline;
+  lane: "baseline" | "candidate";
+  normalizedWorktreeDir: string;
+  repoRoot: string;
+  runner: MantisCommandRunner;
+}): Promise<string> {
+  const commonDirResult = await runMantisCommand({
+    command: "git",
+    args: ["rev-parse", "--git-common-dir"],
+    execution: params.createExecution(),
+    lane: params.lane,
+    runner: params.runner,
+  });
+  if (commonDirResult.stdoutTruncatedBytes) {
+    throw new Error(`${params.lane} worktree cleanup truncated the Git common directory`);
+  }
+  const commonDirValue = commonDirResult.stdout.trim();
+  if (!commonDirValue) {
+    throw new Error(`${params.lane} worktree cleanup received an empty Git common directory`);
+  }
+  const commonDir = await runBeforeMantisCleanupDeadline(
+    params.deadline,
+    "normalizing the Git common directory",
+    async () => await fs.realpath(path.resolve(params.repoRoot, commonDirValue)),
+  );
+  const adminRoot = path.join(commonDir, "worktrees");
+  let entries: Dirent[];
+  try {
+    entries = await runBeforeMantisCleanupDeadline(
+      params.deadline,
+      "listing linked-worktree administration directories",
+      async () => await fs.readdir(adminRoot, { withFileTypes: true }),
+    );
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      throw new Error(
+        `${params.lane} worktree cleanup could not find Git administration for ${params.normalizedWorktreeDir}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  const expectedGitFile = path.join(params.normalizedWorktreeDir, ".git");
+  const matches: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const adminDir = path.join(adminRoot, entry.name);
+    let gitdirValue: string;
+    try {
+      gitdirValue = await runBeforeMantisCleanupDeadline(
+        params.deadline,
+        "reading linked-worktree administration",
+        async () => await fs.readFile(path.join(adminDir, "gitdir"), "utf8"),
+      );
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    const registeredGitFile = gitdirValue.endsWith("\n")
+      ? gitdirValue.slice(0, -1).replace(/\r$/u, "")
+      : gitdirValue;
+    const resolvedGitFile = path.isAbsolute(registeredGitFile)
+      ? path.resolve(registeredGitFile)
+      : path.resolve(adminDir, registeredGitFile);
+    if (resolvedGitFile === expectedGitFile) {
+      matches.push(adminDir);
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error(
+      `${params.lane} worktree cleanup expected one Git administration entry for ${params.normalizedWorktreeDir}, found ${matches.length}`,
+    );
+  }
+  return matches[0] as string;
+}
+
+async function materializeRegisteredWorktreePlaceholder(params: {
+  createExecution: () => MantisCommandExecution;
+  deadline: MantisCleanupDeadline;
+  lane: "baseline" | "candidate";
+  normalizedWorktreeDir: string;
+  repoRoot: string;
+  runner: MantisCommandRunner;
+  worktreeDir: string;
+}): Promise<MantisDirectoryOwnership> {
+  const adminDir = await resolveRegisteredWorktreeAdminDir(params);
+  await runBeforeMantisCleanupDeadline(
+    params.deadline,
+    "creating a missing registered-worktree placeholder",
+    async () => await fs.mkdir(params.worktreeDir, { mode: 0o700 }),
+  );
+  await runBeforeMantisCleanupDeadline(
+    params.deadline,
+    "restoring the registered-worktree Git link",
+    async () =>
+      await fs.writeFile(path.join(params.worktreeDir, ".git"), `gitdir: ${adminDir}\n`, {
+        flag: "wx",
+        mode: 0o600,
+      }),
+  );
+  return await runBeforeMantisCleanupDeadline(
+    params.deadline,
+    "capturing the registered-worktree placeholder identity",
+    async () =>
+      await captureMantisDirectoryOwnership({
+        directoryPath: params.worktreeDir,
+        repoRoot: params.repoRoot,
+      }),
+  );
+}
+
 function createCleanupVerificationAggregate(params: {
   errors: [unknown, unknown];
   lane: "baseline" | "candidate";
@@ -335,15 +466,50 @@ export async function removeMantisWorktree(params: {
       }
       return;
     }
-    ownership = await runBeforeMantisCleanupDeadline(
+    if (await pathExistsBeforeDeadline(params.worktreeDir, deadline)) {
+      throw createRetainedDirectoryError({
+        cause: new Error("the registered worktree has no ownership receipt"),
+        lane: params.lane,
+        worktreeDir: params.worktreeDir,
+      });
+    }
+    ownership = await materializeRegisteredWorktreePlaceholder({
+      createExecution: createCleanupExecution,
       deadline,
-      "capturing the registered worktree identity",
-      async () =>
-        await captureMantisDirectoryOwnership({
-          directoryPath: params.worktreeDir,
-          repoRoot: params.repoRoot,
-        }),
-    );
+      lane: params.lane,
+      normalizedWorktreeDir,
+      repoRoot: params.repoRoot,
+      runner: params.runner,
+      worktreeDir: params.worktreeDir,
+    });
+  } else if (
+    !(await verifyMantisDirectoryOwnershipBeforeDeadline({
+      deadline,
+      ownership,
+      repoRoot: params.repoRoot,
+      worktreeDir: params.worktreeDir,
+    }))
+  ) {
+    const registeredWorktreePaths = await listRegisteredWorktreePaths({
+      createExecution: createCleanupExecution,
+      deadline,
+      lane: params.lane,
+      repoRoot: params.repoRoot,
+      runner: params.runner,
+      worktreeDir: params.worktreeDir,
+    });
+    if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
+      return;
+    }
+    ownership = await materializeRegisteredWorktreePlaceholder({
+      createExecution: createCleanupExecution,
+      deadline,
+      lane: params.lane,
+      normalizedWorktreeDir,
+      repoRoot: params.repoRoot,
+      runner: params.runner,
+      worktreeDir: params.worktreeDir,
+    });
   }
 
   try {
@@ -365,12 +531,20 @@ export async function removeMantisWorktree(params: {
 
   let removeError: unknown;
   try {
-    // Git owns the registration and validates its .git link before deleting.
-    // Mantis never recursively removes a path after Git gives up ownership.
+    // The helper binds cwd before checking the receipt, then Git resolves `.`
+    // through that pinned cwd. A pathname replacement is preserved or makes
+    // Git fail; it is never selected as the removal target.
     await runMantisCommand({
       command: "git",
-      args: ["worktree", "remove", "--force", "--", params.worktreeDir],
-      execution: createCleanupExecution(),
+      args: ["worktree", "remove", "--force", "--", "."],
+      execution: {
+        ...createCleanupExecution(),
+        cwd: params.worktreeDir,
+        expectedCwdIdentity: {
+          dev: ownership.targetDevice,
+          ino: ownership.targetInode,
+        },
+      },
       lane: params.lane,
       runner: params.runner,
     });
@@ -404,10 +578,80 @@ export async function removeMantisWorktree(params: {
   }
 
   if (await pathExistsBeforeDeadline(params.worktreeDir, deadline)) {
+    try {
+      const stillOwned = await verifyMantisDirectoryOwnershipBeforeDeadline({
+        deadline,
+        ownership,
+        repoRoot: params.repoRoot,
+        worktreeDir: params.worktreeDir,
+      });
+      if (stillOwned && (await isDirectoryEmptyBeforeDeadline(params.worktreeDir, deadline))) {
+        // Git no longer owns this unique prepared directory. Keep the empty
+        // inode rather than deleting through a pathname race.
+        return;
+      }
+    } catch {
+      // The retained-path error below reports the safe fail-closed outcome.
+    }
     throw createRetainedDirectoryError({
       cause: removeError ?? new Error("Git reported success but left the directory"),
       lane: params.lane,
       worktreeDir: params.worktreeDir,
+    });
+  }
+}
+
+export async function removeLegacyMantisWorktrees(params: {
+  commandTimeouts: MantisCommandTimeouts;
+  outputDir: string;
+  repoRoot: string;
+  runner: MantisCommandRunner;
+}): Promise<void> {
+  const legacyRoot = path.join(params.outputDir, "worktrees");
+  const deadline = createMantisCleanupDeadline({
+    lane: "baseline",
+    timeoutMs: params.commandTimeouts["worktree-cleanup"],
+  });
+  const createExecution = (): MantisCommandExecution => ({
+    cwd: params.repoRoot,
+    env: process.env,
+    stage: "worktree-cleanup",
+    timeoutMs: resolveMantisCleanupRemainingMs(deadline, "listing legacy worktrees"),
+  });
+  if (!(await pathExistsBeforeDeadline(legacyRoot, deadline))) {
+    return;
+  }
+  const normalizedLegacyRoot = await normalizeWorktreePath(legacyRoot, params.repoRoot, deadline);
+  const registeredPaths = await listRegisteredWorktreePaths({
+    createExecution,
+    deadline,
+    lane: "baseline",
+    repoRoot: params.repoRoot,
+    runner: params.runner,
+    worktreeDir: legacyRoot,
+  });
+  const legacyWorktrees = registeredPaths
+    .filter((registeredPath) => path.dirname(registeredPath) === normalizedLegacyRoot)
+    .toSorted();
+  for (const worktreeDir of legacyWorktrees) {
+    const ownership = (await pathExistsBeforeDeadline(worktreeDir, deadline))
+      ? await runBeforeMantisCleanupDeadline(
+          deadline,
+          "capturing a legacy worktree identity",
+          async () =>
+            await captureMantisDirectoryOwnership({
+              directoryPath: worktreeDir,
+              repoRoot: params.repoRoot,
+            }),
+        )
+      : undefined;
+    await removeMantisWorktree({
+      commandTimeouts: params.commandTimeouts,
+      lane: path.basename(worktreeDir).startsWith("candidate") ? "candidate" : "baseline",
+      ownership,
+      repoRoot: params.repoRoot,
+      runner: params.runner,
+      worktreeDir,
     });
   }
 }

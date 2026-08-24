@@ -5,7 +5,17 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
+import { defaultMantisCommandRunner } from "./run-command.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
+
+const commandTimeouts = {
+  build: 5_000,
+  install: 5_000,
+  qa: 5_000,
+  "worktree-add": 5_000,
+  "worktree-cleanup": 5_000,
+};
 
 type StubCommandResult = {
   code: number | null;
@@ -152,6 +162,29 @@ async function runGit(repoRoot: string, args: readonly string[]) {
   return result;
 }
 
+async function initializeGitRepo(repoRoot: string) {
+  await runGit(repoRoot, ["init"]);
+  await fs.writeFile(path.join(repoRoot, "seed.txt"), "seed\n", "utf8");
+  await runGit(repoRoot, ["add", "seed.txt"]);
+  await runGit(repoRoot, [
+    "-c",
+    "user.name=Mantis Test",
+    "-c",
+    "user.email=mantis@example.test",
+    "commit",
+    "-m",
+    "seed",
+  ]);
+}
+
+async function listGitWorktreePaths(repoRoot: string) {
+  const result = await runGit(repoRoot, ["worktree", "list", "--porcelain"]);
+  return result.stdout
+    .split(/\r?\n/u)
+    .filter((entry) => entry.startsWith("worktree "))
+    .map((entry) => entry.slice("worktree ".length));
+}
+
 describe("mantis before/after process runtime", () => {
   let repoRoot: string;
 
@@ -163,19 +196,8 @@ describe("mantis before/after process runtime", () => {
     await fs.rm(repoRoot, { force: true, recursive: true });
   });
 
-  it("leaves the generated worktree root empty after Git rejects worktree add", async () => {
-    await runGit(repoRoot, ["init"]);
-    await fs.writeFile(path.join(repoRoot, "seed.txt"), "seed\n", "utf8");
-    await runGit(repoRoot, ["add", "seed.txt"]);
-    await runGit(repoRoot, [
-      "-c",
-      "user.name=Mantis Test",
-      "-c",
-      "user.email=mantis@example.test",
-      "commit",
-      "-m",
-      "seed",
-    ]);
+  it("leaves only an empty unique directory after Git rejects worktree add", async () => {
+    await initializeGitRepo(repoRoot);
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "invalid-ref");
 
     await expect(
@@ -189,7 +211,94 @@ describe("mantis before/after process runtime", () => {
       }),
     ).rejects.toThrow("baseline worktree-add failed");
 
-    await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
+    const preparedEntries = await fs.readdir(`${outputDir}.worktrees`);
+    expect(preparedEntries).toEqual([expect.stringMatching(/^baseline-/u)]);
+    await expect(
+      fs.readdir(path.join(`${outputDir}.worktrees`, preparedEntries[0] as string)),
+    ).resolves.toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps an owner-bound cwd when its registered path is replaced after identity verification",
+    async () => {
+      await initializeGitRepo(repoRoot);
+      const worktreeDir = path.join(repoRoot, ".artifacts", "owner-bound", "baseline");
+      const displacedDir = `${worktreeDir}-displaced`;
+      await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
+      await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+      const ownership = await fs.lstat(worktreeDir, { bigint: true });
+      const replaceThenRemoveScript = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const [originalPath, displacedPath] = process.argv.slice(1);
+fs.renameSync(originalPath, displacedPath);
+fs.mkdirSync(originalPath);
+fs.writeFileSync(path.join(originalPath, "replacement.txt"), "replacement");
+const result = spawnSync("git", ["worktree", "remove", "--force", "--", "."], { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`;
+
+      const result = await defaultMantisCommandRunner(
+        process.execPath,
+        ["--input-type=commonjs", "--eval", replaceThenRemoveScript, worktreeDir, displacedDir],
+        {
+          cwd: worktreeDir,
+          env: process.env,
+          expectedCwdIdentity: { dev: ownership.dev, ino: ownership.ino },
+          stage: "worktree-cleanup",
+          timeoutMs: 5_000,
+        },
+      );
+
+      expect(result.code).not.toBe(0);
+      await expect(fs.readFile(path.join(worktreeDir, "replacement.txt"), "utf8")).resolves.toBe(
+        "replacement",
+      );
+      await expect(fs.lstat(path.join(displacedDir, ".git"))).resolves.toBeDefined();
+      expect(await listGitWorktreePaths(repoRoot)).toContain(worktreeDir);
+    },
+  );
+
+  it("removes a registered worktree after its checkout path disappears", async () => {
+    await initializeGitRepo(repoRoot);
+    const worktreeDir = path.join(repoRoot, ".artifacts", "missing-worktree", "baseline");
+    await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
+    await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+    await fs.rm(worktreeDir, { force: true, recursive: true });
+
+    await expect(
+      removeMantisWorktree({
+        commandTimeouts,
+        lane: "baseline",
+        repoRoot,
+        runner: defaultMantisCommandRunner,
+        worktreeDir,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot]);
+    await expect(fs.lstat(worktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("migrates registered worktrees from the legacy output layout", async () => {
+    await initializeGitRepo(repoRoot);
+    const outputDir = path.join(repoRoot, ".artifacts", "legacy-output");
+    const worktreeDir = path.join(outputDir, "worktrees", "baseline");
+    await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
+    await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+
+    await expect(
+      removeLegacyMantisWorktrees({
+        commandTimeouts,
+        outputDir,
+        repoRoot,
+        runner: defaultMantisCommandRunner,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot]);
+    await expect(fs.lstat(worktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("stops an active injected lane command when aborted", async () => {
@@ -201,7 +310,7 @@ describe("mantis before/after process runtime", () => {
         expect(execution.stage).toBe("worktree-cleanup");
         expect(execution.signal).toBeUndefined();
         if (_args[1] === "remove") {
-          await fs.rm(String(_args[4]), { force: true, recursive: true });
+          await fs.rm(execution.cwd, { force: true, recursive: true });
         }
         return successfulCommandResult();
       }
@@ -236,7 +345,7 @@ describe("mantis before/after process runtime", () => {
         skipInstall: true,
       }),
     ).rejects.toThrow("baseline worktree-add aborted");
-    expect(stages).toEqual(["worktree-add", "worktree-cleanup"]);
+    expect(stages).toEqual(["worktree-add", "worktree-cleanup", "worktree-cleanup"]);
   });
 
   it("keeps signal termination ahead of a normalized successful exit", async () => {
@@ -247,7 +356,7 @@ describe("mantis before/after process runtime", () => {
       if (execution.stage === "worktree-cleanup") {
         expect(execution.signal).toBeUndefined();
         if (_args[1] === "remove") {
-          await fs.rm(String(_args[4]), { force: true, recursive: true });
+          await fs.rm(execution.cwd, { force: true, recursive: true });
         }
         return successfulCommandResult();
       }
@@ -276,7 +385,7 @@ describe("mantis before/after process runtime", () => {
         skipInstall: true,
       }),
     ).rejects.toThrow("baseline worktree-add aborted");
-    expect(stages).toEqual(["worktree-add", "worktree-cleanup"]);
+    expect(stages).toEqual(["worktree-add", "worktree-cleanup", "worktree-cleanup"]);
   });
 
   it.skipIf(process.platform === "win32")(

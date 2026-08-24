@@ -355,9 +355,11 @@ generation have this layout:
   candidate-<pid>-<uuid>/
 ```
 
-The worktree root is normally empty after a completed run; lane directories
-appear only while active or when cleanup deliberately preserves one for
-diagnosis.
+The worktree root is normally empty after a completed run. Lane directories
+appear while active or when cleanup deliberately preserves one for diagnosis.
+If `git worktree add` fails before registration, Mantis can leave its empty,
+uniquely named prepared directory instead of deleting through a pathname that
+could have been replaced.
 
 `error.txt` is written at the container root when a run fails and atomically
 cleared after a successful publication. A failure or crash before publication
@@ -365,7 +367,10 @@ leaves `mantis-current.json` pointing to the previous complete generation.
 Mantis does not recursively delete a worktree after Git no longer owns its
 registration: if cleanup fails, inspect the retained unique directory under
 `<output-dir>.worktrees/` together with `error.txt`, then remove it through Git
-after resolving the failure.
+after resolving the failure. At startup, Mantis also scans the legacy
+`<output-dir>/worktrees/` layout and removes its directly registered lane
+worktrees through Git; unregistered entries in that legacy directory are left
+untouched.
 
 Screenshots are evidence, not secrets, but still need redaction discipline:
 private channel names, usernames, or message content may appear. Set
