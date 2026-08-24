@@ -751,7 +751,7 @@ describe("script-specific dev tooling hardening", () => {
   it.runIf(process.platform !== "win32")(
     "returns a terminal result after an Anthropic direct prompt timeout",
     async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-timeout-"));
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-tree-"));
       tempDirs.push(tempRoot);
       const fakeClaudeBin = await writeBlockingPromptCli(tempRoot);
 

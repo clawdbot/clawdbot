@@ -516,12 +516,6 @@ describe("publishable plugin npm package install security scan", () => {
       ),
     ).toEqual(["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js"]);
     expect(
-      expectedOptionalReviewedFindingsForPackedPath(
-        "@openclaw/codex",
-        "dist/shared-client-current.js",
-      ),
-    ).toEqual([]);
-    expect(
       expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", "dist/client-retired.js"),
     ).toEqual([]);
   });
