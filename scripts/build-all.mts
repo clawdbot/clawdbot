@@ -6,10 +6,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import prettyMilliseconds from "pretty-ms";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
@@ -1083,15 +1083,7 @@ export function runBuildAllSteps(
   return { exitCode, timings };
 }
 
-function isMainModule() {
-  const argv1 = process.argv[1];
-  if (!argv1) {
-    return false;
-  }
-  return import.meta.url === pathToFileURL(argv1).href;
-}
-
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   let args;
   try {
     args = parseBuildAllArgs(process.argv.slice(2));
