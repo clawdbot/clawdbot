@@ -19,6 +19,7 @@ import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-uni
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
+const SYSTEMD_MANAGER_QUERY_TIMEOUT_MS = 5_000;
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -48,7 +49,12 @@ async function readSystemdManagerExecStart(
   opts?: GatewayServiceReadOptions,
 ): Promise<string[] | null> {
   const manager = "org.freedesktop.systemd1";
-  const query = (args: string[]) => execBusctlUser(env, ["--json=short", ...args], opts?.timeoutMs);
+  const timeoutMs =
+    opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
+  const deadlineAt = Date.now() + timeoutMs;
+  // Both D-Bus calls share one deadline so every caller reaches the local fallback promptly.
+  const query = (args: string[]) =>
+    execBusctlUser(env, ["--json=short", ...args], Math.max(1, deadlineAt - Date.now()));
   const loaded = await query([
     "call",
     manager,
