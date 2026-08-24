@@ -407,19 +407,27 @@ async function isLiveExternalCliRefreshOwner(params: {
  *
  * Scoped to the canonical built-in CLI slot registry, so a user-owned profile
  * or another CLI provider keeps its expiry visible.
+ *
+ * `skipProfileIds` names profiles whose ownership is already established, and
+ * they are filtered out before any credential read. A caller that already holds
+ * runtime provenance must not pay for a credential-store lookup to learn what
+ * it knows, and on macOS that lookup can wait on a locked Keychain.
  */
 export async function listLiveExternalCliOwnedProfileIds(
   store: AuthProfileStore,
+  options?: { skipProfileIds?: ReadonlySet<string> },
 ): Promise<string[]> {
   const owned = await Promise.all(
-    listExternalCliProfileMetadataIds().map(async (profileId) =>
-      (await isLiveExternalCliRefreshOwner({
-        profileId,
-        credential: store.profiles[profileId],
-      }))
-        ? profileId
-        : null,
-    ),
+    listExternalCliProfileMetadataIds()
+      .filter((profileId) => !options?.skipProfileIds?.has(profileId))
+      .map(async (profileId) =>
+        (await isLiveExternalCliRefreshOwner({
+          profileId,
+          credential: store.profiles[profileId],
+        }))
+          ? profileId
+          : null,
+      ),
   );
   return owned.filter((profileId) => profileId !== null).toSorted();
 }

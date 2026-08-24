@@ -852,6 +852,35 @@ describe("models.authStatus", () => {
       expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
     });
 
+    it("does not read the CLI store when a runtime marker already proves ownership", async () => {
+      // The runtime marker is this process's own proof of refresh ownership.
+      // Re-deriving it from the credential store buys nothing and, on macOS,
+      // can wait on a locked Keychain for the length of the reader timeout.
+      setPersistedClaudeCliStore();
+      setPreparedAuthStore(
+        Object.assign(
+          {
+            version: 1,
+            profiles: {
+              [profileId]: {
+                type: "oauth",
+                provider: "claude-cli",
+                access: "idle-access",
+                refresh: "cli-owned-refresh",
+                expires: 1,
+              } satisfies AuthProfileStore["profiles"][string],
+            },
+          },
+          { runtimeExternalCliProfileIds: [profileId] },
+        ),
+      );
+
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "ok" });
+      expect(mocks.readClaudeCliCredentialsUncachedAsync).not.toHaveBeenCalled();
+    });
+
     it("stays signed in after the CLI rotates its refresh token", async () => {
       // Refresh tokens rotate on the CLI's own schedule. Account identity still
       // proves the persisted slot and the live CLI store describe one login, so
