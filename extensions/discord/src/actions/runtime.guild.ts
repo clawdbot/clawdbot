@@ -1,7 +1,8 @@
 // Discord plugin module implements runtime.guild behavior.
-import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
+import { PermissionFlagsBits } from "discord-api-types/v10";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
@@ -106,14 +107,6 @@ const guildAdminActionGuards: Partial<Record<string, GuildAdminActionGuard>> = {
   channelPermissionRemove: channelPermissionGuard,
 };
 
-function isThreadChannelType(channelType: number | undefined) {
-  return (
-    channelType === ChannelType.GuildNewsThread ||
-    channelType === ChannelType.GuildPublicThread ||
-    channelType === ChannelType.GuildPrivateThread
-  );
-}
-
 function isLockedThreadChannel(channel: unknown) {
   if (!channel || typeof channel !== "object") {
     return false;
@@ -186,7 +179,7 @@ async function resolveGuildAdminActionPermissions(params: {
     createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
   );
   const channelType = "type" in channel ? channel.type : undefined;
-  if (!isThreadChannelType(channelType)) {
+  if (!isDiscordThreadChannelType(channelType)) {
     return params.guard.permissions;
   }
 
