@@ -8,6 +8,9 @@ import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
 const DOCUMENT_PREVIEW_MAX_BYTES = 256 * 1024;
 const DOCUMENT_PREVIEW_MAX_CHARS = 16 * 1024;
+const DOCUMENT_PREVIEW_MAX_ROWS = 8;
+const DOCUMENT_PREVIEW_MAX_COLUMNS = 24;
+const DOCUMENT_PREVIEW_MAX_CELLS = 128;
 const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
 const TEXTY_DOCUMENT_MIME_TYPES = new Set([
   "application/json",
@@ -77,12 +80,35 @@ export function parseDelimitedPreview(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
+  let cellCount = 0;
   let quoted = false;
-  for (let index = 0; index < text.length && rows.length < 8; index += 1) {
+  const commitCell = () => {
+    if (row.length < DOCUMENT_PREVIEW_MAX_COLUMNS && cellCount < DOCUMENT_PREVIEW_MAX_CELLS) {
+      row.push(cell.trim());
+      cellCount += 1;
+    }
+    cell = "";
+  };
+  const commitRow = () => {
+    commitCell();
+    if (row.some((value) => value.length > 0)) {
+      rows.push(row);
+    }
+    row = [];
+  };
+  for (
+    let index = 0;
+    index < text.length &&
+    rows.length < DOCUMENT_PREVIEW_MAX_ROWS &&
+    cellCount < DOCUMENT_PREVIEW_MAX_CELLS;
+    index += 1
+  ) {
     const character = text[index];
     if (character === '"') {
       if (quoted && text[index + 1] === '"') {
-        cell += '"';
+        if (row.length < DOCUMENT_PREVIEW_MAX_COLUMNS) {
+          cell += '"';
+        }
         index += 1;
       } else {
         quoted = !quoted;
@@ -90,29 +116,25 @@ export function parseDelimitedPreview(text: string): string[][] {
       continue;
     }
     if (!quoted && character === delimiter) {
-      row.push(cell.trim());
-      cell = "";
+      commitCell();
       continue;
     }
     if (!quoted && (character === "\n" || character === "\r")) {
       if (character === "\r" && text[index + 1] === "\n") {
         index += 1;
       }
-      row.push(cell.trim());
-      if (row.some((value) => value.length > 0)) {
-        rows.push(row);
-      }
-      row = [];
-      cell = "";
+      commitRow();
       continue;
     }
-    cell += character;
-  }
-  if (cell.length > 0 || row.length > 0) {
-    row.push(cell.trim());
-    if (row.some((value) => value.length > 0) && rows.length < 8) {
-      rows.push(row);
+    if (row.length < DOCUMENT_PREVIEW_MAX_COLUMNS) {
+      cell += character;
     }
+  }
+  if (
+    (cell.length > 0 || row.length > 0) &&
+    rows.length < DOCUMENT_PREVIEW_MAX_ROWS
+  ) {
+    commitRow();
   }
   return rows;
 }
