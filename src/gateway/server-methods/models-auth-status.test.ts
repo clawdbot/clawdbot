@@ -805,6 +805,23 @@ describe("models.authStatus", () => {
       expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
     });
 
+    it("keeps the re-login warning when only the access token matches", async () => {
+      // A matching access token does not prove the persisted refresh token is
+      // still the one the CLI rotates, so it cannot establish refresh ownership.
+      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+        type: "oauth",
+        provider: "anthropic",
+        access: "idle-access",
+        refresh: "rotated-away-refresh",
+        expires: 1,
+      });
+      setPersistedClaudeCliStore();
+
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
+    });
+
     it("keeps the re-login warning when the CLI has no refresh material", async () => {
       mocks.readClaudeCliCredentialsCached.mockReturnValue({
         type: "oauth",

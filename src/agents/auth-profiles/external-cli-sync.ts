@@ -336,8 +336,9 @@ function listScopedExternalCliProfileIds(params: {
  * - the CLI store must still hold an OAuth credential (a `claude logout`
  *   removes it, and ownership is refused),
  * - that credential must still carry refresh material, and
- * - its token material must match the persisted slot, which is the only proof
- *   the stored profile IS this CLI login.
+ * - its refresh material must match the persisted slot, which is the only proof
+ *   that the stored profile IS this CLI login and that this refresh token is
+ *   the one the CLI still rotates.
  *
  * A refresh token revoked server-side while the local file is untouched cannot
  * be detected without a network call; that matches existing behavior for a CLI
@@ -365,10 +366,10 @@ export function isLiveExternalCliRefreshOwner(params: {
   if (live?.type !== "oauth" || !live.refresh?.trim()) {
     return false;
   }
-  return (
-    (Boolean(live.refresh?.trim()) && live.refresh === credential.refresh) ||
-    (Boolean(live.access?.trim()) && live.access === credential.access)
-  );
+  // Refresh material, not the access token, is what carries the credential
+  // forward. Matching access alone would leave the persisted refresh token
+  // unproven while suppressing an expired-credential warning.
+  return live.refresh === credential.refresh;
 }
 
 /**
