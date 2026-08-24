@@ -187,7 +187,24 @@ export function createConfiguredChannelOwnershipPolicy(params: {
       // so on a declared channel the candidate set is the closest static proxy for the serving
       // set, and everything outside it is treated as inactive however it loads.
       if (candidates.narrowedByDeclaration) {
-        return false;
+        // The proxy holds only while some narrowed candidate can serve. Auto-enable skips a
+        // policy-disabled candidate (`plugin-auto-enable.prefer-over.ts` filters its claimant
+        // loop on `isPluginPolicyDisabled`), so with every candidate disabled it activates none
+        // of them, the computed winner is inactive, and the loader lets surviving registrations
+        // stand (`collectCededChannelIdsByPlugin` collects no cede for an inactive winner). The
+        // channel is then served by whatever loads without candidacy, exactly like an undeclared
+        // channel, answered by the same activation read below. Disablement is the whole test on
+        // purpose: auto-enable trusts the candidate it selects (a workspace pair nothing else
+        // trusts still loads once selected), so only operator policy can empty the serving set —
+        // asking the fuller activation decision here would hand the channel back to an outside
+        // claimant while the narrowed pair still serves it.
+        const someNarrowedCandidateServes = [...candidates.ids].some(
+          (candidateId) =>
+            !isPluginPolicyDisabled(params.config, candidateId, canonicalId, params.registry),
+        );
+        if (someNarrowedCandidateServes) {
+          return false;
+        }
       }
       // With nothing declared there are no cedes at all: the channel goes to whichever loaded
       // claimant registers, and the unnarrowed candidate set names only the claim auto-enable

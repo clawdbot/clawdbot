@@ -456,6 +456,75 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
     expect(policy.isPluginActive("zzproof-other", "zzproofchat")).toBe(false);
   });
 
+  // Codex P1 3845532981: the narrowing above presumes some pair member serves. When the operator
+  // disables EVERY narrowed candidate, auto-enable activates none of them, the computed winner is
+  // inactive, and the loader stands no cede — the default-loaded claimant outside the pair
+  // registers and serves the channel. Reporting it inactive validated the operator's config
+  // against a disabled claimant's strict schema for a channel that fallback actually serves.
+  it("falls back to the default-loaded claimant when every narrowed candidate is disabled", () => {
+    const claimant = (id: string, preferOver?: readonly string[]) => ({
+      id,
+      origin: "config",
+      channels: ["zzproofchat"],
+      channelConfigs: { zzproofchat: preferOver ? { preferOver } : {} },
+    });
+    const declaredRegistry = {
+      diagnostics: [],
+      plugins: [
+        claimant("zzproof-plus", ["zzproof-core"]),
+        claimant("zzproof-core"),
+        claimant("zzproof-other"),
+      ],
+    } as unknown as PluginManifestRegistry;
+    const sourceConfig = {
+      channels: { zzproofchat: { accountLabel: "zz-proof" } },
+      plugins: {
+        entries: {
+          "zzproof-plus": { enabled: false },
+          "zzproof-core": { enabled: false },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    // The effective config through the real materialization: with every narrowed candidate
+    // disabled, auto-enable enables nothing and leaves the outside claimant to default loading.
+    const materialized = materializePluginAutoEnableCandidatesInternal({
+      config: sourceConfig,
+      candidates: resolveConfiguredPluginAutoEnableCandidates({
+        config: sourceConfig,
+        env: {},
+        registry: declaredRegistry,
+        configuredChannelIds: ["zzproofchat"],
+      }),
+      env: {},
+      manifestRegistry: declaredRegistry,
+    }).config;
+    expect(materialized.plugins?.entries?.["zzproof-other"]).toBeUndefined();
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config: materialized,
+      sourceConfig,
+      registry: declaredRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzproof-plus", "zzproofchat")).toBe(false);
+    expect(policy.isPluginActive("zzproof-core", "zzproofchat")).toBe(false);
+    expect(policy.isPluginActive("zzproof-other", "zzproofchat")).toBe(true);
+    // Both planes then follow the claimant the runtime actually serves, and the loader lets its
+    // registration stand instead of ceding it to a disabled winner.
+    const { winners } = collectRuntimeChannelOwnership(declaredRegistry, policy);
+    expect(winners.get("zzproofchat")).toBe("zzproof-other");
+    const { cededChannelIdsByPlugin } = collectCededChannelIdsByPlugin({
+      registry: declaredRegistry,
+      config: materialized,
+      sourceConfig,
+      env: {},
+      onlyPluginIdSet: null,
+      dreamingSidecar: null,
+    });
+    expect(cededChannelIdsByPlugin.size).toBe(0);
+  });
+
   // The displacement walk in `channel-config-metadata.ts` applies every resolved non-self
   // `preferOver` edge without asking whether the named target claims the channel, so an edge to
   // an uninstalled plugin still marks the channel contested and the loader cedes the bare
