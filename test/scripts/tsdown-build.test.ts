@@ -49,6 +49,36 @@ const NO_MEMORY_LIMIT = {
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
 
+function createMemoryFileSystem(
+  files: ReadonlyMap<string, string | Error>,
+  onRead?: (filePath: string) => void,
+) {
+  return {
+    readFileSync(filePath: string) {
+      onRead?.(filePath);
+      const contents = files.get(filePath);
+      if (contents === undefined) {
+        throw Object.assign(new Error(`ENOENT: ${filePath}`), { code: "ENOENT" });
+      }
+      if (contents instanceof Error) {
+        throw contents;
+      }
+      return contents;
+    },
+  };
+}
+
+type TsdownInvocationParams = NonNullable<Parameters<typeof resolveTsdownBuildInvocation>[0]>;
+
+function resolveTestNodeOptions(params: TsdownInvocationParams) {
+  return resolveTsdownBuildInvocation({
+    nodeExecPath: "/usr/bin/node",
+    npmExecPath: "/tmp/pnpm.cjs",
+    env: {},
+    ...params,
+  }).options.env.NODE_OPTIONS;
+}
+
 async function expectPathMissing(targetPath: string) {
   let statError: unknown;
   try {
@@ -775,14 +805,9 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("keeps default tsdown heap below the container memory limit", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+    expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024 })).toBe(
+      "--max-old-space-size=6400",
+    );
   });
 
   it("deducts memory already used by a shared limiting cgroup", () => {
@@ -794,15 +819,7 @@ describe("resolveTsdownBuildInvocation", () => {
         `anon ${512 * 1024 * 1024}\nshmem ${256 * 1024 * 1024}\nfile ${768 * 1024 * 1024}\ninactive_file ${768 * 1024 * 1024}\nkernel ${128 * 1024 * 1024}\n`,
       ],
     ]);
-    const fsFixture = {
-      readFileSync(filePath: string) {
-        const contents = cgroupFiles.get(filePath);
-        if (contents === undefined) {
-          throw new Error(`ENOENT: ${filePath}`);
-        }
-        return contents;
-      },
-    };
+    const fsFixture = createMemoryFileSystem(cgroupFiles);
     const result = resolveTsdownBuildPlan({
       env: {},
       cgroupMemoryLimitPaths: ["/test/memory.max"],
@@ -982,60 +999,35 @@ describe("resolveTsdownBuildInvocation", () => {
   it("never sizes the heap above a cgroup limit smaller than the old floor", () => {
     // A floor applied on top of a real limit yields a heap the cgroup cannot honour, so the
     // build is OOM-killed instead of merely running smaller.
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
-    });
-
     // 1500 MiB budget minus the 768 MiB headroom, not the former 2048 MiB floor.
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=732");
+    expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes: 1500 * 1024 * 1024 })).toBe(
+      "--max-old-space-size=732",
+    );
   });
 
   it.each([4096, 1024 * 1024 - 1])(
     "keeps a %i-byte cgroup limit bounded instead of treating it as unbounded",
     (cgroupMemoryLimitBytes) => {
-      const result = resolveTsdownBuildInvocation({
-        nodeExecPath: "/usr/bin/node",
-        npmExecPath: "/tmp/pnpm.cjs",
-        env: {},
-        cgroupMemoryLimitBytes,
-      });
-
-      expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=1");
+      expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes })).toBe("--max-old-space-size=1");
     },
   );
 
   it("keeps a parsed zero-byte cgroup limit bounded", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      cgroupMemoryLimitPaths: ["/test/memory.max"],
-      fs: {
-        readFileSync(filePath: string) {
-          if (filePath !== "/test/memory.max") {
-            throw new Error(`unexpected path ${filePath}`);
-          }
-          return "0\n";
-        },
-      },
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=1");
+    expect(
+      resolveTestNodeOptions({
+        cgroupMemoryLimitPaths: ["/test/memory.max"],
+        fs: createMemoryFileSystem(new Map([["/test/memory.max", "0\n"]])),
+      }),
+    ).toBe("--max-old-space-size=1");
   });
 
   it("uses Node's constrained-memory result as a canonical cgroup candidate", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
-      cgroupMemoryLimitPaths: [],
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(
+      resolveTestNodeOptions({
+        constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
+        cgroupMemoryLimitPaths: [],
+      }),
+    ).toBe("--max-old-space-size=4352");
   });
 
   it("uses physical memory when cgroups and procfs are unavailable", () => {
@@ -1088,14 +1080,9 @@ describe("resolveTsdownBuildInvocation", () => {
       physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
       platform: "linux",
       procMeminfoPath: "/test/meminfo",
-      fs: {
-        readFileSync(filePath: string) {
-          if (filePath !== "/test/meminfo") {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return "MemTotal:       16777216 kB\nMemAvailable:    4194304 kB\n";
-        },
-      },
+      fs: createMemoryFileSystem(
+        new Map([["/test/meminfo", "MemTotal:       16777216 kB\nMemAvailable:    4194304 kB\n"]]),
+      ),
     };
 
     expect(resolveTsdownBuildPlan(base).maxOldSpaceMb).toBe(3328);
@@ -1123,23 +1110,12 @@ describe("resolveTsdownBuildInvocation", () => {
       [`/sys/fs/cgroup${slicePath}/memory.high`, `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
     // 5 GiB slice budget minus the 768 MiB build headroom.
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
   });
 
   it("uses the tightest finite cgroup ancestor when the leaf is also bounded", () => {
@@ -1150,22 +1126,11 @@ describe("resolveTsdownBuildInvocation", () => {
       ["/sys/fs/cgroup/user.slice/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
   });
 
   it("uses a resolved v1 memory limit when a hybrid host's v2 view is inherited", () => {
@@ -1189,23 +1154,12 @@ describe("resolveTsdownBuildInvocation", () => {
       ],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
+    const nodeOptions = resolveTestNodeOptions({
       processResidentMemoryBytes: 64 * 1024 * 1024,
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4928");
+    expect(nodeOptions).toBe("--max-old-space-size=4928");
   });
 
   it("uses host memory when hybrid v1 memory is visibly unlimited and v2 is inherited", () => {
@@ -1222,25 +1176,14 @@ describe("resolveTsdownBuildInvocation", () => {
       [`/sys/fs/cgroup/memory${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
+    const nodeOptions = resolveTestNodeOptions({
       availableMemoryBytes: 16 * 1024 * 1024 * 1024,
       physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
       procMemTotalBytes: 16 * 1024 * 1024 * 1024,
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
+    expect(nodeOptions).toBe("--max-old-space-size=12288");
   });
 
   it("refuses a default heap when an inherited namespace mount hides the process limit", () => {
@@ -1256,15 +1199,7 @@ describe("resolveTsdownBuildInvocation", () => {
       ["/sys/fs/cgroup/memory.max", "max\n"],
       ["/proc/meminfo", `MemTotal:       ${16 * 1024 * 1024} kB\n`],
     ]);
-    const fsFixture = {
-      readFileSync(filePath: string) {
-        const contents = cgroupFiles.get(filePath);
-        if (contents === undefined) {
-          throw new Error(`ENOENT: ${filePath}`);
-        }
-        return contents;
-      },
-    };
+    const fsFixture = createMemoryFileSystem(cgroupFiles);
 
     const result = resolveTsdownBuildPlan({
       env: {},
@@ -1308,15 +1243,7 @@ describe("resolveTsdownBuildInvocation", () => {
       {
         args: ["--config", "custom.ts"],
         env: {},
-        fs: {
-          readFileSync(filePath: string) {
-            const contents = cgroupFiles.get(filePath);
-            if (contents === undefined) {
-              throw new Error(`ENOENT: ${filePath}`);
-            }
-            return contents;
-          },
-        },
+        fs: createMemoryFileSystem(cgroupFiles),
       },
       { cleanup },
     );
@@ -1342,15 +1269,7 @@ describe("resolveTsdownBuildInvocation", () => {
         args: ["--config", "custom.ts"],
         env: {},
         platform: "linux",
-        fs: {
-          readFileSync(filePath: string) {
-            const contents = cgroupFiles.get(filePath);
-            if (contents === undefined) {
-              throw new Error(`ENOENT: ${filePath}`);
-            }
-            return contents;
-          },
-        },
+        fs: createMemoryFileSystem(cgroupFiles),
       },
       { cleanup },
     );
@@ -1371,15 +1290,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     const plan = resolveTsdownBuildPlan({
       env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
       physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
     });
 
@@ -1400,15 +1311,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     const plan = resolveTsdownBuildPlan({
       env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
       physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
     });
 
@@ -1417,26 +1320,19 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("does not treat an unreadable v2 limit as a disabled memory controller", () => {
-    const cgroupFiles = new Map([
+    const cgroupFiles = new Map<string, string | Error>([
       ["/proc/self/cgroup", "0::/user.slice/openclaw.service\n"],
       ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
       ["/sys/fs/cgroup/user.slice/openclaw.service/cgroup.controllers", "cpu io\n"],
+      [
+        "/sys/fs/cgroup/user.slice/openclaw.service/memory.max",
+        Object.assign(new Error("EACCES: memory.max"), { code: "EACCES" }),
+      ],
     ]);
 
     const plan = resolveTsdownBuildPlan({
       env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          if (filePath.endsWith("/memory.max")) {
-            throw Object.assign(new Error(`EACCES: ${filePath}`), { code: "EACCES" });
-          }
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
       physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
     });
 
@@ -1448,21 +1344,15 @@ describe("resolveTsdownBuildInvocation", () => {
     const cgroupDir = "/sys/fs/cgroup/openclaw.service";
     const memoryMaxPath = `${cgroupDir}/memory.max`;
     const memoryHighPath = `${cgroupDir}/memory.high`;
+    const cgroupFiles = new Map<string, string | Error>([
+      [memoryMaxPath, `${8 * 1024 * 1024 * 1024}\n`],
+      [memoryHighPath, Object.assign(new Error(`EACCES: ${memoryHighPath}`), { code: "EACCES" })],
+    ]);
 
     const plan = resolveTsdownBuildPlan({
       env: {},
       cgroupMemoryLimitPaths: [memoryMaxPath, memoryHighPath],
-      fs: {
-        readFileSync(filePath: string) {
-          if (filePath === memoryMaxPath) {
-            return `${8 * 1024 * 1024 * 1024}\n`;
-          }
-          if (filePath === memoryHighPath) {
-            throw Object.assign(new Error(`EACCES: ${filePath}`), { code: "EACCES" });
-          }
-          throw new Error(`ENOENT: ${filePath}`);
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
       physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
     });
 
@@ -1482,15 +1372,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     const result = resolveTsdownBuildPlan({
       env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
     expect(result.maxOldSpaceMb).toBe(1);
@@ -1511,16 +1393,7 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildPlan({
       env: {},
       constrainedMemoryBytes: 1024 * 1024 * 1024,
-      fs: {
-        readFileSync(filePath: string) {
-          pathsRead.push(filePath);
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles, (filePath) => pathsRead.push(filePath)),
     });
 
     expect(result.maxOldSpaceMb).toBe(1);
@@ -1546,15 +1419,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     const result = resolveTsdownBuildPlan({
       env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
     expect(result.maxOldSpaceMb).toBe(1);
@@ -1577,23 +1442,12 @@ describe("resolveTsdownBuildInvocation", () => {
       [`/sys/fs/cgroup dir${slicePath}/memory.high`, `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
     // 5 GiB slice budget minus the 768 MiB build headroom.
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
   });
 
   it("translates an octal-escaped cgroup mount root before reading the limit", () => {
@@ -1606,22 +1460,11 @@ describe("resolveTsdownBuildInvocation", () => {
       ["/sys/fs/cgroup/openclaw.service/memory.high", `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
   });
 
   it("caps the tsdown heap when v1 controllers are co-mounted at the cgroup root", () => {
@@ -1639,22 +1482,11 @@ describe("resolveTsdownBuildInvocation", () => {
       [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
   });
 
   it("ignores a co-mounted cgroup-v1 soft limit when the hard limit is unbounded", () => {
@@ -1671,26 +1503,15 @@ describe("resolveTsdownBuildInvocation", () => {
       [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
+    const nodeOptions = resolveTestNodeOptions({
       // Node/libuv reports the v1 soft limit as constrained memory. The owner walk must
       // discard that advisory candidate and use only the hard limit plus host memory.
       constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
       procMemTotalBytes: 16 * 1024 * 1024 * 1024,
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
+    expect(nodeOptions).toBe("--max-old-space-size=12288");
   });
 
   it("preserves process rlimits while ignoring a cgroup-v1 soft limit", () => {
@@ -1707,25 +1528,14 @@ describe("resolveTsdownBuildInvocation", () => {
       [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    const nodeOptions = resolveTestNodeOptions({
       platform: "linux",
-      env: {},
       constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
       procMemTotalBytes: 16 * 1024 * 1024 * 1024,
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=3328");
+    expect(nodeOptions).toBe("--max-old-space-size=3328");
   });
 
   it("ignores a cgroup-v1 parent limit when hierarchy accounting is disabled", () => {
@@ -1741,26 +1551,15 @@ describe("resolveTsdownBuildInvocation", () => {
       ["/sys/fs/cgroup/memory/parent/memory.limit_in_bytes", `${4 * 1024 * 1024 * 1024}\n`],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=7424");
+    expect(nodeOptions).toBe("--max-old-space-size=7424");
   });
 
   it("refuses cleanup when cgroup-v1 hierarchy metadata is unreadable", () => {
-    const cgroupFiles = new Map([
+    const cgroupFiles = new Map<string, string | Error>([
       ["/proc/self/cgroup", "7:memory:/parent/leaf\n"],
       [
         "/proc/self/mountinfo",
@@ -1768,6 +1567,10 @@ describe("resolveTsdownBuildInvocation", () => {
       ],
       ["/sys/fs/cgroup/memory/parent/leaf/memory.limit_in_bytes", "9223372036854771712\n"],
       ["/sys/fs/cgroup/memory/memory.use_hierarchy", "0\n"],
+      [
+        "/sys/fs/cgroup/memory/parent/memory.use_hierarchy",
+        Object.assign(new Error("EACCES: memory.use_hierarchy"), { code: "EACCES" }),
+      ],
       [
         "/proc/meminfo",
         `MemTotal:       ${16 * 1024 * 1024} kB\nMemAvailable:   ${16 * 1024 * 1024} kB\n`,
@@ -1780,18 +1583,7 @@ describe("resolveTsdownBuildInvocation", () => {
         args: ["--config", "custom.ts"],
         env: {},
         platform: "linux",
-        fs: {
-          readFileSync(filePath: string) {
-            if (filePath === "/sys/fs/cgroup/memory/parent/memory.use_hierarchy") {
-              throw Object.assign(new Error(`EACCES: ${filePath}`), { code: "EACCES" });
-            }
-            const contents = cgroupFiles.get(filePath);
-            if (contents === undefined) {
-              throw new Error(`ENOENT: ${filePath}`);
-            }
-            return contents;
-          },
-        },
+        fs: createMemoryFileSystem(cgroupFiles),
       },
       { cleanup },
     );
@@ -1812,22 +1604,11 @@ describe("resolveTsdownBuildInvocation", () => {
       ["/sys/fs/cgroup/openclaw-main-update.service/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
   });
 
   it("keeps a representable cgroup mount when a later view cannot represent it", () => {
@@ -1844,23 +1625,12 @@ describe("resolveTsdownBuildInvocation", () => {
       ["/test/meminfo", "MemTotal: 7340032 kB\n"],
     ]);
 
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
+    const nodeOptions = resolveTestNodeOptions({
       procMeminfoPath: "/test/meminfo",
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
   });
 
   it("fails closed on a mount that cannot represent this process's cgroup", () => {
@@ -1879,15 +1649,7 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildPlan({
       env: {},
       procMeminfoPath: "/test/meminfo",
-      fs: {
-        readFileSync(filePath: string) {
-          const contents = cgroupFiles.get(filePath);
-          if (contents === undefined) {
-            throw new Error(`ENOENT: ${filePath}`);
-          }
-          return contents;
-        },
-      },
+      fs: createMemoryFileSystem(cgroupFiles),
     });
 
     expect(result.maxOldSpaceMb).toBe(1);
@@ -1898,36 +1660,30 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("clamps explicit tsdown heap settings to the container memory limit", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    const nodeOptions = resolveTestNodeOptions({
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6400");
+    expect(nodeOptions).toBe("--trace-warnings --max-old-space-size=6400");
   });
 
   it("honors OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB over platform and memory defaults", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    const nodeOptions = resolveTestNodeOptions({
       env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "3072" },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=3072");
+    expect(nodeOptions).toBe("--max-old-space-size=3072");
   });
 
   it("keeps memory detection when OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB is blank", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    const nodeOptions = resolveTestNodeOptions({
       env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "  " },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+    expect(nodeOptions).toBe("--max-old-space-size=6400");
   });
 
   it("uses OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB to normalize inherited NODE_OPTIONS", () => {
@@ -1959,27 +1715,18 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("falls back to proc meminfo when the cgroup memory limit is unbounded", () => {
-    const fsMock = {
-      readFileSync: vi.fn((filePath: string) => {
-        if (filePath === "/test/memory.max") {
-          return "max\n";
-        }
-        if (filePath === "/test/meminfo") {
-          return "MemTotal: 7340032 kB\n";
-        }
-        throw new Error(`unexpected path ${filePath}`);
-      }),
-    };
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: fsMock,
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(
+        new Map([
+          ["/test/memory.max", "max\n"],
+          ["/test/meminfo", "MemTotal: 7340032 kB\n"],
+        ]),
+      ),
       cgroupMemoryLimitPaths: ["/test/memory.max"],
       procMeminfoPath: "/test/meminfo",
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+    expect(nodeOptions).toBe("--max-old-space-size=6400");
   });
 
   it("can run tsdown without invoking pnpm", () => {

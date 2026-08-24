@@ -130,7 +130,7 @@ describe("widget theme bridge", () => {
       document.documentElement,
       {
         attributes: true,
-        attributeFilter: ["data-theme", "data-theme-mode"],
+        attributeFilter: ["data-theme", "data-theme-mode", "style"],
       },
     );
     FakeMutationObserver.instances[0]?.trigger({
@@ -138,6 +138,13 @@ describe("widget theme bridge", () => {
     } as MutationRecord);
     expect(chatPost).toHaveBeenCalledOnce();
     expect(boardPost).toHaveBeenCalledOnce();
+    expect(unrelatedPost).not.toHaveBeenCalled();
+    // Accent overrides land as inline style mutations on <html>.
+    FakeMutationObserver.instances[0]?.trigger({
+      attributeName: "style",
+    } as MutationRecord);
+    expect(chatPost).toHaveBeenCalledTimes(2);
+    expect(boardPost).toHaveBeenCalledTimes(2);
     expect(unrelatedPost).not.toHaveBeenCalled();
   });
 });

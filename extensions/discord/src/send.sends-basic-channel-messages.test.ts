@@ -392,7 +392,7 @@ describe("sendMessageDiscord", () => {
     ];
     const onDeliveryResult = vi.fn();
 
-    await sendMessageDiscord("channel:789", "a".repeat(2_500), {
+    const result = await sendMessageDiscord("channel:789", "a".repeat(2_500), {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -415,6 +415,7 @@ describe("sendMessageDiscord", () => {
       "card",
       "text",
     ]);
+    expect(result.receipt.parts.map(({ kind }) => kind)).toEqual(["card", "text"]);
   });
 
   it("delivers embed-only and native Components V2 messages over real HTTP", async () => {
@@ -1008,6 +1009,7 @@ describe("sendMessageDiscord", () => {
     });
 
     expect(res.messageId).toBe("fallback-msg");
+    expectSingleReceiptPart(res.receipt, { platformMessageId: "fallback-msg", kind: "text" });
     expect(postMock).toHaveBeenCalledTimes(2);
     expectBodyFileName(requireRestBody(postMock, 0), "photo.jpg");
     const fallbackBody = requireRestBody(postMock, 1);
@@ -1199,17 +1201,20 @@ describe("sendMessageDiscord", () => {
       name: "preserves reply reference across all text chunks by default",
       params: { text: "a".repeat(2001) },
       expectsSecondReply: true,
+      expectedKinds: ["text", "text"],
     },
     {
       name: "limits reply reference to the first text chunk when requested",
       params: { text: "a".repeat(2001), replyScope: "first" as const },
       expectsSecondReply: false,
       checksReceipt: true,
+      expectedKinds: ["text", "text"],
     },
     {
       name: "preserves reply reference for follow-up text chunks after media caption split by default",
       params: { text: "a".repeat(2500), mediaUrl: "file:///tmp/photo.jpg" },
       expectsSecondReply: true,
+      expectedKinds: ["media", "text"],
     },
     {
       name: "limits media caption reply reference to the first physical message when requested",
@@ -1219,9 +1224,11 @@ describe("sendMessageDiscord", () => {
         replyScope: "first" as const,
       },
       expectsSecondReply: false,
+      expectedKinds: ["media", "text"],
     },
-  ])("$name", async ({ params, expectsSecondReply, checksReceipt }) => {
+  ])("$name", async ({ params, expectsSecondReply, checksReceipt, expectedKinds }) => {
     const { firstBody, secondBody, result } = await sendChunkedReplyAndCollectBodies(params);
+    expect(result.receipt.parts.map(({ kind }) => kind)).toEqual(expectedKinds);
     expectReplyReference(firstBody, "orig-123");
     if (expectsSecondReply) {
       expectReplyReference(secondBody, "orig-123");

@@ -802,7 +802,9 @@ export const talkHandlers: GatewayRequestHandlers = {
       configPayload.session = { mainKey: sessionMainKey };
     }
 
-    const seamColor = snapshot.config.ui?.seamColor;
+    // User accent wins over the operator seam color, matching Control UI
+    // precedence (ui.prefs.accent -> ui.seamColor -> theme default).
+    const seamColor = snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
     if (typeof seamColor === "string") {
       configPayload.ui = { seamColor };
     }
