@@ -475,6 +475,76 @@ describe("applyClawUpdatePlan", () => {
     expect(workspaceRollback).not.toHaveBeenCalled();
   });
 
+  it("applies supported actions while preserving blocked manual actions with skipManual", async () => {
+    const updatePlan = plan([
+      {
+        kind: "agent",
+        id: "worker",
+        action: "change",
+        target: 'agents.entries["worker"]',
+        blocked: false,
+        reason: "restore agent",
+      },
+      {
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "manual",
+        target: "workspace:SOUL.md",
+        blocked: true,
+        reason: "drift preserved",
+      },
+    ]);
+    let config: OpenClawConfig = { agents: { entries: {} } };
+    const applyWorkspace = vi.fn(async () => ({
+      appliedPaths: [],
+      rollback: vi.fn(async () => undefined),
+    }));
+
+    const result = await applyClawUpdatePlan(
+      updatePlan,
+      { targetManifest: manifest, targetSource: source },
+      {
+        config,
+        ...consent(updatePlan),
+        skipManual: true,
+        rebuildPlan: vi.fn(async () => updatePlan),
+        buildAddPlan: vi.fn(async () => addPlan),
+        readInstall: vi.fn(() => install),
+        persistInstall: vi.fn(() => ({ ...install, claw: source })),
+        applyWorkspace,
+        applyMcp: vi.fn(async () => ({
+          appliedNames: [],
+          rollback: vi.fn(async () => undefined),
+        })),
+        applyPackage: vi.fn(async () => ({
+          appliedIds: [],
+          rollback: vi.fn(async () => undefined),
+        })),
+        applyCron: vi.fn(async () => ({
+          appliedIds: [],
+          rollback: vi.fn(async () => undefined),
+        })),
+        commitConfig: async (transform) => {
+          config = transform(config);
+        },
+      },
+    );
+
+    expect(result.status).toBe("complete");
+    expect(result.skippedActions).toEqual([
+      expect.objectContaining({ kind: "workspaceFile", action: "manual" }),
+    ]);
+    // The blocked action never reaches the workspace executor.
+    expect(applyWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actions: expect.not.arrayContaining([expect.objectContaining({ action: "manual" })]),
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(config.agents?.entries?.worker?.name).toBe("Worker v2");
+  });
+
   it("stops before agent mutation when a package update fails", async () => {
     const targetPackage = {
       kind: "skill" as const,

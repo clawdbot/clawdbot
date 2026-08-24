@@ -17,6 +17,7 @@ export type ClawsBuildOptions = { out: string; json?: boolean };
 export type ClawsDevOptions = { agentId?: string; workspace?: string; json?: boolean };
 
 export type ClawsAddOptions = {
+  consentLatest?: boolean;
   dryRun?: boolean;
   yes?: boolean;
   planIntegrity?: string;
@@ -32,8 +33,11 @@ export type ClawsUpdateOptions = {
   yes?: boolean;
   planIntegrity?: string;
   json?: boolean;
+  skipManual?: boolean;
+  consentLatest?: boolean;
 };
 export type ClawsRemoveOptions = {
+  consentLatest?: boolean;
   dryRun?: boolean;
   yes?: boolean;
   planIntegrity?: string;
@@ -43,6 +47,12 @@ export type ClawsRemoveOptions = {
   json?: boolean;
 };
 export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
+export type ClawsGcOptions = { yes?: boolean; json?: boolean };
+export type ClawsReconcileOptions = {
+  keepLocal?: boolean;
+  paths?: string[];
+  json?: boolean;
+};
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
@@ -125,6 +135,28 @@ export function registerClawsCli(program: Command) {
     });
 
   claws
+    .command("reconcile")
+    .description("Adopt locally modified managed state as the owned content")
+    .argument("<claw-or-agent>", "Installed package name or final agent id")
+    .option("--keep-local", "Re-record on-disk content digests as the owned state", false)
+    .option("--paths <path>", "Limit adoption to these workspace paths (repeatable)", collectOption)
+    .option("--json", "Print JSON", false)
+    .action(async (target: string, opts: ClawsReconcileOptions) => {
+      const { runClawsReconcileCommand } = await import("./claws-reconcile-command.js");
+      await runClawsReconcileCommand(target, opts);
+    });
+
+  claws
+    .command("gc")
+    .description("Remove ClawHub packages left behind by removed Claws")
+    .option("--yes", "Remove the orphaned packages", false)
+    .option("--json", "Print JSON", false)
+    .action(async (opts: ClawsGcOptions) => {
+      const { runClawsGcCommand } = await import("./claws-gc-command.js");
+      await runClawsGcCommand(opts);
+    });
+
+  claws
     .command("status")
     .description("Show installed Claw agents and managed-state drift")
     .argument("[claw-or-agent]", "Installed package name or final agent id")
@@ -142,6 +174,16 @@ export function registerClawsCli(program: Command) {
     .option("--dry-run", "Preview update actions without mutating state", false)
     .option("--yes", "Confirm the exact supported update plan", false)
     .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
+    .option(
+      "--skip-manual",
+      "Apply supported actions while preserving locally drifted or blocked state",
+      false,
+    )
+    .option(
+      "--consent-latest",
+      "Bind consent to the most recent dry-run plan instead of --plan-integrity",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
       const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
@@ -155,6 +197,11 @@ export function registerClawsCli(program: Command) {
     .option("--dry-run", "Preview removal without mutating state", false)
     .option("--yes", "Confirm removal", false)
     .option("--plan-integrity <digest>", "Bind consent to an exact removal plan")
+    .option(
+      "--consent-latest",
+      "Bind consent to the most recent dry-run plan instead of --plan-integrity",
+      false,
+    )
     .option(
       "--remove-unused",
       "Remove unchanged Claw-introduced references with no other current owner",

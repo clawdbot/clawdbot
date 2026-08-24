@@ -21,6 +21,7 @@ import {
 import { readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { digestClawMcpServer, readClawMcpServerRefsByName } from "./mcp.js";
+import { diffOwnedChange, diffOwnedRemoval } from "./owned-diff.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { readClawPackageRefs } from "./provenance.js";
@@ -215,14 +216,12 @@ export async function buildClawUpdatePlan(params: {
     const capabilityChanges: ClawUpdateCapabilityChange[] = [];
 
     const desiredAgentDigest = digest(targetPlan.agent.config);
-    const agentAction =
-      record.agentState === "modified"
-        ? "manual"
-        : record.agentState === "missing"
-          ? "change"
-          : record.install.agentConfigDigest === desiredAgentDigest
-            ? "unchanged"
-            : "change";
+    const agentAction = diffOwnedChange({
+      hasCurrent: true,
+      manualWhenPresent: () => record.agentState === "modified",
+      restoresMissing: () => record.agentState === "missing",
+      unchangedWhen: () => record.install.agentConfigDigest === desiredAgentDigest,
+    });
     actions.push({
       kind: "agent",
       id: agentId,
@@ -297,18 +296,16 @@ export async function buildClawUpdatePlan(params: {
         current !== undefined &&
         manualState(current.state) &&
         !(workspaceState === "missing" && current.state === "unsafe");
-      const action =
-        workspaceState === "unsafe"
-          ? "manual"
-          : !current && unownedDestination !== "absent"
-            ? "manual"
-            : !current
-              ? "add"
-              : currentFileRequiresManual
-                ? "manual"
-                : current.contentDigest === target.digest && current.state === "unchanged"
-                  ? "unchanged"
-                  : "change";
+      const action = diffOwnedChange({
+        hasCurrent: current !== undefined,
+        manualBeforeAdd: () =>
+          workspaceState === "unsafe" || (current === undefined && unownedDestination !== "absent"),
+        manualWhenPresent: () => currentFileRequiresManual,
+        unchangedWhen: () =>
+          current !== undefined &&
+          current.contentDigest === target.digest &&
+          current.state === "unchanged",
+      });
       actions.push({
         kind: "workspaceFile",
         id: path,
@@ -345,7 +342,7 @@ export async function buildClawUpdatePlan(params: {
       actions.push({
         kind: "workspaceFile",
         id: current.path,
-        action: manual ? "manual" : "remove",
+        action: diffOwnedRemoval({ manual }),
         target: `${current.workspace}:${current.path}`,
         blocked: manual,
         reason: manual
@@ -381,24 +378,22 @@ export async function buildClawUpdatePlan(params: {
             candidate.version !== target.version,
         );
       const unresolvedCurrent =
-        current && ["modified", "ambiguous", "incomplete"].includes(current.state);
+        current !== undefined && ["modified", "ambiguous", "incomplete"].includes(current.state);
       const independentlyOwnedMutation =
-        current &&
+        current !== undefined &&
         (current.origin === "pre-existing" || current.independentOwner) &&
         (current.state === "missing" || current.version !== target.version);
-      const action =
-        conflictingPluginPin ||
-        unresolvedCurrent ||
-        independentlyOwnedMutation ||
-        failedPackageMutationPreflight
-          ? "manual"
-          : !current
-            ? "add"
-            : current.state === "missing"
-              ? "change"
-              : current.version === target.version && !extensionChanged
-                ? "unchanged"
-                : "change";
+      const action = diffOwnedChange({
+        hasCurrent: current !== undefined,
+        manualBeforeAdd: () =>
+          conflictingPluginPin ||
+          unresolvedCurrent ||
+          independentlyOwnedMutation ||
+          failedPackageMutationPreflight,
+        restoresMissing: () => current !== undefined && current.state === "missing",
+        unchangedWhen: () =>
+          current !== undefined && current.version === target.version && !extensionChanged,
+      });
       actions.push({
         kind: "package",
         id: key,
@@ -466,7 +461,7 @@ export async function buildClawUpdatePlan(params: {
     for (const [key, current] of currentPackages) {
       if (!targetPackages.has(key)) {
         const manual = current.state !== "present";
-        const action = manual ? "manual" : "release";
+        const action = diffOwnedRemoval({ manual, release: true });
         actions.push({
           kind: "package",
           id: key,
@@ -505,16 +500,16 @@ export async function buildClawUpdatePlan(params: {
         (current.origin === "pre-existing" || current.independentOwner) &&
         (current.configDigest !== desiredDigest || current.state !== "present");
       const sharedChange = sharedWithOtherClaws && current?.configDigest !== desiredDigest;
-      const action =
-        unownedLiveServer || independentlyOwnedMutation || sharedChange
-          ? "manual"
-          : !current
-            ? "add"
-            : manualState(current.state)
-              ? "manual"
-              : current.configDigest === desiredDigest && current.state === "present"
-                ? "unchanged"
-                : "change";
+      const action = diffOwnedChange({
+        hasCurrent: current !== undefined,
+        manualBeforeAdd: () =>
+          unownedLiveServer || independentlyOwnedMutation || sharedChange === true,
+        manualWhenPresent: () => current !== undefined && manualState(current.state),
+        unchangedWhen: () =>
+          current !== undefined &&
+          current.configDigest === desiredDigest &&
+          current.state === "present",
+      });
       actions.push({
         kind: "mcpServer",
         id: name,
@@ -559,7 +554,7 @@ export async function buildClawUpdatePlan(params: {
         );
       const ownerAction =
         current.state === "present" && !sharedOrIndependent ? "remove" : "release";
-      const action = manual ? "manual" : ownerAction;
+      const action = diffOwnedRemoval({ manual, release: ownerAction === "release" });
       actions.push({
         kind: "mcpServer",
         id: current.name,
@@ -587,14 +582,13 @@ export async function buildClawUpdatePlan(params: {
     for (const target of params.targetManifest.cronJobs) {
       const current = currentCron.get(target.id);
       const desiredDigest = digest(target);
-      const unresolved = current && (current.status !== "complete" || !current.schedulerJobId);
-      const action = !current
-        ? "add"
-        : unresolved
-          ? "manual"
-          : digest(current.job) === desiredDigest
-            ? "unchanged"
-            : "change";
+      const unresolved =
+        current !== undefined && (current.status !== "complete" || !current.schedulerJobId);
+      const action = diffOwnedChange({
+        hasCurrent: current !== undefined,
+        manualWhenPresent: () => unresolved,
+        unchangedWhen: () => current !== undefined && digest(current.job) === desiredDigest,
+      });
       actions.push({
         kind: "cronJob",
         id: target.id,
@@ -625,7 +619,7 @@ export async function buildClawUpdatePlan(params: {
         continue;
       }
       const manual = current.status !== "complete" || !current.schedulerJobId;
-      const action = manual ? "manual" : "remove";
+      const action = diffOwnedRemoval({ manual });
       actions.push({
         kind: "cronJob",
         id: current.manifestId,

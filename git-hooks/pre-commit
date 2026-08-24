@@ -50,7 +50,7 @@ done
 format_files=()
 while IFS= read -r -d '' file; do
   format_files+=("$file")
-done < <(node "$FILTER_FILES" format -- "${restage_files[@]}")
+done < <(node "$FILTER_FILES" format -- "${restage_files[@]+"${restage_files[@]}"}")
 
 if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"

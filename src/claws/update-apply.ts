@@ -7,18 +7,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawTargetPackages } from "./application-provenance.js";
-import {
-  applyClawCronUpdate,
-  ClawCronUpdateError,
-  type ClawCronUpdateExecution,
-} from "./cron-update.js";
+import { applyClawCronUpdate, ClawCronUpdateError } from "./cron-update.js";
 import type { ClawCronGateway } from "./cron.js";
 import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
-import {
-  applyClawMcpUpdate,
-  ClawMcpUpdateError,
-  type ClawMcpUpdateExecution,
-} from "./mcp-update.js";
+import { applyClawMcpUpdate, ClawMcpUpdateError } from "./mcp-update.js";
+import { ClawUpdateMutationError, runOwnedUpdateSteps } from "./owned-update-steps.js";
+import { coercePluginVersionConflictForUpdate } from "./package-preflight-coercion.js";
 import {
   applyClawPackageUpdate,
   ClawPackageUpdateError,
@@ -37,11 +31,7 @@ import {
   type ClawSourceIdentity,
 } from "./types.js";
 import { buildClawUpdatePlan, type ClawUpdateAction, type ClawUpdatePlan } from "./update-plan.js";
-import {
-  applyClawWorkspaceUpdate,
-  ClawWorkspaceUpdateError,
-  type ClawWorkspaceUpdateExecution,
-} from "./workspace-update.js";
+import { applyClawWorkspaceUpdate, ClawWorkspaceUpdateError } from "./workspace-update.js";
 
 export const CLAW_UPDATE_RESULT_SCHEMA_VERSION = "openclaw.clawUpdateResult.v1" as const;
 
@@ -51,15 +41,7 @@ function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }
 
-export class ClawUpdateMutationError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "ClawUpdateMutationError";
-  }
-}
+export { ClawUpdateMutationError } from "./owned-update-steps.js";
 
 type ClawUpdateResult = {
   schemaVersion: typeof CLAW_UPDATE_RESULT_SCHEMA_VERSION;
@@ -71,6 +53,7 @@ type ClawUpdateResult = {
   previousClaw: NonNullable<ClawUpdatePlan["currentClaw"]>;
   targetClaw: NonNullable<ClawUpdatePlan["targetClaw"]>;
   appliedActions: ClawUpdateAction[];
+  skippedActions?: ClawUpdateAction[];
   installRecord: PersistedClawInstall;
 };
 
@@ -114,6 +97,7 @@ export async function applyClawUpdatePlan(
     config: OpenClawConfig;
     sourceMcpServers: Record<string, Record<string, unknown>>;
     consentPlanIntegrity: string | undefined;
+    skipManual?: boolean;
     packagePreflight?: ClawAddPlanContext["packagePreflight"];
     runtime?: RuntimeEnv;
     commitConfig?: ConfigCommit;
@@ -134,7 +118,11 @@ export async function applyClawUpdatePlan(
       "Consent does not match the current Claw update plan; run update --dry-run again.",
     );
   }
-  if (!plan.found || plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
+  if (
+    !plan.found ||
+    plan.blockers.length > 0 ||
+    (!options.skipManual && plan.actions.some((action) => action.blocked))
+  ) {
     throw new ClawUpdateMutationError(
       "update_blocked",
       "The Claw update plan contains blockers or manual actions.",
@@ -163,7 +151,10 @@ export async function applyClawUpdatePlan(
     );
   }
 
-  const actionable = fresh.actions.filter((action) => action.action !== "unchanged");
+  const appliedActions = options.skipManual
+    ? fresh.actions.filter((action) => !action.blocked)
+    : fresh.actions;
+  const actionable = appliedActions.filter((action) => action.action !== "unchanged");
   const unsupported = actionable.filter(
     (action) =>
       action.kind !== "agent" &&
@@ -213,26 +204,14 @@ export async function applyClawUpdatePlan(
               code: "package_install_unavailable",
               message: "Package preflight is unavailable.",
             };
-        const action = fresh.actions.find(
-          (candidate) => candidate.kind === "package" && candidate.id === `${pkg.kind}:${pkg.ref}`,
+        return coercePluginVersionConflictForUpdate(preflight, pkg, (candidate) =>
+          fresh.actions.some(
+            (action) =>
+              action.kind === "package" &&
+              action.id === `${candidate.kind}:${candidate.ref}` &&
+              action.action === "change",
+          ),
         );
-        return !preflight.ok &&
-          pkg.kind === "plugin" &&
-          preflight.code === "plugin_version_conflict" &&
-          action?.action === "change"
-          ? {
-              ok: true,
-              action: "install" as const,
-              ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
-              ...(preflight.installId ? { installId: preflight.installId } : {}),
-              ...(preflight.warning ? { warning: preflight.warning } : {}),
-              ...(preflight.requirements ? { requirements: preflight.requirements } : {}),
-              ...(preflight.detectedFormat ? { detectedFormat: preflight.detectedFormat } : {}),
-              ...(preflight.mapped ? { mapped: preflight.mapped } : {}),
-              ...(preflight.unavailable ? { unavailable: preflight.unavailable } : {}),
-              ...(preflight.adapterIdentity ? { adapterIdentity: preflight.adapterIdentity } : {}),
-            }
-          : preflight;
       },
     },
   });
@@ -250,7 +229,7 @@ export async function applyClawUpdatePlan(
       "The target Claw cannot be safely materialized for update.",
     );
   }
-  for (const action of fresh.actions.filter(
+  for (const action of appliedActions.filter(
     (candidate) => candidate.kind === "package" && candidate.action === "unchanged",
   )) {
     const addAction = targetAddPlan.actions.find(
@@ -264,7 +243,7 @@ export async function applyClawUpdatePlan(
     }
   }
   const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
-  for (const action of fresh.actions.filter(
+  for (const action of appliedActions.filter(
     (candidate) =>
       candidate.kind === "package" &&
       candidate.action !== "unchanged" &&
@@ -296,7 +275,7 @@ export async function applyClawUpdatePlan(
   }
 
   const applyPackage = options.applyPackage ?? applyClawPackageUpdate;
-  const requirementActions = fresh.actions.filter(
+  const requirementActions = appliedActions.filter(
     (action) =>
       action.kind === "package" &&
       action.action !== "unchanged" &&
@@ -304,7 +283,7 @@ export async function applyClawUpdatePlan(
       action.action !== "remove" &&
       targetPackages.get(action.id)?.kind === "plugin",
   );
-  const remainingPackageActions = fresh.actions.filter(
+  const remainingPackageActions = appliedActions.filter(
     (action) =>
       action.kind === "package" &&
       action.action !== "unchanged" &&
@@ -318,86 +297,6 @@ export async function applyClawUpdatePlan(
     }
     return await applyPackage({ ...fresh, actions }, params.targetManifest, targetAddPlan, options);
   };
-
-  let requirementExecution: ClawPackageUpdateExecution;
-  try {
-    requirementExecution = await applyPackageActions(requirementActions);
-  } catch (error) {
-    if (error instanceof ClawPackageUpdateError && error.partial) {
-      throw partialMutation(error.message);
-    }
-    throw new ClawUpdateMutationError("package_update_failed", coerceErrorMessage(error));
-  }
-  const retainedRequirementMutation = requirementExecution.appliedIds.length > 0;
-
-  const applyWorkspace = options.applyWorkspace ?? applyClawWorkspaceUpdate;
-  let workspaceExecution: ClawWorkspaceUpdateExecution;
-  try {
-    workspaceExecution = await applyWorkspace(fresh, targetAddPlan, options);
-  } catch (error) {
-    if (error instanceof ClawWorkspaceUpdateError && error.partial) {
-      throw partialMutation(error.message);
-    }
-    if (retainedRequirementMutation) {
-      throw partialMutation(
-        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
-      );
-    }
-    throw new ClawUpdateMutationError("workspace_update_failed", coerceErrorMessage(error));
-  }
-
-  const applyMcp = options.applyMcp ?? applyClawMcpUpdate;
-  let mcpExecution: ClawMcpUpdateExecution;
-  try {
-    mcpExecution = await applyMcp(fresh, params.targetManifest, options);
-  } catch (error) {
-    const partial = error instanceof ClawMcpUpdateError && error.partial;
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      throw partialMutation(
-        `${coerceErrorMessage(error)}; workspace rollback failed: ${coerceErrorMessage(rollbackError)}`,
-      );
-    }
-    if (partial) {
-      throw partialMutation(`${error.message}; MCP config write outcome is uncertain`);
-    }
-    if (retainedRequirementMutation) {
-      throw partialMutation(
-        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
-      );
-    }
-    throw new ClawUpdateMutationError("mcp_update_failed", coerceErrorMessage(error));
-  }
-
-  let packageExecution: ClawPackageUpdateExecution;
-  try {
-    packageExecution = await applyPackageActions(remainingPackageActions);
-  } catch (error) {
-    const rollbackFailures: string[] = [];
-    try {
-      await mcpExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    if (error instanceof ClawPackageUpdateError && error.partial) {
-      rollbackFailures.unshift("package artifact rollback is unavailable");
-    }
-    if (rollbackFailures.length > 0) {
-      throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
-    }
-    if (retainedRequirementMutation) {
-      throw partialMutation(
-        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
-      );
-    }
-    throw new ClawUpdateMutationError("package_update_failed", coerceErrorMessage(error));
-  }
 
   const agentAction = fresh.actions.find((action) => action.kind === "agent");
   const commit: ConfigCommit =
@@ -434,164 +333,205 @@ export async function applyClawUpdatePlan(
     });
     agentChanged = false;
   };
-  if (agentAction?.action === "change") {
-    try {
-      await commit((config) => {
-        const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
-        previousAgent = current;
-        if (agentAction.currentDigest !== undefined) {
-          if (!current) {
-            throw new ClawUpdateMutationError(
-              "agent_changed",
-              "The owned agent entry disappeared during update.",
-            );
-          }
-          const liveDigest = `sha256:${createHash("sha256").update(stableStringify(current)).digest("hex")}`;
-          if (liveDigest !== agentAction.currentDigest) {
-            throw new ClawUpdateMutationError(
-              "agent_changed",
-              "The owned agent entry changed during update.",
-            );
-          }
-        }
-        const nextEntries = { ...config.agents?.entries };
-        const { id: _id, ...targetEntry } = targetAddPlan.agent.config;
-        nextEntries[fresh.agentId] = targetEntry;
-        agentChanged = true;
-        return { ...config, agents: { ...config.agents, entries: nextEntries } };
-      });
-    } catch (error) {
-      const rollbackFailures: string[] = [];
-      try {
-        await rollbackAgent();
-      } catch (rollbackError) {
-        rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
-      }
-      try {
-        await packageExecution.rollback();
-      } catch (rollbackError) {
-        rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
-      }
-      try {
-        await mcpExecution.rollback();
-      } catch (rollbackError) {
-        rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-      }
-      try {
-        await workspaceExecution.rollback();
-      } catch (rollbackError) {
-        rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-      }
-      if (rollbackFailures.length > 0) {
-        throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
-      }
-      if (retainedRequirementMutation) {
-        throw partialMutation(
-          `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
-        );
-      }
-      if (error instanceof ClawUpdateMutationError) {
-        throw error;
-      }
-      throw new ClawUpdateMutationError("agent_update_failed", coerceErrorMessage(error));
-    }
-  }
-
-  const persistInstall = options.persistInstall ?? updateClawInstallRecord;
+  const applyWorkspace = options.applyWorkspace ?? applyClawWorkspaceUpdate;
+  const applyMcp = options.applyMcp ?? applyClawMcpUpdate;
   const applyCron = options.applyCron ?? applyClawCronUpdate;
-  let cronExecution: ClawCronUpdateExecution;
-  try {
-    cronExecution = await applyCron(fresh, params.targetManifest, options);
-  } catch (error) {
-    if (error instanceof ClawCronUpdateError && error.partial) {
-      try {
-        persistInstall(targetAddPlan, {
-          ...options,
-          expectedClaw: fresh.currentClaw,
-          status: "partial",
-        });
-      } catch (persistError) {
-        throw partialMutation(
-          `${error.message}; cron gateway mutation outcome is uncertain; provenance update failed: ${coerceErrorMessage(persistError)}`,
-        );
-      }
-      throw partialMutation(`${error.message}; cron gateway mutation outcome is uncertain`);
-    }
-    const rollbackFailures: string[] = [];
-    try {
-      await rollbackAgent();
-    } catch (rollbackError) {
-      rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await packageExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await mcpExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    if (rollbackFailures.length > 0) {
-      throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
-    }
-    if (retainedRequirementMutation) {
-      throw partialMutation(
-        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
-      );
-    }
-    throw new ClawUpdateMutationError("cron_update_failed", coerceErrorMessage(error));
+  const persistInstall = options.persistInstall ?? updateClawInstallRecord;
+
+  let installRecord: PersistedClawInstall | undefined;
+  await runOwnedUpdateSteps(
+    [
+      {
+        name: "requirements",
+        retainedOnApply: true,
+        apply: () => applyPackageActions(requirementActions),
+        onError: (error) =>
+          error instanceof ClawPackageUpdateError && error.partial
+            ? { kind: "partial", message: error.message }
+            : { kind: "fail", code: "package_update_failed", message: coerceErrorMessage(error) },
+      },
+      {
+        name: "workspace",
+        apply: async () => {
+          const execution = await applyWorkspace(
+            { ...fresh, actions: appliedActions },
+            targetAddPlan,
+            options,
+          );
+          return { appliedIds: execution.appliedPaths, rollback: execution.rollback };
+        },
+        onError: (error, { retainedRequirements }) =>
+          error instanceof ClawWorkspaceUpdateError && error.partial
+            ? { kind: "partial", message: error.message }
+            : retainedRequirements
+              ? {
+                  kind: "partial",
+                  message: `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
+                }
+              : {
+                  kind: "fail",
+                  code: "workspace_update_failed",
+                  message: coerceErrorMessage(error),
+                },
+      },
+      {
+        name: "mcp",
+        apply: async () => {
+          const execution = await applyMcp(
+            { ...fresh, actions: appliedActions },
+            params.targetManifest,
+            options,
+          );
+          return { appliedIds: execution.appliedNames, rollback: execution.rollback };
+        },
+        rollbackAfter: ["workspace"],
+        onError: (error, { retainedRequirements }) =>
+          error instanceof ClawMcpUpdateError && error.partial
+            ? {
+                kind: "partial",
+                message: `${error.message}; MCP config write outcome is uncertain`,
+              }
+            : retainedRequirements
+              ? {
+                  kind: "partial",
+                  message: `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
+                }
+              : { kind: "fail", code: "mcp_update_failed", message: coerceErrorMessage(error) },
+      },
+      {
+        name: "package",
+        apply: () => applyPackageActions(remainingPackageActions),
+        rollbackAfter: ["mcp", "workspace"],
+        onError: (error, { retainedRequirements }) =>
+          error instanceof ClawPackageUpdateError && error.partial
+            ? {
+                kind: "partial",
+                message: `${coerceErrorMessage(error)}; package artifact rollback is unavailable`,
+              }
+            : retainedRequirements
+              ? {
+                  kind: "partial",
+                  message: `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
+                }
+              : { kind: "fail", code: "package_update_failed", message: coerceErrorMessage(error) },
+      },
+      {
+        name: "agent",
+        apply: async () => {
+          if (agentAction?.action !== "change") {
+            return { appliedIds: [], rollback: async () => undefined };
+          }
+          await commit((config) => {
+            const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
+            previousAgent = current;
+            if (agentAction.currentDigest !== undefined) {
+              if (!current) {
+                throw new ClawUpdateMutationError(
+                  "agent_changed",
+                  "The owned agent entry disappeared during update.",
+                );
+              }
+              const liveDigest = `sha256:${createHash("sha256").update(stableStringify(current)).digest("hex")}`;
+              if (liveDigest !== agentAction.currentDigest) {
+                throw new ClawUpdateMutationError(
+                  "agent_changed",
+                  "The owned agent entry changed during update.",
+                );
+              }
+            }
+            const nextEntries = { ...config.agents?.entries };
+            const { id: _id, ...targetEntry } = targetAddPlan.agent.config;
+            nextEntries[fresh.agentId] = targetEntry;
+            agentChanged = true;
+            return { ...config, agents: { ...config.agents, entries: nextEntries } };
+          });
+          return { appliedIds: [], rollback: rollbackAgent };
+        },
+        ownRollback: rollbackAgent,
+        rollbackAfter: ["package", "mcp", "workspace"],
+        onError: (error, { retainedRequirements }) =>
+          retainedRequirements
+            ? {
+                kind: "partial",
+                message: `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
+              }
+            : error instanceof ClawUpdateMutationError
+              ? { kind: "rethrow", error }
+              : { kind: "fail", code: "agent_update_failed", message: coerceErrorMessage(error) },
+      },
+      {
+        name: "cron",
+        apply: async () => {
+          const execution = await applyCron(
+            { ...fresh, actions: appliedActions },
+            params.targetManifest,
+            options,
+          );
+          return { appliedIds: execution.appliedIds, rollback: execution.rollback };
+        },
+        rollbackAfter: ["agent", "package", "mcp", "workspace"],
+        onError: async (error, { retainedRequirements }) => {
+          if (error instanceof ClawCronUpdateError && error.partial) {
+            try {
+              persistInstall(targetAddPlan, {
+                ...options,
+                expectedClaw: fresh.currentClaw,
+                status: "partial",
+              });
+            } catch (persistError) {
+              return {
+                kind: "partial",
+                message: `${error.message}; cron gateway mutation outcome is uncertain; provenance update failed: ${coerceErrorMessage(persistError)}`,
+              };
+            }
+            return {
+              kind: "partial",
+              message: `${error.message}; cron gateway mutation outcome is uncertain`,
+            };
+          }
+          return retainedRequirements
+            ? {
+                kind: "partial",
+                message: `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
+              }
+            : { kind: "fail", code: "cron_update_failed", message: coerceErrorMessage(error) };
+        },
+      },
+      {
+        name: "provenance",
+        apply: async () => {
+          installRecord = persistInstall(targetAddPlan, {
+            ...options,
+            expectedClaw: fresh.currentClaw,
+          });
+          return { appliedIds: [], rollback: async () => undefined };
+        },
+        rollbackAfter: ["agent", "package", "cron", "mcp", "workspace"],
+        onError: (error, { retainedRequirements }) =>
+          retainedRequirements
+            ? {
+                kind: "partial",
+                message: `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
+              }
+            : {
+                kind: "fail",
+                code: "provenance_update_failed",
+                message: coerceErrorMessage(error),
+              },
+      },
+    ],
+    {
+      fail: (code, message) => new ClawUpdateMutationError(code, message),
+      partial: partialMutation,
+    },
+  );
+  if (!installRecord) {
+    throw new ClawUpdateMutationError(
+      "update_invalid",
+      "The Claw update produced no install record.",
+    );
   }
 
-  let installRecord: PersistedClawInstall;
-  try {
-    installRecord = persistInstall(targetAddPlan, {
-      ...options,
-      expectedClaw: fresh.currentClaw,
-    });
-  } catch (error) {
-    const rollbackFailures: string[] = [];
-    try {
-      await rollbackAgent();
-    } catch (rollbackError) {
-      rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await packageExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await cronExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`cron rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await mcpExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    if (rollbackFailures.length > 0) {
-      throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
-    }
-    if (retainedRequirementMutation) {
-      throw partialMutation(
-        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
-      );
-    }
-    throw new ClawUpdateMutationError("provenance_update_failed", coerceErrorMessage(error));
-  }
   return {
     schemaVersion: CLAW_UPDATE_RESULT_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,
@@ -602,6 +542,9 @@ export async function applyClawUpdatePlan(
     previousClaw: fresh.currentClaw,
     targetClaw: fresh.targetClaw,
     appliedActions: actionable,
+    ...(options.skipManual
+      ? { skippedActions: fresh.actions.filter((action) => action.blocked) }
+      : {}),
     installRecord,
   };
 }

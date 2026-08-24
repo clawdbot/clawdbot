@@ -1,6 +1,7 @@
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { readClawStatus } from "../claws/lifecycle-state.js";
 import { preflightClawPackage } from "../claws/packages.js";
+import { readClawPlanConsent, storeClawPlanConsent } from "../claws/plan-consent-cache.js";
 import { readClawManifestFile } from "../claws/reader.js";
 import { CLAW_OUTPUT_STABILITY } from "../claws/types.js";
 import {
@@ -31,15 +32,26 @@ function logExperimentalWarning(runtime: RuntimeEnv): void {
   runtime.log("Experimental: Claws contracts may change while RFC 0016 is under review.");
 }
 
+function resolveLatestConsent(plan: { agentId: string }, kind: "update"): string {
+  const cached = readClawPlanConsent(plan.agentId, {});
+  if (cached && cached.planKind === kind) {
+    return cached.planIntegrity;
+  }
+  throw new ClawUpdateMutationError(
+    "consent_latest_missing",
+    "No cached dry-run plan for this agent; run update --dry-run first.",
+  );
+}
+
 export async function runClawsUpdateCommand(
   target: string,
   opts: ClawsUpdateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  if (!opts.dryRun && (!opts.yes || !opts.planIntegrity)) {
+  if (!opts.dryRun && (!opts.yes || (!opts.planIntegrity && !opts.consentLatest))) {
     const message =
-      "Claw update requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to apply supported actions.";
+      "Claw update requires explicit consent; pass --dry-run to preview, --yes with --plan-integrity, or --yes with --consent-latest to apply supported actions.";
     if (opts.json) {
       writeRuntimeJson(runtime, {
         schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
@@ -179,7 +191,8 @@ export async function runClawsUpdateCommand(
     packagePreflight: preflightClawPackage,
     diagnostics: loaded.diagnostics,
   });
-  if (opts.dryRun || plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
+  const blockedActions = plan.actions.filter((action) => action.blocked);
+  if (opts.dryRun || plan.blockers.length > 0 || (blockedActions.length > 0 && !opts.skipManual)) {
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
@@ -190,7 +203,13 @@ export async function runClawsUpdateCommand(
       runtime.log(`Plan integrity: ${plan.planIntegrity}`);
       logClawUpdatePlanSummary(plan, runtime);
     }
-    if (plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
+    if (opts.dryRun && plan.found && plan.blockers.length === 0) {
+      storeClawPlanConsent(
+        { agentId: plan.agentId, planKind: "update", planIntegrity: plan.planIntegrity },
+        {},
+      );
+    }
+    if (plan.blockers.length > 0 || (blockedActions.length > 0 && !opts.skipManual)) {
       runtime.exit(1);
     }
     return;
@@ -208,7 +227,8 @@ export async function runClawsUpdateCommand(
       {
         config,
         sourceMcpServers: listedMcpServers.mcpServers,
-        consentPlanIntegrity: opts.planIntegrity,
+        consentPlanIntegrity: opts.planIntegrity ?? resolveLatestConsent(plan, "update"),
+        skipManual: opts.skipManual,
         packagePreflight: preflightClawPackage,
         runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
@@ -225,6 +245,11 @@ export async function runClawsUpdateCommand(
     logExperimentalWarning(runtime);
     runtime.log(`Updated agent: ${result.agentId}`);
     runtime.log(`Claw version: ${result.previousClaw.version} -> ${result.targetClaw.version}`);
+    if (result.skippedActions && result.skippedActions.length > 0) {
+      runtime.log(
+        `Skipped ${result.skippedActions.length} manual action(s) (drift preserved): ${result.skippedActions.map((action) => `${action.kind}:${action.id}`).join(", ")}`,
+      );
+    }
   } catch (error) {
     const code = error instanceof ClawUpdateMutationError ? error.code : "update_failed";
     const message = error instanceof Error ? error.message : String(error);

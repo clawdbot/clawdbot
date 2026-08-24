@@ -438,6 +438,9 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
+    // Focused gc tests consume the pure candidate decision; production uses
+    // planClawGarbageCollection, which wraps the same helpers.
+    "src/claws/gc.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
