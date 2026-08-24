@@ -275,24 +275,6 @@ describe("non-extension test boundaries", () => {
     expect(offenders).toStrictEqual([]);
   });
 
-  it("keeps bundled plugin sync test-api loaders out of core tests", () => {
-    const files = [
-      ...walkCode(path.join(repoRoot, "src")),
-      ...walkCode(path.join(repoRoot, "test")),
-    ]
-      .filter((file) => !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))
-      .filter((file) => !file.startsWith(CHANNEL_CONTRACT_TEST_HELPERS_PREFIX))
-      .filter((file) => !file.startsWith("test/helpers/"))
-      .filter((file) => file !== "test/extension-test-boundary.test.ts");
-
-    const offenders = files.filter((file) => {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return source.includes("loadBundledPluginTestApiSync(");
-    });
-
-    expect(offenders).toStrictEqual([]);
-  });
-
   it("keeps resolver tests on generated fixtures for broad bundled plugin source APIs", () => {
     const bundledPluginIds = collectBundledPluginIds();
     const offenders = BUNDLED_PLUGIN_RESOLVER_TEST_FILES.flatMap((file) => {

@@ -14,17 +14,26 @@ import {
 
 export type SystemdUnitScope = "system" | "user";
 
+async function execSystemdCommand(
+  command: "systemctl" | "busctl",
+  args: string[],
+  env?: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return await execFileUtf8(command, args, {
+    env: env ? resolveSystemctlProcessEnv(env) : process.env,
+    // A wedged systemd socket can leave manager commands blocked forever; the timeout
+    // kills the child so status reads fail soft instead of hanging the command.
+    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
+  });
+}
+
 export async function execSystemctl(
   args: string[],
   env?: GatewayServiceEnv,
   timeoutMs?: number,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execFileUtf8("systemctl", args, {
-    env: env ? resolveSystemctlProcessEnv(env) : process.env,
-    // A wedged systemd socket can leave `systemctl` blocked forever; the timeout
-    // kills the child so status reads fail soft instead of hanging the command.
-    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
-  });
+  return await execSystemdCommand("systemctl", args, env, timeoutMs);
 }
 
 export function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
@@ -229,27 +238,26 @@ function shouldFallbackToMachineUserScope(detail: string): boolean {
   return !detail.toLowerCase().includes("permission denied");
 }
 
-export async function execSystemctlUser(
+async function execSystemdUserCommand(
+  command: "systemctl" | "busctl",
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
+  const run = (scopeArgs: string[]) =>
+    execSystemdCommand(command, [...scopeArgs, ...args], env, timeoutMs);
 
   // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
   if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       // Do not fall through to bare --user: under sudo that can target root's user manager.
-      return await execSystemctl([...machineScopeArgs, ...args], env, timeoutMs);
+      return await run(machineScopeArgs);
     }
   }
 
-  const directResult = await execSystemctl(
-    [...resolveSystemctlDirectUserScopeArgs(), ...args],
-    env,
-    timeoutMs,
-  );
+  const directResult = await run(resolveSystemctlDirectUserScopeArgs());
   if (directResult.code === 0) {
     return directResult;
   }
@@ -263,7 +271,23 @@ export async function execSystemctlUser(
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await execSystemctl([...machineScopeArgs, ...args], env, timeoutMs);
+  return await run(machineScopeArgs);
+}
+
+export async function execSystemctlUser(
+  env: GatewayServiceEnv,
+  args: string[],
+  timeoutMs?: number,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return await execSystemdUserCommand("systemctl", env, args, timeoutMs);
+}
+
+export async function execBusctlUser(
+  env: GatewayServiceEnv,
+  args: string[],
+  timeoutMs?: number,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return await execSystemdUserCommand("busctl", env, args, timeoutMs);
 }
 
 export async function disableSystemdUserUnitForRemoval(

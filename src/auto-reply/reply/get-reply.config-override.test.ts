@@ -103,6 +103,7 @@ function createPreparedDispatchRuntime(
     },
     modelCatalog: { entries: [], routeVariants: [] },
     inboundPluginRegistry: createEmptyPluginRegistry(),
+    pluginGeneration: {} as never,
     ...overrides,
   });
 }

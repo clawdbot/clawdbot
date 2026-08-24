@@ -403,6 +403,8 @@ export type SessionTranscriptTurnPersistOptions = {
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
+  /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
+  runId?: string;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */
@@ -617,6 +619,8 @@ export type ForkSessionFromParentTranscriptResult =
 
 export type ForkSessionFromParentTranscriptParams = {
   agentId?: string;
+  /** Synchronous authority check run inside each transcript commit transaction. */
+  commitGuard?: () => void;
   parentEntry: SessionEntry;
   parentSessionKey: string;
   sessionKey: string;

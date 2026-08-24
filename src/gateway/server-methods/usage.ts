@@ -60,7 +60,9 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -69,6 +71,7 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -249,6 +252,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 
 type SessionsUsageCacheKeyParams = {
   configRef: object;
+  visibilityIdentity?: string;
   agentId?: string;
   agentScope?: "all";
   startMs: number;
@@ -274,6 +278,7 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
+    ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
 
@@ -1139,13 +1144,24 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "usage.cost": async ({ respond, params, context }) => {
+  "usage.cost": async ({ respond, params, context, client }) => {
     const dateRange = resolveUsageDateRangeOrRespond(params ?? {}, respond);
     if (!dateRange) {
       return;
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
+        ),
+      );
+      return;
+    }
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
@@ -1168,7 +1184,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "sessions.usage": async ({ respond, params, context }) => {
+  "sessions.usage": async ({ respond, params, context, client }) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
@@ -1180,6 +1196,13 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    const sessionCap = operatorSessionCap(client ?? null, config);
+    const visibilityFilter =
+      sessionCap === "none"
+        ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
+        : undefined;
+    const profileId = gatewayClientSessionCreator(client ?? null)?.id;
+    const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
@@ -1234,17 +1257,23 @@ export const usageHandlers: GatewayRequestHandlers = {
         groupingMode,
         specificKey,
         includeContextWeight,
+        ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
           const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
-          const scopedStore = effectiveAgentId
+          const agentStore = effectiveAgentId
             ? filterSessionStoreByAgent({
                 config,
                 store,
                 agentId: effectiveAgentId,
               })
             : store;
+          const scopedStore = visibilityFilter
+            ? Object.fromEntries(
+                Object.entries(agentStore).filter(([key, entry]) => visibilityFilter(key, entry)),
+              )
+            : agentStore;
           const now = Date.now();
 
           const mergedEntries: MergedEntry[] = [];
@@ -1280,6 +1309,11 @@ export const usageHandlers: GatewayRequestHandlers = {
               null;
             const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
             const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+            if (visibilityFilter && !storeEntry) {
+              throw new SessionsUsageInvalidRequestError(
+                `Invalid session reference: ${specificKey}`,
+              );
+            }
             const sessionId = storeEntry?.sessionId ?? keyRest;
 
             // Stored sessions are canonical SQLite targets. JSONL discovery remains only for
@@ -1351,6 +1385,9 @@ export const usageHandlers: GatewayRequestHandlers = {
 
             for (const discovered of discoveredSessions) {
               const storeMatch = storeBySessionId.get(discovered.sessionId);
+              if (visibilityFilter && !storeMatch) {
+                continue;
+              }
               if (storeMatch) {
                 // Named session from store
                 maybeMergeFamilyEntry({

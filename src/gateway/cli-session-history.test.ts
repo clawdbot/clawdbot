@@ -974,6 +974,46 @@ describe("cli session history", () => {
     });
   });
 
+  it("reads comparable fields once while merging large identity-less histories", () => {
+    const rowCount = 200;
+    const reads = { role: 0, content: 0, timestamp: 0 };
+    const createMessage = (source: "imported" | "local", index: number) => {
+      const timestamp = Date.parse("2026-03-26T16:29:54.800Z") + index;
+      return {
+        get role() {
+          reads.role += 1;
+          return "user";
+        },
+        get content() {
+          reads.content += 1;
+          return `${source}-${index}`;
+        },
+        get timestamp() {
+          reads.timestamp += 1;
+          return timestamp;
+        },
+      };
+    };
+    const localMessages = Array.from({ length: rowCount }, (_, index) =>
+      createMessage("local", index),
+    );
+    const importedMessages = Array.from({ length: rowCount }, (_, index) =>
+      createMessage("imported", rowCount + index),
+    );
+
+    // The former growing scan made 59,900 failed comparisons for these unique rows.
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(reads).toEqual({
+      role: rowCount * 2,
+      content: rowCount * 2,
+      timestamp: rowCount * 2,
+    });
+    expect(merged).toHaveLength(rowCount * 2);
+    expect(merged[0]).toBe(localMessages[0]);
+    expect(merged.at(-1)).toBe(importedMessages.at(-1));
+  });
+
   it.each([
     ["deduplicates a local redacted copy against an imported full copy", false],
     ["deduplicates when both local and imported copies are already redacted", true],
@@ -1145,6 +1185,35 @@ describe("cli session history", () => {
     const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
     expect(merged).toHaveLength(2);
   });
+
+  it.each([
+    ["at the five-minute boundary", 0, 5 * 60 * 1000, 1],
+    ["outside the five-minute boundary", 0, 5 * 60 * 1000 + 1, 2],
+    ["when the local timestamp is missing", undefined, 1, 1],
+    ["when the imported timestamp is missing", 1, undefined, 1],
+  ])(
+    "deduplicates matching identity-less text %s",
+    (_label, localTimestamp, importedTimestamp, expectedLength) => {
+      const localMessages = [
+        {
+          role: "user",
+          content: "same text",
+          ...(localTimestamp === undefined ? {} : { timestamp: localTimestamp }),
+        },
+      ];
+      const importedMessages = [
+        {
+          role: "user",
+          content: "same text",
+          ...(importedTimestamp === undefined ? {} : { timestamp: importedTimestamp }),
+        },
+      ];
+
+      expect(mergeImportedChatHistoryMessages({ localMessages, importedMessages })).toHaveLength(
+        expectedLength,
+      );
+    },
+  );
 
   it("keeps untimestamped local messages in place when importing timestamped history", () => {
     const localMessages = [{ role: "user", content: "local without timestamp" }];

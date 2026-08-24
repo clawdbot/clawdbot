@@ -463,19 +463,10 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           initialCursor: inboxCursor.load(),
           persistCursor: (cursor) => inboxCursor.advance(cursor),
           onState: (state) => {
-            if (ctx.abortSignal.aborted) {
+            if (ctx.abortSignal.aborted || state !== "connected") {
               return;
             }
-            ctx.setStatus(
-              state === "connected"
-                ? channelReadyPatch({ accountId: "default" })
-                : {
-                    accountId: "default",
-                    running: true,
-                    connected: false,
-                    lifecycle: "recovering",
-                  },
-            );
+            ctx.setStatus(channelReadyPatch({ accountId: "default", lastDisconnect: null }));
           },
           onError: (error) => {
             if (ctx.abortSignal.aborted) {
@@ -488,6 +479,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
               connected: false,
               lifecycle: "recovering",
               lastError: error.message,
+              lastDisconnect: { at: Date.now(), error: error.message },
             });
           },
         },

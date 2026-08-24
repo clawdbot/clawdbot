@@ -800,7 +800,7 @@ describe("SQLite lifecycle cleanup races", () => {
     let materializations = 0;
     archiveMaterializationHook.afterMaterialize = () => {
       materializations += 1;
-      if (materializations !== 2) {
+      if (materializations !== 1) {
         return;
       }
       const changedEntry = { ...entry, label: "changed", updatedAt: 2 };
@@ -823,7 +823,7 @@ describe("SQLite lifecycle cleanup races", () => {
       pruned: 0,
       capped: 0,
     });
-    expect(materializations).toBe(2);
+    expect(materializations).toBe(1);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ label: "changed" });
   });
 

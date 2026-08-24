@@ -4,8 +4,8 @@ run_hosted_prepare_gates() {
   local changelog_only="$3"
   local recent_sha=""
   local remote_record remote_head remote_head_ref remote_is_cross_repository
-  remote_record=$(gh pr view "$pr" --json headRefName,headRefOid,isCrossRepository)
-  remote_head=$(printf '%s\n' "$remote_record" | jq -r .headRefOid)
+  remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+  remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
   remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
   remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
   if [ "$remote_head" != "$current_head" ]; then

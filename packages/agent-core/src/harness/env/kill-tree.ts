@@ -84,6 +84,48 @@ export function signalProcessTree(
   opts?.onComplete?.();
 }
 
+/** Signals every process group and process still owned by one forkpty session. */
+export function signalPtySessionTree(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return;
+  }
+  if (process.platform === "win32") {
+    void signalProcessTreeWindowsAndWait(pid, signal);
+    return;
+  }
+  const darwinTty = process.platform === "darwin" ? readDarwinPtyTty(pid) : undefined;
+  if (process.platform === "darwin" && !darwinTty) {
+    signalProcessTreeUnix(pid, signal, true);
+    return;
+  }
+  const members = readProcessSessionMembers(pid, darwinTty);
+  if (!members) {
+    signalProcessTreeUnix(pid, signal, true);
+    return;
+  }
+  const signalMembers = (snapshot: Array<{ pid: number; pgid: number }>) => {
+    const groups = new Set(snapshot.map((member) => member.pgid));
+    groups.delete(pid);
+    for (const pgid of groups) {
+      signalUnixTarget(-pgid, signal);
+    }
+    for (const member of snapshot) {
+      if (member.pid !== pid) {
+        signalUnixTarget(member.pid, signal);
+      }
+    }
+  };
+  signalMembers(members);
+  // Keep the leader alive through the rescan: Darwin drops the controlling-tty
+  // lookup once the session leader exits.
+  const remaining = readProcessSessionMembers(pid, darwinTty);
+  if (remaining) {
+    signalMembers(remaining);
+  }
+  signalUnixTarget(-pid, signal);
+  signalUnixTarget(pid, signal);
+}
+
 function normalizeGraceMs(value?: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_GRACE_MS;
@@ -141,6 +183,53 @@ function readProcessGroupIdFromProc(pid: number): number | undefined {
   }
 }
 
+function readDarwinPtyTty(sessionLeaderPid: number): string | undefined {
+  try {
+    // Darwin ps omits numeric SIDs. A forkpty session exclusively owns its
+    // controlling tty, resolved here from the trusted spawn-time leader.
+    const leader = spawnSync("ps", ["-p", String(sessionLeaderPid), "-o", "tty="], {
+      encoding: "utf8",
+      timeout: 500,
+    });
+    const tty = leader.stdout.trim();
+    if (leader.error || leader.status !== 0 || !tty || tty === "?" || tty === "??") {
+      return undefined;
+    }
+    return tty;
+  } catch {
+    return undefined;
+  }
+}
+
+function readProcessSessionMembers(
+  sessionId: number,
+  darwinTty?: string,
+): Array<{ pid: number; pgid: number }> | undefined {
+  try {
+    const expectedSession = darwinTty ?? String(sessionId);
+    const args = darwinTty ? ["-t", darwinTty, "-o", "pid=,pgid="] : ["-axo", "pid=,pgid=,sid="];
+    const result = spawnSync("ps", args, {
+      encoding: "utf8",
+      timeout: 500,
+    });
+    if (result.error || result.status !== 0) {
+      return undefined;
+    }
+    const members: Array<{ pid: number; pgid: number }> = [];
+    for (const line of result.stdout.split("\n")) {
+      const [pidText, pgidText, session] = line.trim().split(/\s+/);
+      const pid = parseProcessGroupId(pidText);
+      const pgid = parseProcessGroupId(pgidText);
+      if (pid && pgid && (darwinTty || session === expectedSession)) {
+        members.push({ pid, pgid });
+      }
+    }
+    return members;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Fail closed to direct-PID signaling when group ownership cannot be proved. */
 function isProcessGroupLeader(pid: number): boolean {
   // Linux exposes the fact in procfs; avoid a synchronous child process on the common path.
@@ -167,6 +256,14 @@ function signalProcessTreeUnix(
     process.kill(pid, signal);
   } catch {
     // Already gone.
+  }
+}
+
+function signalUnixTarget(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Already gone or not signalable; remaining exact targets still run.
   }
 }
 

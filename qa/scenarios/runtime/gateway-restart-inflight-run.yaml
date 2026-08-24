@@ -123,11 +123,11 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.promptMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint ? summary : undefined).catch(() => undefined)"
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.promptMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0) ? summary : undefined).catch(() => undefined)"
                   - expr: liveTurnTimeoutMs(env, 120000)
                   - 25
               - assert:
-                  expr: "(checkpointTranscript.completedToolCallCounts.wait ?? 0) < checkpoint"
+                  expr: "(checkpointTranscript.assistantToolCallCounts.wait ?? 0) > (checkpointTranscript.completedToolCallCounts.wait ?? 0)"
                   message:
                     expr: "`checkpoint ${checkpoint} wait was not pending before restart: ${JSON.stringify(checkpointTranscript)}`"
               - set: checkpointRequests

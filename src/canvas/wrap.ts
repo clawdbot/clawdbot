@@ -24,6 +24,11 @@ const WIDGET_THEME_TOKENS = [
   "danger",
   "info",
   "radius",
+  "radius-full",
+  "scrollbar-size",
+  "scrollbar-thumb-inset",
+  "scrollbar-thumb",
+  "scrollbar-thumb-hover",
   "font-body",
   "font-mono",
 ] as const;
@@ -39,6 +44,9 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --accent:#bd4531;--accent-fill:#bd4531;--accent-fg:#ffffff;
 --ok:#15803d;--warn:#b45309;--danger:#dc2626;--info:#2563eb;
 --radius:10px;
+--radius-full:9999px;--scrollbar-size:12px;--scrollbar-thumb-inset:3px;
+--scrollbar-thumb:color-mix(in srgb,var(--muted) 32%,transparent);
+--scrollbar-thumb-hover:color-mix(in srgb,var(--muted) 64%,transparent);
 --font-body:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 --accent-subtle:color-mix(in srgb,var(--accent) 10%,transparent);
@@ -52,7 +60,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --border:#1e2028;--border-strong:#2e3040;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
-*{box-sizing:border-box}html,body{margin:0}
+*{box-sizing:border-box}@supports not selector(::-webkit-scrollbar-thumb){*{scrollbar-color:var(--scrollbar-thumb) transparent;scrollbar-width:thin}}html,body{margin:0}::-webkit-scrollbar{width:var(--scrollbar-size);height:var(--scrollbar-size);background:var(--surface)}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:content-box;border:var(--scrollbar-thumb-inset) solid transparent;border-radius:var(--radius-full)}::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
 body{font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
@@ -81,6 +89,7 @@ code{padding:1px 5px}pre{padding:10px;overflow-x:auto}
 
 type WidgetDocumentOptions = {
   connectOrigins?: readonly string[];
+  scriptOrigins?: readonly string[];
 };
 
 /** Wraps agent-authored widget markup in the stable isolated Canvas document shell. */
@@ -107,12 +116,22 @@ export function buildWidgetDocument(
   // This bridge precedes widget code and snapshots every authority-bearing
   // primitive. Inline chat keeps its private prompt port; board hosting adopts
   // the view ticket and routes every host API over one request channel.
+  // The activation listeners are that channel's navigation half: the frame
+  // sandbox grants no popups, so only a trusted new-tab activation on a
+  // ticketed board widget's http(s) anchor reaches the host. Widening the
+  // trusted/ticketed/http(s) gates hands ungranted widgets an outbound channel
+  // that the `connect-src` CSP in board-sandbox.ts otherwise denies. The
+  // activation predicate mirrors ui/src/app/native-link-routing.ts so widget
+  // links honor the same primary-click and middle-button contract; listening on
+  // bubble rather than capture keeps a widget's own preventDefault effective.
   const widgetBridge =
     '<script>(()=>{if(!window.parent||window.parent===window||Object.prototype.hasOwnProperty.call(window,"openclaw"))return;' +
     "const parent=window.parent;const post=parent.postMessage.bind(parent);" +
     "const P=Promise;const then=P.prototype.then;const ErrorCtor=Error;" +
     "const stringify=String;const freeze=Object.freeze;const define=Object.defineProperty;" +
     "const push=Array.prototype.push;const shift=Array.prototype.shift;" +
+    "const listen=window.addEventListener.bind(window);const path=Event.prototype.composedPath;" +
+    "const prevent=Event.prototype.preventDefault;const test=RegExp.prototype.test;" +
     "const later=setTimeout.bind(window);const cancel=clearTimeout.bind(window);" +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
@@ -126,11 +145,12 @@ export function buildWidgetDocument(
     "if(d&&d.get)act=d.get.bind(ua);}catch{}" +
     'post({type:"openclaw:widget-prompt-offer"},"*",[c.port2]);' +
     'post({type:"openclaw:widget-bridge-port-offer"},"*",[b.port2]);' +
-    "let ticket=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
+    "let ticket=null;let controlUiBaseUrl=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
     'const initTimer=later(()=>{hostInitExpired=true;while(waiting.length){const entry=shift.call(waiting);if(entry)entry.reject(new ErrorCtor("widget host capabilities unavailable"));}' +
     'while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.reject(new ErrorCtor("widget prompt host unavailable"));}},5000);' +
     'b.port1.addEventListener("message",event=>{const data=event.data;' +
     'if(data?.type==="openclaw:widget-host-init"&&typeof data.ticket==="string"){ticket=data.ticket;' +
+    'const base=data.controlUiBaseUrl;controlUiBaseUrl=typeof base==="string"&&/^https?:\\/\\//.test(base)?base:null;' +
     'bridgePost({type:"openclaw:widget-host-init-ack",ticket});cancel(initTimer);' +
     "while(waiting.length){const entry=shift.call(waiting);if(entry)entry.send();}" +
     "while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.send();}return;}" +
@@ -143,15 +163,25 @@ export function buildWidgetDocument(
     "catch(error){pending.delete(id);reject(error);}};" +
     'if(ticket)send();else if(hostInitExpired)reject(new ErrorCtor("widget host capabilities unavailable"));' +
     "else push.call(waiting,{send,reject});});" +
+    "const activate=event=>{if(event.isTrusted!==true||!ticket||event.defaultPrevented||event.shiftKey||event.altKey)return;" +
+    'const auxiliary=event.type==="auxclick"&&event.button===1;' +
+    'if(!auxiliary&&!(event.type==="click"&&event.button===0))return;' +
+    'for(let index=0,entries=path.call(event);index<entries.length;index++){const anchor=entries[index];if(anchor?.tagName!=="A")continue;' +
+    'const url=anchor.href;if(!url)continue;if(!auxiliary&&anchor.target!=="_blank")return;' +
+    "if(!test.call(/^https?:\\/\\//i,url))return;" +
+    'prevent.call(event);then.call(request("host.open",{url}),()=>{},()=>{});return;}};' +
+    'listen("click",activate);listen("auxclick",activate);' +
     "const sendPrompt=text=>{if(!act||act()!==true)return P.resolve(false);const value=stringify(text);" +
     'if(ticket)return request("prompt.send",{text:value});return new P((resolve,reject)=>{' +
     'const send=()=>{const result=request("prompt.send",{text:value});then.call(result,resolve,reject);};' +
     'const inline=()=>{promptPost({type:"openclaw:widget-prompt",prompt:value});resolve(true);};' +
     'if(inlinePromptReady)inline();else if(hostInitExpired)reject(new ErrorCtor("widget prompt host unavailable"));' +
     "else push.call(promptWaiting,{send,inline,reject});});};" +
-    "const api=freeze({" +
+    'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
+    "const api=freeze({host," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
     'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params})}),' +
+    'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
     'cron:freeze({trigger:jobId=>request("cron.trigger",{jobId:stringify(jobId)})})});' +
     'define(window,"openclaw",{value:api,writable:false,configurable:false});' +
     "window.sendPrompt=text=>{void sendPrompt(text);};" +
@@ -176,6 +206,10 @@ export function buildWidgetDocument(
     'const value=typeof raw==="string"?raw.trim():"";' +
     'if(value&&value.length<=256)set("--"+key,value);else rm("--"+key);}' +
     'if(data.mode==="light"||data.mode==="dark")set("color-scheme",data.mode);});})();</script>';
+  const chatHostBridge =
+    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    'addEventListener("message",event=>{if(event.source===window.parent&&event.data?.type==="openclaw:widget-chat-host")' +
+    'document.documentElement.classList.add("openclaw-chat-host");});})();</script>';
   /*
    * Snapshot requests come from the embedding parent and replies return only
    * there. Capture the response channel and rendering primitives before widget
@@ -237,6 +271,7 @@ export function buildWidgetDocument(
   const connectSources = options.connectOrigins?.length
     ? options.connectOrigins.join(" ")
     : "'none'";
+  const scriptSources = options.scriptOrigins?.length ? ` ${options.scriptOrigins.join(" ")}` : "";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
 }

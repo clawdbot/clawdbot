@@ -1,6 +1,6 @@
 import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   CodexAppServerApprovalPolicy,
   CodexAppServerApprovalsReviewer,
@@ -21,6 +21,19 @@ import {
 import { resolveCodexAppServerNetworkProxy } from "./config-security.js";
 
 type SessionPermissionMode = NonNullable<EmbeddedRunAttemptParamsV2["permissionMode"]>;
+
+export type CodexEffectiveSessionPermissionPolicy = {
+  mode: SessionPermissionMode;
+  root: string;
+  execMode: OpenClawExecMode;
+};
+
+export const CODEX_SESSION_PERMISSION_EXEC_MODES = {
+  "read-only": "deny",
+  guarded: "ask",
+  workspace: "auto",
+  full: "full",
+} satisfies Record<SessionPermissionMode, OpenClawExecMode>;
 
 type CodexSessionPermissionTuple = {
   approvalPolicy: CodexAppServerApprovalPolicy;
@@ -181,6 +194,39 @@ export function applyCodexSessionPermissionPolicy(params: {
     delete resolved.networkProxy;
   }
   return resolved;
+}
+
+export function resolveCodexEffectiveSessionPermissionPolicy(params: {
+  appServer: CodexAppServerRuntimeOptions;
+  permissionMode?: SessionPermissionMode;
+  sessionRoot?: string;
+}): CodexEffectiveSessionPermissionPolicy | undefined {
+  if (!params.permissionMode) {
+    return undefined;
+  }
+  const root = params.sessionRoot?.trim();
+  if (!root) {
+    throw new Error("Codex session permission mode requires a recorded session root");
+  }
+  const { sandbox, approvalPolicy, approvalsReviewer } = params.appServer;
+  const fullAccess =
+    params.permissionMode === "full" &&
+    sandbox === "danger-full-access" &&
+    approvalPolicy === "never";
+  const guardianReview =
+    params.permissionMode !== "guarded" &&
+    sandbox === "workspace-write" &&
+    approvalPolicy === "on-request" &&
+    approvalsReviewer !== "user";
+  const mode =
+    params.permissionMode === "read-only" || sandbox === "read-only"
+      ? "read-only"
+      : fullAccess
+        ? "full"
+        : guardianReview
+          ? "workspace"
+          : "guarded";
+  return { mode, root, execMode: CODEX_SESSION_PERMISSION_EXEC_MODES[mode] };
 }
 
 /** Keeps relative execution inside the prepared root without filesystem rediscovery. */

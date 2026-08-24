@@ -2,7 +2,10 @@
 
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionsSearchResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  PreservedSessionWorktree,
+  SessionsSearchResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -578,6 +581,54 @@ describe("sessions page lifecycle", () => {
     expect(page.selectedKeys).toEqual(new Set());
   });
 
+  it("adopts a managed snapshot that arrives under the bulk-delete lock after its tail refresh", async () => {
+    const deleted = deferred<{
+      deleted: string[];
+      errors: string[];
+      preservedWorktrees: PreservedSessionWorktree[];
+    }>();
+    const deleteMany = vi.fn(() => deleted.promise);
+    const managed = createManagedSessions({ deleteMany });
+    const context = createContext(
+      createGateway({} as GatewayBrowserClient).gateway,
+      managed.sessions,
+    );
+    const page = await createRenderedPage(context, {
+      count: 1,
+      sessions: [{ key: "before" }],
+    } as SessionsListResult);
+    const query = vi.mocked(managed.subscribeList).mock.calls[0]?.[0];
+    if (!query) {
+      throw new Error("Expected a managed query subscription");
+    }
+    managed.refreshList.mockClear();
+    page.selectedKeys = new Set(["before"]);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+
+    const deleting = page.deleteSelected();
+    await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledOnce());
+    const duringResult = {
+      count: 1,
+      sessions: [{ key: "arrived-during-mutation" }],
+    } as SessionsListResult;
+    managed.publish(query, {
+      result: duringResult,
+      agentId: "main",
+      loading: false,
+      error: null,
+    });
+    expect(page.result?.sessions.map((row) => row.key)).toEqual(["before"]);
+
+    deleted.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+    await deleting;
+
+    expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
+    expect(deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      managed.refreshList.mock.invocationCallOrder[0]!,
+    );
+    expect(page.result?.sessions.map((row) => row.key)).toEqual(["arrived-during-mutation"]);
+  });
+
   it("does not delete a selection after the gateway changes during confirmation", async () => {
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
@@ -744,17 +795,12 @@ describe("sessions page lifecycle", () => {
     expect(page.sessionMutationPending).toBe(false);
   });
 
-  it("destroys a pending cloud worker and reports its terminal state", async () => {
-    const request = vi.fn(() =>
-      Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
-    );
+  it("reclaims a pending cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
     const managed = createManagedSessions();
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
     const page = await createPage(createContext(gateway, managed.sessions));
     managed.refreshList.mockClear();
-    const toast = document.createElement("openclaw-toast-host");
-    document.body.append(toast);
-    await toast.updateComplete;
     const row = {
       key: "agent:main:cloud",
       label: "Cloud task",
@@ -777,13 +823,12 @@ describe("sessions page lifecycle", () => {
       confirmLabel: "Stop worker",
       danger: true,
     });
-    expect(request).toHaveBeenCalledWith("environments.destroy", {
-      environmentId: "environment-1",
-    });
-    expect(managed.refreshList).toHaveBeenCalledOnce();
-    expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-      'Cloud worker for "Cloud task" is destroyed.',
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:cloud", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
     );
+    expect(managed.refreshList).toHaveBeenCalledOnce();
     expect(page.sessionMutationPending).toBe(false);
   });
 
@@ -806,7 +851,7 @@ describe("sessions page lifecycle", () => {
     const deleted = deferred<{
       deleted: string[];
       errors: string[];
-      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
+      preservedWorktrees: PreservedSessionWorktree[];
     }>();
     const patched = deferred<unknown>();
     const forked = deferred<string | null>();
@@ -826,7 +871,7 @@ describe("sessions page lifecycle", () => {
       if (method === "chat.history") {
         return Promise.resolve({ messages: [] });
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return captured.promise;
       }
       return Promise.resolve({});
@@ -853,7 +898,7 @@ describe("sessions page lifecycle", () => {
       page.rememberCustomGroup("Stale group"),
     ];
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object)),
+      expect(request).toHaveBeenCalledWith("workboard.cards.captureSession", expect.any(Object)),
     );
 
     mutableGateway.emit({ phase: "reconnecting", client });

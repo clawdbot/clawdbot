@@ -280,7 +280,7 @@ final class QuickChatModel {
         },
         modelControlsProvider: @escaping ModelControlsProvider = { target in
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
-            async let models = transport.listModels()
+            async let models = transport.listModels(agentID: target.agentID)
             async let sessions = transport.listSessions(limit: 200, search: target.sessionKey, archived: false)
             async let agents = GatewayConnection.shared.agentsList()
             return try await QuickChatModelControlLogic.snapshot(

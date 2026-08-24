@@ -138,4 +138,4 @@ if (signal) {
   process.kill(process.pid, signal);
 }
 const missingBoundary = results.some((result) => result.status !== "pass");
-process.exit(code === 0 && !missingBoundary ? 0 : (code ?? 1));
+process.exit(code === 0 && missingBoundary ? 1 : (code ?? 1));

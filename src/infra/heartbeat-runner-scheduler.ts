@@ -9,11 +9,12 @@ import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat
 import {
   activeHoursConfigMatch,
   heartbeatLog,
+  isHeartbeatOwnerUnresolved,
   resolveActiveHoursSchedule,
-  resolveAmbientHeartbeatAgentId,
   resolveHeartbeatAgents,
   resolveHeartbeatForWake,
   resolveHeartbeatSchedulerSeed,
+  tryResolveAmbientHeartbeatAgentId,
   type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
@@ -24,10 +25,7 @@ import {
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
-import {
-  isConfiguredHeartbeatAgent,
-  isTargetedImmediateUnscheduledWake,
-} from "./heartbeat-wake-policy.js";
+import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
@@ -268,20 +266,19 @@ export function startHeartbeatRunner(opts: {
     state.cfg = cfg;
     state.agents = nextAgents;
     const nextEnabled = nextAgents.size > 0;
-    if (!initialized) {
-      if (!nextEnabled) {
-        log.info("heartbeat: disabled", { enabled: false });
-      } else {
+    if (!initialized || prevEnabled !== nextEnabled) {
+      if (nextEnabled) {
         log.info("heartbeat: started", { intervalMs: Math.min(...intervals) });
-      }
-      initialized = true;
-    } else if (prevEnabled !== nextEnabled) {
-      if (!nextEnabled) {
-        log.info("heartbeat: disabled", { enabled: false });
       } else {
-        log.info("heartbeat: started", { intervalMs: Math.min(...intervals) });
+        log.info("heartbeat: disabled", { enabled: false });
+        if (isHeartbeatOwnerUnresolved(cfg)) {
+          log.warn(
+            "heartbeat: multi-agent config has no ambient heartbeat owner; set agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId",
+          );
+        }
       }
     }
+    initialized = true;
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
@@ -326,7 +323,7 @@ export function startHeartbeatRunner(opts: {
     const allowsUnscheduledTarget =
       requestedTargetAgentId !== undefined &&
       isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
-      isTargetedImmediateUnscheduledWake({
+      isTargetedUnscheduledWake({
         source: params.source,
         intent,
         reason,
@@ -428,7 +425,10 @@ export function startHeartbeatRunner(opts: {
     };
 
     if (requestedSessionKey || requestedAgentId) {
-      const targetAgentId = requestedTargetAgentId ?? resolveAmbientHeartbeatAgentId(wakeConfig);
+      const targetAgentId = requestedTargetAgentId ?? tryResolveAmbientHeartbeatAgentId(wakeConfig);
+      if (!targetAgentId) {
+        return { status: "skipped", reason: "disabled" };
+      }
       const targetAgent = state.agents.get(targetAgentId);
       // Task intent wins scheduled-task coalescing, so the cadence payload—not
       // the final intent—proves that the persisted monitor tick joined this turn.

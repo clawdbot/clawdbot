@@ -82,9 +82,8 @@ If you already manage Node yourself:
     openclaw onboard --install-daemon
     ```
 
-    On npm 11.12 and earlier, use the same command without
-    `--allow-scripts=openclaw`. Do not use npm 11.13–11.15 for this install;
-    upgrade to npm 11.16+ first.
+    On npm 11.15 and earlier, use the same command without
+    `--allow-scripts=openclaw`.
 
     <Note>
     npm 12 blocks unapproved package lifecycle scripts by default. The
@@ -93,11 +92,9 @@ If you already manage Node yourself:
     they are not covered by allowScripts`.
 
     npm 11.16 accepts the option but otherwise only warns that the scripts are
-    `not yet covered by allowScripts` and still runs them. npm 11.12 and earlier
+    `not yet covered by allowScripts` and still runs them. npm 11.15 and earlier
     have neither the policy nor the option, so their command must be unflagged.
-    npm 11.13–11.15 also lack the option, but they are transitional upstream
-    releases outside this documented install contract; upgrade rather than
-    relying on their unflagged behavior. The `npm approve-scripts openclaw`
+    The `npm approve-scripts openclaw`
     command suggested by npm 11.16 does not work for a global install — it fails
     with `ENOMATCH  No installed packages match: openclaw`.
     </Note>

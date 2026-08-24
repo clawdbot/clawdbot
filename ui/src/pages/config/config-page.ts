@@ -885,6 +885,16 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
+  private currentAccentPref(): ServerUiPrefState<string> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "accent",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
+    );
+  }
+
   private currentChatSendShortcutPref(): ServerUiPrefState<ChatSendShortcut> {
     return resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
@@ -924,7 +934,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private resetSyncedAppearancePref(
-    key: "theme" | "themeMode" | "chatSendShortcut" | "chatFollowUpMode",
+    key: "theme" | "themeMode" | "accent" | "chatSendShortcut" | "chatFollowUpMode",
   ) {
     switch (key) {
       case "theme":
@@ -939,6 +949,13 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.settings = resetServerUiPref(
           "themeMode",
           this.currentThemeModePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
+        break;
+      case "accent":
+        this.settings = resetServerUiPref(
+          "accent",
+          this.currentAccentPref(),
           this.context.gateway.connection.gatewayUrl,
         );
         break;
@@ -1052,7 +1069,9 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private isUpdateBusy(): boolean {
     const update = this.context.overlays.snapshot;
-    return update.updateRunning || update.updateReconciliationPending;
+    return (
+      update.updateRunning || update.updateStatusRefreshing || update.updateReconciliationPending
+    );
   }
 
   // The update dialog outlives this page and the connection, so it reads live
@@ -1108,9 +1127,11 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
+        recordedAttempt: overlaySnapshot.recordedUpdateAttempt,
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
+        canCheckStatus: canCallGatewayMethod(gatewaySnapshot, "update.status", "operator.admin"),
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
@@ -1127,6 +1148,7 @@ export class ConfigPage extends OpenClawLightDomElement {
             viaNativeApp: false,
           }),
         onHoldUpdate: () => this.context.overlays.holdUpdate(),
+        onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
       });
     }
     const includeSections = this.includeSections();
@@ -1146,6 +1168,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const themePref = this.currentThemePref();
     const themeModePref = this.currentThemeModePref();
+    const accentPref = this.currentAccentPref();
     const localePref = this.currentLocalePref();
     const chatSendShortcutPref = this.currentChatSendShortcutPref();
     const chatFollowUpModePref = this.currentChatFollowUpModePref();
@@ -1212,6 +1235,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeModeOverridden: themeModePref.overridden,
       themeModeProvenance: themeModePref.provenance,
       themeModeResetValue: themeModePref.resetValue ?? UI_APPEARANCE_DEFAULTS.themeMode,
+      accent: this.settings.accent,
+      accentOverridden: accentPref.overridden,
+      accentProvenance: accentPref.provenance,
       systemLocale: i18n.getSystemLocale(),
       localeOverride: isSupportedLocale(localePref.value) ? localePref.value : undefined,
       localeOverridden: localePref.overridden,
@@ -1225,6 +1251,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       resetTheme: () => this.resetSyncedAppearancePref("theme"),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
       resetThemeMode: () => this.resetSyncedAppearancePref("themeMode"),
+      setAccent: (accent) => this.applySettings({ accent }),
+      resetAccent: () => this.resetSyncedAppearancePref("accent"),
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label ?? null,
       customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,

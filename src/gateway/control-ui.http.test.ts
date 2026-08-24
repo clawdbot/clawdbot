@@ -10,6 +10,7 @@ import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
+import * as configIo from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
@@ -169,10 +170,12 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatarReason?: string | null;
       assistantAgentId?: string;
       devGitBranch?: string;
+      environment?: { label: string; color: string };
       localMediaPreviewRoots?: string[];
       seamColor?: string;
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
+      automaticallyFetchFavicons: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -1523,8 +1526,37 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(end).toHaveBeenCalledWith(
-          html.replace("<html", '<html data-openclaw-terminal-enabled="true"'),
+          html.replace(
+            "<html",
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true"',
+          ),
         );
+      },
+    });
+  });
+
+  it("exposes only the environment identity on public HTML while bootstrap stays authenticated", async () => {
+    await withControlUiRoot({
+      indexHtml: "<html><head></head><body>Hello</body></html>\n",
+      fn: async (tmp) => {
+        const config: OpenClawConfig = {
+          gateway: { controlUi: { environment: { label: "edge & team", color: "amber" } } },
+        };
+        const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
+        const documentResponse = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: {} } as IncomingMessage,
+          documentResponse.res,
+          { root: { kind: "resolved", path: tmp }, config, auth },
+        );
+
+        expect(documentResponse.res.statusCode).toBe(200);
+        expect(responseBody(documentResponse.end)).toContain(
+          'data-openclaw-environment="{&quot;label&quot;:&quot;edge &amp; team&quot;,&quot;color&quot;:&quot;amber&quot;}"',
+        );
+
+        const bootstrapResponse = await runBootstrapConfigRequest({ rootPath: tmp, config, auth });
+        expect(bootstrapResponse.res.statusCode).toBe(401);
       },
     });
   });
@@ -1560,33 +1592,62 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     {
-      name: "root-mounted nested routes",
-      requestPath: "/settings/approvals",
+      name: "root-mounted focus routes",
+      requestPath: "/focus/dashboard/roboclaw/session-ref",
       basePath: undefined,
-      expectedPrefix: "",
+      expectedResourceBasePath: "",
     },
     {
-      name: "base-mounted nested routes",
+      name: "base-mounted focus routes",
+      requestPath: "/openclaw/focus/desktop/control",
+      basePath: "/openclaw",
+      expectedResourceBasePath: "/openclaw",
+    },
+    {
+      name: "root-mounted ordinary deep routes",
+      requestPath: "/settings/approvals",
+      basePath: undefined,
+      expectedResourceBasePath: "",
+    },
+    {
+      name: "root-mounted application namespace routes",
+      requestPath: "/__openclaw__/new",
+      basePath: undefined,
+      expectedResourceBasePath: "",
+    },
+    {
+      name: "base-mounted ordinary deep routes",
       requestPath: "/openclaw/settings/approvals",
       basePath: "/openclaw",
-      expectedPrefix: "/openclaw",
+      expectedResourceBasePath: "/openclaw",
     },
   ])(
-    "anchors Vite-relative public asset hrefs for $name",
-    async ({ requestPath, basePath, expectedPrefix }) => {
-      const assets = [
+    "anchors Vite-relative asset references for $name",
+    async ({ requestPath, basePath, expectedResourceBasePath }) => {
+      const emittedAssets = [
+        ["index.js", "index-js\n", "application/javascript; charset=utf-8"],
+        ["runtime.js", "runtime-js\n", "application/javascript; charset=utf-8"],
+        ["index.css", "index-css\n", "text/css; charset=utf-8"],
+      ] as const;
+      const publicAssets = [
         "favicon.svg",
         "favicon-32.png",
         "apple-touch-icon.png",
         "manifest.webmanifest",
       ];
-      const html = `<html><head>${assets
+      const html = `<html><head>${publicAssets
         .map((asset) => `<link href="./${asset}" />`)
-        .join("")}</head><body></body></html>\n`;
+        .join(
+          "",
+        )}<link rel="modulepreload" href="./assets/runtime.js" /><link rel="stylesheet" href="./assets/index.css" /></head><body><script type="module" src="./assets/index.js"></script></body></html>\n`;
 
       await withControlUiRoot({
         indexHtml: html,
         fn: async (tmp) => {
+          await fs.mkdir(path.join(tmp, "assets"));
+          for (const [asset, content] of emittedAssets) {
+            await fs.writeFile(path.join(tmp, "assets", asset), content);
+          }
           const { res, end } = makeMockHttpResponse();
           const handled = await handleControlUiHttpRequest(
             {
@@ -1603,9 +1664,38 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled).toBe(true);
           const body = String(end.mock.calls[0]?.[0] ?? "");
-          for (const asset of assets) {
-            expect(body).toContain(`href="${expectedPrefix}/${asset}"`);
+          expect(body).toContain(
+            `data-openclaw-control-ui-base-path="${expectedResourceBasePath}"`,
+          );
+          for (const asset of publicAssets) {
+            expect(body).toContain(`href="${expectedResourceBasePath}/${asset}"`);
             expect(body).not.toContain(`href="./${asset}"`);
+          }
+          expect(body).toContain(`src="${expectedResourceBasePath}/assets/index.js"`);
+          expect(body).toContain(`href="${expectedResourceBasePath}/assets/runtime.js"`);
+          expect(body).toContain(`href="${expectedResourceBasePath}/assets/index.css"`);
+          expect(body).not.toContain('="./assets/');
+          expect(body).not.toContain(`${requestPath}/assets/`);
+
+          const emittedAssetUrls = Array.from(
+            body.matchAll(/(?:src|href)="([^" ]*\/assets\/[^" ]+)"/g),
+          ).flatMap((match) => (match[1] ? [match[1]] : []));
+          expect(new Set(emittedAssetUrls)).toEqual(
+            new Set(emittedAssets.map(([asset]) => `${expectedResourceBasePath}/assets/${asset}`)),
+          );
+          for (const url of emittedAssetUrls) {
+            const emittedAsset = emittedAssets.find(([asset]) => url.endsWith(`/${asset}`));
+            expect(emittedAsset).toBeDefined();
+            const [, content, contentType] = emittedAsset!;
+            const response = await runControlUiRequest({
+              url,
+              method: "GET",
+              rootPath: tmp,
+              basePath,
+            });
+            expect(response.handled).toBe(true);
+            expect(responseBody(response.end)).toBe(content);
+            expect(response.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
           }
         },
       });
@@ -1630,7 +1720,10 @@ describe("handleControlUiHttpRequest", () => {
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
               },
-              gateway: { cliAgents: { enabled: true } },
+              gateway: {
+                cliAgents: { enabled: true },
+                controlUi: { environment: { label: "edge", color: "amber" } },
+              },
             },
           },
         );
@@ -1643,10 +1736,33 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("roboclaw");
         expect(parsed.seamColor).toBe("#1A2b3C");
+        expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.cliAgentsEnabled).toBe(true);
+        expect(parsed.automaticallyFetchFavicons).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("projects an explicit favicon opt-out into bootstrap config", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              gateway: { controlUi: { automaticallyFetchFavicons: false } },
+            },
+          },
+        );
+
+        expect(handled).toBe(true);
+        expect(parseBootstrapPayload(end).automaticallyFetchFavicons).toBe(false);
       },
     });
   });
@@ -2358,6 +2474,39 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );
+          },
+        });
+      },
+    });
+  });
+
+  it("rejects paired device-token bootstrap when team roles cannot bind a durable person", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            vi.spyOn(configIo, "getRuntimeConfig").mockReturnValue({
+              gateway: {
+                roles: {
+                  default: "guest",
+                  definitions: {
+                    guest: {
+                      sessions: { others: "view" },
+                      agents: ["guest"],
+                      scopes: ["operator.read"],
+                    },
+                  },
+                },
+              },
+            });
+            const { res, handled } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+            });
+
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(401);
           },
         });
       },
@@ -3396,7 +3545,7 @@ describe("handleControlUiHttpRequest", () => {
           expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
           expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
           expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-terminal-enabled="true">',
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
           );
           expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
             end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -3480,28 +3629,38 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     {
-      name: "root-mounted",
+      name: "root-mounted approval",
       basePath: undefined,
       url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "configured-base-path",
+      name: "configured-base-path approval",
       basePath: "/openclaw",
       url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "asset-like-id",
+      name: "asset-like approval id",
       basePath: undefined,
       url: "/approve/plugin%3Arequest.json",
     },
     {
-      name: "configured-base-asset-like-id",
+      name: "configured-base asset-like approval id",
       basePath: "/openclaw",
       url: "/openclaw/approve/plugin%3Arequest.js",
     },
-  ])("serves $name approval deep links through the SPA fallback", async ({ basePath, url }) => {
+    {
+      name: "root-mounted focus path",
+      basePath: undefined,
+      url: "/focus/dashboard/roboclaw/session.json",
+    },
+    {
+      name: "configured-base focus path",
+      basePath: "/openclaw",
+      url: "/openclaw/focus/desktop/control/session/agent%3Amain%3Amain",
+    },
+  ])("serves $name through the standalone document", async ({ basePath, url }) => {
     await withControlUiRoot({
-      indexHtml: "<html><body>approval-spa</body></html>\n",
+      indexHtml: "<html><body>standalone-spa</body></html>\n",
       fn: async (tmp) => {
         for (const method of ["GET", "HEAD"] as const) {
           const { res, end, handled } = await runControlUiRequest({
@@ -3516,7 +3675,7 @@ describe("handleControlUiHttpRequest", () => {
           if (method === "HEAD") {
             expect(firstEndCallLength(end)).toBe(0);
           } else {
-            expect(responseBody(end)).toContain("approval-spa");
+            expect(responseBody(end)).toContain("standalone-spa");
             if (basePath) {
               expect(responseBody(end)).toContain('data-openclaw-control-ui-base-path="/openclaw"');
             }
@@ -3528,21 +3687,31 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     {
-      name: "root-mounted",
+      name: "root-mounted approval",
       basePath: undefined,
       url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "configured-base-path",
+      name: "configured-base-path approval",
       basePath: "/openclaw",
       url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
     },
     {
-      name: "asset-like-id",
+      name: "asset-like approval id",
       basePath: undefined,
       url: "/approve/plugin%3Arequest.json",
     },
-  ])("declines POST to $name approval deep links at the UI module", async ({ basePath, url }) => {
+    {
+      name: "root-mounted focus path",
+      basePath: undefined,
+      url: "/focus/terminal",
+    },
+    {
+      name: "configured-base focus path",
+      basePath: "/openclaw",
+      url: "/openclaw/focus/desktop",
+    },
+  ])("declines POST to $name at the UI module", async ({ basePath, url }) => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { handled, end } = await runControlUiRequest({
@@ -3552,9 +3721,8 @@ describe("handleControlUiHttpRequest", () => {
           basePath,
         });
 
-        // The UI module only serves reads; the gateway's approval-document
-        // stage (server-http.ts) owns the terminal 404 for write methods, so
-        // these requests never reach plugin HTTP handlers in production.
+        // The UI module serves reads only. The gateway router decides whether a
+        // write is reserved approval traffic or an unclaimed focus fallback.
         expect(handled).toBe(false);
         expect(end).not.toHaveBeenCalled();
       },

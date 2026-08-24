@@ -1,13 +1,14 @@
 import { readSourceReplyDeliveryRuntime } from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
 import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
@@ -30,6 +31,7 @@ import {
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import { createScopedAuthProfileStore } from "./auth-store.js";
 import type { RuntimeAuthState } from "./helpers.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   resolveEmbeddedRunEffectiveModel,
   selectEmbeddedRunHarness,
@@ -42,7 +44,7 @@ import { resolveInitialThinkLevel } from "./runtime-resolution.js";
 type ApiKeyInfo = ResolvedProviderAuth;
 
 export async function prepareEmbeddedRunRuntime(input: {
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   provider: string;
   modelId: string;
   agentDir: string;
@@ -91,6 +93,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   let agentHarness = modelSetup.agentHarness;
   let pluginHarnessOwnsTransport = modelSetup.pluginHarnessOwnsTransport;
   let runtimeModel = model;
+  let preparedThinkingCapabilityReady = false;
   const resolveEffectiveModel = (candidate: typeof runtimeModel) =>
     resolveEmbeddedRunEffectiveModel({
       runParams: params,
@@ -112,9 +115,23 @@ export async function prepareEmbeddedRunRuntime(input: {
   let effectiveModel = initialResolvedRuntimeModel.effectiveModel;
   const applyResolvedRuntimeModel = (
     candidate: typeof runtimeModel,
-    resolved = resolveEffectiveModel(candidate),
+    resolvedCandidate?: ReturnType<typeof resolveEffectiveModel>,
   ) => {
-    runtimeModel = candidate;
+    const preparedThinkingCompat = preparedThinkingCapabilityReady
+      ? resolvePreparedModelThinkingCompat({
+          capability: params.modelThinkingCapability,
+          model: candidate,
+          agentRuntime: agentHarness.id,
+        })
+      : undefined;
+    const resolvedModel = preparedThinkingCompat
+      ? { ...candidate, compat: { ...candidate.compat, ...preparedThinkingCompat } }
+      : candidate;
+    const resolved =
+      resolvedModel === candidate && resolvedCandidate
+        ? resolvedCandidate
+        : resolveEffectiveModel(resolvedModel);
+    runtimeModel = resolvedModel;
     effectiveModel = resolved.effectiveModel;
     contextTokenBudget = resolved.contextTokenBudget;
     authoredContextTokenCap = resolved.authoredContextTokenCap;
@@ -189,6 +206,8 @@ export async function prepareEmbeddedRunRuntime(input: {
     preparedAuthAttempts,
   } = preparedAuthPlan;
   let { activePreparedAuthPlan } = preparedAuthPlan;
+  preparedThinkingCapabilityReady = true;
+  applyResolvedRuntimeModel(runtimeModel);
   const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport
@@ -329,6 +348,9 @@ export async function prepareEmbeddedRunRuntime(input: {
     attemptedThinking,
     fallbackConfigured: input.fallbackConfigured,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
+    authProfileFailurePolicy: params.authProfileFailurePolicy,
+    authProfileStateMode: params.authProfileStateMode,
+    runId: params.runId,
     getProvider: () => provider,
     getModelId: () => modelId,
     getRuntimeModel: () => runtimeModel,
@@ -479,24 +501,16 @@ export async function prepareEmbeddedRunRuntime(input: {
   }
   input.markStartupStage("auth");
   input.notifyExecutionPhase("auth", { provider, model: modelId });
-  const compatibleMetadataSnapshot =
-    pluginMetadataSnapshot &&
-    pluginMetadataSnapshot.pluginIds === undefined &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: pluginMetadataSnapshot,
-      config: params.config,
-      env: process.env,
-      workspaceDir: input.workspaceDir,
-    })
-      ? pluginMetadataSnapshot
-      : undefined;
-  const endpointClass = resolveProviderEndpoint(
-    effectiveModel.baseUrl,
-    compatibleMetadataSnapshot?.owners,
-  ).endpointClass;
-  const providerOwner = ["default", "invalid", "local", "custom"].includes(endpointClass)
+  const routeFacts = getModelProviderRequestRouteFacts(effectiveModel);
+  const fallbackEndpointClass = routeFacts
     ? undefined
-    : endpointClass;
+    : resolveProviderEndpoint(effectiveModel.baseUrl, pluginMetadataSnapshot?.owners).endpointClass;
+  const providerOwner =
+    routeFacts?.providerOwner ??
+    (fallbackEndpointClass &&
+    !["default", "invalid", "local", "custom"].includes(fallbackEndpointClass)
+      ? fallbackEndpointClass
+      : undefined);
   const providerRuntimeHandle = {
     ...resolveProviderRuntimePluginHandle({
       provider,
@@ -505,7 +519,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       config: params.config,
       workspaceDir: input.workspaceDir,
       env: process.env,
-      ...(compatibleMetadataSnapshot ? { pluginMetadataSnapshot: compatibleMetadataSnapshot } : {}),
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     }),
     modelId,
     prepared: true as const,

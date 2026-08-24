@@ -44,7 +44,7 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
-import { chatContextFromIMessageTarget } from "./chat-context.js";
+import { chatContextFromIMessageTarget, resolveIMessageDirectChatService } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import {
@@ -557,14 +557,6 @@ async function runIMessageCliJson(
 function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
   const normalized = stringValue(value)?.toLowerCase();
   return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
-}
-
-function resultChatGuidService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
-  const chatGuid = stringValue(value);
-  if (/^imessage;/iu.test(chatGuid ?? "")) {
-    return "imessage";
-  }
-  return /^sms;/iu.test(chatGuid ?? "") ? "sms" : undefined;
 }
 
 function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
@@ -1187,10 +1179,10 @@ export async function sendMessageIMessage(
     // before dispatching. Inbound recording (in monitor/inbound-processing)
     // sets isFromMe=false, so the cache distinguishes own-sent from received.
     const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
-    const confirmedService =
-      resultService(result.service) ??
-      resultChatGuidService(providerChatGuid) ??
-      (service === "imessage" || service === "sms" ? service : undefined);
+    const confirmedService = resolveIMessageDirectChatService(
+      resultService(result.service) ?? service,
+      providerChatGuid,
+    );
     if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
       const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
       rememberIMessageReplyCache({

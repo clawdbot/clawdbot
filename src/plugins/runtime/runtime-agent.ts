@@ -364,6 +364,7 @@ async function createSessionEntry(
         } else {
           const result = await createGatewaySession({
             cfg: params.cfg,
+            operatorRoleActor: { kind: "system" },
             key: params.key,
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
@@ -417,6 +418,11 @@ async function createSessionEntry(
           });
           if (!result.ok) {
             throw new Error(result.error.message);
+          }
+          if (result.postCommit.status === "failed") {
+            // Plugin initialization owns guarded rollback and recovery. Do not
+            // finalize an initializationPending row whose callback failed.
+            throw result.postCommit.error;
           }
           created = result;
         }

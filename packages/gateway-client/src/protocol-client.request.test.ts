@@ -23,7 +23,7 @@ type RequestConnection = {
 function createRequestHarness(options?: {
   createRequestId?: () => string;
   requestTimeoutMs?: number;
-  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
+  onRequestTiming?: (this: unknown, timing: GatewayProtocolRequestTiming) => void;
   onCallbackError?: (label: string, error: unknown) => void;
   send?: (frame: RequestFrame) => void;
   nowMs?: () => number;
@@ -210,17 +210,42 @@ describe("GatewayProtocolClient requests", () => {
     await expect(aborted).rejects.toThrow("gateway request aborted for aborted");
 
     const replacement = client.request("replacement", {}, { timeoutMs: null });
-    expect(latestFrame(connection)).toMatchObject({ id: "same-id:1", method: "replacement" });
-    respond(connection, "same-id", { stale: true });
+    expect(latestFrame(connection)).toMatchObject({ id: "2:same-id", method: "replacement" });
+    respond(connection, "1:same-id", { stale: true });
     expect(client.hasPendingRequests).toBe(true);
-    respond(connection, "same-id:1", { current: true });
+    respond(connection, "2:same-id", { current: true });
     await expect(replacement).resolves.toEqual({ current: true });
 
     await expect(client.request("send.failure", {}, { timeoutMs: null })).rejects.toThrow(
       "synthetic send failure",
     );
-    expect(latestFrame(connection)).toMatchObject({ id: "same-id:2", method: "send.failure" });
+    expect(latestFrame(connection)).toMatchObject({ id: "3:same-id", method: "send.failure" });
     expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("keeps concurrent requests distinct when generated IDs contain sequence suffixes", async () => {
+    const generatedIds = ["same-id:1", "same-id"];
+    const { client, connections } = createRequestHarness({
+      createRequestId: () => generatedIds.shift() ?? "same-id",
+    });
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+
+    const first = client.request("first", {}, { timeoutMs: null });
+    const second = client.request("second", {}, { timeoutMs: null });
+    const [firstFrame, secondFrame] = connection.frames;
+    if (!firstFrame || !secondFrame) {
+      throw new Error("expected concurrent request frames");
+    }
+    expect(firstFrame.id).not.toBe(secondFrame.id);
+
+    respond(connection, firstFrame.id, { request: "first" });
+    respond(connection, secondFrame.id, { request: "second" });
+    await expect(first).resolves.toEqual({ request: "first" });
+    await expect(second).resolves.toEqual({ request: "second" });
     client.stop();
   });
 
@@ -242,14 +267,14 @@ describe("GatewayProtocolClient requests", () => {
       {},
       { timeoutMs: null, expectFinal: true, onAccepted },
     );
-    expect(latestFrame(connection)).toMatchObject({ id: "same-id:1", method: "agent" });
-    respond(connection, "same-id", { status: "accepted", runId: "old" });
-    respond(connection, "same-id", { status: "ok", runId: "old" });
+    expect(latestFrame(connection)).toMatchObject({ id: "2:same-id", method: "agent" });
+    respond(connection, "1:same-id", { status: "accepted", runId: "old" });
+    respond(connection, "1:same-id", { status: "ok", runId: "old" });
     expect(onAccepted).not.toHaveBeenCalled();
     expect(client.hasPendingRequests).toBe(true);
 
-    respond(connection, "same-id:1", { status: "accepted", runId: "new" });
-    respond(connection, "same-id:1", { status: "ok", runId: "new" });
+    respond(connection, "2:same-id", { status: "accepted", runId: "new" });
+    respond(connection, "2:same-id", { status: "ok", runId: "new" });
     await expect(replacement).resolves.toEqual({ status: "ok", runId: "new" });
     expect(onAccepted).toHaveBeenCalledExactlyOnceWith({ status: "accepted", runId: "new" });
     client.stop();
@@ -279,8 +304,33 @@ describe("GatewayProtocolClient requests", () => {
 
   it("isolates callbacks while preserving accepted/final settlement and timing", async () => {
     let nowMs = 10;
-    const onRequestTiming = vi.fn<(timing: GatewayProtocolRequestTiming) => void>();
-    const onCallbackError = vi.fn<(label: string, error: unknown) => void>();
+    const trace: string[] = [];
+    const sentError = new Error("sent callback failed");
+    const acceptedError = new Error("accepted callback failed");
+    const timingError = new Error("timing callback failed");
+    const timingReceivers: unknown[] = [];
+    let timing: GatewayProtocolRequestTiming | undefined;
+    let callPropertyReads = 0;
+    const onRequestTiming = new Proxy(
+      function (this: unknown, value: GatewayProtocolRequestTiming) {
+        trace.push("timing");
+        timingReceivers.push(this);
+        timing = value;
+        throw timingError;
+      },
+      {
+        get(target, property, receiver) {
+          if (property === "call") {
+            callPropertyReads += 1;
+            throw new Error("timing callback .call must not be read");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label) => {
+      trace.push(`error:${label}`);
+    });
     const { client, connections } = createRequestHarness({
       nowMs: () => nowMs,
       onRequestTiming,
@@ -297,10 +347,12 @@ describe("GatewayProtocolClient requests", () => {
         timeoutMs: null,
         expectFinal: true,
         onSent: () => {
-          throw new Error("sent callback failed");
+          trace.push("sent");
+          throw sentError;
         },
         onAccepted: () => {
-          throw new Error("accepted callback failed");
+          trace.push("accepted");
+          throw acceptedError;
         },
       },
     );
@@ -311,8 +363,25 @@ describe("GatewayProtocolClient requests", () => {
     respond(connection, frame.id, { status: "ok" });
 
     await expect(request).resolves.toEqual({ status: "ok" });
-    expect(onCallbackError.mock.calls.map(([label]) => label)).toEqual(["sent", "accepted"]);
-    expect(onRequestTiming).toHaveBeenCalledExactlyOnceWith({
+    trace.push("resolved");
+    expect(trace).toEqual([
+      "sent",
+      "error:sent",
+      "accepted",
+      "error:accepted",
+      "timing",
+      "error:request timing",
+      "resolved",
+    ]);
+    expect(onCallbackError.mock.calls).toEqual([
+      ["sent", sentError],
+      ["accepted", acceptedError],
+      ["request timing", timingError],
+    ]);
+    expect(callPropertyReads).toBe(0);
+    expect(timingReceivers).toHaveLength(1);
+    expect(timingReceivers[0]).toMatchObject({ onTiming: onRequestTiming });
+    expect(timing).toEqual({
       id: frame.id,
       method: "agent",
       ok: true,
@@ -323,7 +392,103 @@ describe("GatewayProtocolClient requests", () => {
     client.stop();
   });
 
-  it("clears generation tombstones when the socket flushes", async () => {
+  it("isolates a timing accessor installed through the callback receiver", async () => {
+    const timingAccessorError = new Error("timing accessor failed");
+    const trace: string[] = [];
+    const timingReceivers: unknown[] = [];
+    const onRequestTiming = function (this: unknown, timing: GatewayProtocolRequestTiming) {
+      trace.push(`timing:${timing.method}`);
+      timingReceivers.push(this);
+    };
+    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label) => {
+      trace.push(`error:${label}`);
+    });
+    const { client, connections } = createRequestHarness({ onRequestTiming, onCallbackError });
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+
+    const first = client.request("first", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, { first: true });
+    await expect(first).resolves.toEqual({ first: true });
+    trace.push("resolved:first");
+    const timingReceiver = timingReceivers[0];
+    if (!timingReceiver || typeof timingReceiver !== "object") {
+      throw new Error("expected timing callback receiver");
+    }
+    Object.defineProperty(timingReceiver, "onTiming", {
+      configurable: true,
+      get: () => {
+        trace.push("get:onTiming");
+        throw timingAccessorError;
+      },
+    });
+
+    const second = client.request("second", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, { second: true });
+    await expect(second).resolves.toEqual({ second: true });
+    trace.push("resolved:second");
+
+    expect(trace).toEqual([
+      "timing:first",
+      "resolved:first",
+      "get:onTiming",
+      "error:request timing",
+      "resolved:second",
+    ]);
+    expect(onCallbackError).toHaveBeenCalledExactlyOnceWith("request timing", timingAccessorError);
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("isolates a falsy timing callback installed through the callback receiver", async () => {
+    const trace: string[] = [];
+    const callbackErrors: unknown[] = [];
+    const onRequestTiming = function (this: unknown, timing: GatewayProtocolRequestTiming) {
+      trace.push(`timing:${timing.method}`);
+      if (!this || typeof this !== "object") {
+        throw new Error("expected timing callback receiver");
+      }
+      Object.defineProperty(this, "onTiming", { configurable: true, value: false });
+    };
+    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label, error) => {
+      trace.push(`error:${label}`);
+      callbackErrors.push(error);
+    });
+    const { client, connections } = createRequestHarness({ onRequestTiming, onCallbackError });
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+
+    const firstPayload = { first: true };
+    const first = client.request("first", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, firstPayload);
+    await expect(first).resolves.toEqual(firstPayload);
+    trace.push("resolved:first");
+
+    const secondPayload = { second: true };
+    const second = client.request("second", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, secondPayload);
+    await expect(second).resolves.toEqual(secondPayload);
+    trace.push("resolved:second");
+
+    expect(trace).toEqual([
+      "timing:first",
+      "resolved:first",
+      "error:request timing",
+      "resolved:second",
+    ]);
+    expect(callbackErrors).toHaveLength(1);
+    const callbackError = callbackErrors[0];
+    expect(callbackError).toBeInstanceOf(TypeError);
+    expect(onCallbackError).toHaveBeenCalledExactlyOnceWith("request timing", callbackError);
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("restarts the request sequence when the socket flushes", async () => {
     vi.useFakeTimers();
     const { client, connections } = createRequestHarness({ createRequestId: () => "same-id" });
     const firstConnection = connections[0];
@@ -342,9 +507,48 @@ describe("GatewayProtocolClient requests", () => {
       throw new Error("expected replacement request connection");
     }
     const replacement = client.request("second", {}, { timeoutMs: null });
-    expect(latestFrame(secondConnection)).toMatchObject({ id: "same-id", method: "second" });
-    respond(secondConnection, "same-id", { ok: true });
+    expect(latestFrame(secondConnection)).toMatchObject({ id: "1:same-id", method: "second" });
+    respond(secondConnection, "1:same-id", { ok: true });
     await expect(replacement).resolves.toEqual({ ok: true });
+    client.stop();
+  });
+
+  it("preserves requests started on a replacement socket by a close timing observer", async () => {
+    let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
+    const { client, connections } = createRequestHarness({
+      createRequestId: () => "same-id",
+      onRequestTiming: ({ method }) => {
+        if (method === "retired") {
+          client.start();
+          recoveredRequest = client.request("replacement", {}, { timeoutMs: null });
+          void recoveredRequest.catch(() => undefined);
+        }
+      },
+    });
+    const firstConnection = connections[0];
+    if (!firstConnection) {
+      throw new Error("expected initial request connection");
+    }
+    const retired = client.request("retired", {}, { timeoutMs: null });
+    void retired.catch(() => undefined);
+
+    firstConnection.close(1012, "service restart");
+
+    const replacementConnection = connections[1];
+    if (!replacementConnection) {
+      throw new Error("expected replacement request connection");
+    }
+    expect(latestFrame(replacementConnection)).toMatchObject({
+      id: "1:same-id",
+      method: "replacement",
+    });
+    expect(client.connected).toBe(true);
+    expect(client.hasPendingRequests).toBe(true);
+    respond(replacementConnection, "1:same-id", { healthy: true });
+
+    await expect(retired).rejects.toThrow("gateway closed (1012): service restart");
+    await expect(recoveredRequest).resolves.toEqual({ healthy: true });
+    expect(client.hasPendingRequests).toBe(false);
     client.stop();
   });
 });

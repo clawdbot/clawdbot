@@ -115,7 +115,7 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts a Control UI GitHub service credential SecretRef", () => {
+  it("accepts a preview SecretRef while keeping GitHub tool identity secret-free", () => {
     expect(
       validateConfigObjectRaw({
         gateway: {
@@ -125,8 +125,30 @@ describe("config secret refs schema", () => {
             },
           },
         },
+        tools: {
+          github: {
+            profileId: "ghp_77777777777777777777777777777777",
+          },
+        },
       }).ok,
     ).toBe(true);
+
+    expect(
+      validateConfigObjectRaw({
+        tools: {
+          github: {
+            profileId: "ghp_88888888888888888888888888888888",
+            token: { source: "store", provider: "default", id: "AGENT_GITHUB" },
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateConfigObjectRaw({
+        tools: { github: { profileId: "../../native" } },
+      }).ok,
+    ).toBe(false);
+    expect(validateConfigObjectRaw({ tools: { github: {} } }).ok).toBe(false);
   });
 
   it("accepts media request secret refs for auth, headers, and tls material", () => {

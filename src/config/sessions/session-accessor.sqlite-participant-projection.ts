@@ -8,7 +8,11 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionCreatedActor, SessionParticipantSource } from "./session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  type SessionCreatedActor,
+  type SessionParticipantSource,
+} from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionParticipantRecord = {
@@ -17,6 +21,25 @@ export type SessionParticipantRecord = {
   lastPromptedAt: number;
   source?: SessionParticipantSource;
 };
+
+export function resolveBoundedProfileParticipantSnapshot(
+  records: readonly SessionParticipantRecord[],
+  currentProfileId?: string,
+): { profileIds: string[]; incomplete: boolean } {
+  const profileIds = new Set(
+    records.flatMap((record) =>
+      record.actor.type === "human" && record.source === "profile" ? [record.actor.id] : [],
+    ),
+  );
+  const current = currentProfileId?.trim();
+  if (current && !profileIds.has(current) && records.length < MAX_SESSION_PARTICIPANTS) {
+    profileIds.add(current);
+  }
+  return {
+    profileIds: [...profileIds],
+    incomplete: records.length >= MAX_SESSION_PARTICIPANTS,
+  };
+}
 
 function projectParticipantRow(row: {
   actor_id: string;
@@ -135,11 +158,16 @@ export function projectSqliteSessionParticipantsBatch(
 export function listSessionParticipantsReadOnly(scope: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
+  sessionKey?: string;
   storePath?: string;
 }): Map<string, SessionParticipantRecord[]> {
   const resolved = resolveSqliteReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => participantRecordsBySessionKey(database.db),
+    (database) =>
+      participantRecordsBySessionKey(
+        database.db,
+        scope.sessionKey ? [scope.sessionKey] : undefined,
+      ),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : new Map();

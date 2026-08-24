@@ -2,12 +2,14 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
@@ -16,11 +18,15 @@ import {
   formatUserProfileAvatarEtag,
   getProfileAvatar,
   getUserProfileDisplay,
+  getUserProfileListItem,
+  getUserProfileRole,
   linkEmail,
   listProfiles,
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
 } from "./user-profiles.js";
 
 const statePaths: string[] = [];
@@ -49,6 +55,39 @@ async function ensureTailscaleProfileWithAvatar(
 ) {
   const profile = ensureProfileForTailscaleIdentity(identity, options);
   return await adoptTailscaleProfileAvatar(profile.id, identity.profilePic, options, fetchOptions);
+}
+
+function syncTailscaleGitHubProfile(
+  params: {
+    accountId: number;
+    canonicalLogin: string;
+    login: string;
+    name?: string;
+  },
+  options: Parameters<typeof ensureProfileForTailscaleIdentity>[1],
+) {
+  return syncGitHubIdentity(
+    {
+      identity: { accountId: params.accountId, login: params.canonicalLogin },
+      authenticationAlias: { kind: "github-login", login: params.login },
+      initialDisplayName: params.name,
+    },
+    options,
+  );
+}
+
+function syncEmailGitHubProfile(
+  params: { accountId: number; canonicalLogin: string; email: string; name?: string },
+  options: Parameters<typeof ensureProfileForEmail>[1],
+) {
+  return syncGitHubIdentity(
+    {
+      identity: { accountId: params.accountId, login: params.canonicalLogin },
+      authenticationAlias: { kind: "email", email: params.email },
+      initialDisplayName: params.name,
+    },
+    options,
+  );
 }
 
 afterEach(() => {
@@ -105,7 +144,404 @@ describe("user profiles", () => {
           "SELECT provider, subject, profile_id FROM user_profile_identities ORDER BY provider, subject",
         )
         .all(),
-    ).toEqual([{ provider: "github", subject: "ada", profile_id: first.id }]);
+    ).toEqual([{ provider: "github", subject: "login:ada", profile_id: first.id }]);
+  });
+
+  it("lazily adds canonical GitHub login storage without changing the schema version", () => {
+    const options = stateOptions();
+    const database = openOpenClawStateDatabase(options).db;
+    database.exec(`
+      CREATE TABLE user_profile_identities (
+        provider TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, subject)
+      ) STRICT;
+    `);
+    const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
+
+    ensureProfileForEmail("ada@example.com", options);
+
+    expect(tableHasColumn(database, "user_profile_identities", "canonical_login")).toBe(true);
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
+  });
+
+  it("lazily adds a downgrade-safe nullable role without changing the schema version", () => {
+    const options = stateOptions();
+    const database = openOpenClawStateDatabase(options).db;
+    database.exec(`
+      CREATE TABLE user_profiles (
+        id TEXT NOT NULL PRIMARY KEY,
+        display_name TEXT,
+        avatar BLOB,
+        avatar_mime TEXT,
+        avatar_sha256 TEXT,
+        merged_into TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+    `);
+    const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
+    const profile = ensureProfileForEmail("ada@example.com", options);
+
+    expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
+    expect(getUserProfileListItem(profile.id, options)).not.toHaveProperty("role");
+    expect(listProfiles(options)[0]).not.toHaveProperty("role");
+    expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
+    expect(getUserProfileRole(profile.id, options)).toBeNull();
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
+    expect(database.prepare("PRAGMA table_info(user_profiles)").all()).toContainEqual(
+      expect.objectContaining({
+        name: "role",
+        type: "TEXT",
+        notnull: 0,
+        dflt_value: null,
+        pk: 0,
+      }),
+    );
+
+    setUserProfileRole(profile.id, "maintainer", options);
+    database
+      .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
+      .run("Older Reader", profile.id);
+    database
+      .prepare("INSERT INTO user_profiles (id, created_at, updated_at) VALUES (?, ?, ?)")
+      .run("older-profile", 1, 1);
+    closeOpenClawStateDatabaseForTest();
+
+    expect(getUserProfileRole(profile.id, options)).toBe("maintainer");
+    expect(getUserProfileRole("older-profile", options)).toBeNull();
+    expect(getUserProfileListItem(profile.id, options)).toMatchObject({
+      displayName: "Older Reader",
+      role: "maintainer",
+    });
+  });
+
+  it("assigns and clears roles on canonical profile heads without changing unassigned shapes", () => {
+    const options = stateOptions();
+    const source = ensureProfileForEmail("source@example.com", options);
+    const target = ensureProfileForEmail("target@example.com", options);
+
+    expect(getUserProfileListItem(target.id, options)).not.toHaveProperty("role");
+    expect(listProfiles(options).every((profile) => !("role" in profile))).toBe(true);
+
+    linkEmail("source@example.com", target.id, options);
+    expect(setUserProfileRole(source.id, "maintainer", options)).toMatchObject({
+      id: target.id,
+      role: "maintainer",
+    });
+    expect(getUserProfileRole(source.id, options)).toBe("maintainer");
+    expect(getUserProfileRole(target.id, options)).toBe("maintainer");
+    expect(listProfiles(options)).toContainEqual(
+      expect.objectContaining({ id: target.id, role: "maintainer" }),
+    );
+
+    const cleared = setUserProfileRole(source.id, null, options);
+    expect(cleared).toMatchObject({ id: target.id });
+    expect(cleared).not.toHaveProperty("role");
+    expect(getUserProfileRole(target.id, options)).toBeNull();
+    expect(listProfiles(options).every((profile) => !("role" in profile))).toBe(true);
+  });
+
+  it("rejects role access for a missing durable profile", () => {
+    const options = stateOptions();
+
+    expect(() => getUserProfileRole("missing-profile", options)).toThrow(
+      "user profile not found: missing-profile",
+    );
+    expect(() => setUserProfileRole("missing-profile", "guest", options)).toThrow(
+      "user profile not found: missing-profile",
+    );
+  });
+
+  it("stores and refreshes verified GitHub identity beside the authenticated login alias", () => {
+    const options = stateOptions();
+    const profile = syncTailscaleGitHubProfile(
+      {
+        accountId: 583231,
+        canonicalLogin: "octocat",
+        login: "583231",
+        name: "Numeric Login",
+      },
+      options,
+    );
+
+    expect(profile).toMatchObject({
+      id: profile.id,
+      githubIdentity: {
+        login: "octocat",
+        profileUrl: "https://github.com/octocat",
+        avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+      },
+    });
+    expect(
+      syncTailscaleGitHubProfile(
+        { accountId: 583231, canonicalLogin: "Octo-Renamed", login: "583231" },
+        options,
+      ).githubIdentity,
+    ).toMatchObject({ login: "Octo-Renamed" });
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare(
+          "SELECT provider, subject, canonical_login, profile_id FROM user_profile_identities ORDER BY subject",
+        )
+        .all(),
+    ).toEqual([
+      {
+        provider: "github",
+        subject: "583231",
+        canonical_login: "Octo-Renamed",
+        profile_id: profile.id,
+      },
+      {
+        provider: "github",
+        subject: "login:583231",
+        canonical_login: null,
+        profile_id: profile.id,
+      },
+    ]);
+  });
+
+  it("reconciles a GitHub rename to the established profile and its preferences", () => {
+    const options = stateOptions();
+    const established = syncTailscaleGitHubProfile(
+      {
+        accountId: 583231,
+        canonicalLogin: "ada",
+        login: "ada",
+        name: "Established Ada",
+      },
+      options,
+    );
+    setDisplayName(established.id, "User Chosen", options);
+    expect(setUserPreferences(established.id, { theme: "claw" }, options)).toMatchObject({
+      ok: true,
+    });
+
+    const reconciled = syncTailscaleGitHubProfile(
+      {
+        accountId: 583231,
+        canonicalLogin: "octocat",
+        login: "octocat",
+        name: "Provider Renamed",
+      },
+      options,
+    );
+
+    expect(reconciled).toMatchObject({
+      id: established.id,
+      displayName: "User Chosen",
+      githubIdentity: { login: "octocat" },
+    });
+    expect(getUserPreferences(established.id, undefined, options)).toMatchObject({ theme: "claw" });
+  });
+
+  it("keeps immutable owners isolated when a released GitHub login is reused", () => {
+    const options = stateOptions();
+    const accountA = syncTailscaleGitHubProfile(
+      {
+        accountId: 10,
+        canonicalLogin: "old-login",
+        login: "old-login",
+        name: "Account A",
+      },
+      options,
+    );
+    setDisplayName(accountA.id, "Account A Custom", options);
+    expect(setAvatar(accountA.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
+    expect(
+      setUserPreferences(
+        accountA.id,
+        { theme: "claw", [GIT_COAUTHOR_PREFERENCE_KEY]: true },
+        options,
+      ),
+    ).toMatchObject({ ok: true });
+
+    const renamedA = syncTailscaleGitHubProfile(
+      {
+        accountId: 10,
+        canonicalLogin: "new-login",
+        login: "new-login",
+        name: "Provider Renamed A",
+      },
+      options,
+    );
+    const accountB = syncTailscaleGitHubProfile(
+      {
+        accountId: 20,
+        canonicalLogin: "old-login",
+        login: "old-login",
+        name: "Account B",
+      },
+      options,
+    );
+
+    expect(renamedA.id).toBe(accountA.id);
+    expect(accountB).toMatchObject({
+      displayName: "Account B",
+      githubIdentity: { login: "old-login" },
+      hasAvatar: false,
+    });
+    expect(accountB.id).not.toBe(accountA.id);
+    expect(getUserPreferences(accountB.id, undefined, options)).toEqual({});
+    expect(ensureProfileForTailscaleIdentity({ login: "old-login@github" }, options).id).toBe(
+      accountB.id,
+    );
+
+    expect(getUserProfileListItem(accountA.id, options)).toMatchObject({
+      displayName: "Account A Custom",
+      githubIdentity: { login: "new-login" },
+      hasAvatar: true,
+    });
+    expect(getProfileAvatar(accountA.id, options)?.bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(getUserPreferences(accountA.id, undefined, options)).toEqual({
+      theme: "claw",
+      [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+    });
+    expect(listProfiles(options)).toEqual([
+      expect.objectContaining({ id: accountA.id, mergedInto: null }),
+      expect.objectContaining({ id: accountB.id, mergedInto: null }),
+    ]);
+  });
+
+  it("does not create provisional profiles on repeated authenticated GitHub sync", () => {
+    const options = stateOptions();
+    const first = syncTailscaleGitHubProfile(
+      { accountId: 10, canonicalLogin: "ada", login: "ada", name: "Ada" },
+      options,
+    );
+    const second = syncTailscaleGitHubProfile(
+      { accountId: 10, canonicalLogin: "ada", login: "ada", name: "Changed Provider Name" },
+      options,
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(listProfiles(options)).toEqual([
+      expect.objectContaining({ id: first.id, displayName: "Ada", mergedInto: null }),
+    ]);
+  });
+
+  it("moves a reused Cloudflare email without exposing the prior verified owner", () => {
+    const options = stateOptions();
+    const accountA = syncEmailGitHubProfile(
+      {
+        accountId: 10,
+        canonicalLogin: "account-a",
+        email: "shared@example.test",
+        name: "Account A",
+      },
+      options,
+    );
+    setDisplayName(accountA.id, "Account A Custom", options);
+    expect(setUserPreferences(accountA.id, { theme: "claw" }, options)).toMatchObject({ ok: true });
+
+    const accountB = syncEmailGitHubProfile(
+      {
+        accountId: 20,
+        canonicalLogin: "account-b",
+        email: "shared@example.test",
+        name: "Account B",
+      },
+      options,
+    );
+
+    expect(accountB).toMatchObject({
+      displayName: "Account B",
+      emails: ["shared@example.test"],
+      githubIdentity: { login: "account-b" },
+    });
+    expect(accountB.id).not.toBe(accountA.id);
+    expect(ensureProfileForEmail("shared@example.test", options).id).toBe(accountB.id);
+    expect(getUserProfileListItem(accountA.id, options)).toMatchObject({
+      displayName: "Account A Custom",
+      emails: [],
+      githubIdentity: { login: "account-a" },
+    });
+    expect(getUserPreferences(accountA.id, undefined, options)).toEqual({ theme: "claw" });
+    expect(getUserPreferences(accountB.id, undefined, options)).toEqual({});
+  });
+
+  it("keeps retired GitHub attribution rows inert during verified sync", () => {
+    const options = stateOptions();
+    const matching = ensureProfileForTailscaleIdentity({ login: "ada@github" }, options);
+    const mismatched = ensureProfileForTailscaleIdentity({ login: "grace@github" }, options);
+    const database = openOpenClawStateDatabase(options).db;
+    const insertLegacy = database.prepare(
+      "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github-attribution', ?, ?, ?, 1)",
+    );
+    insertLegacy.run("10", matching.id, "ada");
+    insertLegacy.run("99", mismatched.id, "wrong-account");
+
+    expect(
+      syncTailscaleGitHubProfile({ accountId: 10, canonicalLogin: "ada", login: "ada" }, options),
+    ).toMatchObject({ githubIdentity: { login: "ada" } });
+    syncTailscaleGitHubProfile({ accountId: 11, canonicalLogin: "grace", login: "grace" }, options);
+
+    expect(getUserPreferences(matching.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
+    expect(getUserPreferences(mismatched.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
+    expect(
+      database
+        .prepare("SELECT COUNT(*) AS count FROM user_profile_identities WHERE provider = ?")
+        .get("github-attribution"),
+    ).toEqual({ count: 2 });
+  });
+
+  it("does not carry co-author consent to a different immutable GitHub account", () => {
+    const options = stateOptions();
+    const profile = syncTailscaleGitHubProfile(
+      { accountId: 10, canonicalLogin: "first-owner", login: "shared" },
+      options,
+    );
+    expect(
+      setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options),
+    ).toMatchObject({ ok: true });
+
+    const nextOwner = syncTailscaleGitHubProfile(
+      { accountId: 11, canonicalLogin: "next-owner", login: "shared" },
+      options,
+    );
+
+    expect(nextOwner.id).not.toBe(profile.id);
+    expect(getUserPreferences(nextOwner.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
+    expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({
+      [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+    });
+  });
+
+  it("keeps co-author consent with the verified account that survives an email merge", () => {
+    const options = stateOptions();
+    const discarded = ensureProfileForEmail("discarded@example.com", options);
+    const established = ensureProfileForEmail("established@example.com", options);
+    syncEmailGitHubProfile(
+      { accountId: 10, canonicalLogin: "discarded", email: "discarded@example.com" },
+      options,
+    );
+    syncEmailGitHubProfile(
+      { accountId: 11, canonicalLogin: "established", email: "established@example.com" },
+      options,
+    );
+    setUserPreferences(discarded.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options);
+
+    const merged = linkEmail("discarded@example.com", established.id, options);
+
+    expect(merged.githubIdentity).toMatchObject({ login: "established" });
+    expect(getUserPreferences(established.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({});
+
+    const carrying = ensureProfileForEmail("carrying@example.com", options);
+    const unverified = ensureProfileForEmail("unverified@example.com", options);
+    syncEmailGitHubProfile(
+      { accountId: 12, canonicalLogin: "carrying", email: "carrying@example.com" },
+      options,
+    );
+    setUserPreferences(carrying.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options);
+
+    const carried = linkEmail("carrying@example.com", unverified.id, options);
+
+    expect(carried.githubIdentity).toMatchObject({ login: "carrying" });
+    expect(getUserPreferences(unverified.id, [GIT_COAUTHOR_PREFERENCE_KEY], options)).toEqual({
+      [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+    });
   });
 
   it("keeps dotted Tailscale logins on the email alias path", () => {
@@ -392,7 +828,7 @@ describe("user profiles", () => {
     const database = openOpenClawStateDatabase(options).db;
     expect(
       database.prepare("SELECT provider, subject, profile_id FROM user_profile_identities").all(),
-    ).toEqual([{ provider: "github", subject: "user", profile_id: provider.id }]);
+    ).toEqual([{ provider: "github", subject: "login:user", profile_id: provider.id }]);
     expect(database.prepare("SELECT email, profile_id FROM user_profile_emails").all()).toEqual([
       { email: "person@gmail.com", profile_id: email.id },
     ]);

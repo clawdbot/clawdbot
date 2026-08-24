@@ -20,7 +20,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { readStoredDeviceIdentityReadOnly } from "./device-identity-store.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
-import { resolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
+import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
 
@@ -195,8 +195,20 @@ export function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       heartbeat: resolveHeartbeatConfig(cfg, agentId),
     }));
   }
-  const fallbackId = resolveAmbientHeartbeatAgentId(cfg);
+  const fallbackId = tryResolveAmbientHeartbeatAgentId(cfg);
+  if (!fallbackId) {
+    return [];
+  }
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+}
+
+export function isHeartbeatOwnerUnresolved(cfg: OpenClawConfig): boolean {
+  return (
+    listAgentIds(cfg).length > 1 &&
+    !hasExplicitHeartbeatAgents(cfg) &&
+    !cfg.agents?.defaults?.heartbeat &&
+    tryResolveAmbientHeartbeatAgentId(cfg) === undefined
+  );
 }
 
 function resolveHeartbeatPromptRaw(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
@@ -310,4 +322,4 @@ export function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   const configured = cfg.agents?.defaults?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
-export { resolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
+export { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";

@@ -1,9 +1,13 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  type ChatContextWindowControlParams,
+  renderContextWindowControl,
+} from "./chat-context-window-control.ts";
 import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
@@ -15,12 +19,11 @@ import { syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 export type ChatModelCatalogState = {
   hasSnapshot: boolean;
-  onRetry?: () => void;
-  status: "idle" | "loading" | "refreshing" | "ready" | "error";
+  status: "idle" | "loading" | "refreshing" | "ready" | "error" | "offline";
 };
 
 type ChatModelPickerParams = {
-  defaultModelLabel: string;
+  contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
@@ -34,6 +37,7 @@ type ChatModelPickerParams = {
   onModelSetup?: () => void;
   onOpen?: () => unknown;
   onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
+  onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
 };
@@ -104,6 +108,7 @@ function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElemen
 
 function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   const model = row.dataset.chatModelName ?? "";
+  const keywords = row.dataset.chatModelKeywords ?? "";
   const provider = row.dataset.chatModelProviderLabel ?? "";
   if (model.startsWith(query)) {
     return 0;
@@ -111,10 +116,13 @@ function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   if (model.includes(query)) {
     return 1;
   }
-  if (provider.startsWith(query)) {
+  if (keywords.includes(query)) {
     return 2;
   }
-  return provider.includes(query) ? 3 : null;
+  if (provider.startsWith(query)) {
+    return 3;
+  }
+  return provider.includes(query) ? 4 : null;
 }
 
 function updateModelSearch(input: HTMLInputElement): void {
@@ -226,20 +234,27 @@ function renderCatalogState(
   hasOptions: boolean,
   hasSelectableOptions: boolean,
   onModelSetup?: () => void,
+  errorLabel = t("chat.modelControls.modelsUnavailable"),
+  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
 ) {
   if (!state || (state.status === "ready" && hasSelectableOptions)) {
     return nothing;
   }
+  if (state.status === "error" && hasOptions) {
+    return nothing;
+  }
   const label =
-    state.status === "refreshing"
-      ? t("chat.modelControls.refreshingModels")
-      : state.status === "error"
-        ? state.hasSnapshot
-          ? t("chat.modelControls.modelsRefreshFailed")
-          : t("chat.modelControls.modelsUnavailable")
-        : state.status === "ready"
-          ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-          : t("chat.modelControls.loadingModels");
+    state.status === "offline"
+      ? t("common.offline")
+      : state.status === "refreshing"
+        ? t("chat.modelControls.refreshingModels")
+        : state.status === "error"
+          ? errorLabel
+          : state.status === "ready"
+            ? hasOptions
+              ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
+              : t("chat.modelControls.noModelsAvailable")
+            : t("chat.modelControls.loadingModels");
   return html`
     <div
       class="chat-controls__model-catalog-state ${hasOptions
@@ -252,26 +267,26 @@ function renderCatalogState(
         ${state.status === "error" ? icons.alertTriangle : nothing}
         <span>${label}</span>
       </span>
-      ${state.status === "error" && state.onRetry
+      ${state.status === "error" && retryTarget
         ? html`
             <button
-              class="chat-controls__model-catalog-retry"
-              data-chat-model-catalog-retry="true"
+              class="chat-controls__model-catalog-action"
+              data-chat-model-target-retry=${retryTarget.groupId}
               type="button"
+              ?disabled=${retryTarget.disabled}
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
-                state.onRetry?.();
+                retryTarget.onRetry(retryTarget.groupId);
               }}
             >
-              ${icons.refresh}
-              <span>${t("common.retry")}</span>
+              ${t("common.retry")}
             </button>
           `
         : nothing}
       ${state.status === "ready" && !hasSelectableOptions && onModelSetup
         ? html`
             <button
-              class="chat-controls__model-catalog-retry"
+              class="chat-controls__model-catalog-action"
               data-chat-model-setup="true"
               type="button"
               @click=${(event: MouseEvent) => {
@@ -294,6 +309,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       ? defaultModelOption
       : params.modelOptions.find((option) => option.value === params.selectedModelValue);
   const modelToolsUnavailable = activeModelOption?.supportsTools === false;
+  const selectedContextWindowOption = params.contextWindow?.options.find(
+    (option) => option.id === params.contextWindow?.selected,
+  );
+  const showContextWindowBadge =
+    selectedContextWindowOption !== undefined &&
+    params.contextWindow?.selected !== params.contextWindow?.defaultId;
   const triggerTitle = [
     params.triggerStatusLabel ?? params.triggerModelLabel,
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
@@ -323,7 +344,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   const optionIndex = new Map(orderedOptions.map((option, index) => [option.value, index]));
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
-  const hasOptions = params.modelOptions.length + targetOptionCount > 0;
+  const hasOptions =
+    params.modelOptions.length + targetOptionCount > 0 ||
+    targetGroups.some((group) => group.status !== "ready");
   const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
   const commitModel = (value: string) => {
     if (params.modelSelectionLocked) {
@@ -418,6 +441,16 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         <span class="chat-controls__inline-select-label">
           ${params.triggerStatusLabel ?? params.triggerModelLabel}
         </span>
+        ${showContextWindowBadge
+          ? html`
+              <span
+                class="chat-controls__locked-model-badge chat-controls__model-context-badge"
+                data-chat-model-context-badge
+              >
+                ${selectedContextWindowOption.label}
+              </span>
+            `
+          : nothing}
       </summary>
       <wa-popup data-anchored-overlay>
         <div
@@ -523,6 +556,22 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 >
                                 <span>${group.label}</span>
                               </div>
+                              ${group.status === "ready"
+                                ? nothing
+                                : renderCatalogState(
+                                    { hasSnapshot: false, status: group.status },
+                                    false,
+                                    false,
+                                    undefined,
+                                    group.errorLabel,
+                                    params.onTargetRetry
+                                      ? {
+                                          disabled: params.disabled,
+                                          groupId: group.id,
+                                          onRetry: params.onTargetRetry,
+                                        }
+                                      : undefined,
+                                  )}
                               ${repeat(
                                 group.options,
                                 (entry) => entry.value,
@@ -548,44 +597,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       >
                         ${t("chat.modelControls.noMatchingModels")}
                       </div>
-                      ${params.modelOptions.length > 0
+                      ${params.contextWindow
+                        ? renderContextWindowControl(params.contextWindow, params.sessionKey)
+                        : nothing}
+                      ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
                         ? html`<footer class="chat-controls__model-provenance">
-                            ${params.selectedModelValue === ""
-                              ? html`<span class="chat-controls__model-provenance-value--inherit">
-                                  ${t("chat.modelControls.usingDefault")}
-                                </span>`
-                              : html`
-                                  <span>${t("chat.modelControls.sessionOverride")}</span>
-                                  <openclaw-tooltip
-                                    .content=${t("chat.modelControls.resetToDefault", {
-                                      model: params.defaultModelLabel,
-                                    })}
-                                  >
-                                    <button
-                                      class="chat-controls__model-reset"
-                                      data-chat-model-reset="true"
-                                      type="button"
-                                      ?disabled=${params.disabled}
-                                      @click=${(event: MouseEvent) => {
-                                        event.stopPropagation();
-                                        if (params.disabled) {
-                                          event.preventDefault();
-                                          return;
-                                        }
-                                        commitModel("");
-                                        const details = (
-                                          event.currentTarget as HTMLElement
-                                        ).closest<HTMLDetailsElement>("details");
-                                        if (details) {
-                                          details.open = false;
-                                          details.querySelector<HTMLElement>("summary")?.focus();
-                                        }
-                                      }}
-                                    >
-                                      ${t("chat.modelControls.useDefault")}
-                                    </button>
-                                  </openclaw-tooltip>
-                                `}
+                            <span>${t("chat.modelControls.sessionOverride")}</span>
                           </footer>`
                         : nothing}
                     `

@@ -24,6 +24,8 @@ export function strokeIcon(body: SVGTemplateResult): TemplateResult {
 export const toolIcons = {
   shieldCheck: strokeIcon(svg` <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z" />
     <path d="m9 12 2 2 4-4" />`),
+  shieldX: strokeIcon(svg` <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z" />
+    <path d="m9.5 9.5 5 5m0-5-5 5" />`),
   cpu: strokeIcon(svg` <rect width="16" height="16" x="4" y="4" rx="2" />
     <rect width="6" height="6" x="9" y="9" rx="1" />
     <path d="M15 2v2" />
@@ -66,6 +68,10 @@ export const toolIcons = {
   image: strokeIcon(svg` <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
     <circle cx="9" cy="9" r="2" />
     <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />`),
+  copyImage: strokeIcon(svg` <rect width="14" height="14" x="8" y="8" rx="2" />
+    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    <circle cx="13" cy="13" r="1" />
+    <path d="m21 18-3-3-5 5" />`),
   camera: strokeIcon(svg` <path
       d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3z"
     />
@@ -156,11 +162,28 @@ export const toolIcons = {
     <circle cx="18" cy="18" r="3" />
     <path d="M13 6h3a2 2 0 0 1 2 2v7" />
     <path d="M6 9v12" />`),
+  gitPullRequestDraft: strokeIcon(svg` <circle cx="6" cy="6" r="3" />
+    <circle cx="18" cy="18" r="3" />
+    <path d="M6 9v12" />
+    <path d="M18 6v.01" />
+    <path d="M18 11v.01" />`),
+  gitPullRequestClosed: strokeIcon(svg` <circle cx="6" cy="6" r="3" />
+    <path d="M6 9v12" />
+    <path d="m15 9 6 6" />
+    <path d="m21 9-6 6" />`),
   gitMerge: strokeIcon(svg` <circle cx="6" cy="6" r="3" />
     <circle cx="18" cy="18" r="3" />
     <path d="M6 21V9a9 9 0 0 0 9 9" />`),
   terminal: strokeIcon(svg` <polyline points="4 17 10 11 4 5" />
     <line x1="12" x2="20" y1="19" y2="19" />`),
+  squareTerminal: strokeIcon(svg` <path d="m7 11 2-2-2-2" />
+    <path d="M11 13h4" />
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />`),
+  listTree: strokeIcon(svg` <path d="M21 12h-8" />
+    <path d="M21 6H8" />
+    <path d="M21 18h-8" />
+    <path d="M3 6v4c0 1.1.9 2 2 2h3" />
+    <path d="M3 10v6c0 1.1.9 2 2 2h3" />`),
   claw: strokeIcon(svg` <path
       d="M8.2 10 A5.2 5.2 0 1 0 8.2 20.4 A5.2 5.2 0 0 0 8.2 10 Z M10.2 20 C14.5 20.8 19 18.6 22.3 13.2 C21 12.9 19.7 12.7 18.4 12.8 L17.5 14.6 L16 12.9 L14.3 14.5 L13.5 13 L11.5 14.2 Z"
     />
@@ -174,9 +197,13 @@ export const toolIcons = {
   lobster: html`
     <svg viewBox="0 0 120 120" fill="none">
       <defs>
+        <!-- Gradient stops read theme tokens (base.css --lobster-icon-*): the
+             shipped hex pair sank into dark backgrounds, so dark mode brightens
+             both stops while light mode keeps the original artwork. var() is
+             only valid in style="", not presentation attributes. -->
         <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#ff4d4d" />
-          <stop offset="100%" stop-color="#991b1b" />
+          <stop offset="0%" style="stop-color: var(--lobster-icon-body, #ff4d4d)" />
+          <stop offset="100%" style="stop-color: var(--lobster-icon-shade, #991b1b)" />
         </linearGradient>
       </defs>
       <path
@@ -188,10 +215,20 @@ export const toolIcons = {
         d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
         fill="url(#lob-g)"
       />
-      <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <circle cx="45" cy="35" r="6" fill="#050810" />
-      <circle cx="75" cy="35" r="6" fill="#050810" />
+      <path
+        d="M45 15Q35 5 30 8"
+        style="stroke: var(--lobster-icon-body, #ff4d4d)"
+        stroke-width="3"
+        stroke-linecap="round"
+      />
+      <path
+        d="M75 15Q85 5 90 8"
+        style="stroke: var(--lobster-icon-body, #ff4d4d)"
+        stroke-width="3"
+        stroke-linecap="round"
+      />
+      <circle cx="45" cy="35" r="6" style="fill: var(--lobster-icon-eye, #050810)" />
+      <circle cx="75" cy="35" r="6" style="fill: var(--lobster-icon-eye, #050810)" />
       <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
       <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
     </svg>

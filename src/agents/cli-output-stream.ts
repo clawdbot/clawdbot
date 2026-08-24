@@ -30,6 +30,7 @@ import {
   decodeCliRecords,
   isClaudeStreamJsonDialect,
   isClaudeStreamJsonResult,
+  isClaudeSubagentRecord,
   isGeminiStreamJsonDialect,
   isStreamJsonDialect,
   missingMessageBoundarySeparator,
@@ -44,13 +45,13 @@ import {
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
 
-export const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
+const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
 
-export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
+const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
@@ -73,7 +74,7 @@ function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): boolean {
 }
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
-export function frameBoundedCliJsonlChunk(
+function frameBoundedCliJsonlChunk(
   state: { pending: string },
   chunk: string,
   maxLineChars: number,
@@ -102,7 +103,7 @@ export function frameBoundedCliJsonlChunk(
 }
 
 /** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
-export function normalizeClaudeCliStreamJsonRecord(
+function normalizeClaudeCliStreamJsonRecord(
   parsed: Record<string, unknown>,
 ): { line: string; omittedRawChars: number } | undefined {
   if (parsed.type !== "user" || !isRecord(parsed.message)) {
@@ -368,7 +369,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
-    if (parsed.type === "assistant" && isRecord(parsed.message)) {
+    if (
+      parsed.type === "assistant" &&
+      isRecord(parsed.message) &&
+      !isClaudeSubagentRecord(parsed)
+    ) {
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
       params.onAssistantMessage?.(parsed.message);
       if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {

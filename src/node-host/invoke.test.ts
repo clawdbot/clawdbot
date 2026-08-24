@@ -8,6 +8,10 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import type {
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeHostCommandContext,
+} from "../plugins/types.node-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
@@ -194,6 +198,70 @@ describe("node host invoke", () => {
     });
   });
 
+  it("binds managed workspace claims to the exact live plugin invocation session", async () => {
+    const release = vi.fn();
+    const acquireManagedWorkspace = vi.fn(() => ({ workspaceDir: "/managed", release }));
+    const workspaceRequest = {
+      workspaceDir: "/managed",
+      environmentId: "environment-1",
+      sessionId: "session-1",
+      ownerEpoch: 1,
+      sessionKey: "agent:main:managed",
+    };
+    let retainedAcquire:
+      | NonNullable<OpenClawPluginNodeHostCommandContext["acquireManagedWorkspace"]>
+      | undefined;
+    const handle = vi.fn<OpenClawPluginNodeHostCommand["handle"]>(
+      async (paramsJSON, _io, context) => {
+        expect(JSON.parse(paramsJSON ?? "{}")).toEqual({ sessionKey: "agent:main:other" });
+        expect(context?.sessionKey).toBe(workspaceRequest.sessionKey);
+        const acquire = context?.acquireManagedWorkspace;
+        if (!acquire) {
+          throw new Error("managed workspace authority missing");
+        }
+        retainedAcquire = acquire;
+        expect(() => acquire({ ...workspaceRequest, sessionKey: "agent:main:other" })).toThrow(
+          "workspace invocation authority is closed",
+        );
+        expect(acquire(workspaceRequest)).toEqual({
+          workspaceDir: "/managed",
+          release,
+        });
+        return '{"ok":true}';
+      },
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "workspace-plugin",
+        pluginName: "Workspace Plugin",
+        command: { command: "workspace.claim", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    await handleInvoke(
+      {
+        id: "invoke-workspace",
+        nodeId: "node-1",
+        command: "workspace.claim",
+        paramsJSON: JSON.stringify({ sessionKey: "agent:main:other" }),
+        sessionKey: workspaceRequest.sessionKey,
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+      undefined,
+      { pluginCommandContext: { sendNodeEvent: vi.fn(), acquireManagedWorkspace } },
+    );
+
+    expect(acquireManagedWorkspace).toHaveBeenCalledOnce();
+    expect(() => retainedAcquire?.(workspaceRequest)).toThrow(
+      "workspace invocation authority is closed",
+    );
+  });
+
   it("does not publish a canceled non-duplex plugin result", async () => {
     const controller = new AbortController();
     let resolvePlugin: ((result: string) => void) | undefined;
@@ -344,10 +412,27 @@ describe("node host invoke", () => {
     fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
   });
 
-  it("returns a redacted exec approvals snapshot", async () => {
+  it.each([
+    { label: "when params are omitted", params: undefined, resolvedDefaults: undefined },
+    {
+      label: "when resolved defaults are not requested",
+      params: { includeResolvedDefaults: false },
+      resolvedDefaults: undefined,
+    },
+    {
+      label: "with resolved defaults when requested",
+      params: { includeResolvedDefaults: true },
+      resolvedDefaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    },
+  ])("returns a redacted exec approvals snapshot $label", async ({ params, resolvedDefaults }) => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
-    const result = await invokeExecApprovals("system.execApprovals.get");
+    const result = await invokeExecApprovals("system.execApprovals.get", params);
     const payload = JSON.parse(result.payloadJSON ?? "{}") as ExecApprovalsSnapshot;
     expect(payload).toEqual({
       path: "/tmp/exec-approvals.json",
@@ -357,6 +442,7 @@ describe("node host invoke", () => {
         version: 1,
         socket: { path: "/tmp/exec-approvals.sock" },
       },
+      ...(resolvedDefaults ? { resolvedDefaults } : {}),
     });
   });
 

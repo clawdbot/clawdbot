@@ -125,3 +125,33 @@ describe("standalone upgrade survivor plugin registry", () => {
     expect(existsSync(packageTarball)).toBe(true);
   });
 });
+
+describe("standalone upgrade survivor live OpenAI probe", () => {
+  it("fails closed before Docker when the opted-in key is missing", () => {
+    const { captureDir, result } = runSurvivor({
+      OPENAI_API_KEY: undefined,
+      OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1",
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENAI_API_KEY",
+    );
+    expect(existsSync(join(captureDir, "docker-args"))).toBe(false);
+  });
+
+  it("forwards the opted-in key by environment name without putting it in Docker arguments", () => {
+    const key = "live-openai-key-must-not-appear-in-arguments";
+    const { captureDir, result } = runSurvivor({
+      OPENAI_API_KEY: key,
+      OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL: "openai/test-model",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(join(captureDir, "docker-args"), "utf8");
+    expect(args).toContain("-e OPENAI_API_KEY");
+    expect(args).toContain("-e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL=openai/test-model");
+    expect(args).not.toContain(key);
+  });
+});

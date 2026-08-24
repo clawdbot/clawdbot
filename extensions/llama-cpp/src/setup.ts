@@ -6,10 +6,15 @@ import type {
   ProviderAuthContext,
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { removeProviderAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildLlamaCppAuthProfileRemovalPatch,
+  LLAMA_CPP_DEFAULT_PROFILE_ID,
+} from "./auth-config.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
@@ -23,7 +28,6 @@ import {
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
-import { resolveManagedLlamaServerPaths, selectLlamaServerAsset } from "./llama-server-install.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
@@ -59,7 +63,7 @@ function configuredCandidates(
   config: ProviderAppGuidedSetupContext["config"],
 ): Array<{ model: ModelDefinitionConfig; provider: ModelProviderConfig }> {
   const existing = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const provider = buildLlamaCppProviderConfig(existing);
+  const provider = buildLlamaCppProviderConfig(existing?.localService ? existing : undefined);
   const primary = readPrimaryModel(config);
   const primaryId = primary?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
     ? primary.slice(LLAMA_CPP_PROVIDER_ID.length + 1)
@@ -122,15 +126,18 @@ function buildSetupResult(params: {
   managed: ManagedLlamaServer;
   defaultModel?: string;
 }): ProviderAuthResult {
+  const existing = params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const switchingFromExternal = Boolean(existing && !existing.localService);
   return {
     profiles: [],
     defaultModel: params.defaultModel ?? DEFAULT_LLAMA_CPP_MODEL_REF,
     configPatch: {
+      ...buildLlamaCppAuthProfileRemovalPatch(params.config),
       models: {
         mode: params.config.models?.mode ?? "merge",
         providers: {
           [LLAMA_CPP_PROVIDER_ID]: buildLlamaCppProviderConfig(
-            params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID],
+            switchingFromExternal ? undefined : existing,
             params.managed,
           ),
         },
@@ -180,20 +187,16 @@ export async function prepareLlamaCppSetup(
     defaultModel: ctx.modelRef,
     managed: {
       command: existing.localService.command,
-      presetPath:
-        existing.localService.args?.find(
-          (_, index, args) => args[index - 1] === "--models-preset",
-        ) ?? resolveManagedLlamaServerPaths(selectLlamaServerAsset()).presetPath,
       baseUrl,
       healthUrl: existing.localService.healthUrl ?? `${rootUrl}/health`,
       args: existing.localService.args ?? [],
-      backend: selectLlamaServerAsset().backend,
     },
   });
 }
 
 export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const managedExisting = existing?.localService ? existing : undefined;
   const candidates = configuredCandidates(ctx.config);
   let selected = candidates[0];
   let chatModelPath = selected ? await resolveCachedCandidate(selected) : undefined;
@@ -224,7 +227,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
 
   const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
   try {
-    const cacheDir = resolveLlamaCppModelCacheDir(existing);
+    const cacheDir = resolveLlamaCppModelCacheDir(managedExisting);
     chatModelPath ??= await ensureLlamaCppModel({
       source: resolveLlamaCppModelSource(selected.model),
       cacheDir,
@@ -249,9 +252,18 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
       chatModelPath,
       contextSize,
       maxTokens: selected.model.maxTokens,
+      embeddingModelIsDefault: true,
       embeddingModelPath,
-      port: readConfiguredPort(existing),
+      port: readConfiguredPort(managedExisting),
     });
+    const updated = await removeProviderAuthProfilesWithLock({
+      provider: LLAMA_CPP_PROVIDER_ID,
+      profileIds: [LLAMA_CPP_DEFAULT_PROFILE_ID],
+      agentDir: ctx.agentDir,
+    });
+    if (!updated) {
+      throw new Error("Failed to remove the previous llama.cpp endpoint auth profile");
+    }
     progress.stop("Managed llama.cpp server prepared");
     return buildSetupResult({
       config: ctx.config,

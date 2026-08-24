@@ -46,13 +46,16 @@ type UsageAuthState = {
   env: NodeJS.ProcessEnv;
   agentDir?: string;
   allowAuthProfileStore: boolean;
+  getStore?: () => AuthStore;
   store?: AuthStore;
 };
 
 function resolveUsageAuthStore(state: UsageAuthState): AuthStore {
-  state.store ??= ensureAuthProfileStore(state.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  state.store ??=
+    state.getStore?.() ??
+    ensureAuthProfileStore(state.agentDir, {
+      allowKeychainPrompt: false,
+    });
   return state.store;
 }
 
@@ -477,10 +480,11 @@ function hasAuthProfileCredentialSource(params: {
 export async function resolveProviderAuths(params: {
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
+  getStore?: () => AuthStore;
+  store?: AuthStore;
   agentDir?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  skipPluginAuthWithoutCredentialSource?: boolean;
   onError?: (provider: UsageProviderId, error: unknown) => void;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
@@ -495,36 +499,22 @@ export async function resolveProviderAuths(params: {
   const authProfileSourceState: UsageAuthState = {
     ...stateBase,
     allowAuthProfileStore: true,
+    getStore: params.getStore,
+    store: params.store,
   };
-  const hasAuthProfileStoreSource = params.skipPluginAuthWithoutCredentialSource
-    ? hasAnyAuthProfileStoreSource(params.agentDir)
-    : false;
+  // Credential-source gate (#69479): resolving plugin usage auth imports the
+  // provider plugin's runtime, so a provider with no config/env/profile-store
+  // credential source must be skipped before that import — otherwise every
+  // usage read cold-loads plugin runtime just to learn there is nothing to auth.
+  // A caller-prepared store is itself the source; only probe disk without one.
+  const hasAuthProfileStoreSource =
+    params.store !== undefined ||
+    params.getStore !== undefined ||
+    hasAnyAuthProfileStoreSource(params.agentDir);
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
     try {
-      if (!params.skipPluginAuthWithoutCredentialSource) {
-        const pluginAuth = await resolveProviderUsageAuthViaPlugin({
-          state: authProfileSourceState,
-          provider,
-        });
-        if (pluginAuth.auth) {
-          auths.push(pluginAuth.auth);
-          continue;
-        }
-        if (pluginAuth.handled) {
-          continue;
-        }
-        const fallbackAuth = await resolveProviderUsageAuthFallback({
-          state: authProfileSourceState,
-          provider,
-        });
-        if (fallbackAuth) {
-          auths.push(fallbackAuth);
-        }
-        continue;
-      }
-
       const directCredentialState = { ...stateBase, allowAuthProfileStore: false };
       const credentialProviderIds = resolveUsageCredentialProviderIds({
         state: directCredentialState,
@@ -555,6 +545,8 @@ export async function resolveProviderAuths(params: {
       const state: UsageAuthState = {
         ...stateBase,
         allowAuthProfileStore,
+        getStore: params.getStore,
+        store: params.store,
       };
       const hasPluginCredentialSource = hasDirectCredentialSource || allowAuthProfileStore;
 

@@ -113,8 +113,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map(([, moduleName = ""]) => moduleName);
 check(
-  ownerModules.length === 58 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 58-module owner list",
+  ownerModules.length === 59 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 59-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,
@@ -132,21 +132,27 @@ check(
 );
 
 const publicIndexSource = read("packages/gateway-protocol/src/index.ts");
+const publicSchemaSource = read("packages/gateway-protocol/src/public-schema.ts");
 check(
-  publicIndexSource.includes('} from "./schema-modules.js";'),
-  "index.ts must explicitly export the reviewed public schema allowlist",
+  publicIndexSource.includes('export * from "./public-schema.js";'),
+  "index.ts must expose the reviewed public schema allowlist",
 );
 check(
-  !publicIndexSource.includes('export * from "./schema-modules.js";'),
-  "index.ts must not expose every schema module export implicitly",
+  publicSchemaSource.includes('} from "./schema-modules.js";'),
+  "public-schema.ts must explicitly export the reviewed public schema allowlist",
+);
+check(
+  !publicSchemaSource.includes('export * from "./schema-modules.js";'),
+  "public-schema.ts must not expose every schema module export implicitly",
 );
 check(
   !fs.existsSync(path.join(repoRoot, "packages/gateway-protocol/src/schema-export-registry.ts")),
-  "the public schema allowlist must stay in the canonical package index",
+  "the public schema allowlist must stay in its canonical public-schema owner",
 );
 
 for (const relativePath of [
   "packages/gateway-protocol/src/index.ts",
+  "packages/gateway-protocol/src/public-schema.ts",
   "packages/gateway-protocol/src/validator-registry.ts",
 ]) {
   check(

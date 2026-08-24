@@ -1,6 +1,7 @@
 // Canvas doctor contract migrates documents from configured host roots into core storage.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
@@ -9,6 +10,30 @@ import {
   readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { migrateCanvasHostConfig } from "./src/config-migration.js";
+
+const RETIRED_CANVAS_HOST_CONFIG_PATH = ["plugins", "entries", "canvas", "config", "host"] as const;
+
+/** Retired Canvas file-host settings detected before strict plugin validation. */
+export const legacyConfigRules = [
+  {
+    path: ["canvasHost"],
+    message:
+      'canvasHost is retired; only plugins.entries.canvas.config.host.enabled remains. Run "openclaw doctor --fix".',
+  },
+  ...(["root", "port", "liveReload"] as const).map((key) => ({
+    path: [...RETIRED_CANVAS_HOST_CONFIG_PATH, key],
+    message: `${[...RETIRED_CANVAS_HOST_CONFIG_PATH, key].join(".")} is retired. Run "openclaw doctor --fix".`,
+  })),
+];
+
+/** Removes retired file-host config while preserving the surviving enablement switch. */
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  return migrateCanvasHostConfig(cfg) ?? { config: cfg, changes: [] };
+}
 
 type StateMigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 

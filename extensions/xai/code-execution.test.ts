@@ -219,7 +219,7 @@ describe("xai code_execution tool", () => {
     });
   });
 
-  it("reuses the xAI plugin web search key for code_execution requests", async () => {
+  it("reuses the xAI plugin web search key without overriding custom model reasoning", async () => {
     const mockFetch = installCodeExecutionFetch();
     const tool = createCodeExecutionTool({
       config: {
@@ -230,6 +230,7 @@ describe("xai code_execution tool", () => {
                 webSearch: {
                   apiKey: "xai-plugin-key", // pragma: allowlist secret
                 },
+                codeExecution: { model: "grok-build-0.1" },
               },
             },
           },
@@ -242,6 +243,14 @@ describe("xai code_execution tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.model).toBe("grok-build-0.1");
+    expect(body.input).toEqual([
+      { role: "user", content: "Compute the standard deviation of [1, 2, 3]" },
+    ]);
+    expect(body.store).toBe(false);
+    expect(body).not.toHaveProperty("reasoning");
+    expect(body).not.toHaveProperty("max_turns");
   });
 
   it("reports malformed code_execution JSON as a provider error", async () => {

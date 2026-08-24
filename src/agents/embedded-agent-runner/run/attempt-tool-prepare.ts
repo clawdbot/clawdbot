@@ -4,6 +4,10 @@
  */
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  isCodeModeDiagnosticEnabled,
+  logCodeModeDiagnostic,
+} from "../../../logging/code-mode-diagnostic.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -45,6 +49,7 @@ import {
 } from "./attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt-tool-search-run-plan.js";
+import { isCodeModeReconciliationTool } from "./code-mode-reconciliation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
@@ -70,15 +75,18 @@ export function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
-  const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
-  const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
-    attempt.toolsAllow,
-    {
-      forceMessageTool: forceDirectMessageTool,
-      forceToolNames:
-        attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : undefined,
-    },
-  );
+  const forceDirectMessageTool =
+    attempt.forceCodeModeReconciliationTools === true
+      ? false
+      : messageToolOwnsVisibleReply(attempt);
+  const toolsAllowWithForcedRuntimeTools =
+    attempt.forceCodeModeReconciliationTools === true
+      ? ["read"]
+      : mergeForcedEmbeddedAttemptToolsAllow(attempt.toolsAllow, {
+          forceMessageTool: forceDirectMessageTool,
+          forceToolNames:
+            attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : undefined,
+        });
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
@@ -104,7 +112,24 @@ export function prepareEmbeddedAttemptToolBase(params: {
     skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
     toolsAllow: attempt.toolsAllow,
     forceCodeModeControls: attempt.forceCodeModeTools,
+    forceDirectTools: attempt.forceCodeModeReconciliationTools,
   });
+  if (isCodeModeDiagnosticEnabled()) {
+    logCodeModeDiagnostic(log, "activation", {
+      runId: attempt.runId,
+      active: codeModeControlsEnabledForRun,
+      toolsEnabled,
+      rawRun: isRawModelRun,
+      toolsDisabled: attempt.disableTools === true,
+      fallbackActive: attempt.fallbackActive === true,
+      allowlist:
+        attempt.toolsAllow === undefined
+          ? "unset"
+          : attempt.toolsAllow.length === 0
+            ? "empty"
+            : "nonempty",
+    });
+  }
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
       ? [...new Set([...toolsAllowWithForcedRuntimeTools, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]
@@ -170,7 +195,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
     modelApi: attempt.model.api,
-    modelContextWindowTokens: attempt.model.contextWindow,
+    modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
     modelHasVision: attempt.model.input?.includes("image") ?? false,
     workspaceDir: params.effectiveWorkspace,
     cwd: params.effectiveCwd,
@@ -272,6 +297,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
           webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+          githubPublicationAvailable: attempt.githubPublicationAvailable,
           abortSignal: params.runAbortController.signal,
           modelProvider: attempt.provider,
           modelId: attempt.modelId,
@@ -284,10 +310,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
             proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
             proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
             collectionReconcile: attempt.skillWorkshopCollectionReconcile,
+            proposalRevision: attempt.skillWorkshopProposalRevision,
           },
           modelCompat: extractModelCompat(attempt.model),
           modelApi: attempt.model.api,
-          modelContextWindowTokens: attempt.model.contextWindow,
+          modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
           delegationCapability: attempt.delegationCapability,
           modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
             workspaceDir: params.effectiveWorkspace,
@@ -351,9 +378,12 @@ export function prepareEmbeddedAttemptToolBase(params: {
         params.markCoreToolStage("attempt:tools-allow");
         return filteredTools;
       })();
-  const toolsRaw = attempt.forceRestartSafeTools
-    ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
-    : constructedToolsRaw;
+  const toolsRaw =
+    attempt.forceCodeModeReconciliationTools === true
+      ? constructedToolsRaw.filter(isCodeModeReconciliationTool)
+      : attempt.forceRestartSafeTools
+        ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+        : constructedToolsRaw;
   if (attempt.forceRestartSafeTools) {
     log.info(
       `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,

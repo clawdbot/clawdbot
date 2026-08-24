@@ -21,6 +21,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ProjectCheckoutError,
   resolveProjectCheckout,
+  resolveProjectDirectory,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -32,7 +33,6 @@ import {
   resolveSessionCreateModelSelection as resolveCreateTitleEntry,
 } from "../session-create-service.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
   loadGatewaySessionEntryReadOnly,
@@ -103,8 +103,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
       cfg,
       agentSelectionKey,
-      explicitlyRequestedAgentId,
-      { allowUnconfiguredExplicitAgent: true },
+      p.agentId ?? parseAgentSessionKey(explicitlyRequestedKey)?.agentId,
     );
     if (!explicitlyRequestedAgent.ok) {
       respond(false, undefined, explicitlyRequestedAgent.error);
@@ -223,7 +222,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitSessionLabel = normalizeOptionalString(p.label);
-    const titleAgentId = normalizeAgentId(explicitlyRequestedAgent.agentId);
+    const titleAgentId = explicitlyRequestedAgent.agentId;
     const shouldPrepareWorktreeTitle =
       p.worktree === true && !requestedWorktreeName && !explicitSessionLabel;
     const deferWorktreeTitle =
@@ -258,11 +257,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const checkout = await resolveProjectCheckout(project.repoRoot);
-        if (project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
+        const checkout =
+          p.worktree === true ? await resolveProjectCheckout(project.repoRoot) : undefined;
+        projectRoot = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
+        if (checkout && project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
           throw new ProjectCheckoutError(`project root is no longer a git checkout`);
         }
-        projectRoot = checkout.path;
       } catch (error) {
         const detail =
           error instanceof ProjectCheckoutError ? error.message : formatErrorMessage(error);
@@ -271,18 +271,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.UNAVAILABLE,
-            `project ${requestedProjectId} is unavailable (${detail}); re-register it or run openclaw doctor --fix`,
+            `project ${requestedProjectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
           ),
         );
         return;
       }
     }
     let sessionKey = p.key;
-    let sessionAgentId =
-      catalogAgentId ??
-      explicitlyRequestedAgent.agentId ??
-      p.agentId ??
-      parseAgentSessionKey(explicitlyRequestedKey)?.agentId;
+    let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
@@ -296,11 +292,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       requestedProjectId,
       sessionCwd,
       sessionKey,
-      targetAgentId: normalizeAgentId(
-        sessionAgentId ??
-          parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-          explicitlyRequestedAgent.agentId,
-      ),
+      targetAgentId: sessionAgentId,
     });
     if (!preparedRoot.ok) {
       respond(false, undefined, preparedRoot.error);
@@ -312,11 +304,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.
       const explicitKey = explicitlyRequestedKey;
-      const agentId = normalizeAgentId(
-        explicitlyRequestedAgent.agentId ??
-          normalizeOptionalString(p.agentId) ??
-          parseAgentSessionKey(explicitKey)?.agentId,
-      );
+      const agentId = explicitlyRequestedAgent.agentId;
       let targetKey = explicitKey;
       let preservesUnspecifiedKey = false;
       if (
@@ -334,9 +322,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
           agentId: parentRequestedAgent.agentId,
         });
-        const parentAgentId = normalizeAgentId(
-          parentRequestedAgent.agentId ?? resolveSessionStoreAgentId(cfg, parent.canonicalKey),
-        );
+        const parentAgentId = parentRequestedAgent.agentId;
         if (
           parent.entry?.sessionId &&
           parent.canonicalKey === resolveAgentMainSessionKey({ cfg, agentId: parentAgentId })
@@ -468,6 +454,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               id: preparedWorktree.id,
               branch: preparedWorktree.branch,
               repoRoot: preparedWorktree.repoRoot,
+              canonicalWorkspaceDir: workspace,
             },
             ...(provisioned
               ? {
@@ -475,7 +462,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
                     await managedWorktrees.remove({
                       id: preparedWorktree.id,
                       reason: "session-create-failed",
-                      force: true,
+                      allowSnapshotLoss: true,
                     });
                   },
                 }
@@ -515,11 +502,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ADMIN_SCOPE,
       clientScopes,
     ).allowed;
-    const modelCatalogAgentId = normalizeAgentId(
-      sessionAgentId ??
-        parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-        explicitlyRequestedAgent.agentId,
-    );
+    const modelCatalogAgentId = sessionAgentId;
     if (!authority.ensureActive()) {
       return;
     }
@@ -530,10 +513,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
+      contextWindow: p.contextWindow,
       thinkingLevel: p.thinkingLevel,
       projectId: requestedProjectId,
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       visibility: p.visibility,
       allowExistingModelSelection,
       parentSessionKey,
@@ -625,6 +615,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;
+    }
+    if (created.postCommit.status === "failed") {
+      runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
     registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     const createdWorktree = sessionWorktree

@@ -4,6 +4,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -13,7 +14,7 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("projects live tunnel status and fences the tunnel before provider teardown", async () => {
+  it("projects live workspace transport status and fences it before provider teardown", async () => {
     support.seedReady("worker-tunnel", undefined, true);
     const order: string[] = [];
     let tunnelStatus: "stopped" | "connected" = "stopped";
@@ -24,7 +25,6 @@ describe("worker environment service", () => {
         return {
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
-          launchTurn: vi.fn(),
           runWorkspaceCommand: vi.fn(),
           syncWorkspace: vi.fn(),
           stop: async () => {},
@@ -55,7 +55,6 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({
         bundleHash: support.BUNDLE_HASH,
-        gateway: { host: "127.0.0.1", port: 18_789 },
         sharedHost: true,
       }),
     );
@@ -136,6 +135,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "crabbox",
         provision: async () => ({
           leaseId: "cloud-lease",
@@ -203,6 +203,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "device",
         provision: async () => ({
           leaseId: "device-lease",
@@ -230,7 +231,7 @@ describe("worker environment service", () => {
     });
     const rejected = expect(starting).rejects.toMatchObject({
       code: "provider_failure",
-      message: expect.stringContaining("did not connect within 3 minutes"),
+      message: expect.stringContaining("check that the worker is online and reachable, then retry"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     await started;
     await vi.advanceTimersByTimeAsync(3 * 60_000);
@@ -453,6 +454,69 @@ describe("worker environment service", () => {
     );
   });
 
+  it("routes a node-backed desktop through its durable node carrier without SSH", async () => {
+    const record = support.seedReadyNodeDesktop("worker-node-desktop-access");
+    const order: string[] = [];
+    const observe = vi.fn(async () => ({
+      transport: "rfb" as const,
+      wsPath: "/desktop/observe?token=node-carrier",
+      expiresAtMs: support.testState.nowMs + 60_000,
+      control: true,
+    }));
+    const launchApp = vi.fn(async () => {});
+    const stop = vi.fn(async () => {
+      order.push("node-desktop-stop");
+    });
+    const nodeDesktopCarrier = {
+      bindRuntime: vi.fn(),
+      observe,
+      launchApp,
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerNodeDesktopCarrier;
+    const workerService = support.createService(
+      support.createProvider({
+        destroy: async () => {
+          order.push("provider-destroy");
+        },
+      }),
+      { nodeDesktopCarrier },
+    );
+    expect(workerService.get(record.environmentId)).toMatchObject({
+      desktopAvailable: true,
+      desktopApps: ["browser", "terminal"],
+    });
+
+    await expect(
+      workerService.observeDesktop({ environmentId: record.environmentId, control: true }),
+    ).resolves.toEqual({
+      transport: "rfb",
+      wsPath: "/desktop/observe?token=node-carrier",
+      expiresAtMs: support.testState.nowMs + 60_000,
+      control: true,
+    });
+    expect(observe).toHaveBeenCalledWith({
+      record: expect.objectContaining({
+        environmentId: record.environmentId,
+        nodeDeviceId: record.nodeDeviceId,
+        sshEndpoint: null,
+        desktop: support.DESKTOP,
+      }),
+      control: true,
+    });
+
+    await expect(
+      workerService.launchDesktopApp({ environmentId: record.environmentId, app: "browser" }),
+    ).resolves.toEqual({ app: "browser", status: "ready" });
+    expect(launchApp).toHaveBeenCalledWith({
+      record: expect.objectContaining({ environmentId: record.environmentId }),
+      app: support.DESKTOP.apps![0],
+    });
+
+    await workerService.destroy(record.environmentId);
+    expect(order).toEqual(["node-desktop-stop", "provider-destroy"]);
+  });
+
   it("rejects desktop observe for invalid lifecycle gates and a stopped service", async () => {
     const tunnelManager = {
       desktop: {
@@ -605,7 +669,7 @@ describe("worker environment service", () => {
     });
     const rejected = expect(starting).rejects.toMatchObject({
       code: "provider_failure",
-      message: expect.stringContaining("did not connect within 3 minutes"),
+      message: expect.stringContaining("check that the worker is online and reachable, then retry"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     await started;
     await vi.advanceTimersByTimeAsync(3 * 60_000);

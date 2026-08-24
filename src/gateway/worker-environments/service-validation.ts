@@ -5,8 +5,10 @@ import { WorkerMachineOptionsSchema } from "../../../packages/gateway-protocol/s
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
+  type WorkerProvider,
   type WorkerMachineOption,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
@@ -42,7 +44,6 @@ export function normalizeWorkerMachineOptions(
     if (
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
-      (option.description !== undefined && option.description.trim() !== option.description) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -54,7 +55,8 @@ export function normalizeWorkerMachineOptions(
   return value.map((option) => ({
     id: option.id,
     label: option.label,
-    ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
+    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
     ...(option.default === undefined ? {} : { default: option.default }),
   }));
 }
@@ -82,6 +84,26 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
     throw new Error("Worker provider returned an invalid inspection result");
   }
   return { status };
+}
+
+export function resolveWorkerTransportModeError(
+  provider: WorkerProvider<"internal">,
+  transportMode: WorkerExecutionMode,
+): WorkerProviderError | undefined {
+  const modes = provider.supportedExecutionModes;
+  const executionMode: WorkerExecutionMode | undefined = modes?.length === 1 ? modes[0] : undefined;
+  return !executionMode || executionMode === transportMode
+    ? undefined
+    : new WorkerProviderError(
+        `${executionMode} providers must return a ${executionMode === "worker-turn" ? "node" : "SSH"} lease`,
+      );
+}
+
+export function resolveWorkerLeaseModeError(
+  provider: WorkerProvider<"internal">,
+  lease: WorkerLease,
+): WorkerProviderError | undefined {
+  return resolveWorkerTransportModeError(provider, lease.node ? "worker-turn" : "remote-exec");
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {

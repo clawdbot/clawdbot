@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   type RequestFrame,
   type WorkerConnectParams,
+  type WorkerGitHubPublishParams,
   type WorkerErrorShape,
   type WorkerHeartbeatResult,
   type WorkerLiveEventErrorDetails,
@@ -20,6 +21,7 @@ import {
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_METHOD_LENGTH,
@@ -30,6 +32,7 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
+  validateWorkerGitHubPublishParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
@@ -58,7 +61,7 @@ import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
-import type { GatewayWorkerIngress, GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   buildWorkerHello,
@@ -97,8 +100,8 @@ export type WorkerConnectionService = {
   ) => WorkerProtocolCloseReason | null;
   executeSessionTool?: (
     identity: WorkerConnectionIdentity,
-    toolName: "sessions_spawn" | "sessions_send",
-    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+    toolName: "sessions_spawn" | "sessions_send" | "github_publish",
+    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams,
     signal?: AbortSignal,
   ) => Promise<WorkerServiceResult<WorkerSessionToolResult, { reason: WorkerProtocolCloseReason }>>;
 };
@@ -141,7 +144,6 @@ type WorkerWsMessageHandlerParams = {
   connId: string;
   service?: WorkerConnectionService;
   isStartupPending?: () => boolean;
-  ingress: GatewayWorkerIngress;
   send(frame: unknown): void;
   close(code?: number, reason?: string): void;
   isClosed(): boolean;
@@ -296,9 +298,14 @@ async function dispatchWorkerRequest(params: {
   }
   if (
     params.request.method === WORKER_PROTOCOL_METHODS[3] ||
-    params.request.method === WORKER_PROTOCOL_METHODS[4]
+    params.request.method === WORKER_PROTOCOL_METHODS[4] ||
+    params.request.method === WORKER_PROTOCOL_METHODS[5]
   ) {
-    if (!params.identity.protocolFeatures.includes(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE)) {
+    const isGitHubPublish = params.request.method === WORKER_PROTOCOL_METHODS[5];
+    const requiredFeature = isGitHubPublish
+      ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
+      : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+    if (!params.identity.protocolFeatures.includes(requiredFeature)) {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
@@ -309,15 +316,20 @@ async function dispatchWorkerRequest(params: {
     const isSpawn = params.request.method === WORKER_PROTOCOL_METHODS[3];
     const requestValid = isSpawn
       ? validateWorkerSessionsSpawnParams(params.request.params)
-      : validateWorkerSessionsSendParams(params.request.params);
+      : isGitHubPublish
+        ? validateWorkerGitHubPublishParams(params.request.params)
+        : validateWorkerSessionsSendParams(params.request.params);
     if (!requestValid) {
       params.respond(false, undefined, workerProtocolError("invalid-frame"));
       return;
     }
     const outcome = await service.executeSessionTool(
       params.identity,
-      isSpawn ? "sessions_spawn" : "sessions_send",
-      params.request.params as WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+      isSpawn ? "sessions_spawn" : isGitHubPublish ? "github_publish" : "sessions_send",
+      params.request.params as
+        | WorkerSessionsSpawnParams
+        | WorkerSessionsSendParams
+        | WorkerGitHubPublishParams,
       params.signal,
     );
     if (outcome.ok) {
@@ -399,8 +411,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
   }) => {
     const internalReason = rejection.internalReason ?? rejection.reason;
     const wireReason: WorkerProtocolCloseReason =
-      (rejection.opaqueOnPublicIngress && params.publicAdmission) ||
-      rejection.reason === "rate-limited"
+      rejection.opaqueOnPublicIngress || rejection.reason === "rate-limited"
         ? "invalid-handshake"
         : rejection.reason;
     const wireError =
@@ -430,7 +441,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       });
       return;
     }
-    if (params.ingress === "public" && !params.publicAdmission) {
+    if (!params.publicAdmission) {
       rejectAdmission({
         id,
         reason: "invalid-handshake",
@@ -482,6 +493,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     setSocketMaxPayload(params.socket, workerMaxPayload(admission.identity));
     params.advanceHandshakePhase("hello_payload_prepared");
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
+    if (disposed || params.isClosed()) {
+      return;
+    }
     params.advanceHandshakePhase("ready");
     expiryTimer = setTimeout(
       () => {
@@ -564,6 +578,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[2] ||
       parsed.method === WORKER_PROTOCOL_METHODS[3] ||
       parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5] ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
     ) {
@@ -596,7 +611,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         ...(signal ? { signal } : {}),
       });
     const isLongSessionOperation =
-      parsed.method === WORKER_PROTOCOL_METHODS[3] || parsed.method === WORKER_PROTOCOL_METHODS[4];
+      parsed.method === WORKER_PROTOCOL_METHODS[3] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5];
     if (isLongSessionOperation) {
       if (sessionOperations.has(parsed.id)) {
         failFrame(1008, "invalid-frame");

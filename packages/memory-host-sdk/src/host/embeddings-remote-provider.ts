@@ -1,5 +1,6 @@
 // Memory Host SDK module implements embeddings remote provider behavior.
 import {
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
@@ -26,7 +27,7 @@ export function createRemoteEmbeddingProvider(params: {
   maxInputTokens?: number;
 }): EmbeddingProvider {
   const { client } = params;
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
   const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {

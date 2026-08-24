@@ -348,6 +348,49 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     }
   });
 
+  it("fences an aborted steer before delayed preparation can enqueue it", async () => {
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let preparationStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      preparationStarted = resolve;
+    });
+    let enqueued = false;
+    const onQueueAccepted = vi.fn();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer: async (_text, _images, _recorder, _media, _imageOrder, _identity, canInject) => {
+        preparationStarted();
+        await preparation;
+        if (canInject && !canInject()) {
+          throw new Error("active session is finalizing");
+        }
+        enqueued = true;
+      },
+      subscribe: () => () => {},
+    };
+    const controller = new AbortController();
+    const wait = steerActiveSessionWithOptionalDeliveryWait(activeSession, "delayed steer", {
+      abortSignal: controller.signal,
+      deliveryTimeoutMs: 10_000,
+      onQueueAccepted,
+      waitForTranscriptCommit: true,
+    });
+    const rejection = expect(wait).rejects.toThrow(
+      "queued steering message was cancelled before acceptance",
+    );
+
+    await started;
+    controller.abort();
+    releasePreparation();
+
+    await rejection;
+    expect(enqueued).toBe(false);
+    expect(onQueueAccepted).toHaveBeenCalledOnce();
+    expect(onQueueAccepted).toHaveBeenCalledWith(false);
+  });
+
   it("matches identical steering text by stable queue identity", async () => {
     let emit!: (event: unknown) => void;
     const first = {

@@ -88,7 +88,7 @@ import {
   type ManagedServiceRootRedirect,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
-export { updateFinalizeCommand } from "./update-command-post-core.js";
+export { updateFinalizeCommand } from "./update-command-finalize.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
@@ -289,11 +289,17 @@ async function updateCommandInternal(
   }
 
   const explicitTag = normalizeTag(opts.tag);
-  if (channel === "extended-stable" && explicitTag) {
+  const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
+  if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
     await reportPreMutationUpdateFailure({
       root,
       installKind: updateInstallKind,
-      reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      reason: unsupportedMainTag
+        ? "unsupported-package-target"
+        : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      message: unsupportedMainTag
+        ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
+        : undefined,
       opts,
       controlPlaneUpdateSentinelMeta,
     });
@@ -657,6 +663,7 @@ async function updateCommandInternal(
   await finishUpdate({
     result,
     root,
+    previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
     configSnapshot: finalizationConfigSnapshot,
     requestedChannel,

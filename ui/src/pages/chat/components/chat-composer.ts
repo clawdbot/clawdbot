@@ -13,6 +13,7 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  paneDomId,
   preserveComposerFocusOnPrimaryAction,
   replaceComposerPopoverAnchor,
   scheduleTextareaHeightAdjustment,
@@ -23,13 +24,14 @@ import {
   getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   resetSkillMenuState,
+  type SkillMenuHost,
   updateSkillMenu,
 } from "./chat-composer-skill-menu.ts";
 import {
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
-  paneDomId,
+  resetSlashMenuState,
   updateSlashMenu,
 } from "./chat-composer-slash-menu.ts";
 import {
@@ -136,6 +138,13 @@ export function renderChatComposer(props: ChatComposerProps) {
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const skillMenuHost: SkillMenuHost = {
+    paneId: props.paneId,
+    getDraft: () => state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft,
+    commitDraft: (next) => commitComposerDraft(props, next),
+    getTextarea: () => state.composerTextarea,
+    refreshCommands: props.onSlashIntent,
+  };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
   const steerNowEnabled =
     props.connected &&
@@ -214,12 +223,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.questionTakeoverActive = questionTakeoverActive;
   const showComposer = !questionTakeoverActive;
 
-  const placeholder =
-    !canCompose && props.disabledReason
-      ? props.disabledReason
-      : hasVisualAttachments
-        ? t("chat.composer.placeholderWithAttachments")
-        : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+  const placeholder = hasVisualAttachments
+    ? t("chat.composer.placeholderWithAttachments")
+    : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
@@ -251,6 +257,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const handleKeyDown = createComposerKeyDownHandler({
     state,
     props,
+    skillMenuHost,
     requestUpdate,
     sendShortcut,
     canSubmitDraft,
@@ -264,15 +271,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
-    updateSkillMenu(
-      target.value,
-      target.selectionStart,
-      requestUpdate,
-      props,
-      {},
-      () => target.value,
-      () => target.selectionStart,
-    );
+    updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
     requestUpdate();
   };
   const handleBeforeInput = (event: InputEvent) => {
@@ -303,19 +302,11 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     syncComposerValue(target);
-    props.onTypingChange?.(Boolean(target.value.trim()));
+    props.onTypingChange?.(Boolean(target.value.trim()), target.value);
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
-    updateSkillMenu(
-      target.value,
-      target.selectionStart,
-      requestUpdate,
-      props,
-      {},
-      () => target.value,
-      () => target.selectionStart,
-    );
+    updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     state.composerComposing = false;
@@ -323,7 +314,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     syncComposerValue(event.target as HTMLTextAreaElement);
-    props.onTypingChange?.(Boolean((event.target as HTMLTextAreaElement).value.trim()));
+    const value = (event.target as HTMLTextAreaElement).value;
+    props.onTypingChange?.(Boolean(value.trim()), value);
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
@@ -337,7 +329,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
     props.onTypingChange?.(false);
   };
-  const handleSend = () => {
+  const handleSend = (submissionAction?: Event) => {
     const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
@@ -346,7 +338,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
-    props.onSend();
+    props.onSend(undefined, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = () => {
@@ -522,6 +514,10 @@ export function renderChatComposer(props: ChatComposerProps) {
     ?.getVideoTracks?.()[0]
     ?.getSettings?.().facingMode;
   const mirrorCameraPreview = cameraFacingMode !== "environment";
+  if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
+    state.slashMenuOpen = false;
+    resetSlashMenuState(state);
+  }
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const skillMenuVisible = props.connected && canCompose && isSkillMenuVisible(state);
   if (!skillMenuVisible && state.skillMenuOpen && !state.skillCommandRefreshPending) {
@@ -566,6 +562,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     mirrorCameraPreview,
     slashMenuVisible,
     skillMenuVisible,
+    skillMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,

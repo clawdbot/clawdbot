@@ -55,12 +55,14 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
+    automaticallyFetchFavicons: boolean;
     chatToolMessages: Record<string, unknown>[];
     guardianNotices: ChatGuardianNotice[];
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
     chatMessagesBySession: ChatMessageCache;
     basePath: string;
+    resourceBasePath: string;
     chatAvatarUrl: string | null;
     chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
@@ -75,6 +77,7 @@ export type ChatPageHost = ChatHost &
     sessionsError: string | null;
     sessionsArchivedFilter: "active" | "archived" | "all";
     selectedChatSessionArchived: boolean;
+    selectedChatSessionIncognito: boolean;
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
@@ -132,7 +135,11 @@ export type ChatPageHost = ChatHost &
     handleChatScroll: (event: Event) => void;
     handleChatDraftChange: (next: string) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
-    handleSendChat: (messageOverride?: string, options?: unknown) => Promise<void>;
+    handleSendChat: (
+      messageOverride?: string,
+      options?: unknown,
+      submissionAction?: Event,
+    ) => Promise<void>;
     handleAbortChat: (options?: unknown) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;

@@ -5,6 +5,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import {
+  attachSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -204,6 +208,7 @@ export async function persistSessionTranscriptTurn(
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages,
+    runId: options.runId,
   });
 
   return {
@@ -230,6 +235,7 @@ async function appendTranscriptTurnMessages(
       },
       {
         ...appendOptions,
+        message: attachSessionTranscriptRunId(appendOptions.message, options.runId),
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
       },
@@ -346,7 +352,10 @@ async function persistExpectedSessionTranscriptTurn(
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
           atomicGroup: options.atomicGroup,
-          messages: options.messages,
+          messages: options.messages.map((append) => ({
+            ...append,
+            message: attachSessionTranscriptRunId(append.message, options.runId),
+          })),
           sessionLifecyclePatch: options.sessionLifecyclePatch,
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,
@@ -374,6 +383,7 @@ async function persistExpectedSessionTranscriptTurn(
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages: turn.appendedMessages,
+    runId: options.runId,
   });
 
   if (turn.sessionEntry && scope.sessionStore) {
@@ -493,6 +503,7 @@ async function publishTranscriptTurnUpdate(params: {
   updateMode: SessionTranscriptTurnUpdateMode;
   publishWhen: "always" | "when-appended";
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
+  runId?: string;
 }): Promise<void> {
   if (params.updateMode === "none") {
     return;
@@ -536,11 +547,13 @@ async function publishTranscriptTurnUpdate(params: {
     return;
   }
   for (const { message, messageSeq } of sequencedMessages) {
+    const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     emitTranscriptUpdate({
       ...update,
       message: message.message,
       messageId: message.messageId,
       ...(messageSeq !== undefined ? { messageSeq } : {}),
+      ...(runId ? { runId } : {}),
     });
   }
 }

@@ -112,6 +112,50 @@ describe("qa-bus server", () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
+  it("returns a 500 JSON response when request handling rejects", async () => {
+    const state = createQaBusState();
+    const requestError = new Error("snapshot unavailable");
+    state.getSnapshot = () => {
+      throw requestError;
+    };
+    const bus = await startQaBusServer({ state });
+    stops.push(async () => await bus.stop());
+
+    const response = await fetch(`${bus.baseUrl}/v1/state`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: requestError.message });
+  });
+
+  it("normalizes direct-message aliases at HTTP ingress without accepting unknown kinds", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    for (const kind of ["direct", "dm"]) {
+      const response = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+        conversation: { id: "alice", kind },
+        senderId: "alice",
+        text: `hello from ${kind}`,
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        message: { conversation: { id: "alice", kind: "direct" } },
+      });
+    }
+
+    const rejected = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+      conversation: { id: "alice", kind: "private" },
+      senderId: "alice",
+      text: "must not be accepted",
+    });
+
+    expect(rejected.status).toBe(400);
+    expect(state.getSnapshot().messages).toHaveLength(2);
+  });
+
   it("wakes matching polls and fences late polls and writes during shutdown", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });

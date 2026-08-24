@@ -1024,6 +1024,27 @@ extension DashboardManager {
         }
     }
 
+    func handleGatewaySetup(_ link: GatewayConnectDeepLink) {
+        NSApp.activate(ignoringOtherApps: true)
+        let coordinator = DashboardGatewaySetupCoordinator(
+            adapter: DashboardPrimaryGatewayAdapter(state: AppStateStore.shared),
+            confirm: { title, message in
+                let alert = DashboardWindowController.makeGatewaySetupAlert(title: title, message: message)
+                return alert.runModal() == .alertFirstButtonReturn
+            },
+            presentError: { title, message in
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = message
+                alert.alertStyle = .warning
+                alert.runModal()
+            },
+            openConnectionSettings: {
+                AppNavigationActions.openSettings(tab: .connection)
+            })
+        coordinator.handle(link)
+    }
+
     func openOrFocusDashboard(for target: DashboardGatewayTarget) {
         Task { await self.performOpenOrFocusDashboard(for: target) }
     }

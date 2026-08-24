@@ -4,16 +4,13 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
  *
  * Exposes proposal create/update/review/apply actions while the workshop service owns persistence.
  */
-import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
-import {
-  MAX_RECONCILED_SKILL_BYTES,
-  type SkillCollectionReconcileContext,
-} from "../../skills/workshop/collection-contracts.js";
+import type { SkillCollectionReconcileContext } from "../../skills/workshop/collection-contracts.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
+import { resolveSkillWorkshopProjectionBudgets } from "../../skills/workshop/model-context-budget.js";
 import {
   applySkillProposal,
   composeSkillBodyPatch,
@@ -27,15 +24,15 @@ import {
   reviseSkillProposal,
   SkillProposalStaleTargetError,
 } from "../../skills/workshop/service.js";
+import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
 import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
-  SkillProposalStatus,
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopProposalReviewCompletion,
+  SkillWorkshopProposalRevisionConstraint,
 } from "../../skills/workshop/types.js";
 import { readWritableWorkspaceSkill } from "../../skills/workshop/workspace-skill-read.js";
-import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,
   readToolStringParam,
@@ -43,11 +40,10 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 import {
+  executeSkillCollectionHistory,
   executeSkillCollectionReconcile,
   executeSkillCollectionRestore,
   recordSkillCollectionReadReceipt,
-  SKILL_COLLECTION_ACTION_DESCRIPTION,
-  skillCollectionPlanSchema,
 } from "./skill-workshop-tool-collection.js";
 import { buildSkillWorkshopToolDescription } from "./skill-workshop-tool-description.js";
 import {
@@ -69,44 +65,16 @@ import {
   formatProposalInspect,
   formatProposalList,
   listProposalEntries,
+  resolveProposalInspectArtifact,
 } from "./skill-workshop-tool-presentation.js";
+import {
+  buildSkillWorkshopToolSchema,
+  resolveProposalOnlyActions,
+  SKILL_PROPOSAL_STATUSES,
+  SKILL_WORKSHOP_ACTIONS,
+} from "./skill-workshop-tool-schema.js";
 
-const SKILL_WORKSHOP_ACTIONS = [
-  "create",
-  "patch",
-  "update",
-  "read",
-  "revise",
-  "list",
-  "inspect",
-  "evaluate",
-  "apply",
-  "reject",
-  "quarantine",
-  "restore_collection",
-] as const;
-function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion: boolean) {
-  return [
-    "create",
-    ...(updateProposals ? ["patch", "update", "read"] : []),
-    "revise",
-    "list",
-    "inspect",
-    ...(supportsCompletion ? ["complete"] : []),
-  ];
-}
 const SKILL_WORKSHOP_MUTATION_ACTIONS = new Set(["create", "patch", "update", "revise"]);
-// Reads give the model the text it must quote to patch. Composition still uses
-// the authoritative live body, while the cap bounds provider payloads.
-const SKILL_WORKSHOP_READ_MAX_CHARS = 20_000;
-const SKILL_PROPOSAL_STATUSES = [
-  "pending",
-  "applied",
-  "rejected",
-  "quarantined",
-  "stale",
-] as const satisfies readonly SkillProposalStatus[];
-
 function requireProposalContent(content: string | undefined): string {
   if (content === undefined) {
     throw new ToolInputError("proposal_content required");
@@ -126,125 +94,45 @@ function readSkillPatchText(params: Record<string, unknown>) {
   };
 }
 
-function buildSkillWorkshopToolSchema(
-  proposalOnly: boolean,
-  supportsCompletion: boolean,
-  updateProposals: boolean,
-  collectionOnly: boolean,
-) {
-  const proposalActions = resolveProposalOnlyActions(updateProposals, supportsCompletion);
-  return Type.Object(
-    {
-      action: stringEnum(
-        collectionOnly
-          ? ["read", "reconcile"]
-          : proposalOnly
-            ? proposalActions
-            : [...SKILL_WORKSHOP_ACTIONS],
-        {
-          description: proposalOnly
-            ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
-            : collectionOnly
-              ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
-        },
-      ),
-      proposal_id: Type.Optional(
-        Type.String({
-          description:
-            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine.",
-        }),
-      ),
-      name: Type.Optional(
-        Type.String({
-          description:
-            "Skill/proposal name. Required for create; for inspect/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
-        }),
-      ),
-      query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
-      status: Type.Optional(
-        stringEnum(SKILL_PROPOSAL_STATUSES, {
-          description: "Optional proposal status filter for action=list.",
-        }),
-      ),
-      limit: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          maximum: 50,
-          description: "Maximum proposals to return for action=list. Defaults to 20.",
-        }),
-      ),
-      description: Type.Optional(
-        Type.String({
-          maxLength: 160,
-          description:
-            "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
-        }),
-      ),
-      skill_name: Type.Optional(
-        Type.String({
-          description:
-            "Existing skill name or key for action=update, action=patch, or action=read.",
-        }),
-      ),
-      old_string: Type.Optional(
-        Type.String({
-          description:
-            "For action=patch: the exact current skill text to replace, quoted from read. Must match exactly once. Empty string appends new_string at the end of the skill.",
-        }),
-      ),
-      new_string: Type.Optional(
-        Type.String({
-          description:
-            "For action=patch: the replacement text (or the appended section when old_string is empty). Author it fully — steps, pitfalls, verification — in the skill's existing style.",
-        }),
-      ),
-      proposal_content: Type.Optional(
-        Type.String({
-          description:
-            "Complete final skill body for action=create or action=update, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
-        }),
-      ),
-      support_files: Type.Optional(
-        Type.Array(
-          Type.Object(
-            {
-              path: Type.String({
-                description:
-                  "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
-              }),
-              content: Type.String({ description: "Support file text content." }),
-            },
-            { additionalProperties: false },
-          ),
-          { description: "Optional support files to store with the proposal." },
-        ),
-      ),
-      goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
-      evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
-      reason: Type.Optional(
-        Type.String({
-          description: "Optional reason for action=apply, action=reject, or action=quarantine.",
-        }),
-      ),
-      expected_revision_hash: Type.Optional(
-        Type.String({
-          description:
-            "Optional exact proposal revision hash for evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
-        }),
-      ),
-      correlation_id: Type.Optional(
-        Type.String({
-          maxLength: 256,
-          description:
-            "Optional orchestration or experiment correlation id carried into lifecycle events.",
-        }),
-      ),
-      collection: skillCollectionPlanSchema,
-    },
-    { additionalProperties: false },
-  );
+function bindProposalRevisionConstraint(
+  params: Record<string, unknown>,
+  action: string,
+  constraint: SkillWorkshopProposalRevisionConstraint | undefined,
+): Record<string, unknown> {
+  if (!constraint) {
+    return params;
+  }
+  if (!constraint.proposalId.trim()) {
+    throw new ToolInputError("operator-reviewed proposal_id required");
+  }
+  if (!constraint.expectedRevisionHash.trim()) {
+    throw new ToolInputError("operator-reviewed expected_revision_hash required");
+  }
+  if (action !== "inspect" && action !== "revise") {
+    throw new ToolInputError(
+      "this operator-requested Skill Workshop turn can only inspect or revise its reviewed proposal",
+    );
+  }
+  const proposalId = readToolStringParam(params, "proposal_id", { label: "proposal_id" });
+  if (proposalId && proposalId !== constraint.proposalId) {
+    throw new ToolInputError("proposal_id conflicts with the operator-reviewed proposal");
+  }
+  if (readToolStringParam(params, "name")) {
+    throw new ToolInputError("name cannot replace the operator-reviewed proposal_id");
+  }
+  const expectedRevisionHash = readToolStringParam(params, "expected_revision_hash");
+  if (expectedRevisionHash && expectedRevisionHash !== constraint.expectedRevisionHash) {
+    throw new ToolInputError(
+      "expected_revision_hash conflicts with the operator-reviewed proposal revision",
+    );
+  }
+  return {
+    ...params,
+    proposal_id: constraint.proposalId,
+    expected_revision_hash: constraint.expectedRevisionHash,
+  };
 }
+
 type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -263,11 +151,16 @@ type SkillWorkshopToolOptions = {
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   /** Isolated collection review latch; when present only read/reconcile are exposed. */
   collectionReconcile?: SkillCollectionReconcileContext;
+  /** Effective selected-model context used for every model-visible Workshop projection. */
+  modelContextWindowTokens?: number;
+  /** Exact proposal revision reviewed before this operator-requested revision turn. */
+  proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   const workshopConfig = resolveSkillWorkshopConfig(options.config);
+  const projectionBudgets = resolveSkillWorkshopProjectionBudgets(options.modelContextWindowTokens);
   const readSkillHashes =
     options.collectionReconcile?.readSkillHashes ??
     options.proposalMutationBudget?.readSkillHashes ??
@@ -289,16 +182,19 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       updateProposals: options.updateProposals === true,
       autonomousMode: workshopConfig.autonomous.mode,
       collectionOnly: options.collectionReconcile !== undefined,
+      proposalRevision: options.proposalRevision !== undefined,
     }),
     parameters: buildSkillWorkshopToolSchema(
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,
       options.updateProposals === true,
       options.collectionReconcile !== undefined,
+      options.proposalRevision !== undefined,
     ),
     execute: async (_toolCallId, args) => {
-      const params = asToolParamsRecord(args);
-      const action = readToolStringParam(params, "action", { required: true });
+      const rawParams = asToolParamsRecord(args);
+      const action = readToolStringParam(rawParams, "action", { required: true });
+      const params = bindProposalRevisionConstraint(rawParams, action, options.proposalRevision);
       const proposalActions = resolveProposalOnlyActions(
         options.updateProposals === true,
         options.proposalReviewCompletion !== undefined,
@@ -333,6 +229,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         return await executeSkillCollectionRestore(options);
       }
 
+      if (action === "history") {
+        return executeSkillCollectionHistory(options, projectionBudgets.collectionHistoryChars);
+      }
+
       if (action === "read") {
         if (
           options.proposalOnly === true &&
@@ -352,9 +252,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         ) {
           throw new ToolInputError(`skill is outside this collection review: ${skill.skillKey}`);
         }
-        const readMaxChars = options.collectionReconcile
-          ? MAX_RECONCILED_SKILL_BYTES
-          : SKILL_WORKSHOP_READ_MAX_CHARS;
+        const readMaxChars = projectionBudgets.artifactChars;
         const truncated = skill.content.length > readMaxChars;
         // A truncated read is context, not sight of the whole skill: it earns no
         // receipt, so oversized skills cannot be patched by a reviewer that never
@@ -371,12 +269,22 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         } else {
           readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));
         }
+        const sizeBytes = Buffer.byteLength(skill.content);
         const text = truncated
-          ? `${truncateUtf16Safe(skill.content, readMaxChars)}\n[truncated: skill exceeds the Workshop read budget]`
+          ? truncateUtf16Safe(
+              [
+                `Skill: ${skill.skillKey} (${sizeBytes} bytes)`,
+                "Content omitted: the complete skill exceeds the selected-model read budget.",
+                options.collectionReconcile
+                  ? "Next: select a larger-context model or use operator/CLI access; this collection cannot be reconciled without a complete read."
+                  : "Next: use operator/CLI access for the complete skill; autonomous patch/update requires a complete model read.",
+              ].join("\n"),
+              readMaxChars,
+            )
           : skill.content;
         return {
           content: [{ type: "text", text }],
-          details: { skillKey: skill.skillKey, truncated },
+          details: { skillKey: skill.skillKey, sizeBytes, contentIncluded: !truncated },
         };
       }
 
@@ -426,9 +334,35 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           options.env,
           options.agentId,
         );
+        const artifactPath = readToolStringParam(params, "artifact_path", {
+          label: "artifact_path",
+        });
+        const artifact = resolveProposalInspectArtifact(proposal, artifactPath);
+        if (!artifact) {
+          const available = [
+            PROPOSAL_DRAFT_FILE,
+            ...(proposal.record.supportFiles ?? []).map((file) => file.path),
+          ];
+          throw new ToolInputError(
+            truncateUtf16Safe(
+              `proposal artifact not found: ${artifactPath}. Inspect without artifact_path for the bounded manifest. Available artifacts: ${available.join(", ")}`,
+              projectionBudgets.artifactChars,
+            ),
+          );
+        }
+        const projection = formatProposalInspect(
+          proposal,
+          artifact,
+          projectionBudgets.artifactChars,
+        );
         return proposalResult(proposal, {
-          contentText: formatProposalInspect(proposal),
-          includeContent: true,
+          contentText: projection.text,
+          inspect: {
+            artifactPath: artifact.path,
+            artifactSizeBytes: artifact.sizeBytes,
+            availableArtifacts: projection.availableArtifacts,
+            contentIncluded: projection.contentIncluded,
+          },
         });
       }
 
@@ -540,7 +474,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const readHash = readSkillHashes.get(target.skillKey);
         if (!readHash) {
           throw new ToolInputError(
-            target.content.length > SKILL_WORKSHOP_READ_MAX_CHARS
+            target.content.length > projectionBudgets.artifactChars
               ? `skill "${target.skillKey}" exceeds the reviewer read budget and cannot be updated autonomously`
               : `read the live skill first: call action=read with skill_name "${target.skillKey}", then ${action === "patch" ? "quote its current text in the patch" : "rewrite it from the returned content"}`,
           );
@@ -663,24 +597,30 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               : proposalMutationText("Created skill patch proposal", proposal.record)
             : proposalMutationText("Created skill patch proposal", proposal.record);
         } else if (action === "revise") {
-          const pendingProposal = await resolvePendingSkillProposal({
-            proposalId: readToolStringParam(params, "proposal_id", {
-              label: "proposal_id",
-            }),
-            name: readToolStringParam(params, "name"),
-            workspaceDir: options.workspaceDir,
-            agentId: options.agentId,
-            env: options.env,
-          });
+          let proposalId = options.proposalRevision?.proposalId;
+          let expectedRevisionHash = options.proposalRevision?.expectedRevisionHash;
+          if (!proposalId) {
+            const pendingProposal = await resolvePendingSkillProposal({
+              proposalId: readToolStringParam(params, "proposal_id", {
+                label: "proposal_id",
+              }),
+              name: readToolStringParam(params, "name"),
+              workspaceDir: options.workspaceDir,
+              agentId: options.agentId,
+              env: options.env,
+            });
+            proposalId = pendingProposal.record.id;
+            expectedRevisionHash =
+              readToolStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash;
+          }
           proposal = await reviseSkillProposal({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
             eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
-            proposalId: pendingProposal.record.id,
-            expectedRevisionHash:
-              readToolStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash,
+            proposalId,
+            expectedRevisionHash,
             correlationId: readToolStringParam(params, "correlation_id"),
             content: proposalContent,
             supportFiles,

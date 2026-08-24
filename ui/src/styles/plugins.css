@@ -2,17 +2,8 @@
  * (styles/settings.css): art tiles, row messages, the detail overlay, and the
  * MCP inline form. Structural layout comes from .settings-page/.settings-row. */
 
-.plugins-content-header .page-title {
+.plugins-hub-header .page-title {
   margin: 0;
-}
-
-/* Hub tab strip aligned with the settings page column below it
-   (1120px matches .settings-page--wide). */
-.plugins-hub-tabs-row {
-  width: 100%;
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: var(--space-3) var(--space-4) 0;
 }
 
 /* ---------- toolbar ---------- */
@@ -24,15 +15,26 @@
   flex-wrap: wrap;
 }
 
-/* Toolbars mixing labelled fields with buttons align on the control row. */
+/* Toolbars mixing labelled fields with buttons share one control-row baseline. */
 .plugins-toolbar--fields {
   align-items: flex-end;
 }
 
+.plugins-toolbar--fields > .plugins-toolbar__hint {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--settings-control-height);
+}
+
 .plugins-toolbar--fields > .settings-segmented,
 .plugins-toolbar--fields > .btn,
-.plugins-toolbar--fields > .plugins-toolbar__hint {
-  margin-bottom: 3px;
+.skills-toolbar__agent .agent-select__trigger {
+  box-sizing: border-box;
+  height: var(--settings-control-height);
+}
+
+.plugins-toolbar--fields > .settings-segmented {
+  --wa-form-control-height: calc(var(--settings-control-height) - 6px);
 }
 
 .plugins-toolbar__search {
@@ -175,6 +177,8 @@
    row-local messages can break onto a full-width line below the controls. */
 .plugins-item {
   flex-wrap: wrap;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 73px;
 }
 
 .plugins-item--clickable {
@@ -900,13 +904,11 @@ h3.plugins-subheader {
 
 /* ---------- responsive ---------- */
 
-@media (max-width: 768px) {
-  .plugins-content-header {
-    display: flex;
-  }
-}
-
 @media (max-width: 560px) {
+  .plugins-toolbar--fields > .settings-segmented {
+    height: auto;
+  }
+
   .plugins-remove-confirm {
     flex-wrap: wrap;
     white-space: normal;

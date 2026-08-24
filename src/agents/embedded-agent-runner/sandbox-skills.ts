@@ -142,7 +142,9 @@ export function mapSandboxSkillUsagePaths(params: {
 
 export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
-  effectiveWorkspace: string;
+  // Fallback skill discovery anchors to the configured agent workspace so
+  // snapshot and fallback paths agree.
+  skillsAnchorWorkspace: string;
   skillsSnapshot?: SkillSnapshot;
 }): {
   skillsEligibility?: SkillEligibilityContext;
@@ -152,7 +154,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   workspaceOnly: boolean;
 } {
   if (params.sandbox?.enabled === true) {
-    const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.effectiveWorkspace;
+    const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.skillsAnchorWorkspace;
     const skillsPromptWorkspaceDir =
       params.sandbox.workspaceAccess === "rw" &&
       params.sandbox.skillsWorkspaceDir &&
@@ -173,9 +175,9 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     };
   }
   return {
-    skillsPromptWorkspaceDir: params.effectiveWorkspace,
+    skillsPromptWorkspaceDir: params.skillsAnchorWorkspace,
     skillsSnapshot: params.skillsSnapshot,
-    skillsWorkspaceDir: params.effectiveWorkspace,
+    skillsWorkspaceDir: params.skillsAnchorWorkspace,
     workspaceOnly: false,
   };
 }

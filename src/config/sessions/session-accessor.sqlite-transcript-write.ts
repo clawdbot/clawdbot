@@ -256,6 +256,7 @@ export async function appendTranscriptEvent(
   const resolved = resolveSqliteTranscriptScope(scope);
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
+      options.beforeCommitInTransaction?.();
       appendTranscriptEventInTransaction(
         database,
         resolved,
@@ -277,6 +278,7 @@ export function appendTranscriptEventSync(
   const resolved = resolveSqliteTranscriptScope(fencedScope);
   let result: Result<boolean, TranscriptEventAppendError> = ok(false);
   runOpenClawAgentWriteTransaction((database) => {
+    options.beforeCommitInTransaction?.();
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (!fresh) {
       result = err({

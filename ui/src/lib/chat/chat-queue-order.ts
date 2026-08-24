@@ -11,8 +11,8 @@ export function chatQueueOrderKey(item: ChatQueuePosition): number {
 }
 
 /**
- * The one queue comparator. Display projection, drain head selection, steer
- * rebuild, and alias merge all sort through it, so what the operator sees is
+ * The one queue comparator. Display projection, drain head selection, and
+ * alias merge all sort through it, so what the operator sees is
  * what the Gateway receives. Equal positions keep their existing relative order
  * through sort stability, which is how same-millisecond arrivals stayed FIFO.
  */
@@ -22,13 +22,12 @@ export function compareChatQueueOrder(left: ChatQueuePosition, right: ChatQueueP
 
 /**
  * A row may move while it is still waiting for its turn. Rows already attached
- * to a run — sending, steering, running a command, or awaiting settings — keep
+ * to a run — sending, running a command, or awaiting settings — keep
  * their place, so a move can never jump ahead of work already handed over.
  */
 export function isMovableChatQueueItem(item: ChatQueueItem): boolean {
   return (
     !item.pendingRunId &&
-    item.kind !== "steered" &&
     (item.sendState === undefined ||
       item.sendState === "waiting-idle" ||
       item.sendState === "waiting-reconnect" ||

@@ -34,29 +34,19 @@ import {
   sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
-import {
-  buildMediaGenerationRequestKey,
-  recordRecentMediaGenerationTaskStartForSession,
-} from "../media-generation-task-status-shared.js";
+import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
-  buildMediaGenerationStartedToolResult,
   createDefaultMediaGenerateBackgroundScheduler,
-  notifyMediaGenerationAsyncTaskStarted,
-  scheduleMediaGenerationTaskCompletion,
-  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
 import {
-  completeMusicGenerationTaskRun,
-  createMusicGenerationTaskRun,
-  failMusicGenerationTaskRun,
   musicGenerationTaskLifecycle,
-  recordMusicGenerationTaskProgress,
+  runMediaGenerationTask,
   type MusicGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
@@ -401,9 +391,7 @@ type LoadedReferenceImage = Awaited<ReturnType<typeof loadReferenceImages>>[numb
 type ExecutedMusicGeneration = {
   provider: string;
   model: string;
-  savedPaths: string[];
   count: number;
-  paths: string[];
   attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
@@ -428,7 +416,7 @@ async function executeMusicGenerationJob(params: {
   providers?: MusicGenerationProvider[];
 }): Promise<ExecutedMusicGeneration> {
   if (params.taskHandle) {
-    recordMusicGenerationTaskProgress({
+    musicGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
       progressSummary: "Generating music",
     });
@@ -450,7 +438,7 @@ async function executeMusicGenerationJob(params: {
     createCapabilityProviderRuntimeDeps(params.providers),
   );
   if (params.taskHandle) {
-    recordMusicGenerationTaskProgress({
+    musicGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
       progressSummary: "Saving generated music",
     });
@@ -553,9 +541,7 @@ async function executeMusicGenerationJob(params: {
   return {
     provider: result.provider,
     model: result.model,
-    savedPaths: savedTracks.map((track) => track.path),
     count: savedTracks.length,
-    paths: savedTracks.map((track) => track.path),
     attachments,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
@@ -777,134 +763,61 @@ export function createMusicGenerateTool(options?: {
       });
       // Accepted tasks own their paid work independently; cancellation applies only before admission.
       signal?.throwIfAborted();
-      const taskHandle = createMusicGenerationTaskRun({
+      return runMediaGenerationTask({
+        lifecycle: musicGenerationTaskLifecycle,
+        generationLabel: "music",
         sessionKey: options?.agentSessionKey,
         requesterAgentId: options?.requesterAgentId,
         requesterOrigin: options?.requesterOrigin,
         prompt,
-        providerId: selectedProvider?.id ?? selectedModelRef?.provider,
+        requestKey,
+        providerId: selectedProviderId,
+        config: effectiveCfg,
+        scheduleBackgroundWork,
+        onAsyncTaskStarted: options?.onAsyncTaskStarted,
+        onFailure: (message, meta) => log.warn(message, meta),
+        messages: [timeout.message],
+        detailExtras: {
+          ...buildMediaReferenceDetails({
+            entries: loadedReferenceImages,
+            singleKey: "image",
+            pluralKey: "images",
+            getResolvedInput: (entry) => entry.resolvedInput,
+          }),
+          ...(model ? { model } : {}),
+          ...(lyrics ? { requestedLyrics: lyrics } : {}),
+          ...(typeof instrumental === "boolean" ? { instrumental } : {}),
+          ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
+          ...(format ? { format } : {}),
+          ...(filename ? { filename } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          ...(timeout.normalization
+            ? {
+                requestedTimeoutMs: timeout.normalization.requested,
+                timeoutNormalization: timeout.normalization,
+                warning: timeout.message,
+              }
+            : {}),
+        },
+        run: (taskHandle) =>
+          executeMusicGenerationJob({
+            effectiveCfg,
+            prompt,
+            agentDir: options?.agentDir,
+            lyrics,
+            instrumental,
+            durationSeconds,
+            model,
+            format,
+            filename,
+            loadedReferenceImages,
+            taskHandle,
+            autoProviderFallback: explicitModelConfig ? false : undefined,
+            timeoutMs,
+            timeoutNormalization: timeout.normalization,
+            providers: preparedProviders,
+          }),
       });
-      const shouldDetach = Boolean(
-        taskHandle &&
-        shouldDetachMediaGenerationTask(options?.agentSessionKey, options?.requesterAgentId),
-      );
-
-      if (shouldDetach && taskHandle) {
-        recordRecentMediaGenerationTaskStartForSession({
-          sessionKey: options?.agentSessionKey,
-          agentId: options?.requesterAgentId,
-          taskKind: "music_generation",
-          sourcePrefix: "music_generate",
-          taskId: taskHandle.taskId,
-          runId: taskHandle.runId,
-          taskLabel: prompt,
-          requestKey,
-          providerId: selectedProviderId,
-          progressSummary: "Generating music",
-        });
-        scheduleMediaGenerationTaskCompletion({
-          lifecycle: musicGenerationTaskLifecycle,
-          handle: taskHandle,
-          scheduleBackgroundWork,
-          progressSummary: "Generating music",
-          config: effectiveCfg,
-          toolName: "Music generation",
-          onWakeFailure: (message, meta) => log.warn(message, meta),
-          run: () =>
-            executeMusicGenerationJob({
-              effectiveCfg,
-              prompt,
-              agentDir: options?.agentDir,
-              model,
-              lyrics,
-              instrumental,
-              durationSeconds,
-              format,
-              filename,
-              loadedReferenceImages,
-              taskHandle,
-              autoProviderFallback: explicitModelConfig ? false : undefined,
-              timeoutMs,
-              timeoutNormalization: timeout.normalization,
-              providers: preparedProviders,
-            }),
-        });
-
-        await notifyMediaGenerationAsyncTaskStarted({
-          callback: options?.onAsyncTaskStarted,
-          message: "Music generation started; wait for the generated music completion event.",
-          toolName: "music_generate",
-          handle: taskHandle,
-          onFailure: (message, meta) => log.warn(message, meta),
-        });
-
-        return buildMediaGenerationStartedToolResult({
-          toolName: "music_generate",
-          generationLabel: "music",
-          completionLabel: "music",
-          taskHandle,
-          messages: [timeout.message],
-          detailExtras: {
-            ...buildMediaReferenceDetails({
-              entries: loadedReferenceImages,
-              singleKey: "image",
-              pluralKey: "images",
-              getResolvedInput: (entry) => entry.resolvedInput,
-            }),
-            ...(model ? { model } : {}),
-            ...(lyrics ? { requestedLyrics: lyrics } : {}),
-            ...(typeof instrumental === "boolean" ? { instrumental } : {}),
-            ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
-            ...(format ? { format } : {}),
-            ...(filename ? { filename } : {}),
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-            ...(timeout.normalization
-              ? {
-                  requestedTimeoutMs: timeout.normalization.requested,
-                  timeoutNormalization: timeout.normalization,
-                  warning: timeout.message,
-                }
-              : {}),
-          },
-        });
-      }
-
-      try {
-        const executed = await executeMusicGenerationJob({
-          effectiveCfg,
-          prompt,
-          agentDir: options?.agentDir,
-          lyrics,
-          instrumental,
-          durationSeconds,
-          model,
-          format,
-          filename,
-          loadedReferenceImages,
-          taskHandle,
-          autoProviderFallback: explicitModelConfig ? false : undefined,
-          timeoutMs,
-          timeoutNormalization: timeout.normalization,
-          providers: preparedProviders,
-        });
-        completeMusicGenerationTaskRun({
-          handle: taskHandle,
-          provider: executed.provider,
-          model: executed.model,
-          count: executed.savedPaths.length,
-          paths: executed.savedPaths,
-        });
-        return {
-          content: [{ type: "text", text: executed.contentText }],
-          details: executed.details,
-        };
-      } catch (error) {
-        failMusicGenerationTaskRun({
-          handle: taskHandle,
-          error,
-        });
-        throw error;
-      }
     },
   };
 }

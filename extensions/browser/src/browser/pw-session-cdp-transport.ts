@@ -4,9 +4,7 @@ import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import WebSocket from "ws";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openCdpWebSocket } from "./cdp.helpers.js";
-import { playwrightCore } from "./playwright-core.runtime.js";
-
-const { chromium } = playwrightCore;
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
 type CdpSocketLookup = typeof dnsLookupCb;
 
 export async function connectOverCdpPinnedTransport(
@@ -130,7 +128,7 @@ export async function connectOverCdpPinnedTransport(
     ws.on("error", (error) => {
       scheduleTransportClosed(formatErrorMessage(error));
     });
-    return await chromium.connectOverCDP(transport, { timeout: opts.timeout });
+    return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
   } catch (error) {
     ws.close();
     throw error;

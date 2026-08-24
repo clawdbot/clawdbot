@@ -1,5 +1,6 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
+import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -24,12 +25,6 @@ type TerminalOpenResult = {
   cwd: string;
   confined: boolean;
   title?: string;
-};
-
-type TerminalCatalogReference = {
-  catalogId: string;
-  hostId: string;
-  threadId: string;
 };
 
 type TerminalAttachResult = TerminalOpenResult & {
@@ -145,6 +140,10 @@ export class TerminalConnection {
   // capped buffer becomes a detectable gap instead of silent output loss.
   private readonly pending = new Map<string, BoundedBuffer<PendingEvent>>();
   private unsubscribe: (() => void) | null = null;
+  // Fence for replies that outlive dispose(): without it a late open/attach
+  // would resurrect stream state and re-arm the liveness loop on a connection
+  // whose panel is gone or was replaced by a reconnect.
+  private disposed = false;
   private pendingOpenCount = 0;
   private livenessTimer: ReturnType<typeof setTimeout> | null = null;
   private livenessProbeInFlight = false;
@@ -220,10 +219,7 @@ export class TerminalConnection {
   }
 
   /** Opens a session and registers its output/exit sinks before returning. */
-  async open(
-    params: { agentId?: string; cols: number; rows: number; catalog?: TerminalCatalogReference },
-    sink: SessionSink,
-  ): Promise<TerminalOpenResult> {
+  async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
@@ -252,6 +248,9 @@ export class TerminalConnection {
       }
       throw new TerminalOpenUnusableSessionError(missingField);
     }
+    if (this.disposed) {
+      return result;
+    }
     const stream = this.setStream(result.sessionId, sink, {
       seqMode: "unknown",
       expectedSeq: 0,
@@ -276,6 +275,9 @@ export class TerminalConnection {
     }
     const offset =
       typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
+    if (this.disposed) {
+      return result;
+    }
     const stream = this.setStream(sessionId, sink, {
       seqMode: offset === null ? "counter" : "offset",
       expectedSeq: offset,
@@ -648,6 +650,7 @@ export class TerminalConnection {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const stream of this.streams.values()) {
       stream.abort.abort();
     }

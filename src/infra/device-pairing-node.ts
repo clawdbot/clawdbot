@@ -6,7 +6,7 @@ import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-c
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
-  clearNodePairingGenerationBins,
+  clearNodePairingGenerationState,
   resolveNodePairingGeneration,
   resolveNodePairingState,
   withPairedDeviceRecords,
@@ -76,6 +76,7 @@ type NodePairingPendingEntry = NodePairingPendingRequest & {
 /** Approved node record projected from the device's node surface (no auth material). */
 export type PairedDeviceNode = NodeDeclaredSurface & {
   bins?: string[];
+  sessionHost?: boolean;
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
@@ -184,6 +185,7 @@ function toPairedNode(
     permissions: surface.permissions,
     remoteIp: device.remoteIp,
     bins: surface.bins,
+    ...(surface.sessionHost === true ? { sessionHost: true } : {}),
     ...(pairingGeneration ? { pairingGeneration } : {}),
     createdAtMs: surface.createdAtMs,
     approvedAtMs: surface.approvedAtMs,
@@ -587,7 +589,7 @@ export async function approveNodePairing(
     if (!nextPairingState || !nextPairingGeneration) {
       return { value: null, persist: false };
     }
-    clearNodePairingGenerationBins(device, previousPairingGeneration);
+    clearNodePairingGenerationState(device, previousPairingGeneration);
     const node = toPairedNode(device);
     if (!node) {
       return { value: null, persist: false };
@@ -633,38 +635,6 @@ export async function getPendingNodePairing(
       return { value: null, persist: false };
     }
     return { value: { requestId, nodeId: device.deviceId }, persist: false };
-  });
-}
-
-/** Update the remote skill bins advertised by a paired node. */
-export async function updatePairedNodeBins(
-  nodeId: string,
-  bins: string[],
-  expectedPairingGeneration: NodePairingGeneration,
-  baseDir?: string,
-): Promise<boolean> {
-  return await withPairedDeviceRecords<boolean>(baseDir, () => {
-    const value = updatePairedDeviceNodeSurfaceInTransaction<boolean>(nodeId, baseDir, (device) => {
-      const currentPairingGeneration = resolveNodePairingGeneration(device);
-      if (
-        !device?.nodeSurface ||
-        expectedPairingGeneration.nodeId !== device.deviceId ||
-        currentPairingGeneration?.key !== expectedPairingGeneration.key
-      ) {
-        return { value: false, persist: false };
-      }
-      return {
-        value: true,
-        persist: true,
-        nodeSurface: {
-          ...device.nodeSurface,
-          bins,
-        },
-      };
-    });
-    // The row-scoped transaction owns cross-process generation validation, while
-    // this lock prevents a local full-snapshot writer from replaying retired bins.
-    return { value, persist: false };
   });
 }
 

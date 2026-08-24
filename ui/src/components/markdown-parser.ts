@@ -1,13 +1,9 @@
-import MarkdownIt from "markdown-it";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
-import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import {
-  formatGitHubItemReference,
-  isGitHubItemRootPath,
-  parseGitHubItemPath,
-} from "./github-link-target.ts";
+import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -22,6 +18,7 @@ import {
 } from "./markdown-file-links.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
+import { installMarkdownTables } from "./markdown-tables.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
@@ -64,7 +61,7 @@ const PROGRESS_HTML_RE = /^(?:<progress(?:\s[^<>]*)?>\s*(?:<\/progress>)?|<\/pro
 function renderRawMarkdownHtml(
   tokens: readonly Token[],
   index: number,
-  env: Partial<MarkdownRenderEnv> | undefined,
+  progressBars: boolean,
   block: boolean,
 ): string {
   const token = tokens[index];
@@ -72,7 +69,7 @@ function renderRawMarkdownHtml(
     return "";
   }
   const content = token.content;
-  if (env?.progressBars) {
+  if (progressBars) {
     return PROGRESS_HTML_RE.test(content.trim()) ? content : "";
   }
   return escapeMarkdownHtml(content) + (block ? "\n" : "");
@@ -111,6 +108,26 @@ function parseWebLinkHref(href: string): URL | null {
   return url.protocol === "https:" || url.protocol === "http:" ? url : null;
 }
 
+function formatGitHubLinkLabel(url: URL): string {
+  const segments = url.pathname.split("/").filter(Boolean);
+  const item = parseGitHubItemPath(url);
+  if (item) {
+    return segments.length === 4 && !url.search && !url.hash ? `#${item.number}` : url.href;
+  }
+  if (segments.length === 2) {
+    return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
+  }
+  if (segments[2] === "blob" && segments.length > 4) {
+    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (filename) {
+      return filename;
+    }
+  }
+  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
+  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  return ["github.com", ...path].join("/");
+}
+
 function isFileLinkBoundaryBefore(value: string, index: number): boolean {
   const char = value[index - 1];
   return char === undefined || /\s/.test(char) || "([{<\"'`".includes(char);
@@ -121,7 +138,7 @@ function isFileLinkBoundaryAfter(value: string, index: number): boolean {
   return char === undefined || /\s/.test(char) || ".,;:!?)]}>\"'".includes(char);
 }
 
-export function createMarkdownParser(): MarkdownIt {
+export function createMarkdownParser(): MarkdownItParser {
   const markdownParser = new MarkdownIt({
     html: true, // Enable HTML recognition so html_block/html_inline overrides can escape it
     breaks: true,
@@ -134,6 +151,7 @@ export function createMarkdownParser(): MarkdownIt {
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
+  installMarkdownTables(markdownParser);
 
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol
@@ -260,7 +278,7 @@ export function createMarkdownParser(): MarkdownIt {
       for (const token of children) {
         if (
           token.type === "link_open" &&
-          DISALLOWED_LINK_SCHEME_RE.test(token.attrGet("href") ?? "")
+          DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""))
         ) {
           token.hidden = true;
           hideClose = true;
@@ -314,7 +332,7 @@ export function createMarkdownParser(): MarkdownIt {
         const cjkTail = displayText.slice(cjkIndex);
         // Rebuild href by preserving the scheme prefix that linkify added but
         // display text omits (e.g. "mailto:" for emails, "http://" for www links).
-        const href = token.attrGet("href") ?? "";
+        const href = String(token.attrGet("href") ?? "");
         const prefixLength = href.indexOf(displayText);
         const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
         token.attrSet("href", hrefPrefix + trimmedDisplay);
@@ -350,7 +368,7 @@ export function createMarkdownParser(): MarkdownIt {
           continue;
         }
         if (token.type === "link_open") {
-          const href = token.attrGet("href");
+          const href = String(token.attrGet("href") ?? "");
           if (href) {
             let decodedHref = href;
             try {
@@ -510,7 +528,7 @@ export function createMarkdownParser(): MarkdownIt {
         if (open?.type !== "link_open") {
           continue;
         }
-        const href = open.attrGet("href");
+        const href = String(open.attrGet("href") ?? "");
         const url = href ? parseWebLinkHref(href) : null;
         if (!url) {
           continue;
@@ -518,12 +536,8 @@ export function createMarkdownParser(): MarkdownIt {
         const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
         const host = url.hostname.toLowerCase();
         const githubLink = host === "github.com" || host === "www.github.com";
-        const itemTarget = githubLink ? parseGitHubItemPath(url) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
-        }
-        if (!githubLink) {
-          continue;
         }
         let labelToken: Token | null = null;
         for (let cursor = index + 1; cursor < children.length; cursor++) {
@@ -535,13 +549,22 @@ export function createMarkdownParser(): MarkdownIt {
             (token.type === "text" || token.type === "code_inline") &&
             token.content.trim() !== ""
           ) {
-            open.attrJoin("class", GITHUB_LINK_CLASS);
             labelToken = token;
             break;
           }
         }
-        if (generatedUrlLabel && itemTarget && labelToken && isGitHubItemRootPath(url)) {
-          labelToken.content = formatGitHubItemReference(itemTarget);
+        if (githubLink && labelToken) {
+          open.attrJoin("class", GITHUB_LINK_CLASS);
+        }
+        if (githubLink && generatedUrlLabel && labelToken) {
+          labelToken.content = formatGitHubLinkLabel(url);
+          open.attrSet("title", href ?? url.href);
+        }
+        if (!githubLink && labelToken && state.env.linkFavicons) {
+          const favicon = new state.Token("link_favicon", "img", 0);
+          favicon.meta = { hostname: host };
+          children.splice(index + 1, 0, favicon);
+          index += 1;
         }
       }
     }
@@ -576,12 +599,18 @@ export function createMarkdownParser(): MarkdownIt {
   // Renderer rules degrade to empty output on impossible token misses instead of
   // throwing mid-render; markdown input is untrusted and the chat view must not crash.
   markdownParser.renderer.rules.html_block = (tokens, index, _options, env) =>
-    renderRawMarkdownHtml(tokens, index, env, true);
+    renderRawMarkdownHtml(tokens, index, env?.progressBars === true, true);
   markdownParser.renderer.rules.html_inline = (tokens, index, _options, env) => {
     const token = tokens[index];
     return token?.meta?.taskListPlugin === true
       ? token.content
-      : renderRawMarkdownHtml(tokens, index, env, false);
+      : renderRawMarkdownHtml(tokens, index, env?.progressBars === true, false);
+  };
+  markdownParser.renderer.rules.link_favicon = (tokens, index) => {
+    const hostname: unknown = tokens[index]?.meta?.hostname;
+    return typeof hostname === "string"
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeMarkdownHtml(hostname)}" alt="" role="presentation">`
+      : "";
   };
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
     const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);
@@ -593,7 +622,7 @@ export function createMarkdownParser(): MarkdownIt {
         target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
       return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
     }
-    const sessionKey: unknown = tokens[index]?.meta?.sessionLink?.sessionKey;
+    const sessionKey: unknown = asOptionalRecord(tokens[index]?.meta?.sessionLink)?.sessionKey;
     return typeof sessionKey === "string"
       ? `<a class="markdown-session-link" role="link" tabindex="0" data-session-key="${escapeMarkdownHtml(sessionKey)}">${rendered}</a>`
       : rendered;
@@ -626,7 +655,7 @@ export function createMarkdownParser(): MarkdownIt {
       (env as Partial<MarkdownRenderEnv> | undefined)?.mode === "document",
   });
 
-  // Override fenced code blocks with copy button + JSON collapse
+  // Fenced and indented blocks share one interaction and overflow surface.
   markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {
@@ -635,8 +664,13 @@ export function createMarkdownParser(): MarkdownIt {
     // token.info contains the full fence info string (e.g., "json title=foo");
     // extract only the first whitespace-separated token as the language.
     const language = token.info.trim().split(/\s+/)[0] || "";
+    // An unfinished fence consumes the remaining input; only container closers can
+    // follow it. Invalid fence-looking prose must not de-highlight an earlier block.
+    const streamingOpenFence = env?.streamingOpenFence === true;
     return renderMarkdownCodeBlock(token.content, language, env, {
       copyText: markdownCodeBlockCopyText(token.content),
+      highlight:
+        !streamingOpenFence || tokens.findLastIndex(({ nesting }) => nesting !== -1) !== index,
     });
   };
   // Override indented code blocks (code_block) with the same treatment as fence

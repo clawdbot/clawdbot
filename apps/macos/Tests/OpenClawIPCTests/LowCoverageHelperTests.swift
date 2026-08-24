@@ -91,29 +91,6 @@ struct LowCoverageHelperTests {
         #expect(ContinuousClock.now - startedAt < .seconds(2))
     }
 
-    @Test func `node info codable round trip`() throws {
-        let info = NodeInfo(
-            nodeId: "node-1",
-            displayName: "Node One",
-            platform: "macOS",
-            version: "1.0",
-            coreVersion: "1.0-core",
-            uiVersion: "1.0-ui",
-            deviceFamily: "Mac",
-            modelIdentifier: "MacBookPro",
-            remoteIp: "192.168.1.2",
-            caps: ["chat"],
-            commands: ["send"],
-            permissions: ["send": true],
-            paired: true,
-            connected: false)
-        let data = try JSONEncoder().encode(info)
-        let decoded = try JSONDecoder().decode(NodeInfo.self, from: data)
-        #expect(decoded.nodeId == "node-1")
-        #expect(decoded.isPaired == true)
-        #expect(decoded.isConnected == false)
-    }
-
     @Test @MainActor func `presence reporter summary and privacy parameters`() {
         let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
@@ -368,6 +345,7 @@ struct LowCoverageHelperTests {
         let missing = try #require(CanvasScheme.makeURL(session: "missing", path: "/"))
         let missingResponse = handler._testResponse(for: missing)
         #expect(missingResponse.mime == "text/html")
+        #expect(String(data: missingResponse.data, encoding: .utf8)?.contains("Not Found") == true)
 
         #expect(handler._testTextEncodingName(for: "text/html") == "utf-8")
         #expect(handler._testTextEncodingName(for: "application/octet-stream") == nil)
@@ -399,15 +377,11 @@ struct LowCoverageHelperTests {
         #expect(!body.contains("top-secret"))
     }
 
-    @Test @MainActor func `canvas window helper functions`() throws {
+    @Test @MainActor func `canvas window helper functions`() {
         let rect = NSRect(x: 10, y: 12, width: 400, height: 420)
         let key = CanvasWindowController._testStoredFrameKey(sessionKey: "test")
         let loaded = CanvasWindowController._testStoreAndLoadFrame(sessionKey: "test", frame: rect)
         UserDefaults.standard.removeObject(forKey: key)
         #expect(loaded?.size.width == rect.size.width)
-
-        let trusted = try #require(URL(string:
-            "http://127.0.0.1:18789/__openclaw__/cap/token/__openclaw__/a2ui/?platform=macos"))
-        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(trusted, expectedRemoteURL: trusted))
     }
 }

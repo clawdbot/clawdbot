@@ -226,12 +226,12 @@ describe("node worker supervisor recovery", () => {
       state: "pending",
       supervisor: { pid: 2_147_483_647, startTime: 1 },
     });
-    const availability: boolean[] = [];
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const supervisor = createNodeWorkerSupervisor({
       bundleRoot,
       env,
       capacity: 1,
-      onAvailabilityChanged: (available) => availability.push(available),
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
 
     await supervisor.initialize();
@@ -240,7 +240,10 @@ describe("node worker supervisor recovery", () => {
       state: "interrupted",
       worker: null,
     });
-    expect(availability).toEqual([false, true]);
+    expect(capacitySnapshots).toEqual([
+      { total: 1, available: 0 },
+      { total: 1, available: 1 },
+    ]);
     await supervisor.close();
   });
 

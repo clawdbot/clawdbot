@@ -45,6 +45,7 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import type {
@@ -54,6 +55,10 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import {
+  resolveDirectIncognitoTargets,
+  sessionMutationTargetFields,
+} from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -141,6 +146,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
     import("./server-methods/sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "sessions-github": () =>
+    import("./server-methods/sessions-github.js").then((module) => module.sessionsGitHubHandlers),
   "sessions-diff": () =>
     import("./server-methods/sessions-diff.js").then((module) => module.sessionsDiffHandlers),
   "sessions-abort": () =>
@@ -209,6 +216,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
   "tools-catalog": () =>
     import("./server-methods/tools-catalog.js").then((module) => module.toolsCatalogHandlers),
+  "tools-github": () =>
+    import("./server-methods/tools-github.js").then((module) => module.toolsGitHubHandlers),
   "tools-effective": () =>
     import("./server-methods/tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () =>
@@ -285,6 +294,35 @@ const SUSPEND_CONTROL_METHODS = new Set([
 
 function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
   return SUSPEND_CONTROL_METHODS.has(method);
+}
+
+async function authorizeAuthenticatedProfileForMethod(params: {
+  client: GatewayRequestOptions["client"];
+  method: string;
+  requestParams: unknown;
+  methodRegistry: GatewayMethodRegistry;
+  context: GatewayRequestContext;
+}): Promise<ErrorShape | null> {
+  const sync = params.client?.authenticatedGitHubIdentitySync;
+  if (!sync || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    return null;
+  }
+  const requiresProfile =
+    params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
+    resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
+    (sessionMutationTargetFields(params.method).length > 0 &&
+      params.context.getRuntimeConfig().gateway?.roles !== undefined);
+  if (!requiresProfile) {
+    return null;
+  }
+  try {
+    await sync();
+  } catch {
+    return authenticatedProfileUnavailableError();
+  }
+  return params.client?.authenticatedUserProfile?.profileId.trim()
+    ? null
+    : authenticatedProfileUnavailableError();
 }
 
 const coreGatewayHandlerMethodNames = listCoreGatewayHandlerMethodNames();
@@ -367,6 +405,27 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   if (authError) {
     return { error: authError };
   }
+  // GitHub-backed connections receive hello before remote account resolution. Profile-owned
+  // methods must cross this single router fence before session authorization or handler work.
+  const profileError = await authorizeAuthenticatedProfileForMethod(params);
+  if (profileError) {
+    return { error: profileError };
+  }
+  // Startup gating precedes session authorization: session stores are not loaded yet,
+  // so an authorization read here would deny with a misleading non-retryable error.
+  if (params.context.unavailableGatewayMethods?.has(params.method)) {
+    return {
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${params.method} unavailable during gateway startup`,
+        {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        },
+      ),
+    };
+  }
   const sessionMutation = resolveSessionMutationAuthorization({
     client: params.client ?? null,
     method: params.method,
@@ -386,19 +445,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         retryable: true,
         details: { code: "PAIRING_CHANGED" },
       }),
-    };
-  }
-  if (params.context.unavailableGatewayMethods?.has(params.method)) {
-    return {
-      error: errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${params.method} unavailable during gateway startup`,
-        {
-          retryable: true,
-          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-        },
-      ),
     };
   }
   return {

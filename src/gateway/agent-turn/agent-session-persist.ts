@@ -24,10 +24,12 @@ import {
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { errorShapeFromError } from "../error-shape.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import {
   assertExpectedExistingSession,
   ExpectedExistingSessionChangedError,
@@ -35,6 +37,7 @@ import {
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
 import type { TrustedSessionCreation } from "../server-methods/session-creation-provenance.js";
+import type { GatewayOperatorRoleActor } from "../server-methods/shared-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import {
   cronContinuationHasReusableRuntime,
@@ -83,6 +86,8 @@ export async function persistAgentSessionPhase(params: {
   sessionAgentId: string;
   mainSessionKey: string;
   creation: TrustedSessionCreation;
+  requestingOperatorProfileId?: string;
+  operatorRoleActor?: GatewayOperatorRoleActor;
   lifecycleGeneration: string;
   isRestartRecoveryResumeRun: boolean;
   runId: string;
@@ -154,6 +159,7 @@ export async function persistAgentSessionPhase(params: {
     let deletedDuringStoreUpdateError: string | undefined;
     let restoredCronContinuationError: string | undefined;
     let restartRecoveryReservationConflict: string | undefined;
+    let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
     try {
       persisted =
         (await patchSessionEntryTarget(
@@ -168,6 +174,18 @@ export async function persistAgentSessionPhase(params: {
           (_currentEntry, patchContext) => {
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
             const freshEntry = patchContext.existingEntry;
+            if (!freshEntry) {
+              creationAuthorizationError = authorizeGatewaySessionCreation({
+                cfg: params.cfg,
+                agentId: params.sessionAgentId,
+                ...(params.operatorRoleActor
+                  ? { actor: params.operatorRoleActor }
+                  : { profileId: params.requestingOperatorProfileId }),
+              });
+              if (creationAuthorizationError) {
+                throw new Error(creationAuthorizationError.message);
+              }
+            }
             assertExpectedExistingSession({
               constraint: params.expectedSession,
               entry: freshEntry,
@@ -355,6 +373,10 @@ export async function persistAgentSessionPhase(params: {
           },
         )) ?? undefined;
     } catch (err) {
+      if (creationAuthorizationError) {
+        params.respond(false, undefined, creationAuthorizationError);
+        return undefined;
+      }
       if (
         params.abortForLifecycleRotation({
           sessionKey: params.canonicalSessionKey,
@@ -462,6 +484,15 @@ export async function persistAgentSessionPhase(params: {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,
+    });
+  }
+  if (params.creation.actor?.type === "human" && params.creation.actor.id) {
+    recordSessionParticipantBestEffort({
+      actor: { type: "human", id: params.creation.actor.id },
+      agentId: params.sessionAgentId,
+      sessionKey: params.canonicalSessionKey,
+      source: "profile",
+      storePath: params.storePath,
     });
   }
   if (isNewSession && params.entry?.sessionId && resolvedSessionId !== params.entry.sessionId) {

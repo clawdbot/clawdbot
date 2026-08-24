@@ -13,7 +13,7 @@ import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
 
 /** Normalized model metadata returned by the Codex app-server model listing helper. */
-type CodexAppServerModel = {
+export type CodexAppServerModel = {
   id: string;
   model: string;
   displayName?: string;

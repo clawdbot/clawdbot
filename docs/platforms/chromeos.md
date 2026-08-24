@@ -54,8 +54,8 @@ Full server guidance lives in the [Linux guide](/platforms/linux) and the
 
 On a single user Chromebook, use the native npm install (the installer script,
 or `npm i -g openclaw@latest --allow-scripts=openclaw` on npm 12 or npm
-11.16+) rather than [Docker](/install/docker). On npm 11.12 and earlier, omit
-`--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+11.16+) rather than [Docker](/install/docker). On npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`.
 
 Docker works inside Crostini, but Docker in Crostini adds friction: if you use
 the Claude Code CLI as your model runtime, it has to be installed and logged in

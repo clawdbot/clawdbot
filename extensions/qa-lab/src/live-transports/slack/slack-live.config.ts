@@ -1,5 +1,4 @@
 // QA Lab Slack credentials, instrumentation, and channel config.
-import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asNonArrayRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -7,6 +6,7 @@ import {
   type SlackQaConfigOverrides,
   SLACK_QA_ENV_KEYS,
   slackQaCredentialPayloadSchema,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)[number]) {

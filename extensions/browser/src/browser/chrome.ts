@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
+import { isPidAlive, prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -161,21 +161,6 @@ function createChromeLaunchStderrDiagnostics(maxBytes: number) {
   };
 }
 
-function processExists(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EPERM") {
-      return true;
-    }
-    return false;
-  }
-}
-
 function readSingletonLockTarget(userDataDir: string): { hostname: string; pid: number } | null {
   let target: string;
   try {
@@ -189,9 +174,6 @@ function readSingletonLockTarget(userDataDir: string): { hostname: string; pid: 
   }
   const hostname = normalizeOptionalString(match.groups.lockHost) ?? "";
   const pid = Number.parseInt(match.groups.pid ?? "", 10);
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return null;
-  }
   return { hostname, pid };
 }
 
@@ -436,7 +418,7 @@ function readOwnedManagedChromeIdentity(params: {
   profile: ResolvedBrowserProfile;
   userDataDir: string;
 }): ManagedChromeProcessIdentity | null {
-  if (!processExists(params.pid) || !pidListensOnPort(params.pid, params.profile.cdpPort)) {
+  if (!isPidAlive(params.pid) || !pidListensOnPort(params.pid, params.profile.cdpPort)) {
     return null;
   }
   const command = readManagedProcessCommandLine(params.pid);
@@ -471,7 +453,7 @@ function isPortInUseError(err: unknown): boolean {
 
 function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname()): number | null {
   const lock = readSingletonLockTarget(userDataDir);
-  if (!lock || lock.hostname !== hostname || !processExists(lock.pid)) {
+  if (!lock || lock.hostname !== hostname || !isPidAlive(lock.pid)) {
     return null;
   }
   return lock.pid;
@@ -489,22 +471,8 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
 
 /** Remove stale Chrome singleton lock files from a user-data-dir. */
 function clearStaleChromeSingletonLocks(userDataDir: string, hostname = os.hostname()): boolean {
-  const lockPath = path.join(userDataDir, "SingletonLock");
-  let target: string;
-  try {
-    target = fs.readlinkSync(lockPath);
-  } catch {
-    return false;
-  }
-
-  const match = /^(?<lockHost>.+)-(?<pid>\d+)$/.exec(target);
-  if (!match?.groups) {
-    return false;
-  }
-
-  const lockHost = normalizeOptionalString(match.groups.lockHost) ?? "";
-  const pid = Number.parseInt(match.groups.pid ?? "", 10);
-  if (lockHost === hostname && processExists(pid)) {
+  const lock = readSingletonLockTarget(userDataDir);
+  if (!lock || (lock.hostname === hostname && isPidAlive(lock.pid))) {
     return false;
   }
 
@@ -567,14 +535,14 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string):
 async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!processExists(pid)) {
+    if (!isPidAlive(pid)) {
       return true;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, CHROME_BOOTSTRAP_EXIT_POLL_MS);
     });
   }
-  return !processExists(pid);
+  return !isPidAlive(pid);
 }
 
 async function terminateOwnedStaleChromeProcess(
@@ -619,7 +587,7 @@ async function terminateOwnedStaleChromeProcess(
 
 function clearRecoveredChromeSingletonArtifacts(userDataDir: string, pid: number): boolean {
   const lock = readSingletonLockTarget(userDataDir);
-  if (!lock || lock.hostname !== os.hostname() || lock.pid !== pid || processExists(pid)) {
+  if (!lock || lock.hostname !== os.hostname() || lock.pid !== pid || isPidAlive(pid)) {
     return false;
   }
   clearChromeSingletonArtifacts(userDataDir);

@@ -33,7 +33,13 @@ ensure_home_env
 # Register paths in the caller: command substitutions run in a subshell, so
 # array mutations inside a helper would not reach this shell.
 TMPFILES=()
+WRAPPER_BACKUP_TARGET=""
+WRAPPER_BACKUP_PATH=""
 cleanup_tmpfiles() {
+  if [[ -n "$WRAPPER_BACKUP_PATH" && ( -e "$WRAPPER_BACKUP_PATH" || -L "$WRAPPER_BACKUP_PATH" ) ]]; then
+    rm -f "$WRAPPER_BACKUP_TARGET" 2>/dev/null || true
+    mv "$WRAPPER_BACKUP_PATH" "$WRAPPER_BACKUP_TARGET" 2>/dev/null || true
+  fi
   local f
   for f in "${TMPFILES[@]:-}"; do
     rm -rf "$f" 2>/dev/null || true
@@ -65,8 +71,8 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.15.0"
-ARMV7_DEFAULT_NODE_VERSION="22.22.3"
+DEFAULT_NODE_VERSION="24.19.0"
+ARMV7_DEFAULT_NODE_VERSION="22.23.2"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
@@ -99,7 +105,7 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.15.0; 22.22.3 on Linux ARMv7)
+  --node-version <ver>                Node version (default: 24.19.0; 22.23.2 on Linux ARMv7)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -426,7 +432,7 @@ select_node_version_for_platform() {
     NODE_VERSION="$ARMV7_DEFAULT_NODE_VERSION"
   fi
   if [[ "$os" == "linux" && "$arch" == "armv7l" && "${NODE_VERSION%%.*}" != "22" ]]; then
-    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.22.3."
+    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.23.2."
   fi
 }
 
@@ -1127,7 +1133,7 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(linked_node_sqlite_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.15.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.19.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }
@@ -1146,10 +1152,16 @@ ensure_pnpm() {
     emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"corepack\"}"
     log "Installing pnpm via Corepack..."
     "$(node_dir)/bin/corepack" enable >/dev/null 2>&1 || true
-    "$(node_dir)/bin/corepack" prepare pnpm@11 --activate
-    if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^11\. ]]; then
-      emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
-      return 0
+    # Corepack downloads fail hard on npm registry key rotation (its bundled
+    # signature set goes stale); the npm fallback below must stay reachable.
+    if "$(node_dir)/bin/corepack" prepare pnpm@11 --activate; then
+      if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^11\. ]]; then
+        emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
+        return 0
+      fi
+    else
+      emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"warn\",\"reason\":\"corepack-failed\"}"
+      log "Corepack could not provision pnpm; falling back to npm."
     fi
   fi
 
@@ -1273,6 +1285,58 @@ npm_config_has_raw_key() {
   return 1
 }
 
+npm_lifecycle_allow_arg() {
+  local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" version="" output=""
+  if ! version="$("$npm_cmd" --version 2>/dev/null)"; then
+    log "ERROR: unable to determine npm version; no package changes were made"
+    return 1
+  fi
+  output="$("$(node_bin)" - "$version" "$spec" "$npm_cwd" <<'NODE'
+const path = require("node:path");
+const [versionOutput, spec, cwd] = process.argv.slice(2);
+const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
+const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
+const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
+if (!parsed) fail("Unable to determine npm version; no package changes were made.");
+if (+parsed[1] < 12 && (+parsed[1] !== 11 || +parsed[2] < 16)) process.exit(0);
+const normalized = spec.trim();
+const unaliased = normalized.toLowerCase().startsWith("openclaw@") ? normalized.slice(9).trim() : normalized;
+const explicit = (value) => /\.(?:tgz|tar\.gz)$/i.test(value) || value.includes("://") || value.includes("#") || /^(?:file|github|git\+(?:ssh|https|http|file)|npm):/i.test(value);
+let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\.{1,2}(?:[\\/]|$)/.test(unaliased) || path.isAbsolute(normalized) || path.isAbsolute(unaliased) ? unaliased : "openclaw";
+if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
+const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
+if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
+process.stdout.write(`--allow-scripts=${identity}\n`);
+NODE
+)" || return 1
+  printf '%s' "$output"
+}
+
+publish_executable_wrapper() {
+  local target="$1" target_dir="" temp="" backup=""
+  target_dir="${target%/*}"
+  mkdir -p "$target_dir"
+  temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
+  TMPFILES+=("$temp")
+  cat > "$temp"
+  chmod +x "$temp"
+  if [[ -z "$WRAPPER_BACKUP_PATH" && ( -e "$target" || -L "$target" ) ]]; then
+    backup="$(mktemp "${target}.backup.XXXXXX")" || return 1
+    rm -f "$backup" || return 1
+    mv "$target" "$backup" || return 1
+    WRAPPER_BACKUP_TARGET="$target"
+    WRAPPER_BACKUP_PATH="$backup"
+  fi
+  mv -f "$temp" "$target"
+}
+
+commit_wrapper_backup() {
+  [[ -z "$WRAPPER_BACKUP_PATH" ]] || rm -f "$WRAPPER_BACKUP_PATH" || return 1
+  WRAPPER_BACKUP_TARGET=""
+  WRAPPER_BACKUP_PATH=""
+}
+
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
   if is_openclaw_source_package_install_spec "$requested"; then
@@ -1304,17 +1368,29 @@ install_openclaw() {
     fi
     require_openclaw_version_compatible "$resolved_requested"
   fi
+  local install_spec="openclaw@${resolved_requested}"
+  if [[ "$resolved_requested" == *"://"* || "$resolved_requested" == /* || "$resolved_requested" == ./* || "$resolved_requested" == ../* || "$resolved_requested" =~ ^(file|github|git\+|npm): || "$resolved_requested" =~ \.(tgz|tar\.gz)$ ]]; then
+    install_spec="$resolved_requested"
+  fi
+  local npm_cmd="" lifecycle_arg=""
+  npm_cmd="$(npm_bin)"
+  local npm_cwd="$PWD"
+  lifecycle_arg="$(npm_lifecycle_allow_arg "$npm_cmd" "$install_spec" "$npm_cwd")" || return 1
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"version\":\"${requested}\"}"
   log "Installing OpenClaw (${requested})..."
   if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
     fix_npm_prefix_if_needed
   fi
 
-  local installed_entry
+  local installed_entry install_guard
   installed_entry="$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
-  if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
+  install_guard="$(node_dir)/lib/node_modules/openclaw/dist/openclaw-install-guard"
+  local npm_install_args=(install -g --prefix "$(node_dir)" "${npm_args[@]}")
+  [[ -z "$lifecycle_arg" ]] || npm_install_args+=("$lifecycle_arg")
+  npm_install_args+=("$install_spec")
+  if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
-    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$install_guard" ]]; then
       emit_json '{"event":"error","message":"npm install did not produce a usable OpenClaw package"}'
       log "ERROR: npm install did not produce a usable OpenClaw package"
       return 1
@@ -1322,13 +1398,11 @@ install_openclaw() {
   fi
 
   mkdir -p "${PREFIX}/bin"
-  rm -f "${PREFIX}/bin/openclaw"
-  cat > "${PREFIX}/bin/openclaw" <<EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
 EOF
-  chmod +x "${PREFIX}/bin/openclaw"
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"version\":\"${requested}\"}"
 }
 
@@ -1382,7 +1456,9 @@ clone_git_checkout_transactionally() {
   fi
   TMPFILES+=("$staging_dir")
 
-  git clone "$repo_url" "$staging_dir" || clone_status=$?
+  # Blobless partial clone: the dev checkout only needs current files plus pullable
+  # history refs; full multi-gigabyte blob history would dominate install time.
+  git clone --filter=blob:none "$repo_url" "$staging_dir" || clone_status=$?
   if [[ "$clone_status" -ne 0 ]]; then
     return "$clone_status"
   fi
@@ -1541,12 +1617,11 @@ install_openclaw_from_git() {
   emit_json '{"event":"step","name":"cli-build","status":"ok"}'
 
   mkdir -p "${PREFIX}/bin"
-  cat > "${PREFIX}/bin/openclaw" <<EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
 EOF
-  chmod +x "${PREFIX}/bin/openclaw"
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"method\":\"git\"}"
 }
 
@@ -1557,12 +1632,25 @@ is_gateway_daemon_loaded() {
   fi
 
   local status_json=""
-  status_json="$("$claw" daemon status --json 2>/dev/null || true)"
+  # Unlike daemon status, gateway status reports service.loaded during pending migrations.
+  status_json="$("$claw" gateway status --json 2>/dev/null || true)"
   if [[ -z "$status_json" ]]; then
     return 1
   fi
 
-  printf '%s' "$status_json" | node -e '
+  # Managed installs must parse with their provisioned Node even when the system has none.
+  local node_bin="${PREFIX}/tools/node/bin/node"
+  if [[ ! -x "$node_bin" ]]; then
+    if command -v node >/dev/null 2>&1; then
+      node_bin="$(command -v node)"
+    else
+      # Approximate POSIX-safe fallback when neither managed nor system Node is available.
+      printf '%s\n' "$status_json" | grep -Eq '"loaded"[[:space:]]*:[[:space:]]*true'
+      return
+    fi
+  fi
+
+  printf '%s' "$status_json" | "$node_bin" -e '
 const fs = require("fs");
 const raw = fs.readFileSync(0, "utf8").trim();
 if (!raw) process.exit(1);
@@ -1636,6 +1724,7 @@ main() {
     [[ -z "$installed_version" ]]; then
     fail "Installed OpenClaw CLI did not return a version successfully from ${PREFIX}/bin/openclaw."
   fi
+  commit_wrapper_backup
 
   refresh_gateway_service_if_loaded
   emit_json "{\"event\":\"done\",\"ok\":true,\"version\":\"${installed_version//\"/\\\"}\"}"

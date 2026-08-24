@@ -55,6 +55,7 @@ export type SessionOrigin = {
   to?: string;
   nativeChannelId?: string;
   nativeDirectUserId?: string;
+  avatar?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -374,7 +375,13 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
      */
-    worktree?: { id: string; branch: string; repoRoot: string };
+    worktree?: {
+      id: string;
+      branch: string;
+      repoRoot: string;
+      /** Durable skill workspace prepared when this session runs from a managed worktree. */
+      canonicalWorkspaceDir?: string;
+    };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
@@ -450,6 +457,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
     abortCutoffTimestamp?: number;
     chatType?: SessionChatType;
+    contextWindow?: string;
     thinkingLevel?: string;
     /**
      * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
@@ -574,6 +582,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
+    /** Origin of the persisted context window; `resolved` is legacy/unverified. */
+    contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
@@ -615,6 +625,8 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Exact run that produced the latest terminal Gateway lifecycle projection. */
+  lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */

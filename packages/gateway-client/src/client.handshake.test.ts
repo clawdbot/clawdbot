@@ -138,11 +138,53 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
     });
     await retried;
     expect(requestCount).toBe(2);
-    expect(errors).toHaveLength(2);
     expect(errors.map((error) => error.message)).toEqual([
       "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
       "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
     ]);
+  });
+
+  it.each([
+    {
+      name: "a typed Gateway rejection",
+      body: JSON.stringify({
+        error: {
+          type: "proxy_attribution_required",
+          message: "Configure gateway.trustedProxies narrowly",
+        },
+      }),
+      expectedDetails: {
+        gatewayErrorType: "proxy_attribution_required",
+        gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
+      },
+    },
+    { name: "malformed JSON", body: "{", expectedDetails: {} },
+    { name: "a non-object JSON body", body: "null", expectedDetails: {} },
+  ])("preserves structured upgrade details for $name", async ({ body, expectedDetails }) => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(body);
+    });
+    const port = await listen(server);
+    const error = await new Promise<Error>((resolve) => {
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        onConnectError: resolve,
+      });
+      clients.push(client);
+      client.start();
+    });
+
+    expect(error).toMatchObject({
+      details: {
+        reason: "websocket-upgrade-rejected",
+        httpStatus: 403,
+        ...expectedDetails,
+      },
+    });
+    if (!("gatewayErrorType" in expectedDetails)) {
+      expect(error).not.toMatchObject({ details: { gatewayErrorType: expect.anything() } });
+    }
   });
 
   it("caps a rejected websocket upgrade body before the peer ends it", async () => {

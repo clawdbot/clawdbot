@@ -35,7 +35,10 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "ownerAgentId">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
+  >;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**
@@ -188,10 +191,8 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  draftEverRendered: boolean;
   finalAnswerDeliveryStarted: boolean;
   finalAnswerDelivered: boolean;
-  sawProgressFinal: boolean;
   verboseProgressActive: () => boolean;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

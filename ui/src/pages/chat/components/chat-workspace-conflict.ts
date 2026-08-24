@@ -95,3 +95,49 @@ export function renderWorkspaceConflictNotice(props: {
     </div>
   `;
 }
+
+export function renderWorkspaceConflictTranscriptMessage(
+  conflict: WorkspaceResultConflict,
+  messageKey: string,
+  entryId?: string,
+) {
+  const count = workspaceConflictCount(conflict);
+  const visible = visibleWorkspaceConflictPaths(conflict);
+  return html`
+    <div
+      class="chat-bubble chat-bubble--workspace-conflict"
+      data-message-id=${messageKey}
+      data-entry-id=${entryId || nothing}
+    >
+      <div class="chat-workspace-conflict-event" role="status">
+        <div class="chat-workspace-conflict-event__header">
+          <span aria-hidden="true">${icons.alertTriangle}</span>
+          <strong
+            >${t(
+              count === 1
+                ? "chat.workspaceConflict.eventTitleOne"
+                : "chat.workspaceConflict.eventTitleMany",
+              { count: String(count) },
+            )}</strong
+          >
+        </div>
+        <p>${t("chat.workspaceConflict.eventDescription")}</p>
+        <ul class="chat-workspace-conflict-paths">
+          ${visible.paths.map(
+            (entryPath) =>
+              html`<li><code>${workspaceConflictPathForDisplay(entryPath)}</code></li>`,
+          )}
+        </ul>
+        ${visible.remaining > 0
+          ? html`<div class="chat-workspace-conflict-more">
+              ${t("chat.workspaceConflict.morePaths", { count: String(visible.remaining) })}
+            </div>`
+          : nothing}
+        <div class="chat-workspace-conflict-ref">
+          <span>${t("chat.workspaceConflict.stagedResult")}</span>
+          <code>${conflict.stagedResultRef}</code>
+        </div>
+      </div>
+    </div>
+  `;
+}

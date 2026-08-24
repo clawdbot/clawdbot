@@ -2673,6 +2673,38 @@ describe("session_status tool", () => {
     expect(saved.liveModelSwitchPending).toBe(true);
   });
 
+  it("resolves a model alias configured only on the target agent", async () => {
+    resetSessionStore({
+      main: { sessionId: "s1", updatedAt: 10 },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: { "openai/gpt-5.4": { alias: "global" } },
+          modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+        },
+        entries: {
+          main: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "agent-sonnet" },
+            },
+          },
+        },
+      },
+    };
+
+    const result = await getSessionStatusTool().execute("agent-alias", {
+      model: "agent-sonnet",
+    });
+
+    expect(result.details).toMatchObject({
+      modelOverride: "anthropic/claude-sonnet-4-6",
+      modelProvider: "anthropic",
+    });
+  });
+
   it("preserves a compatible auth profile when changing the session model", async () => {
     let persistedStore: Record<string, SessionEntry> | undefined;
     resetSessionStore({

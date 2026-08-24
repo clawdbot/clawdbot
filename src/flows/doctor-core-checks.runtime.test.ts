@@ -1,7 +1,9 @@
 // Doctor runtime check tests cover runtime-backed doctor checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
+import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 
 const mocks = vi.hoisted(() => ({
@@ -11,7 +13,8 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
   buildGatewayProbeConnectionDetails: vi.fn(),
-  probeGatewayStatus: vi.fn(),
+  callGateway: vi.fn(),
+  isGatewayCredentialsRequiredError: vi.fn(),
   readGatewayServiceState: vi.fn(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
@@ -46,10 +49,8 @@ vi.mock("../agents/agent-tools.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayProbeConnectionDetails: mocks.buildGatewayProbeConnectionDetails,
-}));
-
-vi.mock("../cli/daemon-cli/probe.js", () => ({
-  probeGatewayStatus: mocks.probeGatewayStatus,
+  callGateway: mocks.callGateway,
+  isGatewayCredentialsRequiredError: mocks.isGatewayCredentialsRequiredError,
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -105,16 +106,9 @@ describe("doctor runtime tool schema checks", () => {
     mocks.normalizeProviderToolSchemasWithPlugin
       .mockReset()
       .mockImplementation(({ context }) => context.tools);
-    mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
-      url: "http://127.0.0.1:5829",
-    });
-    mocks.probeGatewayStatus.mockReset().mockResolvedValue({
-      ok: true,
-      server: { version: "2026.6.26" },
-    });
     mocks.readGatewayServiceState.mockReset().mockResolvedValue({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: {},
       command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
@@ -567,13 +561,11 @@ describe("doctor gateway runtime checks", () => {
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "http://127.0.0.1:5829",
     });
-    mocks.probeGatewayStatus.mockReset().mockResolvedValue({
-      ok: true,
-      server: { version: "2026.6.26" },
-    });
+    mocks.callGateway.mockReset().mockResolvedValue({ degradedSecretOwners: [] });
+    mocks.isGatewayCredentialsRequiredError.mockReset().mockReturnValue(false);
     mocks.readGatewayServiceState.mockReset().mockResolvedValue({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: {},
       command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
@@ -582,52 +574,209 @@ describe("doctor gateway runtime checks", () => {
     mocks.resolveGatewayService.mockReset().mockReturnValue({ label: "openclaw-gateway" });
   });
 
-  it("reports unreachable gateway health probes", async () => {
-    mocks.probeGatewayStatus.mockResolvedValueOnce({
-      ok: false,
-      error: "connect ECONNREFUSED 127.0.0.1:5829",
+  it("projects every degraded SecretRef owner from exactly one authenticated read-only status RPC", async () => {
+    const cfg = { gateway: { mode: "local" as const } };
+    const privateToken = "SYNTHETIC_PRIVATE_URL_TOKEN";
+    mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
+      url: "wss://127.0.0.1:5829",
+      tlsFingerprint: "sha256:test-doctor-fingerprint",
+      preauthHandshakeTimeoutMs: 1200,
+    });
+    mocks.callGateway.mockResolvedValueOnce({
+      degradedSecretOwners: [
+        {
+          ownerKind: "account",
+          ownerId: "discord:ops",
+          state: "unavailable",
+          paths: ["channels.discord.accounts.ops.token"],
+          reason: "secret reference was not found (env:default:PRIVATE_REF_ID)",
+        },
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "stale",
+          paths: ["tts.providers.elevenlabs.apiKey", "tts.providers.elevenlabs.voiceId"],
+          reason: "secret provider policy denied resolution",
+        },
+        {
+          ownerKind: "provider",
+          ownerId: `vault\u001b]52;c;attack\u0007:https://user:${privateToken}@secret.test/${"a".repeat(500)}`,
+          state: "unavailable",
+          paths: Array.from(
+            { length: 12 },
+            (_, index) =>
+              `providers.example.${index}.https://secret.test/value?token=${privateToken}\n${"z".repeat(400)}`,
+          ),
+          reason: `secret provider failed: ${privateToken}\nref PRIVATE_REF_ID`,
+        },
+      ],
+      degradedPlugins: [{ pluginId: "not-this-check" }],
     });
 
-    await expect(
-      collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/gateway-health",
-      severity: "warning",
-      message: "Gateway is not reachable: connect ECONNREFUSED 127.0.0.1:5829",
-      path: "gateway.mode",
-      target: "http://127.0.0.1:5829",
-      fixHint:
-        "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+    const findings = await collectGatewayHealthFindings({
+      cfg,
+      configPath: "/tmp/selected-openclaw.json",
     });
+
+    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs: 3000,
+      sharedStateMode: "read-only",
+      config: cfg,
+      configPath: "/tmp/selected-openclaw.json",
+      tlsFingerprint: "sha256:test-doctor-fingerprint",
+      preauthHandshakeTimeoutMs: 1200,
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("cold account:discord:ops"),
+        path: "channels.discord.accounts.ops.token",
+        target: "account:discord:ops",
+        fixHint: expect.stringContaining("openclaw secrets reload"),
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("stale capability:tts"),
+        path: "tts.providers.elevenlabs.apiKey",
+        target: "capability:tts",
+        fixHint: expect.stringContaining("openclaw secrets reload"),
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("provider:vault"),
+        path: expect.stringContaining("providers.example.0"),
+        target: expect.stringContaining("provider:vault"),
+      }),
+    ]);
+    expect(findings[1]?.message).toContain("tts.providers.elevenlabs.voiceId");
+    const finding = findings[2];
+    const rendered = JSON.stringify(findings);
+    expect(finding?.message).toContain("omitted");
+    expect(finding?.message).toContain("secret resolution failed");
+    expect(finding?.message.length).toBeLessThanOrEqual(700);
+    expect(finding?.target?.length).toBeLessThanOrEqual(150);
+    expect(finding?.path?.length).toBeLessThanOrEqual(180);
+    expect(rendered).not.toContain(privateToken);
+    expect(rendered).not.toContain("PRIVATE_REF_ID");
+    expect(rendered).not.toContain("not-this-check");
+    expect(rendered).not.toContain("\u001b");
+    expect(rendered).not.toContain("\u0007");
   });
 
-  it("reports temporary Gateway authentication lockouts with wait-and-retry guidance", async () => {
-    mocks.probeGatewayStatus.mockResolvedValueOnce({
-      ok: false,
-      error: "connect failed",
-      connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
-    });
+  it.each([
+    {
+      label: "missing Gateway authentication",
+      error: new Error("auth token SYNTHETIC_PRIVATE_TOKEN\nref PRIVATE_REF_ID"),
+      credentialsRequired: true,
+      message:
+        "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+    },
+    {
+      label: "an unavailable Gateway authentication SecretRef",
+      error: new GatewaySecretRefUnavailableError("gateway.auth.token"),
+      credentialsRequired: false,
+      message:
+        "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+    },
+    {
+      label: "temporary Gateway authentication rate limiting",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unauthorized: too many failed authentication attempts (retry later)",
+        details: { code: "AUTH_RATE_LIMITED", authReason: "rate_limited" },
+        retryable: true,
+      }),
+      credentialsRequired: false,
+      message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+    },
+    {
+      label: "an unreachable Gateway with terminal control characters",
+      error: new Error("connect ECONNREFUSED 127.0.0.1:5829\u001b]52;c;attack\u0007\u009b"),
+      credentialsRequired: false,
+      message: "Gateway status could not be inspected: connect ECONNREFUSED 127.0.0.1:5829",
+    },
+  ])("reports $label from exactly one sanitized status attempt", async (entry) => {
+    mocks.callGateway.mockRejectedValueOnce(entry.error);
+    mocks.isGatewayCredentialsRequiredError.mockReturnValueOnce(entry.credentialsRequired);
+
+    const findings = await collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: entry.message,
+        path: "gateway.mode",
+        target: "http://127.0.0.1:5829",
+      }),
+    ]);
+    expect(JSON.stringify(findings)).not.toContain("SYNTHETIC_PRIVATE_TOKEN");
+    expect(JSON.stringify(findings)).not.toContain("PRIVATE_REF_ID");
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("reports preparation failures without exposing URL credentials or control characters", async () => {
+    mocks.buildGatewayProbeConnectionDetails.mockRejectedValueOnce(
+      new Error(
+        `invalid wss://user:${"SYNTHETIC_PRIVATE_TOKEN".repeat(20)}@gateway.test/rpc\nmore`,
+      ),
+    );
+
+    const findings = await collectGatewayHealthFindings({ cfg: {} });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        message: expect.stringContaining("Gateway health inspection could not be prepared"),
+        path: "gateway",
+      }),
+    ]);
+    expect(JSON.stringify(findings)).not.toContain("SYNTHETIC_PRIVATE_TOKEN");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("prepares the target but skips the RPC for active exec credentials unless execution is allowed", async () => {
+    const cfg = {
+      gateway: {
+        mode: "local" as const,
+        auth: {
+          mode: "token" as const,
+          token: { source: "exec" as const, provider: "vault", id: "PRIVATE_REF_ID" },
+        },
+      },
+    };
+
+    const findings = await collectGatewayHealthFindings({ cfg, env: {} });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("intentionally skipped"),
+        fixHint: expect.stringContaining("--allow-exec"),
+      }),
+    ]);
+    expect(JSON.stringify(findings)).not.toContain("PRIVATE_REF_ID");
+    expect(mocks.buildGatewayProbeConnectionDetails).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
 
     await expect(
-      collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/gateway-health",
-      severity: "warning",
-      message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
-      path: "gateway.mode",
-      target: "http://127.0.0.1:5829",
-      fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
-    });
+      collectGatewayHealthFindings({ cfg, env: {}, allowExecSecretRefs: true }),
+    ).resolves.toEqual([]);
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
   });
 
   it("redacts sensitive remote gateway URLs from health finding targets", async () => {
     mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
       url: "wss://user:pass@gateway.example.test/rpc?token=secret&safe=value",
     });
-    mocks.probeGatewayStatus.mockResolvedValueOnce({
-      ok: false,
-      error: "remote gateway did not answer",
-    });
+    mocks.callGateway.mockRejectedValueOnce(new Error("remote gateway did not answer"));
 
     const findings = await collectGatewayHealthFindings({
       cfg: { gateway: { mode: "remote", remote: { url: "wss://gateway.example.test/rpc" } } },
@@ -636,7 +785,7 @@ describe("doctor gateway runtime checks", () => {
     expect(findings).toContainEqual({
       checkId: "core/doctor/gateway-health",
       severity: "warning",
-      message: "Gateway is not reachable: remote gateway did not answer",
+      message: "Gateway status could not be inspected: remote gateway did not answer",
       path: "gateway.remote.url",
       target: "wss://***:***@gateway.example.test/rpc?token=***&safe=value",
       fixHint: "Verify the remote Gateway URL, network path, TLS settings, and credentials.",
@@ -648,7 +797,7 @@ describe("doctor gateway runtime checks", () => {
   it("reports missing local gateway daemon service", async () => {
     mocks.readGatewayServiceState.mockResolvedValueOnce({
       installed: false,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: {},
       command: null,
