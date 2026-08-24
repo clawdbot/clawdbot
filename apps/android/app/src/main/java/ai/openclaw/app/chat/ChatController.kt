@@ -344,6 +344,7 @@ class ChatController internal constructor(
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
 
   private val subagentActivityLock = Any()
+
   // A null job preserves an expired terminal observation without retaining its UI row.
   private val subagentActivityExpiryJobs = mutableMapOf<String, Job?>()
   private val _subagentActivities = MutableStateFlow<Map<String, ChatSubagentActivity>>(emptyMap())
