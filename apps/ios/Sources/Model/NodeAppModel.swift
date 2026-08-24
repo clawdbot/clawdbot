@@ -1724,6 +1724,11 @@ final class NodeAppModel {
     {
         guard shouldContinue(), let payload = evt.payload else { return }
         switch evt.event {
+        case "config.changed":
+            // Persisted config writes (accent, session routing) must reach an
+            // already-connected app; the protocol directs clients to re-read via
+            // config.get, which the guarded branding refresh already does.
+            await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
         case "voicewake.changed":
             struct Payload: Decodable { var triggers: [String] }
             guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
