@@ -1313,7 +1313,7 @@ openclaw-chat-page {
   max-width: 100%;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: transparent;
   cursor: zoom-in;
 }
@@ -1323,7 +1323,7 @@ openclaw-chat-page {
   display: inline-flex;
   max-width: 100%;
   overflow: hidden;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
 }
 
 .chat-image-frame--managed {
@@ -1407,7 +1407,7 @@ openclaw-chat-page {
   max-width: min(100%, 400px);
   height: auto;
   max-height: 240px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   object-fit: contain;
   transition: transform 150ms ease-out;
 }

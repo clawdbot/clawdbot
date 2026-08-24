@@ -414,6 +414,13 @@
     corner-shape: superellipse(1.5);
   }
 
+  .chat-image-frame.chat-image-frame,
+  .chat-message-image-button.chat-message-image-button,
+  .chat-message-image.chat-message-image {
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
   /* The transcript search bar's bottom corners round with its .card ancestor
      so the two edges stay optically parallel; only two corners are rounded,
      and .chat:has(> .agent-chat__search-bar) zeroes .card's own radius while
