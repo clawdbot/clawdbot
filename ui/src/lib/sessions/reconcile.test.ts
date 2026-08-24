@@ -572,6 +572,106 @@ describe("reconcileSessionChanged", () => {
     expect(next.row?.archivedBy).toBeUndefined();
     expect(next.result?.sessions[0]?.archivedBy).toBeUndefined();
   });
+
+  it("clears an active run even when a terminal event has an equal updatedAt (timestamp tie)", () => {
+    const key = "agent:main:main";
+    const result = buildResult([
+      {
+        key,
+        kind: "global",
+        sessionId: "s1",
+        updatedAt: 100,
+        startedAt: 100,
+        hasActiveRun: true,
+        status: "running",
+      },
+    ]);
+
+    // The terminal sessions.changed event carries updatedAt == existing updatedAt
+    // (lifecycle endedAt ties sessionRow.updatedAt) and startedAt == existing
+    // startedAt (same run). A terminal projection must override an active row
+    // regardless of timestamp ordering.
+    const next = reconcileSessionChanged(result, {
+      sessionKey: key,
+      key,
+      kind: "global",
+      sessionId: "s1",
+      updatedAt: 100,
+      startedAt: 100,
+      hasActiveRun: false,
+      status: "done",
+    });
+
+    expect(next.applied).toBe(true);
+    expect(next.result?.sessions[0]?.hasActiveRun).toBe(false);
+    expect(next.result?.sessions[0]?.status).toBe("done");
+  });
+
+  it("clears an active run when a terminal event updatedAt equals existing startedAt", () => {
+    const key = "agent:main:main";
+    const result = buildResult([
+      {
+        key,
+        kind: "global",
+        sessionId: "s1",
+        updatedAt: 200,
+        startedAt: 100,
+        hasActiveRun: true,
+        status: "running",
+      },
+    ]);
+
+    // Terminal event with updatedAt == startedAt and matching startedAt: the
+    // staleness guard must not block a terminal projection from overriding an
+    // active row.
+    const next = reconcileSessionChanged(result, {
+      sessionKey: key,
+      key,
+      kind: "global",
+      sessionId: "s1",
+      updatedAt: 100,
+      startedAt: 100,
+      hasActiveRun: false,
+      status: "done",
+    });
+
+    expect(next.applied).toBe(true);
+    expect(next.result?.sessions[0]?.hasActiveRun).toBe(false);
+    expect(next.result?.sessions[0]?.status).toBe("done");
+  });
+
+  it("does not clear an active run when a terminal event has a mismatched startedAt (stale overlap)", () => {
+    const key = "agent:main:main";
+    const result = buildResult([
+      {
+        key,
+        kind: "global",
+        sessionId: "s1",
+        updatedAt: 300,
+        startedAt: 200,
+        hasActiveRun: true,
+        status: "running",
+      },
+    ]);
+
+    // A delayed terminal event for an older run (startedAt 100) arrives while a
+    // newer run (startedAt 200) is active. The mismatched startedAt means this
+    // terminal projection is stale and must not clear the newer run's state.
+    const next = reconcileSessionChanged(result, {
+      sessionKey: key,
+      key,
+      kind: "global",
+      sessionId: "s1",
+      updatedAt: 150,
+      startedAt: 100,
+      hasActiveRun: false,
+      status: "done",
+    });
+
+    expect(next.result).toBe(result);
+    expect(next.result?.sessions[0]?.hasActiveRun).toBe(true);
+    expect(next.result?.sessions[0]?.status).toBe("running");
+  });
 });
 
 describe("reconcileSessionHistory", () => {

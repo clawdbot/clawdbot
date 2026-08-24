@@ -93,6 +93,9 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
+      '@panzoom/panzoom':
+        specifier: 4.6.2
+        version: 4.6.2
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
