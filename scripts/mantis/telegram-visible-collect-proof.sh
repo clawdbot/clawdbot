@@ -2,20 +2,14 @@
 set -euo pipefail
 output_root="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
 evidence="$output_root/evidence"
-session_root="$SESSION_ROOT"
-node scripts/mantis/telegram-visible-proof.mjs evaluate \
-  --scenario "$output_root/scenario" \
-  --scenario-hash "$SCENARIO_HASH" \
-  --baseline-exit "$BASELINE_EXIT" \
-  --baseline-facts "$session_root/baseline.json" \
-  --candidate-exit "$CANDIDATE_EXIT" \
-  --candidate-facts "$session_root/candidate.json" \
-  --published-root "$session_root/published" \
-  --output-dir "$evidence" \
-  --baseline-ref main \
+node scripts/mantis/telegram-visible-proof.mjs collect \
+  --agent-manifest "$output_root/agent-evidence.json" \
+  --baseline-facts "$SESSION_ROOT/baseline.json" \
   --baseline-sha "$BASELINE_SHA" \
-  --candidate-ref "$CANDIDATE_SHA" \
-  --candidate-sha "$CANDIDATE_SHA"
+  --candidate-facts "$SESSION_ROOT/candidate.json" \
+  --candidate-sha "$CANDIDATE_SHA" \
+  --published-root "$SESSION_ROOT/published" \
+  --output-dir "$evidence"
 node scripts/mantis/publish-pr-evidence.mjs \
   --manifest "$evidence/mantis-evidence.json" --validate-only true
 comparison_status="$(jq -er '.comparison.outcome | select(. == "pass" or . == "fail" or . == "blocked")' "$evidence/mantis-evidence.json")"

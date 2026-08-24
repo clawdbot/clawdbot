@@ -40,7 +40,6 @@ output_root="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
 sudo install -d -m 2770 -o root -g mantis-proof "$output_root"
 sudo setfacl -m "u:${recorder_user}:rwx,u:codex:rwx,u:mantis-sut:rwx" "$output_root"
 sudo setfacl -d -m "u:${recorder_user}:rwx,u:codex:rwx,u:mantis-sut:rwx" "$output_root"
-sudo -u codex mkdir -p "$output_root/scenario-draft"
 
 session_root="$SESSION_ROOT"
 fixture_root="$session_root/fixture-plugins"

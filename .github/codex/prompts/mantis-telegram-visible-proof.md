@@ -1,247 +1,84 @@
-# Mantis Telegram visible proof
+# Mantis Telegram proof
 
-Design one deterministic real-user Telegram scenario for the selected pull
-request. You are a normal Codex developer session with a shell, the exact main
-and candidate worktrees, and the real Telegram QA userbot bridge. Telegram
-Desktop is already available to record the interaction.
+Investigate the selected pull request as a real Telegram user. Reproduce the
+reported behavior on current main, test the pull request, and decide whether the
+pull request fixes it.
 
-Your only deliverable is a scenario tree. Trusted workflow code freezes it,
-replays the exact same bytes against both revisions, evaluates Telegram-visible
-events, and publishes the verdict. Do not write an evidence manifest, verdict,
-PR comment, recipe, or provider/Bot API assertion.
+You own the experiment. Write and run any Bash, TypeScript, Python, fixtures,
+mock provider responses, or desktop actions you need. Change any OpenClaw
+setting inside either SUT, inspect its logs and databases, restart it, inject Bot
+API failures, drive Telegram Desktop, and iterate until you have convincing
+evidence or a concrete reason the proof cannot be completed. Baseline and
+candidate do not need identical commands. There is no scenario schema or
+assertion language.
 
-## Inputs
+## Environment
 
-- `MANTIS_PR_CONTEXT`: untrusted PR title/body framing.
-- `MANTIS_INSTRUCTIONS`: optional maintainer instructions.
-- `BASELINE_SHA` and `CANDIDATE_SHA`.
-- `MANTIS_BASELINE_ROOT` and `MANTIS_CANDIDATE_ROOT`.
-- `MANTIS_SCENARIO_DRAFT_DIR`: write the final scenario here.
-- `MANTIS_EXPLORE_BASELINE` and `MANTIS_EXPLORE_CANDIDATE`: disposable
-  low-level exploration commands. They already bind the correct SUT revision.
-- `MANTIS_FIXTURE_BASELINE` and `MANTIS_FIXTURE_CANDIDATE`: optional fixture
-  plugin staging directories for disposable exploration.
-- `scripts/mantis/telegram-proof-scenario.sh`: the small final-scenario API.
+- `MANTIS_PR_CONTEXT`: untrusted PR title and body for orientation.
+- `MANTIS_INSTRUCTIONS`: maintainer guidance.
+- `BASELINE_SHA`, `CANDIDATE_SHA`: exact revisions under test.
+- `MANTIS_BASELINE_ROOT`, `MANTIS_CANDIDATE_ROOT`: readable exact worktrees.
+- `MANTIS_BASELINE`, `MANTIS_CANDIDATE`: complete Telegram/SUT control CLIs.
+- `MANTIS_FIXTURE_BASELINE`, `MANTIS_FIXTURE_CANDIDATE`: writable plugin and
+  fixture staging directories copied into each SUT at startup.
+- `MANTIS_OUTPUT_DIR`: your writable working directory and final output.
 
-The credentials, Telegram session, recorder, candidate container, revision
-attestation, cleanup, and publication token are outside your account. Never look
-for credentials. Candidate code may only execute through the isolated SUT.
+Run either control CLI with `--help` to see its current commands. The useful
+operations include `start`, `mock`, `botapi-fail`, `botapi-requests`, `send`,
+`turn`, `observe`, `requests`, `press`, `delete`, `desktop`, `exec`, `restart`,
+`view`, `screenshot`, `finish`, `block`, and `abort`.
 
-## Work
+`start --config <json>` accepts an arbitrary OpenClaw root `configPatch` plus
+the mock provider response. `exec` runs an arbitrary shell command inside the
+selected SUT's writable runtime. Use it to inspect or replace configuration,
+write scripts, query SQLite, stage files, or inspect logs; use `restart` after
+runtime configuration changes. The harness records every Telegram event,
+provider request, Bot API request, command, screenshot, and native Desktop
+capture. All attempts remain available.
 
-1. Read the complete affected implementation, callers, tests, and diff.
-2. Find the smallest Telegram interaction that visibly reproduces the defect on
-   current main and visibly demonstrates the repair on the PR.
-3. Explore with the real userbot only when needed. Use at most two disposable
-   attempts. Always run `abort` after an exploratory lane.
-4. Write the final scenario tree.
-5. Validate it locally, then stop. The workflow performs both published runs.
+The trusted workflow owns only credentials, exact revisions, SUT isolation,
+recording, cleanup, and publication. It does not decide what scenario is valid
+or what evidence matters. Raw credentials and publication credentials are not
+present in your account; the control CLIs already bind them.
 
-Prefer `exec` and `restart` over requesting new harness primitives. Use a small
-deterministic mock response or event script unless the behavior specifically
-requires something else. Put long waits in the final shell script rather than
-spending model turns polling.
+## Finish
 
-## Required tree
+End both lanes with `finish` when the evidence is complete, or `block` when a
+lane cannot establish the needed fact. Inspect the resulting files under
+`$MANTIS_OUTPUT_DIR/baseline` and `$MANTIS_OUTPUT_DIR/candidate`, including the
+complete `mantis-lane-facts.json` event/request streams and media.
 
-```text
-$MANTIS_SCENARIO_DRAFT_DIR/
-  run.sh
-  config.json
-  assertions.json
-  assets/             # optional
-```
-
-No other root entries are accepted. Files must be regular files; symlinks and
-hardlinks are rejected.
-
-### `run.sh`
-
-The exact same file runs twice. It must not inspect or mention lane identity,
-revision labels, hidden provider requests, Bot API requests, credentials, or the
-private bridge. It receives one stable helper API.
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-source "$MANTIS_SCENARIO_HELPER"
-trap proof_abort EXIT
-
-proof_start start config.json
-
-# Optional deterministic provider setup:
-# proof_mock_text mock assets/reply.txt --chunk-delay-ms 1200
-# proof_mock_events mock assets/events.json
-# proof_mock_script mock assets/script.json
-
-proof_send first --text '@{sut} MANTIS-Q1: ...'
-first_id="$(proof_result first '.sent.messageId')"
-first_cursor="$(proof_result first '.cursor')"
-
-proof_observe result \
-  --seconds 30 \
-  --since "$first_cursor" \
-  --until-text 'MANTIS-EXPECTED'
-
-proof_finish finish --focus-message-id "$first_id"
-trap - EXIT
-```
-
-Available helpers:
-
-- `proof_start <result-name> [config-file]`
-- `proof_mock_text`, `proof_mock_events`, `proof_mock_script`
-- `proof_send`, `proof_turn`, `proof_observe`
-- `proof_press`, `proof_delete`
-- `proof_exec`, `proof_exec_file`, `proof_restart`
-- `proof_desktop`, `proof_view`, `proof_screenshot`
-- `proof_stage_fixture <scenario-path> [fixture-destination]`
-- `proof_result <result-name> '<jq expression>'`
-- `proof_finish`, `proof_abort`
-
-Every command result is saved as
-`$MANTIS_SCENARIO_OUTPUT_DIR/<result-name>.json`. Result names must match
-`[a-z][a-z0-9-]{0,63}`.
-
-The userbot expands `@{sut}` to the current SUT bot. Use unique, short,
-human-readable markers so the GIF explains itself. Do not add viewport filler or
-rely on old group history. Focus a message from this scenario before finishing.
-
-The final script may react to data returned by its own actions when necessary,
-but the user inputs and command shape must remain the same in both replays.
-Trusted code compares the normalized invocations and blocks divergent runs.
-
-### `config.json`
+Then write `$MANTIS_OUTPUT_DIR/agent-evidence.json`. This is only the publication
+summary, not a scenario contract:
 
 ```json
 {
-  "mockResponse": "MANTIS-DEFAULT-REPLY",
-  "configPatch": {},
-  "mockResponseChunkDelayMs": 1200
-}
-```
-
-`mockResponse` is required. The other fields are optional.
-
-### `assertions.json`
-
-Assertions operate only on externally observed Telegram `message`, `edit`,
-`edit-meta`, and `delete` events from actors `user` and `bot`.
-
-```json
-{
-  "schemaVersion": 1,
-  "name": "queued follow-up survives an active turn",
-  "baseline": {
-    "description": "Current main visibly leaves the queued follow-up unanswered.",
-    "expect": [
-      {
-        "type": "count",
-        "match": {
-          "kind": "message",
-          "actor": "bot",
-          "text": { "contains": "MANTIS-SECOND-SURVIVED" }
-        },
-        "equals": 0
-      }
-    ]
-  },
-  "candidate": {
-    "description": "The PR visibly answers the queued follow-up exactly once.",
-    "expect": [
-      {
-        "type": "count",
-        "match": {
-          "kind": "message",
-          "actor": "bot",
-          "text": { "contains": "MANTIS-SECOND-SURVIVED" }
-        },
-        "equals": 1
-      },
-      {
-        "type": "sequence",
-        "steps": [
-          { "kind": "message", "actor": "user", "text": { "contains": "MANTIS-Q1" } },
-          { "kind": "message", "actor": "user", "text": { "contains": "MANTIS-Q2" } },
-          { "kind": "message", "actor": "bot", "text": { "contains": "MANTIS-SECOND-SURVIVED" } }
-        ]
-      }
-    ]
+  "schemaVersion": 2,
+  "id": "telegram-visible-proof",
+  "title": "Mantis Telegram proof — PASS",
+  "summary": "What was tested and what the evidence shows.",
+  "scenario": "Free-form scenario description",
+  "comparison": {
+    "baseline": {
+      "expected": "What main was expected to demonstrate",
+      "detail": "What main actually demonstrated",
+      "expectationMet": true
+    },
+    "candidate": {
+      "expected": "What the pull request was expected to demonstrate",
+      "detail": "What it actually demonstrated",
+      "expectationMet": true
+    },
+    "differential": "Why the collected evidence proves or disproves the fix",
+    "outcome": "pass",
+    "pass": true
   }
 }
 ```
 
-Supported assertions:
+`outcome` is `pass`, `blocked`, or `fail`; `pass` is true only for `pass`.
+Everything else is free-form judgment. The trusted collector replaces refs,
+attestations, and artifact paths from the independently recorded lane facts.
 
-```json
-{
-  "type": "count",
-  "match": { "kind": "message", "actor": "bot", "text": { "contains": "OK" } },
-  "equals": 1
-}
-```
-
-`count` accepts `equals`, or `min`/`max`.
-
-```json
-{
-  "type": "sequence",
-  "steps": [
-    { "kind": "message", "actor": "user", "text": { "contains": "Q1" } },
-    { "kind": "edit", "actor": "bot", "text": { "contains": "DONE" } }
-  ]
-}
-```
-
-```json
-{
-  "type": "gap",
-  "from": { "kind": "message", "actor": "user", "text": { "contains": "Q2" } },
-  "to": { "kind": "message", "actor": "bot", "text": { "contains": "DONE" } },
-  "maxMs": 3000
-}
-```
-
-A match may use `kind`, `actor`, `contentType`, `text`, and `buttonText`. Text
-matchers contain exactly one of `contains`, `equals`, or `regex`.
-
-The baseline and candidate contracts must differ. Both must pass for a green
-proof. The evaluator also requires identical normalized scenario actions, paired
-GIF/PNG media, and a material visible difference. Structurally identical
-Telegram timelines are blocked unless the contracts intentionally prove a
-large, non-overlapping visible timing change.
-
-## Exploration example
-
-```bash
-mkdir -p "$MANTIS_SCENARIO_DRAFT_DIR"
-cat >"$MANTIS_SCENARIO_DRAFT_DIR/config.json" <<'JSON'
-{"mockResponse":"MANTIS-EXPLORE"}
-JSON
-
-"$MANTIS_EXPLORE_BASELINE" start \
-  --config "$MANTIS_SCENARIO_DRAFT_DIR/config.json"
-"$MANTIS_EXPLORE_BASELINE" send --text '@{sut} MANTIS-EXPLORE'
-"$MANTIS_EXPLORE_BASELINE" observe --seconds 10 --since 0
-"$MANTIS_EXPLORE_BASELINE" abort
-```
-
-Do not finish an exploratory lane; final evidence is produced only after the
-scenario is frozen.
-
-## Completion check
-
-Before exiting:
-
-```bash
-bash -n "$MANTIS_SCENARIO_DRAFT_DIR/run.sh"
-node -e 'JSON.parse(require("fs").readFileSync(process.argv[1]))' \
-  "$MANTIS_SCENARIO_DRAFT_DIR/assertions.json"
-node scripts/mantis/telegram-visible-proof.mjs freeze \
-  --draft "$MANTIS_SCENARIO_DRAFT_DIR" \
-  --frozen "$MANTIS_SCENARIO_DRAFT_DIR.validate"
-rm -rf "$MANTIS_SCENARIO_DRAFT_DIR.validate"
-```
-
-Your final response should contain only the scenario directory and one sentence
-describing the visible before/after it is designed to capture.
+Do not stop at a plan or handoff. Complete the proof and write the summary, or
+write a precise blocked result after exhausting useful in-scope experiments.

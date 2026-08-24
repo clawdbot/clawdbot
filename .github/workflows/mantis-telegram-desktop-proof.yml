@@ -160,19 +160,19 @@ jobs:
               owner,
               repo,
               issue_number,
-              body: `${marker}\n👀 Mantis is designing one frozen real-user Telegram scenario. [Follow the run](${runUrl}).`,
+              body: `${marker}\n👀 Mantis is running an open-ended real-user Telegram investigation. [Follow the run](${runUrl}).`,
             });
 
   run_telegram_visible_proof:
-    name: Design and replay native Telegram proof
+    name: Run agentic native Telegram proof
     needs: resolve_request
     if: needs.resolve_request.outputs.should_run == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 100
     environment: qa-live-shared
     outputs:
-      comparison_status: ${{ steps.evaluate.outputs.comparison_status }}
-      output_dir: ${{ steps.evaluate.outputs.output_dir }}
+      comparison_status: ${{ steps.collect.outputs.comparison_status }}
+      output_dir: ${{ steps.collect.outputs.output_dir }}
     steps:
       - name: Checkout harness ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -268,7 +268,7 @@ jobs:
           codex-user: codex
           allow-bot-users: github-actions[bot]
 
-      - name: Design one frozen Telegram scenario with GPT-5.6
+      - name: Run open-ended Telegram investigation with GPT-5.6
         env:
           LEASE_LOST_MARKER: ${{ steps.telegram_credential.outputs.lease_lost_marker }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
@@ -278,41 +278,23 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
           MANTIS_BASELINE_ROOT: ${{ steps.worktrees.outputs.baseline_root }}
           MANTIS_CANDIDATE_ROOT: ${{ steps.worktrees.outputs.candidate_root }}
-          MANTIS_EXPLORE_BASELINE: /usr/local/bin/mantis-telegram-baseline
-          MANTIS_EXPLORE_CANDIDATE: /usr/local/bin/mantis-telegram-candidate
+          MANTIS_BASELINE: /usr/local/bin/mantis-telegram-baseline
+          MANTIS_CANDIDATE: /usr/local/bin/mantis-telegram-candidate
           MANTIS_FIXTURE_BASELINE: ${{ steps.telegram_credential.outputs.session_root }}/fixture-plugins/baseline
           MANTIS_FIXTURE_CANDIDATE: ${{ steps.telegram_credential.outputs.session_root }}/fixture-plugins/candidate
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
           MANTIS_PR_CONTEXT: ${{ needs.resolve_request.outputs.pr_context }}
-          MANTIS_SCENARIO_DRAFT_DIR: ${{ github.workspace }}/${{ env.MANTIS_OUTPUT_DIR }}/scenario-draft
         shell: bash
-        run: bash scripts/mantis/telegram-visible-design-scenario.sh
+        run: bash scripts/mantis/telegram-visible-run-agent.sh
 
-      - name: Freeze the final scenario and discard exploration
-        id: freeze
+      - name: Collect trusted Telegram evidence
+        id: collect
         env:
           SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
-        shell: bash
-        run: bash scripts/mantis/telegram-visible-freeze-scenario.sh
-
-      - name: Replay identical scenario on main and pull request
-        id: replay
-        env:
-          SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
-        shell: bash
-        run: bash scripts/mantis/telegram-visible-replay-scenario.sh
-
-      - name: Evaluate only Telegram-visible evidence
-        id: evaluate
-        env:
-          SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
-          SCENARIO_HASH: ${{ steps.freeze.outputs.scenario_hash }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ steps.worktrees.outputs.candidate_revision }}
-          BASELINE_EXIT: ${{ steps.replay.outputs.baseline_exit }}
-          CANDIDATE_EXIT: ${{ steps.replay.outputs.candidate_exit }}
         shell: bash
-        run: bash scripts/mantis/telegram-visible-evaluate-proof.sh
+        run: bash scripts/mantis/telegram-visible-collect-proof.sh
 
       - name: Clean up Mantis sessions
         id: cleanup
@@ -346,11 +328,11 @@ jobs:
 
       - name: Upload Mantis Telegram artifacts
         id: upload
-        if: ${{ always() && steps.evaluate.outputs.output_dir != '' }}
+        if: ${{ always() && steps.collect.outputs.output_dir != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-telegram-visible-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.evaluate.outputs.output_dir }}
+          path: ${{ steps.collect.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
 
@@ -366,9 +348,9 @@ jobs:
           permission-issues: write
           permission-pull-requests: read
 
-      - name: Publish paired Telegram proof
+      - name: Publish Telegram proof
         id: publish
-        if: ${{ always() && steps.evaluate.outputs.output_dir != '' && steps.app_token.outcome == 'success' }}
+        if: ${{ always() && steps.collect.outputs.output_dir != '' && steps.app_token.outcome == 'success' }}
         env:
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -385,7 +367,7 @@ jobs:
           set -euo pipefail
           marker="<!-- mantis-telegram-visible-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} -->"
           node scripts/mantis/publish-pr-evidence.mjs \
-            --manifest "${{ steps.evaluate.outputs.output_dir }}/mantis-evidence.json" \
+            --manifest "${{ steps.collect.outputs.output_dir }}/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-visible/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --marker "$marker" \
@@ -420,14 +402,14 @@ jobs:
           ${{
             always() &&
             (
-              steps.evaluate.outputs.comparison_status == 'fail' ||
+              steps.collect.outputs.comparison_status == 'fail' ||
               steps.cleanup.outcome == 'failure' ||
               steps.release.outcome == 'failure' ||
               steps.publish.outcome == 'failure'
             )
           }}
         env:
-          COMPARISON_STATUS: ${{ steps.evaluate.outputs.comparison_status }}
+          COMPARISON_STATUS: ${{ steps.collect.outputs.comparison_status }}
         run: |
           echo "Mantis Telegram visible proof failed: ${COMPARISON_STATUS:-no trusted verdict}." >&2
           exit 1
