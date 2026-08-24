@@ -539,6 +539,28 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
+  it.each([
+    { initialUrl: "/chat/research/conversation", navCollapsed: true },
+    { initialUrl: "/chat/research", navCollapsed: true },
+    { initialUrl: "/chat", navCollapsed: false },
+    { initialUrl: "/dashboard/research/conversation", navCollapsed: false },
+    { initialUrl: "/settings/appearance", navCollapsed: false },
+  ])("seeds sidebar visibility once from the initial $initialUrl conversation URL", (testCase) => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    window.history.replaceState({}, "", testCase.initialUrl);
+    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+
+    try {
+      runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+      expect(runtime.context.navigation.snapshot.navCollapsed).toBe(testCase.navCollapsed);
+    } finally {
+      runtime?.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
   it("does not rewrite browser history when startup contains no URL credentials", () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;

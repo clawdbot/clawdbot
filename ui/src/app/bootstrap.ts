@@ -15,6 +15,7 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -185,13 +186,15 @@ function createApplicationTheme(
 
 function createApplicationNavigationPreferences(
   initialSettings: UiSettings,
+  initialPathname: string,
+  basePath: string,
 ): ApplicationNavigationPreferences {
-  let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed: settings.navCollapsed,
-    navWidth: settings.navWidth,
-    sidebarEntries: settings.sidebarEntries,
-    pinnedAgentIds: settings.pinnedAgentIds ?? [],
+    // Seed once from a single-conversation first-load URL; never reapply on SPA navigation or persist.
+    navCollapsed: sessionRefFromPath(initialPathname, basePath)?.namespace === "chat",
+    navWidth: initialSettings.navWidth,
+    sidebarEntries: initialSettings.sidebarEntries,
+    pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -209,8 +212,7 @@ function createApplicationNavigationPreferences(
       ) {
         return;
       }
-      settings = patchSettings({
-        navCollapsed: nextSnapshot.navCollapsed,
+      patchSettings({
         navWidth: nextSnapshot.navWidth,
         sidebarEntries: [...nextSnapshot.sidebarEntries],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
@@ -379,7 +381,11 @@ export function bootstrapApplication(
   };
   const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
   syncConfigWriteSuspension();
-  const navigation = createApplicationNavigationPreferences(settings);
+  const navigation = createApplicationNavigationPreferences(
+    settings,
+    applicationLocation.pathname,
+    basePath,
+  );
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({

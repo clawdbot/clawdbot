@@ -337,7 +337,7 @@ export class ShellChromeOwner {
       host.desktopNavigationExpanded = false;
     } else if (host.navDrawerOpen) {
       host.closeNavDrawer({ restoreFocus: false });
-      // Preserve the stored preference while keeping the responsive handoff expanded.
+      // Preserve the tab-local state while keeping the responsive handoff expanded.
       host.desktopNavigationExpanded = host.context?.navigation.snapshot.navCollapsed ?? false;
     }
     host.requestUpdate();

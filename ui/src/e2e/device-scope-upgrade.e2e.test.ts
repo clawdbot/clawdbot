@@ -4,7 +4,6 @@ import { chromium, type Browser, type BrowserContext, type Page, type Route } fr
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
-  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -179,12 +178,6 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
 
   it("anchors desktop chat access status in the active header actions", async () => {
     const context = await createContext();
-    await context.addInitScript(
-      ({ settingsKey }) => {
-        localStorage.setItem(settingsKey, JSON.stringify({ navCollapsed: true }));
-      },
-      { settingsKey: controlUiBundledSettingsStorageKey(server.baseUrl) },
-    );
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -201,7 +194,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       operatorScopes: LIMITED_SCOPES,
       sessionKey: "agent:main:session-a",
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${server.baseUrl}chat/main/session-a`);
 
     const header = page.locator(".chat-pane__header").first();
     const status = page.getByRole("button", { name: "Show limited access details" });
@@ -488,8 +481,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     async ({ collapsed, rootClass }) => {
       const context = await createContext();
       await context.addInitScript(
-        ({ hostClass, settingsKey, startCollapsed }) => {
-          localStorage.setItem(settingsKey, JSON.stringify({ navCollapsed: startCollapsed }));
+        ({ hostClass }) => {
           if (hostClass === "openclaw-native-web-chrome") {
             (window as Window & { __OPENCLAW_NATIVE_WEB_CHROME__?: boolean })[
               "__OPENCLAW_NATIVE_WEB_CHROME__"
@@ -505,8 +497,6 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
         },
         {
           hostClass: rootClass,
-          settingsKey: controlUiBundledSettingsStorageKey(server.baseUrl),
-          startCollapsed: collapsed,
         },
       );
       const page = await context.newPage();
@@ -515,7 +505,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
         operatorScopes: LIMITED_SCOPES,
       });
 
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}${collapsed ? "chat/main" : "chat"}`);
       if (collapsed) {
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))

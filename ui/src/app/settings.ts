@@ -50,7 +50,10 @@ type ScopedSessionSelection = {
   lastActiveSessionKey: string;
 };
 
-type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActiveSessionKey"> & {
+type PersistedUiSettings = Omit<
+  UiSettings,
+  "token" | "sessionKey" | "lastActiveSessionKey" | "navCollapsed"
+> & {
   token?: never;
   sessionKey?: string;
   lastActiveSessionKey?: string;
@@ -537,8 +540,7 @@ export function loadSettings(): UiSettings {
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
         parsed.sidebarSessionActivePanels,
       ),
-      navCollapsed:
-        typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
+      navCollapsed: defaults.navCollapsed,
       navWidth:
         typeof parsed.navWidth === "number" &&
         parsed.navWidth >= NAV_WIDTH_MIN &&
@@ -694,8 +696,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
           ),
         }
       : {}),
-    navCollapsed: next.navCollapsed,
-    navWidth: next.navWidth,
+    navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
