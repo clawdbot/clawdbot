@@ -42,11 +42,11 @@ describe("renderClawAddPlanSummary", () => {
       "  MCP statuspage: npx --yes @acme/statuspage-mcp@1.0.0",
       "Cron jobs: 1",
       "Capability escalations (5):",
-      '  ! agent:incident-response {"heartbeat":{"every":"30m","isolatedSession":true,"lightContext":true,"timeoutSeconds":120},"sandbox":{"mode":"all","scope":"agent","workspaceAccess":"rw"},"tools":{"allow":["read","write","web_fetch"],"deny":["exec","browser"]}}',
-      '  ! cronJob:heartbeat-summary {"agentId":"incident-response","delivery":{"channel":"last","mode":"announce"},"id":"heartbeat-summary","message":"Review active incidents and prepare a concise status summary.","name":"Incident heartbeat summary","schedule":{"cron":"0 * * * *","timezone":"UTC"},"session":"isolated"}',
-      '  ! mcpServer:statuspage {"args":["--yes","@acme/statuspage-mcp@1.0.0"],"command":"npx","env":["STATUSPAGE_TOKEN"]}',
-      '  ! plugin:@openclaw/plugin-pager-duty {"installId":"@openclaw/plugin-pager-duty","integrity":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kind":"plugin","ref":"@openclaw/plugin-pager-duty","source":"clawhub","version":"2.4.0"}',
-      '  ! skill:incident-triage {"integrity":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kind":"skill","ref":"incident-triage","source":"clawhub","version":"1.0.0"}',
+      '  ! agent:incident-response {"sandbox":{"mode":"all","scope":"agent","workspaceAccess":"rw"},"tools":{"allow":["read","write","web_fetch"],"deny":["exec","browser"]},"heartbeat":{"every":"30m","lightContext":true,"isolatedSession":true,"timeoutSeconds":120}}',
+      '  ! cronJob:heartbeat-summary {"id":"heartbeat-summary","name":"Incident heartbeat summary","schedule":{"cron":"0 * * * *","timezone":"UTC"},"session":"isolated","message":"Review active incidents and prepare a concise status summary.","delivery":{"mode":"announce","channel":"last"},"agentId":"incident-response"}',
+      '  ! mcpServer:statuspage {"command":"npx","args":["--yes","@acme/statuspage-mcp@1.0.0"],"env":["STATUSPAGE_TOKEN"]}',
+      '  ! package:plugin:@openclaw/plugin-pager-duty {"kind":"plugin","source":"clawhub","ref":"@openclaw/plugin-pager-duty","version":"2.4.0","integrity":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","installId":"@openclaw/plugin-pager-duty"}',
+      '  ! package:skill:incident-triage {"kind":"skill","source":"clawhub","ref":"incident-triage","version":"1.0.0","integrity":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
       "The plan integrity binds every capability line above.",
     ]);
   });
