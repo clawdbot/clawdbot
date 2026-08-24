@@ -151,6 +151,7 @@ suite.define(() => {
           `[data-session-key="${sessionKey}"] [data-session-menu]`,
         );
         await adoptedMenu.waitFor({ state: "attached" });
+        await expect.poll(() => adoptedMenu.getAttribute("aria-expanded")).toBe("true");
         await popup.getByRole("menuitem").first().press(dismissKey);
         await popup.waitFor({ state: "detached" });
         if (dismissKey === "Escape") {

@@ -64,6 +64,17 @@ describe("hover marquee", () => {
     expect(label.classList.contains("hover-marquee--scrolling")).toBe(false);
   });
 
+  it("keeps the original delay when start repeats during hover", () => {
+    const { row, label } = buildRow({ textWidth: 320, labelWidth: 180 });
+    startHoverMarquee(row);
+    runPendingFrame();
+    vi.advanceTimersByTime(250);
+    startHoverMarquee(row);
+    runPendingFrame();
+    vi.advanceTimersByTime(250);
+    expect(label.classList.contains("hover-marquee--scrolling")).toBe(true);
+  });
+
   it("cancels measurement when hover ends before the next frame", () => {
     const { row, label } = buildRow({ textWidth: 320, labelWidth: 180 });
     startHoverMarquee(row);

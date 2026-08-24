@@ -488,6 +488,7 @@ function renderCatalogSessionRow(
     return params.renderLiveRow(adoptedRow, {
       label,
       marqueeKey: JSON.stringify([label, session.pullRequest]),
+      catalogMenuOpen: params.isMenuOpen(catalogKey),
       catalogMenuTriggerRef,
       ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
       ...(focusRef && focusedControlKind

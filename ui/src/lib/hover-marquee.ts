@@ -48,10 +48,15 @@ function clearPendingMarquee(label: HTMLElement): void {
 
 export function startHoverMarquee(host: HTMLElement): void {
   const label = findMarqueeLabel(host);
-  if (!label || label.classList.contains("hover-marquee--scrolling")) {
+  if (
+    !label ||
+    label.classList.contains("hover-marquee--scrolling") ||
+    pendingMarquees.has(label)
+  ) {
     return;
   }
-  clearPendingMarquee(label);
+  // Catalog renders can reconnect refs while the pointer stays on the row.
+  // Preserve this label's delay; keyed label replacements get fresh state.
   // Mouseenter fires before hover-only actions finish affecting layout. Measure
   // on the next frame so the marquee sees the width the user actually sees.
   const pending: PendingMarquee = {

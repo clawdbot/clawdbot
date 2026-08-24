@@ -248,7 +248,8 @@ export function renderRecentSession(params: {
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
   const menuTooltip = t("chat.sidebar.openSessionMenu");
   const menuLabel = `${menuTooltip}: ${label}`;
-  const menuOpen = host.sidebarMenus.sessionMenu?.session.key === session.key;
+  const menuOpen =
+    host.sidebarMenus.sessionMenu?.session.key === session.key || display?.catalogMenuOpen === true;
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",

@@ -135,6 +135,7 @@ export function visibleCatalogHosts(
 export type CatalogBackingSessionDisplay = {
   label: string;
   marqueeKey?: string;
+  catalogMenuOpen?: boolean;
   catalogMenuTriggerRef?: (element: Element | undefined) => void;
   subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
