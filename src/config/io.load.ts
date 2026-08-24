@@ -1,10 +1,4 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  loadShellEnvFallback,
-  resolveShellEnvFallbackTimeoutMs,
-  shouldDeferShellEnvFallback,
-  shouldEnableShellEnvFallback,
-} from "../infra/shell-env.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { materializeConfigForLoad } from "./io.context.js";
@@ -28,7 +22,6 @@ import {
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
 import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
-import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -43,27 +36,16 @@ export function loadConfigFromContext(
     envBeforeRead = snapshotEnv(deps.env);
     if (!deps.fs.existsSync(configPath)) {
       loggedConfigWarningFingerprints.delete(configPath);
-      if (
-        context.options.shellEnvFallback !== "defer" &&
-        shouldEnableShellEnvFallback(deps.env) &&
-        !shouldDeferShellEnvFallback(deps.env)
-      ) {
-        loadShellEnvFallback({
-          enabled: true,
-          env: deps.env,
-          expectedKeys: resolveShellEnvExpectedKeys(deps.env),
-          logger: deps.logger,
-          timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
-        });
-      }
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
       // (compaction safeguard, session/cron defaults) silently diverges.
-      return materializeConfigForLoad(
-        context,
-        coerceConfig(migratePersistedImplicitMainRoster({}).config),
-        {},
-        undefined,
+      return context.finalizeLoadedRuntimeConfig(
+        materializeConfigForLoad(
+          context,
+          coerceConfig(migratePersistedImplicitMainRoster({}).config),
+          {},
+          undefined,
+        ),
       );
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
