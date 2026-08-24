@@ -214,6 +214,14 @@ export async function captureVideoTalkProof(page: Page, fileName: string) {
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
+export async function captureWebRtcSdpAlertProof(page: Page, fileName: string) {
+  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "webrtc-sdp");
+  await mkdir(artifactDir, { recursive: true });
+  await page
+    .locator('.agent-chat__talk-status[role="alert"]')
+    .screenshot({ path: path.join(artifactDir, fileName) });
+}
+
 export async function installBlockedMicrophoneFixture(page: Page) {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "mediaDevices", {

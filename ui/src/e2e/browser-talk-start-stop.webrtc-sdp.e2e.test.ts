@@ -2,6 +2,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
+  captureWebRtcSdpAlertProof,
   installOversizedWebRtcSdpFixture,
   installWebRtcSdpFailureFixture,
   type WebRtcSdpE2eProof,
@@ -28,6 +29,7 @@ suite.define(() => {
             transport: "webrtc",
             clientSecret: "test-client-secret",
             offerUrl: "https://api.openai.com/v1/realtime/calls",
+            offerResponseMaxBytes: 256 * 1024,
           },
         },
       });
@@ -39,6 +41,7 @@ suite.define(() => {
 
       const alert = page.locator('.agent-chat__talk-status[role="alert"]');
       await expect.poll(() => alert.textContent()).toContain("Realtime WebRTC setup failed (502)");
+      await captureWebRtcSdpAlertProof(page, "01-http-failure-alert.png");
       await expect
         .poll(() =>
           page.evaluate(
@@ -72,6 +75,7 @@ suite.define(() => {
             transport: "webrtc",
             clientSecret: "test-client-secret",
             offerUrl: "https://api.openai.com/v1/realtime/calls",
+            offerResponseMaxBytes: 256 * 1024,
           },
         },
       });
@@ -85,6 +89,7 @@ suite.define(() => {
       await expect
         .poll(() => alert.textContent())
         .toContain("Realtime WebRTC SDP answer: text response exceeds 262144 bytes");
+      await captureWebRtcSdpAlertProof(page, "02-oversized-answer-alert.png");
       await expect
         .poll(() =>
           page.evaluate(

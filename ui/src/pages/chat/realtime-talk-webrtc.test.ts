@@ -105,6 +105,7 @@ function createOpenAiTransport(
       provider: "openai",
       transport: "webrtc",
       clientSecret: "client-secret-123",
+      offerResponseMaxBytes: 256 * 1024,
     },
     {
       client: client as never,
@@ -385,9 +386,11 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   it("aborts stalled WebRTC SDP answer body reads after the offer timeout", async () => {
     vi.useFakeTimers();
     let offerSignal: AbortSignal | undefined;
+    let response: Response | undefined;
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       offerSignal = init?.signal ?? undefined;
-      return createPendingSdpResponse(offerSignal);
+      response = createPendingSdpResponse(offerSignal);
+      return response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const transport = createOpenAiTransport();
@@ -399,6 +402,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(offerSignal?.aborted).toBe(false);
+    expect(response?.body?.locked).toBe(true);
 
     await vi.runAllTimersAsync();
 
@@ -406,24 +410,29 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       new Error("Realtime WebRTC offer request timed out after 30000ms"),
     );
     expect(offerSignal?.aborted).toBe(true);
+    expect(response?.body?.locked).toBe(false);
   });
 
   it("aborts a pending WebRTC SDP answer body read when stopped", async () => {
     let offerSignal: AbortSignal | undefined;
+    let response: Response | undefined;
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       offerSignal = init?.signal ?? undefined;
-      return createPendingSdpResponse(offerSignal);
+      response = createPendingSdpResponse(offerSignal);
+      return response;
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const transport = createOpenAiTransport();
 
     const startResult = transport.start();
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(response?.body?.locked).toBe(true);
 
     transport.stop();
 
     await expect(startResult).resolves.toBe("cancelled");
     expect(offerSignal?.aborted).toBe(true);
+    expect(response?.body?.locked).toBe(false);
   });
 
   it("reports a closed candidate when the peer fails during final setup", async () => {

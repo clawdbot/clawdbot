@@ -5,7 +5,6 @@ import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
-const REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
 const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
@@ -154,15 +153,14 @@ export class RealtimeTalkWebRtcOfferExchange {
       }
       let answer: string;
       try {
-        // OpenAI's server path caps SDP answers at 256 KiB. Custom providers
-        // remain uncapped because the generic WebRTC session contract declares no shared limit.
+        const maxBytes = params.session.offerResponseMaxBytes;
         answer =
-          params.session.provider === "openai"
-            ? await readResponseTextWithLimit(response, {
-                maxBytes: REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES,
-                tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES} bytes`,
-              })
-            : await response.text();
+          maxBytes === undefined
+            ? await response.text()
+            : await readResponseTextWithLimit(response, {
+                maxBytes,
+                tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${maxBytes} bytes`,
+              });
       } catch (error) {
         if (!params.isCurrent()) {
           return undefined;

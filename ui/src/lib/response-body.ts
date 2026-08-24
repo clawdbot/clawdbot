@@ -50,6 +50,7 @@ export async function readResponseTextWithLimit(
       }
       totalBytes += value.byteLength;
       if (totalBytes > options.maxBytes) {
+        // Cancellation is best-effort; finally always releases this reader's lock.
         void reader.cancel().catch(() => undefined);
         throw new Error(options.tooLargeMessage);
       }
