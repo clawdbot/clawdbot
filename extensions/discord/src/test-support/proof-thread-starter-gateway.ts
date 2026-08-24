@@ -2,13 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { ChannelType, type Client } from "../extensions/discord/src/internal/discord.js";
-import {
-  RequestClient,
-  type RequestClientOptions,
-} from "../extensions/discord/src/internal/rest.js";
-import { resolveDiscordThreadStarter } from "../extensions/discord/src/monitor/threading.js";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../extensions/qa-lab/api.js";
+import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../qa-lab/api.js";
+import { ChannelType, type Client } from "../internal/discord.js";
+import { RequestClient, type RequestClientOptions } from "../internal/rest.js";
+import { resolveDiscordThreadStarter } from "../monitor/threading.js";
 
 const DISCORD_TOKEN = "qa-discord-proof-token";
 const DISCORD_APPLICATION_ID = "123456789012345678";
@@ -165,7 +162,7 @@ let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
 const restClients: RequestClient[] = [];
 try {
   gateway = await startQaGatewayChild({
-    repoRoot: path.resolve(import.meta.dirname, ".."),
+    repoRoot: path.resolve(import.meta.dirname, "../../../.."),
     useRepoCli: true,
     providerBaseUrl: `${mock.baseUrl}/v1`,
     transportBaseUrl: "http://127.0.0.1:9",
