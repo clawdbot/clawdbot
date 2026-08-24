@@ -180,24 +180,24 @@ export function renderWhereChip(params: {
           },
           params.submitting,
         )}
-        <div class="new-session-page__menu-title">${t("newSession.yourDevices")}</div>
-        ${renderSessionMenuItem(
-          {
-            value: "auto-device",
-            label: t("newSession.anyAvailableNode"),
-            icon: icons.monitor,
-            checked: params.autoDevice === true,
-            disabled: Boolean(params.state.autoDeviceDisabledReason),
-            title: params.state.autoDeviceDisabledReason,
-            facts: params.state.autoDeviceDisabledReason
-              ? [params.state.autoDeviceDisabledReason]
-              : undefined,
-            onSelect: params.onSelectAutoDevice,
-          },
-          params.submitting,
-        )}
         ${params.state.devices.length > 0
           ? html`
+              <div class="new-session-page__menu-title">${t("newSession.yourDevices")}</div>
+              ${renderSessionMenuItem(
+                {
+                  value: "auto-device",
+                  label: t("newSession.anyAvailableNode"),
+                  icon: icons.monitor,
+                  checked: params.autoDevice === true,
+                  disabled: Boolean(params.state.autoDeviceDisabledReason),
+                  title: params.state.autoDeviceDisabledReason,
+                  facts: params.state.autoDeviceDisabledReason
+                    ? [params.state.autoDeviceDisabledReason]
+                    : undefined,
+                  onSelect: params.onSelectAutoDevice,
+                },
+                params.submitting,
+              )}
               ${params.state.devices.map((device) => {
                 const disabledReason = params.state.deviceDisabledReason ?? device.disabledReason;
                 return renderSessionMenuItem(

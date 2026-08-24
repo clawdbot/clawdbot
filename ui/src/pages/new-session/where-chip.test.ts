@@ -155,9 +155,51 @@ describe("Where chip", () => {
     expect(device?.title).toBe("This runtime does not support paired devices");
   });
 
-  it("disables automatic selection with an actionable reason when no session host is paired", () => {
+  it("omits the devices section entirely when no devices are paired", () => {
     const state = resolveWhereChip({
       environments: [],
+      cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
+    });
+    const emptyContainer = document.createElement("div");
+    render(
+      renderWhereChip({
+        state,
+        gatewayName: "",
+        cloudProfileId: "",
+        deviceId: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingPlacement: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: false,
+        onGuardTransition: vi.fn(),
+        onPopoverShow: vi.fn(),
+        onPopoverHide: vi.fn(),
+        onPopoverAfterHide: vi.fn(),
+        onSelectDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
+        onSelectCloudProfile: vi.fn(),
+        onConnectMachine: vi.fn(),
+      }),
+      emptyContainer,
+    );
+    expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
+  });
+
+  it("disables automatic selection with an actionable reason when no paired device hosts sessions", () => {
+    const state = resolveWhereChip({
+      environments: [
+        {
+          id: "node:macbook",
+          type: "node",
+          label: "MacBook",
+          status: "available",
+          sessionHost: false,
+        },
+      ],
       cloudProfiles: [],
       cloudProfileId: "",
       deviceId: "",
