@@ -114,7 +114,7 @@ describe("subagent registration rollback", () => {
     };
   }
 
-  function createPipelineAdapter(cleanupOnFailure: () => Promise<void>) {
+  function createPipelineAdapter(cleanupOnFailure: (params: { error: unknown }) => Promise<void>) {
     return {
       initialize: async () => ({}),
       dispatchTurn: async () => ({ runId: "run-pipeline-registration" }),
@@ -465,6 +465,46 @@ describe("subagent registration rollback", () => {
     expect(cleanupOnFailure).toHaveBeenCalledOnce();
     expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
     expect(loadSubagentRegistryFromSqlite().has("run-pipeline-registration")).toBe(false);
+  });
+
+  it("fails closed when registration ownership is unknown at the pipeline boundary", async () => {
+    const runId = "run-pipeline-registration";
+    const terminationAttempts: string[] = [];
+    const recordRollback = vi.fn(recordAcceptedRollback);
+    const cleanupOnFailure = vi.fn(async ({ error }: { error: unknown }) => {
+      terminationAttempts.push(runId);
+      expect(error).toMatchObject({
+        registrationOwnership: {
+          status: "unknown",
+          attempted: { runId, childSessionKey: "" },
+        },
+      });
+    });
+
+    const result = await runSpawnPipeline({
+      adapter: createPipelineAdapter(cleanupOnFailure),
+      progressSessionKey: "agent:main:main",
+      buildRegistration: () => createRegistration(runId, ""),
+      recordAcceptedRollback: recordRollback,
+      rollbackRegistration,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      phase: "register",
+      error: {
+        registrationOwnership: {
+          status: "unknown",
+          attempted: { runId, childSessionKey: "" },
+        },
+      },
+    });
+    expect(recordRollback).not.toHaveBeenCalled();
+    expect(terminationAttempts).toEqual([runId]);
+    expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
+    resetSubagentRegistryForTests({ persist: false });
+    await testing.sweepOnceForTests();
+    expect(getSubagentRunByChildSessionKey("agent:main:subagent:any")).toBeNull();
   });
 
   it("keeps normal registration and rollback exactly once", async () => {

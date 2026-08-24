@@ -89,6 +89,19 @@ function isRegistrationOwnership(value: unknown): value is SubagentRegistrationO
   return value.status === "predecessor-restored" && isRegistrationIdentity(value.predecessor);
 }
 
+class SpawnRegistrationOwnershipError extends Error {
+  constructor(
+    readonly registrationOwnership: Exclude<
+      SubagentRegistrationOwnership,
+      { status: "new-row-committed" }
+    >,
+  ) {
+    super(
+      `Subagent registration did not commit a new row: ${registrationOwnership.attempted.runId}`,
+    );
+  }
+}
+
 type SpawnPipelineParams<TState> = {
   adapter: SpawnBackendAdapter<TState>;
   admissionReservation?: { release: () => void };
@@ -205,7 +218,7 @@ async function executeSpawnPipeline<TState>(
     params.assertRegistrationAdmission?.();
     const registrationResult = registerSubagentRun(registration);
     if (registrationResult.status !== "new-row-committed") {
-      throw new Error(`Subagent registration did not commit a new row: ${runId}`);
+      throw new SpawnRegistrationOwnershipError(registrationResult);
     }
     registrationOwnership = registrationResult.attempted;
     params.publishRegistration?.(registration);
