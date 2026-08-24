@@ -147,12 +147,6 @@ async function navigateToClaudeCatalog(page: Page) {
   await expandCodingSection(page);
 }
 
-function claudeCatalogSessionLink(page: Page, name: string) {
-  return page
-    .locator('[data-session-section="catalog:claude"]')
-    .getByRole("link", { name, exact: true });
-}
-
 async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
@@ -547,9 +541,9 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
+    const catalog = page.locator('[data-session-section="catalog:claude"]');
     await page.locator('[data-session-catalog-load-more="claude"]').click();
-    const olderRemoteReview = claudeCatalogSessionLink(page, "Older remote review");
-    await olderRemoteReview.waitFor();
+    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
       catalogId: "claude",
@@ -567,14 +561,11 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);
-    await olderRemoteReview.waitFor();
-    const remoteArchitectureReview = claudeCatalogSessionLink(page, "Remote architecture review");
-    await remoteArchitectureReview.hover();
-    await page
-      .locator(".session-progress-hovercard")
-      .getByText("Remote architecture review", { exact: true })
-      .waitFor();
-    await remoteArchitectureReview.click();
+    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+    const remote = catalog.getByRole("link", { name: /^Remote architecture review$/ });
+    await remote.hover();
+    await page.locator(".session-progress-hovercard").waitFor();
+    await remote.click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
     const catalogPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     const thread = catalogPane.locator(".chat-thread");
