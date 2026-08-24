@@ -1383,6 +1383,7 @@ function createRawOllamaStreamFn(
             // Keep the guarded timeout tied to inference progress. Terminal-tail
             // validation has its own explicit bounded completion policy above.
             refreshTimeout?.();
+            requestTimeoutGuard.refresh();
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {
               ensureStreamStarted();

@@ -351,6 +351,7 @@ describe("createOllamaStreamFn thinking events", () => {
         allowPrivateNetwork: true,
         hostnameAllowlist: ["localhost"],
       },
+      signal: expect.any(AbortSignal),
       timeoutMs: 2500,
       auditContext: "ollama-stream.chat",
     });
@@ -539,7 +540,7 @@ describe("createOllamaStreamFn thinking events", () => {
     }
 
     expect(events.some((event) => event.type === "done")).toBe(true);
-    expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
+    expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length + 1);
   });
 
   it("keeps a real slow native Ollama response alive while NDJSON chunks advance", async () => {
