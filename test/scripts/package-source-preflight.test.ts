@@ -146,6 +146,126 @@ exit 64
   }
 }
 
+function runLiveSourcePackageBuildAndValidation(packageEnv: Record<string, string>) {
+  const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
+  const pack = workflowStep(
+    workflow,
+    "prepare_docker_e2e_image",
+    "Pack OpenClaw package for Docker E2E",
+  );
+  const validate = workflowStep(
+    workflow,
+    "prepare_docker_e2e_image",
+    "Validate OpenClaw Docker E2E package",
+  );
+  const artifactTuple = runLiveArtifactTupleValidation(packageEnv);
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-live-source-package-"));
+  const fakeBin = path.join(tempDir, "bin");
+  const callsPath = path.join(tempDir, "calls");
+  const outputPath = path.join(tempDir, "output");
+  const summaryPath = path.join(tempDir, "summary");
+  const selectedSha = "a".repeat(40);
+  mkdirSync(fakeBin);
+  writeFileSync(
+    path.join(fakeBin, "node"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CALLS_PATH"
+if [[ "$1" == "scripts/package-openclaw-for-docker.mjs" ]]; then
+  shift
+  output_dir=""
+  output_name=""
+  while (( "$#" )); do
+    case "$1" in
+      --output-dir) output_dir="$2"; shift 2 ;;
+      --output-name) output_name="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  fixture="$(mktemp -d)"
+  mkdir -p "$fixture/package/dist" "$output_dir"
+  printf '%s\\n' '{"name":"openclaw","version":"2026.8.1"}' > "$fixture/package/package.json"
+  printf '{"commit":"%s"}\\n' "$SELECTED_SHA" > "$fixture/package/dist/build-info.json"
+  tar -czf "$output_dir/$output_name" -C "$fixture" package
+  rm -rf "$fixture"
+  exit 0
+fi
+if [[ "$1" == "scripts/check-openclaw-package-tarball.mjs" ]]; then
+  exit 0
+fi
+exit 64
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    path.join(fakeBin, "timeout"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+shift 2
+exec "$@"
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    path.join(fakeBin, "sha256sum"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%064d  %s\\n' 0 "$1"
+`,
+    { mode: 0o755 },
+  );
+  const commonEnv = {
+    ...process.env,
+    ALLOW_UNRELEASED_CHANGELOG: "false",
+    CALLS_PATH: callsPath,
+    GITHUB_OUTPUT: outputPath,
+    GITHUB_STEP_SUMMARY: summaryPath,
+    GITHUB_WORKSPACE: tempDir,
+    PATH: `${fakeBin}:${process.env.PATH}`,
+    SELECTED_SHA: selectedSha,
+    SHARED_IMAGE_POLICY: "existing-only",
+  };
+  try {
+    const buildResult = spawnSync("bash", ["--noprofile", "--norc", "-c", pack.run ?? ""], {
+      cwd: tempDir,
+      encoding: "utf8",
+      env: commonEnv,
+    });
+    const artifactPresent = artifactTuple.output.package_artifact_present === "true";
+    const validationResult = spawnSync(
+      "bash",
+      ["--noprofile", "--norc", "-c", validate.run ?? ""],
+      {
+        cwd: tempDir,
+        encoding: "utf8",
+        env: {
+          ...commonEnv,
+          EXPECTED_PACKAGE_FILE_NAME: artifactPresent ? packageEnv.PACKAGE_FILE_NAME : "",
+          EXPECTED_PACKAGE_SHA256: artifactPresent ? packageEnv.PACKAGE_SHA256 : "",
+          EXPECTED_PACKAGE_SOURCE_SHA: artifactPresent ? packageEnv.PACKAGE_SOURCE_SHA : "",
+          EXPECTED_PACKAGE_VERSION: artifactPresent ? packageEnv.PACKAGE_VERSION : "",
+        },
+      },
+    );
+    const output =
+      validationResult.status === 0
+        ? Object.fromEntries(
+            readFileSync(outputPath, "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => {
+                const separator = line.indexOf("=");
+                return [line.slice(0, separator), line.slice(separator + 1)];
+              }),
+          )
+        : {};
+    const calls = readFileSync(callsPath, "utf8").trim().split("\n");
+    return { artifactTuple, buildResult, calls, output, validationResult, validate };
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
 function runReleaseInputCapture(params: {
   candidateArtifactJson?: string;
   releasePackageSpec?: string;
@@ -475,6 +595,45 @@ describe("package source preflight", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(output.package_artifact_present).toBe("false");
+  });
+
+  it("builds and validates a source package for a whitespace-only artifact tuple", () => {
+    const whitespace = " \t\n ";
+    const result = runLiveSourcePackageBuildAndValidation({
+      PACKAGE_ARTIFACT_DIGEST: whitespace,
+      PACKAGE_ARTIFACT_ID: whitespace,
+      PACKAGE_ARTIFACT_NAME: whitespace,
+      PACKAGE_ARTIFACT_RUN_ATTEMPT: whitespace,
+      PACKAGE_ARTIFACT_RUN_ID: whitespace,
+      PACKAGE_FILE_NAME: whitespace,
+      PACKAGE_SHA256: whitespace,
+      PACKAGE_SOURCE_SHA: whitespace,
+      PACKAGE_VERSION: whitespace,
+    });
+
+    expect(result.artifactTuple.result.status, result.artifactTuple.result.stderr).toBe(0);
+    expect(result.artifactTuple.output.package_artifact_present).toBe("false");
+    expect(result.validate.env).toMatchObject({
+      EXPECTED_PACKAGE_FILE_NAME:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_file_name || '' }}",
+      EXPECTED_PACKAGE_SHA256:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_sha256 || '' }}",
+      EXPECTED_PACKAGE_SOURCE_SHA:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_source_sha || '' }}",
+      EXPECTED_PACKAGE_VERSION:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_version || '' }}",
+    });
+    expect(result.buildResult.status, result.buildResult.stderr).toBe(0);
+    expect(result.validationResult.status, result.validationResult.stderr).toBe(0);
+    expect(result.calls).toEqual([
+      expect.stringContaining("scripts/package-openclaw-for-docker.mjs"),
+      expect.stringContaining("scripts/check-openclaw-package-tarball.mjs"),
+    ]);
+    expect(result.output).toMatchObject({
+      file_name: "openclaw-current.tgz",
+      source_sha: "a".repeat(40),
+      version: "2026.8.1",
+    });
   });
 
   it("guards install-smoke candidate packaging before its dependency install", () => {

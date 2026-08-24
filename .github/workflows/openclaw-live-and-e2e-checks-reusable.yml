@@ -2366,10 +2366,10 @@ jobs:
         id: package
         if: steps.plan.outputs.needs_package == '1'
         env:
-          EXPECTED_PACKAGE_FILE_NAME: ${{ inputs.package_file_name }}
-          EXPECTED_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
-          EXPECTED_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
-          EXPECTED_PACKAGE_VERSION: ${{ inputs.package_version }}
+          EXPECTED_PACKAGE_FILE_NAME: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_file_name || '' }}
+          EXPECTED_PACKAGE_SHA256: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_sha256 || '' }}
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_source_sha || '' }}
+          EXPECTED_PACKAGE_VERSION: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_version || '' }}
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
