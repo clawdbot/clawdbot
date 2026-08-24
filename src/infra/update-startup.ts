@@ -64,7 +64,7 @@ import {
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
 import {
   applyDevUpdateTargetEnv,
-  devUpdateTargetFromGitCampaign,
+  devUpdateTargetFromGitTarget,
   type TrackedDevUpdateTarget,
 } from "./update-dev-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
@@ -1121,7 +1121,7 @@ export async function runGatewayUpdateCheck(params: {
               tag: "dev",
               forced,
               root: root ?? status.root ?? undefined,
-              devTarget: devUpdateTargetFromGitCampaign(target),
+              devTarget: devUpdateTargetFromGitTarget(target),
               log: params.log,
               runAuto,
             }),

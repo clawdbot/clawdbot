@@ -233,6 +233,31 @@ function setDevCampaignSchedule(upstreamSha = "frozen-upstream-sha"): void {
   };
 }
 
+function mockGitInstallStatus(upstreamSha: string, upstreamRef = "origin/main"): void {
+  const root = "/tmp/openclaw";
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+    root,
+    status: {
+      root,
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root,
+        sha: "0".repeat(40),
+        tag: null,
+        branch: "main",
+        upstream: upstreamRef,
+        upstreamSha,
+        dirty: false,
+        ahead: 0,
+        behind: 1,
+        fetchOk: true,
+      },
+    },
+    installReceipt: null,
+  });
+}
+
 function mockPackageInstallSurface(kind: "global" | "package-root"): void {
   const root = "/tmp/openclaw";
   initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
@@ -247,14 +272,17 @@ function mockPackageInstallSurface(kind: "global" | "package-root"): void {
   );
 }
 
-async function invokeUpdateRun(): Promise<void> {
+async function invokeUpdateRun(
+  params: Record<string, unknown> = {},
+  respond: (ok: boolean, response?: unknown) => void = () => undefined,
+): Promise<void> {
   const { updateHandlers } = await import("./update.js");
   await expectDefined(
     updateHandlers["update.run"],
     'updateHandlers["update.run"] test invariant',
   )({
-    params: {},
-    respond: () => undefined,
+    params,
+    respond,
     client: {
       connId: "conn-1",
       clientIp: "127.0.0.1",
@@ -265,6 +293,20 @@ async function invokeUpdateRun(): Promise<void> {
       logGateway: { info: logGatewayInfoMock },
     },
   } as never);
+}
+
+async function captureUpdateRun(params: Record<string, unknown>) {
+  let response: { ok?: boolean; result?: { status?: string; reason?: string } } | undefined;
+  await invokeUpdateRun(params, (_ok, payload) => {
+    response = payload as typeof response;
+  });
+  return response;
+}
+
+function expectNoUpdateMutation(): void {
+  expect(runGatewayUpdatePreflightMock).not.toHaveBeenCalled();
+  expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+  expect(runGatewayUpdateMock).not.toHaveBeenCalled();
 }
 
 describe("update.run campaign ownership", () => {
@@ -403,6 +445,142 @@ describe("update.run campaign ownership", () => {
         },
       }),
     );
+  });
+
+  it("rejects an explicit commit that conflicts with the adopted Git campaign before mutation", async () => {
+    const campaignSha = "1234567890abcdef1234567890abcdef12345678";
+    setDevCampaignSchedule(campaignSha);
+    mockGitInstallStatus(campaignSha);
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+
+    const response = await captureUpdateRun({
+      target: {
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "abcdef1234567890abcdef1234567890abcdef12",
+      },
+    });
+
+    expect(response?.result).toMatchObject({
+      status: "error",
+      reason: "update-target-campaign-mismatch",
+    });
+    expectNoUpdateMutation();
+  });
+
+  it("coalesces an explicit commit matching the adopted Git campaign", async () => {
+    const upstreamSha = "1234567890abcdef1234567890abcdef12345678";
+    setDevCampaignSchedule(upstreamSha);
+    mockGitInstallStatus(upstreamSha);
+
+    await invokeUpdateRun({ target: { kind: "git", upstreamRef: "origin/main", upstreamSha } });
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha },
+      }),
+    );
+  });
+
+  describe("explicit Git target binding", () => {
+    const requestTarget = {
+      kind: "git",
+      upstreamRef: "origin/main",
+      upstreamSha: "1234567890abcdef1234567890abcdef12345678",
+    };
+    const newerUpstreamSha = "abcdef1234567890abcdef1234567890abcdef12";
+    const trackedTarget = {
+      mode: "tracked",
+      upstreamRef: requestTarget.upstreamRef,
+      upstreamSha: requestTarget.upstreamSha,
+    };
+
+    beforeEach(() => {
+      updateChannel = "dev";
+      adoptCampaignMock.mockReturnValue(undefined);
+    });
+
+    it("keeps the requested commit through managed preflight and handoff after upstream advances", async () => {
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      mockGitInstallStatus(newerUpstreamSha);
+
+      const response = await captureUpdateRun({ target: requestTarget });
+
+      expect(runGatewayUpdatePreflightMock).toHaveBeenCalledWith(
+        "/tmp/openclaw",
+        undefined,
+        trackedTarget,
+      );
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+        expect.objectContaining({ devTarget: trackedTarget }),
+      );
+      expect(response?.ok).toBe(true);
+    });
+
+    it("passes the requested commit to a direct Git update", async () => {
+      mockGitInstallStatus(newerUpstreamSha);
+
+      await invokeUpdateRun({ target: requestTarget });
+
+      expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ devTarget: trackedTarget }),
+      );
+    });
+
+    it.each([
+      { name: "short SHA", target: { ...requestTarget, upstreamSha: "1234567" } },
+      { name: "nonhex SHA", target: { ...requestTarget, upstreamSha: "g".repeat(40) } },
+      { name: "unsafe upstream", target: { ...requestTarget, upstreamRef: "origin/main branch" } },
+      { name: "wrong kind", target: { ...requestTarget, kind: "package" } },
+      { name: "non-object", target: "origin/main" },
+    ])("rejects malformed $name before any update mutation", async ({ target }) => {
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+
+      const response = await captureUpdateRun({ target });
+
+      expect(response?.result).toMatchObject({ status: "error", reason: "invalid-update-target" });
+      expectNoUpdateMutation();
+    });
+
+    it("rejects a target for another Git upstream before update mutation", async () => {
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      mockGitInstallStatus(newerUpstreamSha, "upstream/main");
+
+      const response = await captureUpdateRun({ target: requestTarget });
+
+      expect(response?.result).toMatchObject({
+        status: "error",
+        reason: "update-target-upstream-mismatch",
+      });
+      expectNoUpdateMutation();
+    });
+
+    it("rejects an exact Git target outside the dev channel before update mutation", async () => {
+      updateChannel = "stable";
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      mockGitInstallStatus(newerUpstreamSha);
+
+      const response = await captureUpdateRun({ target: requestTarget });
+
+      expect(response?.result).toMatchObject({
+        status: "error",
+        reason: "unsupported-update-target",
+      });
+      expectNoUpdateMutation();
+    });
+
+    it("rejects an exact Git target on a package install before update mutation", async () => {
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      mockPackageInstallSurface("global");
+
+      const response = await captureUpdateRun({ target: requestTarget });
+
+      expect(response?.result).toMatchObject({
+        status: "error",
+        reason: "unsupported-update-target",
+      });
+      expectNoUpdateMutation();
+    });
   });
 
   it("does not pin a plain dev update without a campaign", async () => {
