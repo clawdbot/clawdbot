@@ -979,7 +979,12 @@ describe("managed service update handoff", () => {
           kind: "launchd",
           uid: typeof process.getuid === "function" ? process.getuid() : 501,
           label: "test.gateway",
-          plistPath: path.normalize("/Users/test/Library/LaunchAgents/test.gateway.plist"),
+          plistPath: path.posix.join(
+            "/Users/test",
+            "Library",
+            "LaunchAgents",
+            "test.gateway.plist",
+          ),
         },
       },
       {

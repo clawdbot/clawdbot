@@ -142,7 +142,6 @@ export async function runGatewayLoop(params: {
   let pendingStartupRequest: GatewayRunSignalRequest | null = null;
   let activeRestartRequest: GatewayRunSignalRequest | null = null;
   let committedGenericSuccessor: ChildProcess | true | null = null;
-  let managedUpdateHandoffRuntime: typeof import("../../infra/update-managed-service-handoff.js");
   let forceActiveRestartExit: (() => void) | null = null;
   let pendingStartupForceExitTimer: ReturnType<typeof setTimeout> | null = null;
   let restartDrainingMarked = false;
@@ -197,13 +196,12 @@ export async function runGatewayLoop(params: {
         }
         return;
       }
-      const handoffRuntime = managedUpdateHandoffRuntime;
       if (
         sameManagedUpdateOwner(owner, ownerToCommit) &&
-        handoffRuntime.claimManagedServiceUpdateHandoff(owner) &&
-        (await handoffRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome)) &&
+        eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
+        (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome)) &&
         sameManagedUpdateOwner(getManagedUpdateOwner(), owner) &&
-        handoffRuntime.claimManagedServiceUpdateHandoff(owner)
+        eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
       ) {
         // Keep exact request ownership live through the synchronous exit call.
         exitProcess(code);
@@ -272,10 +270,7 @@ export async function runGatewayLoop(params: {
         if (!owner) {
           return requiresParentExit ? "restart-after-exit" : "restored-in-process";
         }
-        managedUpdateHandoffRuntime ??=
-          await import("../../infra/update-managed-service-handoff.js");
-        const restoration =
-          await managedUpdateHandoffRuntime.cancelManagedServiceUpdateHandoff(owner);
+        const restoration = await eagerLifecycleRuntime.cancelManagedServiceUpdateHandoff(owner);
         if (!restoration) {
           gatewayLog.error("managed update handoff cancellation unconfirmed; remaining draining");
           return false;
@@ -741,13 +736,11 @@ export async function runGatewayLoop(params: {
           const owner = activeRestartRequest.restartIntent.successorOwner;
           managedUpdateOwner = owner;
           try {
-            managedUpdateHandoffRuntime ??=
-              await import("../../infra/update-managed-service-handoff.js");
             if (
               !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
-              !(await managedUpdateHandoffRuntime.requestManagedServiceUpdateHandoffPark(owner)) ||
+              !(await eagerLifecycleRuntime.requestManagedServiceUpdateHandoffPark(owner)) ||
               !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
-              !managedUpdateHandoffRuntime.claimManagedServiceUpdateHandoff(owner)
+              !eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
             ) {
               throw new Error("managed update helper lost exact ownership during service parking");
             }
