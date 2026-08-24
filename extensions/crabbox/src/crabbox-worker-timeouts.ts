@@ -43,7 +43,9 @@ export function resolveCrabboxProvisionBaseTimeoutMs(
   const warmupTimeoutMs = profile.desktop
     ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
     : CRABBOX_WARMUP_TIMEOUT_MS;
-  return warmupTimeoutMs + resolveCrabboxLifecycleTimeoutMs(profile.provider);
+  const lifecycleTimeoutMs = resolveCrabboxLifecycleTimeoutMs(profile.provider);
+  // Machine0 needs separate windows for authoritative inspection and readiness retry.
+  return warmupTimeoutMs + lifecycleTimeoutMs * (profile.provider === "machine0" ? 2 : 1);
 }
 
 export function countCrabboxProvisionSetupPhases(profile: CrabboxProvisionTimeoutProfile): number {
