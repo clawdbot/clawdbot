@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
@@ -29,6 +30,7 @@ class ControllerHost implements ReactiveControllerHost {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   localStorage.clear();
@@ -64,6 +66,7 @@ function createDraftFixture(options: FixtureOptions = {}) {
         hello:
           phase === "connected"
             ? {
+                server: { bootId: "gateway-boot-a" },
                 auth: {
                   role: "operator",
                   scopes: options.scopes ?? ["operator.read", "operator.write"],
@@ -362,6 +365,95 @@ describe("DraftSubmissionFlow submit gates", () => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it("replays a frozen direct create without inheriting refreshed placement or mutable submit gates", async () => {
+    const { context, flow, place } = createDraftFixture({
+      methods: ["sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
+    const original = new Promise<{ key: string; initialRun: { status: "idle" } }>((resolve) => {
+      finishOriginal = resolve;
+    });
+    const result = { key: "agent:main:direct-resumed", initialRun: { status: "idle" as const } };
+    vi.mocked(context.sessions.createResult)
+      .mockImplementationOnce(() => original)
+      .mockResolvedValueOnce(result);
+    vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+    });
+    flow.setMessage("keep the original direct request");
+
+    const initialSubmission = flow.submit();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    const originalParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    flow.invalidate("gateway-changed");
+    place.applyPendingPlacement({ agentId: "main", profileId: "new-cloud-discovery" });
+    expect(flow.canSubmit()).toBe(false);
+    expect(flow.submitting).toBe(true);
+
+    flow.resumeInterruptedSubmission();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(context.sessions.createResult).mock.calls[1]?.[0]).toEqual(originalParams);
+    expect(flow.pendingPlacement.sessionKey).toBe("");
+    finishOriginal(result);
+    await initialSubmission;
+    await vi.waitFor(() => expect(flow.submitting).toBe(false));
+  });
+
+  it("unlocks visibly when a frozen retry loses sessions.create access", async () => {
+    const { context, flow } = createDraftFixture();
+    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
+    vi.mocked(context.sessions.createResult).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOriginal = resolve;
+        }),
+    );
+    flow.setMessage("do not replay without authority");
+    const initialSubmission = flow.submit();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    flow.invalidate("gateway-changed");
+    if (context.gateway.snapshot.hello?.features) {
+      context.gateway.snapshot.hello.features.methods = [];
+    }
+
+    flow.resumeInterruptedSubmission();
+
+    expect(flow.error).toBeTruthy();
+    expect(flow.submitting).toBe(false);
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    finishOriginal({ key: "agent:main:old", initialRun: { status: "idle" } });
+    await initialSubmission;
+  });
+
+  it("expires an interrupted direct create and unlocks with an explicit unknown outcome", async () => {
+    const clock = vi.spyOn(Date, "now");
+    let now = 1_000;
+    clock.mockImplementation(() => now);
+    const { context, flow } = createDraftFixture();
+    let finishOriginal!: (value: { key: string; initialRun: { status: "idle" } }) => void;
+    vi.mocked(context.sessions.createResult).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOriginal = resolve;
+        }),
+    );
+    flow.setMessage("the original outcome is unknown");
+    const initialSubmission = flow.submit();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    flow.invalidate("gateway-changed");
+    now += SESSION_CREATE_RETRY_WINDOW_MS;
+
+    flow.resumeInterruptedSubmission();
+
+    expect(flow.submissionOutcomeUnknown).toBe("gateway-changed");
+    expect(flow.submitting).toBe(false);
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    finishOriginal({ key: "agent:main:old", initialRun: { status: "idle" } });
+    await initialSubmission;
+    clock.mockRestore();
+  });
+
   it("surfaces navigation failure after a session has already been created", async () => {
     const { context, flow } = createDraftFixture();
     vi.mocked(context.sessions.createResult).mockResolvedValue({
