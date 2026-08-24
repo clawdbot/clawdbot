@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CommandTurnContext } from "../command-turn-context.js";
 import {
+  resolveSourceConversationContextMode,
   resolveSourceReplyDeliveryMode,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
@@ -713,5 +714,68 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
       },
     );
+  });
+});
+
+describe("resolveSourceConversationContextMode", () => {
+  it("uses the run's mode when no session-pinned mode exists", () => {
+    // The regression. sessionPinnedMode is set only for CLI sessions, so every
+    // other run hit the old hardcoded "automatic" fallback and was told its
+    // plain-text final would be delivered while delivery required
+    // message(action=send). Asserting the run mode wins here is the whole point
+    // of the helper.
+    expect(
+      resolveSourceConversationContextMode({
+        sessionPinnedMode: undefined,
+        runMode: "message_tool_only",
+      }),
+    ).toBe("message_tool_only");
+  });
+
+  it("keeps a CLI session pinned to its creation-time mode", () => {
+    // CLI sessions fix the system prompt at creation, so the pin must win even
+    // when the current turn resolves differently — otherwise the prompt would
+    // describe a mode the already-created session does not use.
+    expect(
+      resolveSourceConversationContextMode({
+        sessionPinnedMode: "automatic",
+        runMode: "message_tool_only",
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceConversationContextMode({
+        sessionPinnedMode: "message_tool_only",
+        runMode: "automatic",
+      }),
+    ).toBe("message_tool_only");
+  });
+
+  it("passes automatic through unchanged", () => {
+    expect(
+      resolveSourceConversationContextMode({
+        sessionPinnedMode: undefined,
+        runMode: "automatic",
+      }),
+    ).toBe("automatic");
+  });
+
+  it("defaults to automatic only when neither mode is known", () => {
+    expect(
+      resolveSourceConversationContextMode({
+        sessionPinnedMode: undefined,
+        runMode: undefined,
+      }),
+    ).toBe("automatic");
+  });
+
+  it("never reports automatic while the run is message_tool_only and unpinned", () => {
+    // The invariant stated directly rather than via prompt-string matching: an
+    // unpinned run must never be described by the automatic variant, because
+    // that is precisely the contradiction that strands replies.
+    for (const runMode of ["automatic", "message_tool_only"] as const) {
+      expect(resolveSourceConversationContextMode({ sessionPinnedMode: undefined, runMode })).toBe(
+        runMode,
+      );
+    }
   });
 });

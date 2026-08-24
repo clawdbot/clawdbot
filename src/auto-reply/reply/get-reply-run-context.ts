@@ -55,6 +55,7 @@ import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
 import {
   isDirectedSourceReplyTurn,
   isSyntheticSourceReplyTurn,
+  resolveSourceConversationContextMode,
 } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -230,7 +231,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   // miss — a prompt/policy contradiction, not a delivery fault.
   const sessionStableConversationContext =
     sourceConversationContextByMode[
-      sessionPromptSourceReplyDeliveryMode ?? sourceReplyDeliveryMode ?? "automatic"
+      resolveSourceConversationContextMode({
+        sessionPinnedMode: sessionPromptSourceReplyDeliveryMode,
+        runMode: sourceReplyDeliveryMode,
+      })
     ];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";

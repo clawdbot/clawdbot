@@ -231,3 +231,26 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     deliverySuppressionReason,
   };
 }
+
+/**
+ * Which delivery-mode variant of the conversation context a run must inject.
+ *
+ * The prompt and the delivery path MUST agree about the mode. When they diverge
+ * the agent is told its plain-text final will be posted while delivery expects
+ * `message(action=send)`; the reply is then stranded, silently retried once, and
+ * surfaced to the user as "I generated a reply but could not deliver it to this
+ * chat" on the second miss. That is a prompt/policy contradiction rather than a
+ * delivery fault, which makes it expensive to diagnose from the symptom.
+ *
+ * `sessionPinnedMode` exists because CLI sessions fix their system prompt at
+ * session creation, so those runs must keep the variant they were created with
+ * even if the current turn resolves differently. It is undefined for every other
+ * run — which is exactly why the fallback must be the run's own mode and not a
+ * hardcoded "automatic".
+ */
+export function resolveSourceConversationContextMode(params: {
+  sessionPinnedMode: SourceReplyDeliveryMode | undefined;
+  runMode: SourceReplyDeliveryMode | undefined;
+}): SourceReplyDeliveryMode {
+  return params.sessionPinnedMode ?? params.runMode ?? "automatic";
+}
