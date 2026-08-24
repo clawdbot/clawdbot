@@ -797,6 +797,19 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      - name: Validate release package source metadata
+        if: inputs.candidate_artifact_json == '' && needs.resolve_target.outputs.release_package_spec == ''
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ needs.resolve_target.outputs.allow_unreleased_changelog }}
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          args=(--ref "$PACKAGE_REF")
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node scripts/package-source-preflight.mjs "${args[@]}"
+
       - name: Set artifact metadata
         id: artifact
         if: inputs.candidate_artifact_json == ''
