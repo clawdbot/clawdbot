@@ -252,7 +252,20 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
 vi.mock("../registry/subagent-registry.js", () => ({
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
   // ACP registration deliberately moved behind the shared spawn pipeline.
-  registerSubagentRun: hoisted.registerSubagentRunMock,
+  registerSubagentRun: (record: Record<string, unknown>) => {
+    const result = hoisted.registerSubagentRunMock(record);
+    return (
+      result ?? {
+        status: "new-row-committed",
+        attempted: {
+          runId: String(record.runId),
+          childSessionKey: String(record.childSessionKey),
+          generation: 1,
+          createdAt: 1,
+        },
+      }
+    );
+  },
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => ({

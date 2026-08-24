@@ -1,6 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import type {
-  SubagentRegistrationError,
   SubagentRegistrationIdentity,
   SubagentRegistrationOwnership,
 } from "./subagents/registry/subagent-registry-run-launch.js";
@@ -20,6 +20,9 @@ export type SpawnBackendAdapter<TState> = {
 };
 
 type RegisterSubagentRunInput = Parameters<typeof registerSubagentRun>[0];
+type OwnedSubagentRegistration = RegisterSubagentRunInput & {
+  expectedRegistration: SubagentRegistrationIdentity;
+};
 
 type SpawnProgressOrigin = {
   channel?: string;
@@ -55,10 +58,35 @@ function combineSpawnRollbackError(error: unknown, rollbackError: unknown, messa
 }
 
 function readRegistrationOwnership(error: unknown): SubagentRegistrationOwnership | undefined {
-  if (!(error instanceof Error) || !("registrationOwnership" in error)) {
+  if (!isRecord(error) || !isRegistrationOwnership(error.registrationOwnership)) {
     return undefined;
   }
-  return (error as SubagentRegistrationError).registrationOwnership;
+  return error.registrationOwnership;
+}
+
+function isRegistrationIdentity(value: unknown): value is SubagentRegistrationIdentity {
+  return (
+    isRecord(value) &&
+    typeof value.runId === "string" &&
+    typeof value.childSessionKey === "string" &&
+    typeof value.generation === "number" &&
+    typeof value.createdAt === "number"
+  );
+}
+
+function isRegistrationOwnership(value: unknown): value is SubagentRegistrationOwnership {
+  if (!isRecord(value) || !isRegistrationIdentity(value.attempted)) {
+    return false;
+  }
+  if (
+    value.status === "new-row-committed" ||
+    value.status === "new-row-survived" ||
+    value.status === "no-new-row" ||
+    value.status === "unknown"
+  ) {
+    return true;
+  }
+  return value.status === "predecessor-restored" && isRegistrationIdentity(value.predecessor);
 }
 
 type SpawnPipelineParams<TState> = {
@@ -76,17 +104,13 @@ type SpawnPipelineParams<TState> = {
   publishRegistration?: (registration: RegisterSubagentRunInput) => void;
   afterRegistration?: (state: TState, runId: string) => Promise<void>;
   recordAcceptedRollback?: (
-    registration: RegisterSubagentRunInput,
-    ownership: SubagentRegistrationIdentity,
+    registration: OwnedSubagentRegistration,
     error: unknown,
   ) =>
     | { status: "persisted" }
     | { status: "pending-persistence"; error: unknown }
     | { status: "rejected" };
-  rollbackRegistration?: (
-    registration: RegisterSubagentRunInput,
-    ownership: SubagentRegistrationIdentity,
-  ) => boolean;
+  rollbackRegistration?: (registration: OwnedSubagentRegistration) => boolean;
 };
 
 export async function runSpawnPipeline<TState>(
@@ -133,7 +157,8 @@ async function executeSpawnPipeline<TState>(
     rollbackPromise = (async () => {
       const failures: unknown[] = [];
       const ownership = registrationOwnership;
-      const rollbackOwner = params.recordAcceptedRollback?.(registration, ownership, error);
+      const ownedRegistration = { ...registration, expectedRegistration: ownership };
+      const rollbackOwner = params.recordAcceptedRollback?.(ownedRegistration, error);
       if (rollbackOwner?.status === "rejected") {
         failures.push(new Error(`Accepted subagent rollback owner was rejected: ${runId}`));
       } else if (rollbackOwner?.status === "pending-persistence") {
@@ -152,7 +177,7 @@ async function executeSpawnPipeline<TState>(
       }
       if (cleanupComplete) {
         try {
-          if (params.rollbackRegistration?.(registration, ownership) === false) {
+          if (params.rollbackRegistration?.(ownedRegistration) === false) {
             throw new Error(`Accepted subagent registration rollback lost ownership: ${runId}`);
           }
           registrationOwnership = undefined;

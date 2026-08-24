@@ -7,7 +7,10 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import * as detachedTaskRuntime from "../tasks/detached-task-runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runSpawnPipeline } from "./spawn-pipeline.js";
-import type { SubagentRegistrationIdentity } from "./subagents/registry/subagent-registry-run-launch.js";
+import type {
+  RegisterSubagentRunParams,
+  SubagentRegistrationIdentity,
+} from "./subagents/registry/subagent-registry-run-launch.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
 import {
   recordAcceptedSubagentSpawnRollback,
@@ -120,8 +123,9 @@ describe("subagent registration rollback", () => {
   }
 
   function recordAcceptedRollback(
-    registration: ReturnType<typeof createRegistration>,
-    ownership: SubagentRegistrationIdentity,
+    registration: RegisterSubagentRunParams & {
+      expectedRegistration: SubagentRegistrationIdentity;
+    },
     error: unknown,
   ) {
     return recordAcceptedSubagentSpawnRollback({
@@ -129,18 +133,19 @@ describe("subagent registration rollback", () => {
       childSessionKey: registration.childSessionKey,
       gatewayRunId: registration.runId,
       reason: error instanceof Error ? error.message : String(error),
-      expectedRegistration: ownership,
+      expectedRegistration: registration.expectedRegistration,
     });
   }
 
   function rollbackRegistration(
-    registration: ReturnType<typeof createRegistration>,
-    ownership: SubagentRegistrationIdentity,
+    registration: RegisterSubagentRunParams & {
+      expectedRegistration: SubagentRegistrationIdentity;
+    },
   ) {
     return rollbackSubagentRunRegistration({
       runId: registration.runId,
       childSessionKey: registration.childSessionKey,
-      expectedRegistration: ownership,
+      expectedRegistration: registration.expectedRegistration,
     });
   }
 

@@ -481,10 +481,8 @@ export async function spawnSubagentDirect(
           await cleanupFailedSpawn();
           return;
         }
-        // The gateway skips its fallback CLI task row because this launch claims
-        // the run's row, and registration is what delivers it. A register failure
-        // means no owner ever recorded the run, so abort the run the gateway
-        // already accepted instead of leaving it executing unrecorded.
+        // Registration claims the fallback task row. If no row survives, abort
+        // the accepted Gateway run instead of leaving it executing unrecorded.
         let emitLifecycleHooks = threadBindingReady;
         if (phase === "dispatch" && threadBindingReady) {
           let endedHookEmitted = false;
@@ -626,19 +624,13 @@ export async function spawnSubagentDirect(
       afterRegistration: params.collect
         ? undefined
         : (_state, runId) => emitSpawnLifecycleHooks(runId),
-      rollbackRegistration: (registration, ownership) =>
-        rollbackSubagentRunRegistration({
-          runId: registration.runId,
-          childSessionKey: registration.childSessionKey,
-          expectedRegistration: ownership,
-        }),
-      recordAcceptedRollback: (registration, ownership, error) =>
+      rollbackRegistration: rollbackSubagentRunRegistration,
+      recordAcceptedRollback: (registration, error) =>
         recordAcceptedSubagentSpawnRollback({
-          runId: registration.runId,
-          childSessionKey: registration.childSessionKey,
+          ...registration,
           gatewayRunId: acceptedChildRunId ?? registration.runId,
           reason: error instanceof Error ? error.message : String(error),
-          expectedRegistration: ownership,
+          expectedRegistration: registration.expectedRegistration,
           ...provisionalSessionIdentity,
         }),
     });

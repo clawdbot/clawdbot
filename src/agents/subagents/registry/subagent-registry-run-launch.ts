@@ -120,7 +120,7 @@ export type SubagentRegistrationOwnership =
     }
   | { status: "unknown"; attempted: SubagentRegistrationIdentity };
 
-export class SubagentRegistrationError extends AggregateError {
+class SubagentRegistrationError extends AggregateError {
   constructor(
     errors: unknown[],
     message: string,
