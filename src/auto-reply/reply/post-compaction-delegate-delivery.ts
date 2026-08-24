@@ -473,12 +473,6 @@ async function maybeFinalizePreviouslyAcceptedDelivery(params: {
   return true;
 }
 
-export function isQueuedPostCompactionDelegateDelivery(
-  entry: QueuedSessionDelivery,
-): entry is QueuedPostCompactionDelegateDelivery {
-  return entry.kind === "postCompactionDelegate";
-}
-
 export async function deliverQueuedPostCompactionDelegate(
   params: {
     entry: QueuedPostCompactionDelegateDelivery;
@@ -635,9 +629,10 @@ export async function deliverQueuedPostCompactionDelegate(
   const delegateWakeOnReturn = params.entry.silentWake ?? true;
   const delegateSilentAnnounce = params.entry.silent ?? delegateWakeOnReturn;
 
-  const artifactFlowId = resolveQueuedPostCompactionContinuationFlowId(params.entry);
   if (artifactMode === "optional" || artifactMode === "required") {
-    assertDelegateArtifactPolicyPrepared(artifactFlowId);
+    assertDelegateArtifactPolicyPrepared(
+      resolveQueuedPostCompactionContinuationFlowId(params.entry),
+    );
   }
 
   const activeDispatch = registerContinuationDelegateDispatchClaim({
@@ -773,10 +768,9 @@ export async function deliverQueuedPostCompactionDelegate(
         ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
       },
     );
-  } catch (error) {
-    await rollbackAcceptedSpawn?.();
-    throw error;
+    rollbackAcceptedSpawn = undefined;
   } finally {
+    await rollbackAcceptedSpawn?.();
     activeDispatch.release();
   }
 }

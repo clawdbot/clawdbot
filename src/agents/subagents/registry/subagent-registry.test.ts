@@ -5754,6 +5754,21 @@ describe("subagent registry seam flow", () => {
     ).toBe(false);
   });
 
+  it("removes an exact provisional registration and cancels its task projection", () => {
+    const runId = "run-registration-handoff-rollback";
+    const childSessionKey = "agent:main:subagent:handoff-rollback";
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey,
+      task: "rollback stale accepted handoff",
+    });
+
+    expect(mod.rollbackSubagentRunRegistration({ runId, childSessionKey })).toBe(true);
+
+    expect(findRequesterRun(runId)).toBeUndefined();
+    expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "cancelled" });
+  });
+
   it("rolls back a killed tombstone when its durable registry write fails", () => {
     mockPendingAgentWait();
     const runId = "run-kill-persist-failure";

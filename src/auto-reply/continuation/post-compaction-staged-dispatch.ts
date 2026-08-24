@@ -7,11 +7,7 @@ import {
   removeUnacceptedDelegateArtifactPolicy,
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
-import { deriveContinuationDelegateChildRunId } from "../../agents/subagent-continuation-ids.js";
-import {
-  rollbackAcceptedSubagentChild,
-  spawnSubagentDirect,
-} from "../../agents/subagents/spawn/subagent-spawn.js";
+import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
 import {
   emitContinuationDisabledSpan,
   resolveContinuationTraceparent,
@@ -92,6 +88,7 @@ export async function dispatchStagedPostCompactionDelegates(
     /** Startup recovery leaves valid pending rows running while disabled. */
     holdPendingWhileDisabled?: boolean;
     finalizeAcceptedFlow?: (params: { flowId: string; chainState: ChainState }) => Promise<void>;
+    rollbackAcceptedFlow?: (params: { flowId: string; childSessionKey: string }) => Promise<void>;
   },
 ): Promise<{
   dispatched: number;
@@ -261,9 +258,9 @@ export async function dispatchStagedPostCompactionDelegates(
             },
           });
         } catch (error) {
-          await rollbackAcceptedSubagentChild({
+          await options.rollbackAcceptedFlow?.({
+            flowId: delegate.flowId,
             childSessionKey: acceptedChildSessionKey,
-            runId: deriveContinuationDelegateChildRunId(delegate.flowId),
           });
           throw error;
         }

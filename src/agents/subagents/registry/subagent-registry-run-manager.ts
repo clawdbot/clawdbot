@@ -50,6 +50,16 @@ class SubagentRunManager extends SubagentLaunchManager {
     }
     this.options.clearPendingLifecycleError(params.runId);
     clearGatewayContextResolver(entry);
+    finalizeTaskRunByRunId({
+      runId: entry.taskRunId ?? entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      status: "cancelled",
+      endedAt: Date.now(),
+      lastEventAt: Date.now(),
+      error: SUBAGENT_KILL_TASK_ERROR,
+      suppressDelivery: true,
+    });
     if (this.options.runs.size === 0) {
       this.options.stopSweeper();
     }

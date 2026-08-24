@@ -33,7 +33,6 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
   deliverQueuedPostCompactionDelegate,
   formatPostCompactionDelegateTaskPreview,
-  isQueuedPostCompactionDelegateDelivery,
   normalizePostCompactionDelegate,
   persistPendingPostCompactionDelegates,
   resolvePostCompactionDelegateDeliveryContext,
@@ -239,14 +238,14 @@ export async function drainPostCompactionDelegateDeliveries(params: {
     log: params.log ?? defaultRecoveryLog,
     stateDir: params.stateDir,
     deliver: async (entry) => {
-      if (!isQueuedPostCompactionDelegateDelivery(entry)) {
+      if (entry.kind !== "postCompactionDelegate") {
         return;
       }
       await deliverQueuedPostCompactionDelegate({ entry }, params.deliveryDeps);
     },
     selectEntry: (entry) => ({
       match:
-        isQueuedPostCompactionDelegateDelivery(entry) &&
+        entry.kind === "postCompactionDelegate" &&
         (params.sessionKey == null || entry.sessionKey === params.sessionKey) &&
         (entryIds.size === 0 || entryIds.has(entry.id)),
       bypassBackoff: entryIds.size > 0,

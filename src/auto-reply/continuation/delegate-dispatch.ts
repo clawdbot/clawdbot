@@ -48,6 +48,7 @@ import {
   DELEGATE_DISPATCH_RETRY_MS,
 } from "./delegate-dispatch-hedge.js";
 import { partitionManagedDelegatesForRuntime } from "./delegate-dispatch-managed-gates.js";
+import { commitPendingDelegateSpawnAcceptance } from "./delegate-spawn-acceptance.js";
 import {
   createContinuationOwnerSessionLoader,
   registerContinuationDelegateDispatchClaim,
@@ -57,7 +58,6 @@ import {
   clearRecoverableDelegatesChainTokensFold,
   consumePendingDelegates,
   markPendingDelegateFailed,
-  markPendingDelegateSpawnAccepted,
   peekEarliestQueuedDelegateDueAt,
   revalidatePendingDelegateForSpawn,
   requeuePendingDelegate,
@@ -70,9 +70,6 @@ export { resetDelegateDispatchHedgesForTests } from "./delegate-dispatch-hedge.j
 
 const log = createSubsystemLogger("continuation/delegate-dispatch");
 
-function formatDelegateTaskForSystemEvent(task: string): string {
-  return task;
-}
 /**
  * Consume and dispatch all pending tool-dispatched delegates for a session.
  *
@@ -289,10 +286,10 @@ export async function dispatchToolDelegates(
     if (!terminalizeRejectedDelegate(failedDelegate, summary)) {
       throw error;
     }
-    enqueueSystemEvent(
-      `[continuation] ${summary}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
-      { sessionKey, trusted: true },
-    );
+    enqueueSystemEvent(`[continuation] ${summary}. Task: ${delegate.task}`, {
+      sessionKey,
+      trusted: true,
+    });
   }
 
   for (const dropped of delegatesOverLimit) {
@@ -309,13 +306,10 @@ export async function dispatchToolDelegates(
       },
     );
     terminalizeRejectedDelegate(failedDelegate, summary);
-    enqueueSystemEvent(
-      `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(dropped.task)}`,
-      {
-        sessionKey,
-        trusted: true,
-      },
-    );
+    enqueueSystemEvent(`[continuation] ${summary} Task: ${dropped.task}`, {
+      sessionKey,
+      trusted: true,
+    });
   }
 
   for (const delegate of delegatesWithinLimit) {
@@ -365,13 +359,10 @@ export async function dispatchToolDelegates(
         },
       );
       markDelegateFailed(failedDelegate, summary);
-      enqueueSystemEvent(
-        `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
-        {
-          sessionKey,
-          trusted: true,
-        },
-      );
+      enqueueSystemEvent(`[continuation] ${summary} Task: ${delegate.task}`, {
+        sessionKey,
+        trusted: true,
+      });
       emitContinuationDisabledSpan({
         chainId: undefined,
         chainStepRemaining: Math.max(0, maxChainLength - currentChainCount),
@@ -427,13 +418,10 @@ export async function dispatchToolDelegates(
         },
       );
       terminalizeRejectedDelegate(failedDelegate, summary);
-      enqueueSystemEvent(
-        `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
-        {
-          sessionKey,
-          trusted: true,
-        },
-      );
+      enqueueSystemEvent(`[continuation] ${summary} Task: ${delegate.task}`, {
+        sessionKey,
+        trusted: true,
+      });
       rejected++;
       continue;
     }
@@ -522,16 +510,11 @@ export async function dispatchToolDelegates(
           { markPlannedChainState: true, markerKind: "advanced" },
         );
         try {
-          const committed = markPendingDelegateSpawnAccepted(
+          await commitPendingDelegateSpawnAcceptance(
             acceptedDelegate,
             childSessionKey,
-            params.persistChainState ? { requireWriteSuccess: true } : {},
+            Boolean(params.persistChainState),
           );
-          if (!committed) {
-            dispatchSpan.setStatus("ERROR", "delegate source acceptance became stale");
-            rejected++;
-            continue;
-          }
         } catch (err) {
           const errorMessage = formatErrorMessage(err);
           log.warn(
@@ -559,10 +542,10 @@ export async function dispatchToolDelegates(
         );
         removeRejectedArtifactPolicy(delegate);
         dispatchSpan.setStatus("ERROR", spawnFence.summary);
-        enqueueSystemEvent(
-          `[continuation] ${spawnFence.summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
-          { sessionKey, trusted: true },
-        );
+        enqueueSystemEvent(`[continuation] ${spawnFence.summary} Task: ${delegate.task}`, {
+          sessionKey,
+          trusted: true,
+        });
         rejected++;
         continue;
       }
@@ -607,7 +590,7 @@ export async function dispatchToolDelegates(
           `[continuation:delegate-spawned] hop=${nextHop}/${maxChainLength} mode=${delegate.mode ?? "normal"} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
         );
         enqueueSystemEvent(
-          `[continuation:delegate-spawned] Spawned turn ${nextHop}/${maxChainLength}: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+          `[continuation:delegate-spawned] Spawned turn ${nextHop}/${maxChainLength}: ${delegate.task}`,
           { sessionKey, trusted: true },
         );
         const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
@@ -619,19 +602,13 @@ export async function dispatchToolDelegates(
         activeDispatch.authority.assertCurrent("final-acceptance", null);
         if (acceptedChildSessionKey) {
           try {
-            const committed = markPendingDelegateSpawnAccepted(
+            await commitPendingDelegateSpawnAcceptance(
               acceptedDelegate,
               acceptedChildSessionKey,
-              params.persistChainState ? { requireWriteSuccess: true } : {},
+              Boolean(params.persistChainState),
+              result.rollbackAccepted,
             );
-            if (!committed) {
-              await result.rollbackAccepted?.();
-              dispatchSpan.setStatus("ERROR", "delegate source acceptance became stale");
-              rejected++;
-              continue;
-            }
           } catch (err) {
-            await result.rollbackAccepted?.();
             const errorMessage = formatErrorMessage(err);
             log.warn(
               `[continuation:delegate-accept-finalize-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} accepted child rolled back: ${errorMessage}`,
@@ -665,7 +642,7 @@ export async function dispatchToolDelegates(
           armManagedSpawnRetry();
           dispatchSpan.setStatus("ERROR", reasonText);
           enqueueSystemEvent(
-            `[continuation] ${summary}; managed work was deferred for retry. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+            `[continuation] ${summary}; managed work was deferred for retry. Task: ${delegate.task}`,
             {
               sessionKey,
               trusted: true,
@@ -680,13 +657,10 @@ export async function dispatchToolDelegates(
         );
         terminalizeRejectedDelegate(failedDelegate, summary);
         dispatchSpan.setStatus("ERROR", reasonText);
-        enqueueSystemEvent(
-          `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
-          {
-            sessionKey,
-            trusted: true,
-          },
-        );
+        enqueueSystemEvent(`[continuation] ${summary} Task: ${delegate.task}`, {
+          sessionKey,
+          trusted: true,
+        });
         rejected++;
       }
     } catch (err) {
@@ -722,7 +696,7 @@ export async function dispatchToolDelegates(
         }
         armManagedSpawnRetry();
         enqueueSystemEvent(
-          `[continuation] ${summary}; managed work was deferred for retry. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
+          `[continuation] ${summary}; managed work was deferred for retry. Task: ${delegate.task}`,
           {
             sessionKey,
             trusted: true,
@@ -739,13 +713,10 @@ export async function dispatchToolDelegates(
         },
       );
       terminalizeRejectedDelegate(failedDelegate, summary);
-      enqueueSystemEvent(
-        `[continuation] ${summary}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
-        {
-          sessionKey,
-          trusted: true,
-        },
-      );
+      enqueueSystemEvent(`[continuation] ${summary}. Task: ${delegate.task}`, {
+        sessionKey,
+        trusted: true,
+      });
       rejected++;
     } finally {
       activeDispatch.release();

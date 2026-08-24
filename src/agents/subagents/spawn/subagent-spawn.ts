@@ -31,7 +31,6 @@ import {
   persistInitialChildRuntimeState,
   type ContinuationSpawnParams,
 } from "../announce/subagent-announce.runtime.js";
-import { getSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import { rollbackSubagentRunRegistration } from "../registry/subagent-registry.js";
 import { removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
@@ -83,26 +82,6 @@ export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-s
 export type SpawnSubagentParams = BaseSpawnSubagentParams & ContinuationSpawnParams;
 export type SpawnSubagentContext = BaseSpawnSubagentContext;
 export type SpawnSubagentResult = BaseSpawnSubagentResult;
-
-export async function rollbackAcceptedSubagentChild(params: {
-  childSessionKey: string;
-  runId?: string;
-}): Promise<boolean> {
-  const registered = getSubagentRunByChildSessionKey(params.childSessionKey);
-  const runId = registered?.runId ?? params.runId;
-  if (!runId) {
-    return false;
-  }
-  rollbackSubagentRunRegistration({
-    runId,
-    childSessionKey: params.childSessionKey,
-  });
-  return await terminateAcceptedCollectorRun({
-    childSessionKey: params.childSessionKey,
-    gatewayRunId: runId,
-    retry: false,
-  });
-}
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
@@ -653,15 +632,8 @@ export async function spawnSubagentDirect(
       },
       afterRegistration: params.collect
         ? undefined
-        : async (_state, runId) => {
-            await emitSpawnLifecycleHooks(runId);
-          },
-      rollbackRegistration: (registration) => {
-        rollbackSubagentRunRegistration({
-          runId: registration.runId,
-          childSessionKey: registration.childSessionKey,
-        });
-      },
+        : (_state, runId) => emitSpawnLifecycleHooks(runId),
+      rollbackRegistration: rollbackSubagentRunRegistration,
     });
     if (!pipelineResult.ok) {
       const runId = pipelineResult.runId ?? childIdem;

@@ -1,5 +1,9 @@
 /** Stateless startup and post-compaction recovery for continuation delegates. */
 
+import { deriveContinuationDelegateChildRunId } from "../../agents/subagent-continuation-ids.js";
+import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { rollbackSubagentRunRegistration } from "../../agents/subagents/registry/subagent-registry.js";
+import { terminateAcceptedCollectorRun } from "../../agents/subagents/spawn/subagent-spawn-cleanup.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -330,6 +334,17 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     const result = await dispatchStagedPostCompactionDelegates(delegates, sessionKey, spawnCtx, {
       chainState,
       holdPendingWhileDisabled: true,
+      rollbackAcceptedFlow: async ({ flowId, childSessionKey }) => {
+        const runId =
+          getSubagentRunByChildSessionKey(childSessionKey)?.runId ??
+          deriveContinuationDelegateChildRunId(flowId);
+        rollbackSubagentRunRegistration({ runId, childSessionKey });
+        await terminateAcceptedCollectorRun({
+          childSessionKey,
+          gatewayRunId: runId,
+          retry: false,
+        });
+      },
       finalizeAcceptedFlow: async ({ flowId, chainState: acceptedChainState }) => {
         const updated = await updateSessionEntry(
           { sessionKey, storePath },
