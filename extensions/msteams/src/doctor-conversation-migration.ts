@@ -26,9 +26,14 @@ function parseLegacyConversationStore(value: unknown): MSTeamsLegacyConversation
   if (!isRecord(value) || value.version !== 1 || !isRecord(value.conversations)) {
     return null;
   }
+  const conversations = Object.fromEntries(
+    Object.entries(value.conversations).filter(
+      (entry): entry is [string, StoredConversationReference] => isRecord(entry[1]),
+    ),
+  );
   return normalizeMSTeamsLegacyConversationStore({
     version: 1,
-    conversations: value.conversations as Record<string, StoredConversationReference>,
+    conversations,
   });
 }
 
