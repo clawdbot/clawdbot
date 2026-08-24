@@ -279,9 +279,9 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
     }
     const record = value as Record<string, unknown>;
     // Result attachments are provider-controlled; trust remains owned by the run/tool policy.
-    const attachment = Object.fromEntries(
+    const attachment: ReplyMediaAttachment = Object.fromEntries(
       Object.entries(record).filter(([key]) => REPLY_ATTACHMENT_METADATA_KEYS.has(key)),
-    ) as ReplyMediaAttachment;
+    );
     for (const key of ["media", "path", "url", "mediaUrl", "filePath", "fileUrl"]) {
       pushString(record[key], attachment);
     }
