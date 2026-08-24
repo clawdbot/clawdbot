@@ -3704,10 +3704,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const items = Array.from({ length: 16 }, (_, index) => {
         const active = index === 15 ? " slash-menu-item--active" : "";
         return `<div class="slash-menu-item${active}" role="option">
-          <span class="slash-menu-leading">
-            <span class="slash-menu-icon">${iconSvg()}</span>
-            <span class="slash-menu-name">$skill_${index + 1}</span>
-          </span>
+          <span class="slash-menu-icon">${iconSvg()}</span>
+          <span class="slash-menu-copy"><span class="slash-menu-name">$skill_${index + 1}</span></span>
         </div>`;
       }).join("");
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>

@@ -20,8 +20,8 @@ async function setComposerCaret(composer: Locator, caret: number) {
 
 type FriendlyTokenGeometry = {
   clipped: number;
-  gap: number;
   label?: string;
+  overlapsNextWord: boolean;
   overflow: number;
 };
 
@@ -194,13 +194,16 @@ suite.define(() => {
                 wordRange.setEnd(sibling, nextWordStart + 1);
                 const wordRect = wordRange.getBoundingClientRect();
                 const tokenRect = token.getBoundingClientRect();
+                const horizontalOverlap =
+                  Math.min(tokenRect.right, wordRect.right) -
+                  Math.max(tokenRect.left, wordRect.left);
+                const verticalOverlap =
+                  Math.min(tokenRect.bottom, wordRect.bottom) -
+                  Math.max(tokenRect.top, wordRect.top);
                 return {
                   clipped: token.scrollWidth - token.clientWidth,
-                  gap:
-                    getComputedStyle(element).direction === "rtl"
-                      ? tokenRect.left - wordRect.right
-                      : wordRect.left - tokenRect.right,
                   label: token.textContent?.trim(),
+                  overlapsNextWord: horizontalOverlap > 0 && verticalOverlap > 0,
                   overflow:
                     Math.max(0, element.getBoundingClientRect().left - tokenRect.left) +
                     Math.max(0, tokenRect.right - element.getBoundingClientRect().right),
@@ -211,14 +214,16 @@ suite.define(() => {
         await composer.fill("Use $bench_skill_01 next and $autoreview later");
         await expect
           .poll(readFriendlyTokenGeometry)
-          .toSatisfy((tokens) =>
-            tokens?.every(
-              (token: FriendlyTokenGeometry) =>
-                token.clipped <= 1 &&
-                token.gap > 0 &&
-                token.overflow <= 1 &&
-                ["Bench Skill 01", "Auto Review"].includes(token.label ?? ""),
-            ),
+          .toSatisfy(
+            (tokens) =>
+              tokens?.length === 2 &&
+              tokens.every(
+                (token: FriendlyTokenGeometry) =>
+                  token.clipped <= 1 &&
+                  !token.overlapsNextWord &&
+                  token.overflow <= 1 &&
+                  ["Bench Skill 01", "Auto Review"].includes(token.label ?? ""),
+              ),
           );
 
         await page.setViewportSize({ width: 390, height: 844 });
@@ -227,22 +232,26 @@ suite.define(() => {
         );
         await expect
           .poll(readFriendlyTokenGeometry)
-          .toSatisfy((tokens) =>
-            tokens?.every(
-              (token: FriendlyTokenGeometry) =>
-                token.clipped <= 1 && token.gap > 0 && token.overflow <= 1,
-            ),
+          .toSatisfy(
+            (tokens) =>
+              tokens?.length === 2 &&
+              tokens.every(
+                (token: FriendlyTokenGeometry) =>
+                  token.clipped <= 1 && !token.overlapsNextWord && token.overflow <= 1,
+              ),
           );
 
         await composer.fill("שלום עם $bench_skill_01 הבא ואז $autoreview מאוחר יותר");
         await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
         await expect
           .poll(readFriendlyTokenGeometry)
-          .toSatisfy((tokens) =>
-            tokens?.every(
-              (token: FriendlyTokenGeometry) =>
-                token.clipped <= 1 && token.gap > 0 && token.overflow <= 1,
-            ),
+          .toSatisfy(
+            (tokens) =>
+              tokens?.length === 2 &&
+              tokens.every(
+                (token: FriendlyTokenGeometry) =>
+                  token.clipped <= 1 && !token.overlapsNextWord && token.overflow <= 1,
+              ),
           );
 
         await page.setViewportSize({ width: 420, height: 780 });
@@ -288,28 +297,6 @@ suite.define(() => {
         ]);
         expect(overlayGeometry).toEqual(textareaGeometry);
 
-        await composer.evaluate((element) => {
-          const surface = element.closest<HTMLElement>(".agent-chat__input");
-          if (!surface) {
-            throw new Error("Expected the composer surface");
-          }
-          surface.dataset.composerLayout = "single-line";
-        });
-        await expect
-          .poll(async () =>
-            Promise.all([
-              composer.evaluate((element) => getComputedStyle(element).whiteSpace),
-              overlay.evaluate((element) => getComputedStyle(element).whiteSpace),
-            ]),
-          )
-          .toEqual(["nowrap", "nowrap"]);
-
-        await composer.evaluate((element) => {
-          const surface = element.closest<HTMLElement>(".agent-chat__input");
-          if (surface) {
-            surface.dataset.composerLayout = "multiline";
-          }
-        });
         await expect
           .poll(() => overlay.evaluate((element) => getComputedStyle(element).whiteSpace))
           .toBe("pre-wrap");

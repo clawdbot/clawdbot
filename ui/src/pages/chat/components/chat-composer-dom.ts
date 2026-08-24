@@ -329,6 +329,22 @@ export function scrollActiveMenuOptionIntoView(activeId: string | null): void {
   });
 }
 
+export function syncComposerMenuScroll(element: Element | undefined): void {
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+  const sync = () => {
+    const scrollable = element.scrollHeight > element.clientHeight + 1;
+    element.dataset.scrollable = String(scrollable);
+    element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
+    element.dataset.atEnd = String(
+      !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+    );
+  };
+  sync();
+  requestAnimationFrame(sync);
+}
+
 export function paneDomId(paneId: string, suffix: string): string {
   return `chat-${encodeURIComponent(paneId)}-${suffix}`;
 }

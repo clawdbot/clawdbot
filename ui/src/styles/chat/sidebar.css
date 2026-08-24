@@ -140,7 +140,6 @@ openclaw-chat-sidebar-region,
 /* Canonical rail header contract. The header owns geometry; actions are bare
    glyphs with an invisible hit area so generic button chrome cannot leak in. */
 .rail-header {
-  box-sizing: border-box;
   display: flex;
   height: var(--rail-header-height);
   min-height: var(--rail-header-height);

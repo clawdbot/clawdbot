@@ -615,11 +615,7 @@ function getThinkingReasoningValueLabel(container: Element): string {
     "[data-chat-thinking-preview-committed]:not([hidden]), " +
       "[data-chat-thinking-preview-index]:not([hidden])",
   );
-  return (
-    preview?.textContent?.trim() ??
-    container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ??
-    ""
-  );
+  return preview?.textContent?.trim() ?? "";
 }
 
 function requireElement(container: Element, selector: string, label: string): Element {
