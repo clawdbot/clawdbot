@@ -402,6 +402,86 @@ suite.define(() => {
     );
   });
 
+  it("keeps unrelated active sessions out of the involving-me filter", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: sessionOwnerProofArtifactDir,
+              size: { height: 800, width: 1200 },
+            },
+          }
+        : {}),
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const allSessions = sessionsList(["profile-ada", "profile-bob"]);
+    const gateway = await installMockGateway(currentPage, {
+      hasMultipleSessionSharingIdentities: true,
+      sessionKey: "agent:main:ada",
+      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": allSessions },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
+    await gateway.setMethodResponse("sessions.list", {
+      ...allSessions,
+      count: 1,
+      sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
+    });
+    const menu = await openSidebarSortMenu(currentPage);
+    await menu.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "involving-me" } },
+        }),
+      ),
+    );
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("sessions.list")).some(
+          (request) =>
+            (request.params as { involvingMe?: unknown } | undefined)?.involvingMe === true,
+        ),
+      )
+      .toBe(true);
+    await captureSessionOwnerProof(currentPage, "02-involving-me-before-active-event.png");
+
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "agent:main:bob",
+      key: "agent:main:bob",
+      kind: "direct",
+      updatedAt: 3,
+      archived: false,
+      hasActiveRun: true,
+      status: "running",
+      owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
+      participants: [],
+      participantCount: 0,
+    });
+
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
+    const filteredMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(filteredMenu.locator('[value="involving-me"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureSessionOwnerProof(currentPage, "03-involving-me-after-active-event.png");
+  });
+
   it("renders zero ownership chrome for a single owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
