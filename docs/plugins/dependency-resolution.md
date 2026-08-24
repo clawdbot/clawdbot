@@ -80,22 +80,21 @@ npm may hoist transitive dependencies to the per-plugin project's
 root before trusting the install, and removes that project on uninstall, so
 hoisted runtime dependencies stay inside that plugin's cleanup boundary.
 
-Published npm plugin packages can ship `npm-shrinkwrap.json`; npm uses that
-publishable lockfile during install, and OpenClaw's managed npm project root
-supports it through the normal install path. OpenClaw-owned publishable
-plugin packages must include a package-local shrinkwrap generated from that
-package's published dependency graph:
+OpenClaw-owned npm plugin packages never ship npm lockfiles. The repository
+uses `pnpm-lock.yaml` as its committed product dependency review boundary, then
+generates npm package locks only in temporary directories to validate the
+publishable dependency graph:
 
 ```bash
-pnpm deps:shrinkwrap:generate
-pnpm deps:shrinkwrap:check
+pnpm deps:npm-lock:check
+pnpm deps:npm-lock:check:changed
 ```
 
-The generator strips plugin `devDependencies`, applies the workspace override
-policy, and writes `extensions/<id>/npm-shrinkwrap.json` for each plugin with
-`openclaw.release.publishToNpm: true`. Third-party plugin packages may also
-ship a shrinkwrap; OpenClaw does not require one for community packages, but
-npm respects it when present.
+The checker strips plugin `devDependencies`, applies the workspace override
+policy, and rejects generated versions absent from `pnpm-lock.yaml`. Nothing
+is written into the checkout. Third-party plugin packages may still contain
+lockfiles according to their own packaging policy; OpenClaw's installer leaves
+that npm behavior to the installed npm version.
 
 Before treating a local package as release-candidate proof, inspect the
 tarball that will be installed:
@@ -125,11 +124,13 @@ name list, strips dev-only workspace metadata from the published manifest,
 runs a script-free npm install for the package-local runtime dependencies,
 then packs or publishes the plugin tarball with those dependency files
 included. Native-heavy packages (Codex, ACPX, Copilot, llama.cpp,
-memory-lancedb, Tlon) opt out with
+memory-lancedb, Microsoft Teams, Tlon) opt out with
 `openclaw.release.bundleRuntimeDependencies: false`; they still ship a
-shrinkwrap, but npm resolves runtime dependencies during install instead of
-embedding every platform binary in the plugin tarball. The root `openclaw`
-package does not bundle its full dependency tree.
+precisely pinned manifest, but npm resolves runtime dependencies during install
+instead of embedding every platform binary in the plugin tarball. The root
+`openclaw` package also resolves dependencies at install time and does not
+bundle its full dependency tree. See
+[dependency locking](/gateway/security/dependency-locking).
 
 Plugins that import `openclaw/plugin-sdk/*` declare `openclaw` as a peer
 dependency. OpenClaw does not let npm install a separate registry copy of the
@@ -200,9 +201,15 @@ the repository root does not prepare bundled plugin dependencies.
 
 | Install shape                    | Bundled plugin location               | Dependency owner                                                     |
 | -------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
-| `npm install -g openclaw`        | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
+| Global npm install               | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
 | Git checkout plus `pnpm install` | `extensions/<id>` workspace packages  | The pnpm workspace, including each plugin package's own dependencies |
 | `openclaw plugins install ...`   | Managed npm project/git/ClawHub root  | The plugin install/update flow                                       |
+
+For the global npm row, use
+`npm install -g openclaw --allow-scripts=openclaw` on npm 12 or npm 11.16+.
+On npm 11.15 and earlier, omit `--allow-scripts=openclaw`. Plugin dependency
+convergence remains intentionally script-disabled and continues to use the
+`--ignore-scripts` commands above.
 
 ## Legacy cleanup
 

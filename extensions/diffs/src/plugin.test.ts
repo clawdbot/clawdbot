@@ -20,6 +20,23 @@ afterAll(() => {
 });
 
 describe("diffs plugin language-pack discovery", () => {
+  it("skips runtime registration while collecting CLI metadata", () => {
+    const registerTool = vi.fn();
+    const registerHttpRoute = vi.fn();
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      registrationMode: "cli-metadata",
+      registerTool,
+      registerHttpRoute,
+      on,
+    });
+
+    expect(() => registerDiffsPlugin(api)).not.toThrow();
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(registerHttpRoute).not.toHaveBeenCalled();
+    expect(on).not.toHaveBeenCalled();
+  });
+
   it.each(["assets", "dist/assets"])(
     "requires both the sibling manifest and generated runtime asset in %s",
     (assetDir) => {
@@ -35,6 +52,7 @@ describe("diffs plugin language-pack discovery", () => {
           '{"id":"diffs-language-pack"}\n',
         );
         const config = { plugins: {} } as OpenClawConfig;
+        const openBlobStore = vi.fn(() => createBlobStoreStub());
         let registeredToolFactory:
           | ((
               ctx: OpenClawPluginToolContext,
@@ -43,13 +61,23 @@ describe("diffs plugin language-pack discovery", () => {
         const api = createTestPluginApi({
           rootDir: diffsRoot,
           config,
-          runtime: { config: { current: () => config } } as never,
+          runtime: {
+            config: { current: () => config },
+            state: { openBlobStore },
+          } as never,
           registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
             registeredToolFactory = typeof tool === "function" ? tool : () => tool;
           },
         });
 
         registerDiffsPlugin(api);
+        expect(openBlobStore).toHaveBeenCalledWith({
+          namespace: "diff-artifacts",
+          maxEntries: 2_048,
+          maxBytesPerEntry: 32 * 1024 * 1024,
+          maxBytesPerNamespace: 256 * 1024 * 1024,
+          overflowPolicy: "reject-new",
+        });
         const context = {
           agentId: "main",
           sessionId: "session-1",
@@ -76,3 +104,15 @@ describe("diffs plugin language-pack discovery", () => {
     },
   );
 });
+
+function createBlobStoreStub() {
+  return {
+    register: vi.fn(),
+    registerIfAbsent: vi.fn(),
+    lookup: vi.fn(),
+    entries: vi.fn(),
+    delete: vi.fn(),
+    deleteExpired: vi.fn(),
+    clear: vi.fn(),
+  };
+}

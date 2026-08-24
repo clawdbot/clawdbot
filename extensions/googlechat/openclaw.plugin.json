@@ -1,5 +1,8 @@
 {
   "id": "googlechat",
+  "doctorContract": {
+    "configRepair": true
+  },
   "name": "Google Chat",
   "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
   "icon": "https://cdn.simpleicons.org/googlechat",
@@ -7,9 +10,6 @@
     "onStartup": false
   },
   "channels": ["googlechat"],
-  "channelEnvVars": {
-    "googlechat": ["GOOGLE_CHAT_SERVICE_ACCOUNT", "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

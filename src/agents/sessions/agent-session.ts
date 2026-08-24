@@ -2,7 +2,6 @@ import { AgentSessionTree } from "./agent-session-tree.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 
 export * from "./agent-session-types.js";
-export { parseSkillBlock, type ParsedSkillBlock } from "./agent-session-utils.js";
 
 /**
  * Core abstraction for agent lifecycle and session management.

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "../plugins/discovery.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   applyPluginAutoEnable,
   detectPluginAutoEnableCandidates,
@@ -106,6 +107,54 @@ describe("applyPluginAutoEnable core", () => {
         channelId: "slack",
       },
     ]);
+  });
+
+  it("keeps configured channel candidates when plugin config is already present", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          discord: {
+            enabled: true,
+            accounts: { default: { token: "redacted" } },
+          },
+        },
+        plugins: {
+          entries: {
+            discord: { config: {} },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([{ id: "discord", channels: ["discord"], origin: "global" }]),
+    });
+
+    expect(result.config.plugins?.entries?.discord).toEqual({ config: {}, enabled: true });
+    expect(result.changes).toContain("Discord configured, enabled automatically.");
+  });
+
+  it("keeps configured channel candidates under a material plugin allowlist", () => {
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {
+        channels: { discord: { token: "redacted" } },
+        plugins: {
+          allow: ["existing"],
+          entries: {
+            existing: { enabled: true },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "discord", channels: ["discord"], origin: "global" },
+        { id: "existing", channels: [], origin: "global" },
+      ]),
+    });
+
+    expect(candidates).toContainEqual({
+      pluginId: "discord",
+      kind: "channel-configured",
+      channelId: "discord",
+    });
   });
 
   it("reuses policy-compatible current manifest registry when runtime config differs", () => {
@@ -221,30 +270,43 @@ describe("applyPluginAutoEnable core", () => {
     ).toBe("google auth configured");
   });
 
-  it("auto-enables external speech providers selected by TTS config", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        messages: { tts: { provider: "gradium" } },
-        plugins: { allow: ["telegram"] },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "gradium",
-          channels: [],
-          contracts: { speechProviders: ["gradium"] },
-          origin: "global",
+  it.each([
+    ["TTS", { tts: { provider: "gradium" } }, "gradium", "gradium", "speechProviders"],
+    [
+      "sole Talk speech alias",
+      { talk: { providers: { "gradium-voice": {} } } },
+      "gradium-voice",
+      "gradium",
+      "speechProviders",
+    ],
+    [
+      "Talk realtime alias",
+      { talk: { realtime: { provider: "grok-voice", providers: { "grok-voice": {} } } } },
+      "grok-voice",
+      "xai",
+      "realtimeVoiceProviders",
+    ],
+  ] as const)(
+    "auto-enables the manifest owner selected by %s",
+    (_surface, config, id, owner, key) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          ...config,
+          plugins: { allow: ["telegram"] },
         },
-      ]),
-    });
+        env,
+        manifestRegistry: makeRegistry([
+          { id: owner, channels: [], contracts: { [key]: [owner, id] }, origin: "global" },
+        ]),
+      });
 
-    expect(result.config.plugins?.allow).toEqual(["telegram", "gradium"]);
-    expect(result.config.plugins?.entries?.gradium).toEqual({ enabled: true });
-    expect(result.autoEnabledReasons).toEqual({
-      gradium: ["gradium speech provider selected"],
-    });
-    expect(result.changes).toContain("gradium speech provider selected, enabled automatically.");
-  });
+      const reason = `${id} ${key === "speechProviders" ? "speech" : "realtime voice"} provider selected`;
+      expect(result.config.plugins?.allow).toEqual(["telegram", owner]);
+      expect(result.config.plugins?.entries?.[owner]).toEqual({ enabled: true });
+      expect(result.autoEnabledReasons).toEqual({ [owner]: [reason] });
+      expect(result.changes).toContain(`${reason}, enabled automatically.`);
+    },
+  );
 
   it("treats an undefined config as empty", () => {
     const result = applyPluginAutoEnable({
@@ -293,7 +355,6 @@ describe("applyPluginAutoEnable core", () => {
         channels: { slack: { botToken: "x" } },
         plugins: {
           allow: [],
-          bundledDiscovery: "compat",
         },
       },
       env,
@@ -512,40 +573,24 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
-  it("auto-enables an opt-in provider plugin when an explicit provider model is configured", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        agents: {
-          defaults: {
-            model: "codex/gpt-5.4",
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([{ id: "codex", channels: [], providers: ["codex"] }]),
-    });
-
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toBeUndefined();
-    expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
-  });
-
   it("auto-enables provider plugins referenced by media generation model fallbacks", () => {
     const result = applyPluginAutoEnable({
       config: {
         agents: {
           defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-1",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
-            },
-            videoGenerationModel: {
-              primary: "openai/sora-2",
-              fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
-            },
-            musicGenerationModel: {
-              primary: "minimax/music-2.6",
-              fallbacks: ["google/lyria-3-clip-preview"],
+            mediaModels: {
+              image: {
+                primary: "openai/gpt-image-1",
+                fallbacks: ["google/gemini-3-pro-image-preview"],
+              },
+              video: {
+                primary: "openai/sora-2",
+                fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
+              },
+              music: {
+                primary: "minimax/music-2.6",
+                fallbacks: ["google/lyria-3-clip-preview"],
+              },
             },
           },
         },
@@ -642,35 +687,6 @@ describe("applyPluginAutoEnable core", () => {
                 },
               },
             },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai"] },
-        {
-          id: "codex",
-          channels: [],
-          providers: ["codex"],
-          activation: { onAgentHarnesses: ["codex"] },
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.changes).toEqual([
-      "openai/gpt-5.5 model configured, enabled automatically.",
-      "codex agent runtime configured, enabled automatically.",
-    ]);
-  });
-
-  it("auto-enables Codex when OpenAI agent models use the implicit runtime default", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
           },
         },
       },
@@ -1088,6 +1104,68 @@ describe("applyPluginAutoEnable core", () => {
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
   });
 
+  it("fingerprints identical snapshots once per plugin metadata lifecycle", () => {
+    const traversals = { candidates: 0, config: 0, env: 0, plugins: 0 };
+    const config = new Proxy<OpenClawConfig>(
+      {},
+      {
+        ownKeys: (target) => {
+          traversals.config += 1;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const envSnapshot = new Proxy(makeIsolatedEnv(), {
+      ownKeys: (target) => {
+        traversals.env += 1;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const discovery: PluginDiscoveryResult = {
+      candidates: new Proxy([], {
+        get: (target, property, receiver) => {
+          if (property === "map") {
+            traversals.candidates += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+      diagnostics: [],
+    };
+    const manifestRegistry = makeRegistry([]);
+    manifestRegistry.plugins = new Proxy(manifestRegistry.plugins, {
+      get: (target, property, receiver) => {
+        if (property === "map") {
+          traversals.plugins += 1;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const first = applyPluginAutoEnable({
+      config,
+      discovery,
+      env: envSnapshot,
+      manifestRegistry,
+    });
+    const firstTraversalCounts = { ...traversals };
+
+    for (let index = 0; index < 20; index += 1) {
+      expect(applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry })).toBe(
+        first,
+      );
+    }
+    expect(traversals).toEqual(firstTraversalCounts);
+
+    clearPluginMetadataLifecycleCaches();
+    applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry });
+
+    expect(traversals.config).toBeGreaterThan(firstTraversalCounts.config);
+    expect(traversals.env).toBeGreaterThan(firstTraversalCounts.env);
+    expect(traversals.candidates).toBeGreaterThan(firstTraversalCounts.candidates);
+    expect(traversals.plugins).toBeGreaterThan(firstTraversalCounts.plugins);
+  });
+
   it("does not reuse same-turn results for omitted metadata after current snapshot replacement", () => {
     const config: OpenClawConfig = {
       channels: { apn: { someKey: "value" } },
@@ -1165,7 +1243,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
   });
 
-  it("does not reuse same-turn auto-enable results after config mutates in place", () => {
+  it("refreshes auto-enable results after config mutates at a lifecycle boundary", () => {
     const config: OpenClawConfig = {};
     const manifestRegistry = makeRegistry([{ id: "apn-channel", channels: ["apn"] }]);
 
@@ -1176,6 +1254,7 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
     config.channels = { apn: { someKey: "value" } };
+    clearPluginMetadataLifecycleCaches();
     const second = applyPluginAutoEnable({
       config,
       discovery: emptyDiscovery,
@@ -1188,7 +1267,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(second).not.toBe(first);
   });
 
-  it("does not reuse same-turn auto-enable results after registry mutates in place", () => {
+  it("refreshes auto-enable results after registry mutates at a lifecycle boundary", () => {
     const config: OpenClawConfig = {
       channels: { apn: { someKey: "value" } },
     };
@@ -1205,6 +1284,7 @@ describe("applyPluginAutoEnable core", () => {
       registry.plugins.length,
       ...makeRegistry([{ id: "apn-channel", channels: ["apn"] }]).plugins,
     );
+    clearPluginMetadataLifecycleCaches();
     const second = applyPluginAutoEnable({
       config,
       discovery: emptyDiscovery,
@@ -1217,7 +1297,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(second).not.toBe(first);
   });
 
-  it("does not reuse same-turn auto-enable results after discovery mutates in place", () => {
+  it("refreshes auto-enable results after discovery mutates at a lifecycle boundary", () => {
     const config: OpenClawConfig = {};
     const mutableDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
     const manifestRegistry = makeRegistry([
@@ -1239,6 +1319,7 @@ describe("applyPluginAutoEnable core", () => {
         channelId: "cache-channel",
       }),
     );
+    clearPluginMetadataLifecycleCaches();
     const second = applyPluginAutoEnable({
       config,
       discovery: mutableDiscovery,
@@ -1251,7 +1332,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(second).not.toBe(first);
   });
 
-  it("does not reuse same-turn auto-enable results after env mutates in place", () => {
+  it("refreshes auto-enable results after env mutates at a lifecycle boundary", () => {
     const config: OpenClawConfig = {
       plugins: {
         entries: {
@@ -1272,6 +1353,7 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
     mutableEnv.OPENCLAW_TEST_CACHE_INPUT = "changed";
+    clearPluginMetadataLifecycleCaches();
     const second = applyPluginAutoEnable({
       config,
       discovery: emptyDiscovery,
@@ -1289,7 +1371,7 @@ describe("applyPluginAutoEnable core", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
-        plugins: { entries: { slack: { enabled: false } } },
+        plugins: { entries: { slack: { enabled: false, config: {} } } },
       },
       env,
     });

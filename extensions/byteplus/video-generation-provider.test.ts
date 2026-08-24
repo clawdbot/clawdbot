@@ -1,5 +1,6 @@
 // Byteplus tests cover video generation provider plugin behavior.
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { streamedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Submit/poll transport is mocked locally so each test can inject the BytePlus task JSON
@@ -19,36 +20,88 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
   const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
-  const resolveTimeoutMs = (timeoutMs: unknown): number =>
-    typeof timeoutMs === "function" ? (timeoutMs() as number) : ((timeoutMs as number) ?? 60_000);
   return {
     // REAL byte-bounded JSON reader under test — not stubbed.
+    assertProviderBinaryResponseContent: actual.assertProviderBinaryResponseContent,
     readProviderJsonResponse: actual.readProviderJsonResponse,
     postJsonRequest: postJsonRequestMock,
-    fetchProviderOperationResponse: async (params: {
+    pollProviderOperationJson: async (params: {
       url: string;
-      init?: RequestInit;
-      timeoutMs?: unknown;
-      fetchFn: typeof fetch;
-    }) => fetchWithTimeoutMock(params.url, params.init ?? {}, resolveTimeoutMs(params.timeoutMs)),
+      headers: Headers;
+      defaultTimeoutMs: number;
+      maxAttempts: number;
+      requestFailedMessage: string;
+      timeoutMessage: string;
+      isComplete: (payload: unknown) => boolean;
+      getFailureMessage?: (payload: unknown) => string | undefined;
+    }) => {
+      for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+        const response = await fetchWithTimeoutMock(
+          params.url,
+          { method: "GET", headers: params.headers },
+          params.defaultTimeoutMs,
+        );
+        const payload = await actual.readProviderJsonResponse(
+          response,
+          params.requestFailedMessage,
+        );
+        if (params.isComplete(payload)) {
+          return payload;
+        }
+        const failureMessage = params.getFailureMessage?.(payload);
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
+      }
+      throw new Error(params.timeoutMessage);
+    },
     fetchProviderDownloadResponse: async (params: {
       url: string;
       init?: RequestInit;
-      timeoutMs?: unknown;
+      deadline: { deadlineAtMs?: number; timeoutMs?: number };
       fetchFn: typeof fetch;
-    }) => fetchWithTimeoutMock(params.url, params.init ?? {}, resolveTimeoutMs(params.timeoutMs)),
+    }) =>
+      fetchWithTimeoutMock(
+        params.url,
+        params.init ?? {},
+        params.deadline.deadlineAtMs === undefined
+          ? (params.deadline.timeoutMs ?? 60_000)
+          : Math.max(1, params.deadline.deadlineAtMs - Date.now()),
+      ),
     assertOkOrThrowHttpError: async () => {},
     createProviderOperationDeadline: ({
       label,
       timeoutMs,
     }: {
       label: string;
-      timeoutMs?: number;
-    }) => ({ label, timeoutMs }),
+      timeoutMs?: number | (() => number);
+    }) => {
+      const resolvedTimeoutMs = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+      return {
+        label,
+        timeoutMs: resolvedTimeoutMs,
+        deadlineAtMs:
+          typeof resolvedTimeoutMs === "number" ? Date.now() + resolvedTimeoutMs : undefined,
+      };
+    },
     createProviderOperationTimeoutResolver:
-      ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-      () =>
+      ({
+        deadline,
         defaultTimeoutMs,
+      }: {
+        deadline: { deadlineAtMs?: number; label: string; timeoutMs?: number };
+        defaultTimeoutMs: number;
+      }) =>
+      () => {
+        if (typeof deadline.deadlineAtMs !== "number") {
+          return defaultTimeoutMs;
+        }
+        const remainingMs = deadline.deadlineAtMs - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`);
+        }
+        return Math.min(defaultTimeoutMs, remainingMs);
+      },
     resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,
     resolveProviderHttpRequestConfig: (params: {
@@ -62,7 +115,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       headers: new Headers(params.defaultHeaders),
       dispatcherPolicy: undefined,
     }),
-    waitProviderOperationPollInterval: async () => {},
   };
 });
 
@@ -76,6 +128,7 @@ afterEach(() => {
   postJsonRequestMock.mockReset();
   fetchWithTimeoutMock.mockReset();
   resolveApiKeyForProviderMock.mockClear();
+  vi.useRealTimers();
 });
 
 function mockSuccessfulBytePlusTask(params?: { model?: string }) {
@@ -93,7 +146,7 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
         content: {
           video_url: "https://example.com/byteplus.mp4",
         },
-        model: params?.model ?? "seedance-1-0-lite-t2v-250428",
+        model: params?.model ?? "seedance-1-0-pro-250528",
       }),
     )
     .mockResolvedValueOnce({
@@ -137,20 +190,6 @@ function streamedVideoResponse(bytes: string): Response {
   );
 }
 
-// BytePlus submit/poll task JSON is now read through the byte-bounded reader, so the
-// mocked responses must expose a real readable body (not just a json() shortcut).
-function streamedJsonResponse(payload: unknown): Response {
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
-        controller.close();
-      },
-    }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  );
-}
-
 // Builds a JSON body larger than the shared 16 MiB readProviderJsonResponse cap so the
 // bounded reader cancels the stream mid-flight; if the cap were removed the reader would
 // buffer the whole advertised payload before parsing. Tracks how many bytes were pulled
@@ -186,7 +225,10 @@ function makeOversizedJsonStream(): {
 
 describe("byteplus video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildBytePlusVideoGenerationProvider());
+    const provider = buildBytePlusVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.defaultModel).toBe("seedance-1-0-pro-250528");
+    expect(provider.models).toEqual(["seedance-1-0-pro-250528", "seedance-1-5-pro-251215"]);
   });
 
   it("creates a content-generation task, polls, and downloads the video", async () => {
@@ -195,7 +237,7 @@ describe("byteplus video generation provider", () => {
     const provider = buildBytePlusVideoGenerationProvider();
     const result = await provider.generateVideo({
       provider: "byteplus",
-      model: "seedance-1-0-lite-t2v-250428",
+      model: "seedance-1-0-pro-250528",
       prompt: "A lantern floats upward into the night sky",
       cfg: {},
     });
@@ -213,6 +255,127 @@ describe("byteplus video generation provider", () => {
     expect(video.fileName).toBe("video-1.webm");
     const metadata = result.metadata as Record<string, unknown>;
     expect(metadata.taskId).toBe("task_123");
+  });
+
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as generated video", async ({ contentType, body }) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-invalid-download" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-invalid-download",
+          status: "succeeded",
+          content: { video_url: "https://example.com/invalid.mp4" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(body, { headers: { "content-type": contentType } }));
+
+    await expect(
+      buildBytePlusVideoGenerationProvider().generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-pro-250528",
+        prompt: "invalid download",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus generated video download: malformed video response");
+  });
+
+  it("cancels the unread response body when a generated-video MIME type is rejected", async () => {
+    const canceled = vi.fn();
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-open-response" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-open-response",
+          status: "succeeded",
+          content: { video_url: "https://example.com/invalid.mp4" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+            },
+            cancel: canceled,
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+
+    await expect(
+      buildBytePlusVideoGenerationProvider().generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-pro-250528",
+        prompt: "open invalid response",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus generated video download: malformed video response");
+    expect(canceled).toHaveBeenCalledOnce();
+  });
+
+  it("releases a rejected download body without awaiting a debug-capture tee branch", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-captured-response" }),
+      release: vi.fn(async () => {}),
+    });
+    // The debug proxy clones every captured response, so the caller-facing body is one
+    // branch of a live tee. Cancelling such a branch settles only once both branches
+    // cancel, so awaiting it here would hang the download instead of surfacing the error.
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+        },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+    const captureClone = response.clone();
+    const captureReader = captureClone.body?.getReader();
+    await captureReader?.read();
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-captured-response",
+          status: "succeeded",
+          content: { video_url: "https://example.com/invalid.mp4" },
+        }),
+      )
+      .mockResolvedValueOnce(response);
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(
+        Promise.race([
+          buildBytePlusVideoGenerationProvider().generateVideo({
+            provider: "byteplus",
+            model: "seedance-1-0-pro-250528",
+            prompt: "captured invalid response",
+            cfg: {},
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              reject(new Error("BytePlus download waited for a captured response clone"));
+            }, 500);
+          }),
+        ]),
+      ).rejects.toThrow("BytePlus generated video download: malformed video response");
+    } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+      await captureReader?.cancel().catch(() => undefined);
+    }
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
@@ -236,20 +399,65 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "short video",
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("BytePlus generated video download exceeds 1 bytes");
   });
 
-  it("switches t2v image requests to i2v models and lowercases resolution", async () => {
-    mockSuccessfulBytePlusTask({ model: "seedance-1-0-lite-i2v-250428" });
+  it("shares one wall-clock deadline across download headers and body", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task_slow_download" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task_slow_download",
+          status: "succeeded",
+          content: { video_url: "https://example.com/slow.mp4" },
+        }),
+      )
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(1_090);
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async pull(controller) {
+              controller.enqueue(new Uint8Array([1]));
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 20);
+              });
+            },
+          }),
+          { headers: { "content-type": "video/mp4" } },
+        );
+      });
+
+    const result = buildBytePlusVideoGenerationProvider().generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      prompt: "slow download",
+      timeoutMs: 100,
+      cfg: {},
+    });
+    const assertion = expect(result).rejects.toThrow(
+      "BytePlus generated video download timed out after 100ms",
+    );
+
+    await vi.advanceTimersByTimeAsync(11);
+    await assertion;
+  });
+
+  it("keeps the unified model for image requests and lowercases resolution", async () => {
+    mockSuccessfulBytePlusTask({ model: "seedance-1-0-pro-250528" });
 
     const provider = buildBytePlusVideoGenerationProvider();
     await provider.generateVideo({
       provider: "byteplus",
-      model: "seedance-1-0-lite-t2v-250428",
+      model: "seedance-1-0-pro-250528",
       prompt: "Animate this still image",
       resolution: "720P",
       inputImages: [{ url: "https://example.com/first-frame.png" }],
@@ -257,7 +465,7 @@ describe("byteplus video generation provider", () => {
     });
 
     expect(requireBytePlusPostBody()).toEqual({
-      model: "seedance-1-0-lite-i2v-250428",
+      model: "seedance-1-0-pro-250528",
       resolution: "720p",
       content: [
         { type: "text", text: "Animate this still image" },
@@ -351,7 +559,7 @@ describe("byteplus video generation provider", () => {
     const provider = buildBytePlusVideoGenerationProvider();
     const result = await provider.generateVideo({
       provider: "byteplus",
-      model: "seedance-1-0-lite-t2v-250428",
+      model: "seedance-1-0-pro-250528",
       prompt: "A lantern floats upward into the night sky",
       cfg: {},
     });
@@ -378,7 +586,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "bad create response",
         cfg: {},
       }),
@@ -404,7 +612,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "missing status",
         cfg: {},
       }),
@@ -428,7 +636,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "malformed content",
         cfg: {},
       }),
@@ -450,7 +658,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "oversized submit response",
         cfg: {},
       }),
@@ -481,7 +689,7 @@ describe("byteplus video generation provider", () => {
     await expect(
       provider.generateVideo({
         provider: "byteplus",
-        model: "seedance-1-0-lite-t2v-250428",
+        model: "seedance-1-0-pro-250528",
         prompt: "oversized poll response",
         cfg: {},
       }),

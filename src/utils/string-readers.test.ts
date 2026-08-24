@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isStringOption, readStringAlias, readTrimmedStringAlias } from "./string-readers.js";
+import { isStringOption, readTrimmedStringAlias } from "./string-readers.js";
 
 describe("string readers", () => {
   it("checks caller-owned string options from arrays and sets", () => {
@@ -12,7 +12,7 @@ describe("string readers", () => {
     expect(isStringOption(1, modes)).toBe(false);
   });
 
-  it("reads aliases with explicit raw and trimmed contracts", () => {
+  it("reads trimmed aliases", () => {
     const record = {
       empty: "",
       spaced: "  value  ",
@@ -20,8 +20,6 @@ describe("string readers", () => {
       invalid: 1,
     };
 
-    expect(readStringAlias(record, ["invalid", "empty", "fallback"])).toBe("");
-    expect(readStringAlias(record, ["spaced"])).toBe("  value  ");
     expect(readTrimmedStringAlias(record, ["invalid", "empty", "spaced", "fallback"])).toBe(
       "value",
     );

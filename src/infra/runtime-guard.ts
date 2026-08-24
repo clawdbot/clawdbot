@@ -1,13 +1,23 @@
 // Validates the current runtime against OpenClaw's Node engine floor.
 import process from "node:process";
+import { format } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  isNodeVersionAtLeast,
+  isSupportedOpenClawNodeVersion,
+  parseNodeReleaseVersion,
+} from "../../node-version.mjs";
+import { formatConsoleDiagnosticBlock } from "../logging/json-console-line.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-// Runtime validation precedes terminal setup. Keep this default path from
-// pulling terminal-core into every CLI startup command.
+// Runtime validation precedes console capture. Keep this direct sink aligned
+// with configured JSONL output without pulling in the full logger.
 const defaultRuntime: RuntimeEnv = {
   log: (...args) => console.log(...args),
-  error: (...args) => console.error(...args),
+  error: (...args) => {
+    const message = format(...args);
+    process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }));
+  },
   exit: (code) => {
     process.exit(code);
   },
@@ -21,9 +31,6 @@ type Semver = {
   patch: number;
 };
 
-const MIN_NODE_22: Semver = { major: 22, minor: 22, patch: 3 };
-const MIN_NODE_24: Semver = { major: 24, minor: 15, patch: 0 };
-const MIN_NODE_25: Semver = { major: 25, minor: 9, patch: 0 };
 const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
@@ -33,6 +40,7 @@ type RuntimeDetails = {
   version: string | null;
   execPath: string | null;
   pathEnv: string;
+  hasNodeSqlite: boolean;
 };
 
 const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)/;
@@ -55,7 +63,7 @@ export function parseSemver(version: string | null): Semver | null {
 }
 
 /** Compares parsed semver triples against an inclusive minimum version. */
-export function isAtLeast(version: Semver | null, minimum: Semver): boolean {
+function isAtLeast(version: Semver | null, minimum: Semver): boolean {
   if (!version) {
     return false;
   }
@@ -79,7 +87,18 @@ function detectRuntime(): RuntimeDetails {
     version,
     execPath: process.execPath ?? null,
     pathEnv: process.env.PATH ?? "(not set)",
+    hasNodeSqlite: currentRuntimeProvidesNodeSqlite(),
   };
+}
+
+// Bun >=1.4 (Rust rewrite) ships node:sqlite; older Buns do not. Feature-probe
+// instead of version-gating so the guard tracks the actual runtime capability.
+function currentRuntimeProvidesNodeSqlite(): boolean {
+  try {
+    return Boolean(process.getBuiltinModule?.("node:sqlite"));
+  } catch {
+    return false;
+  }
 }
 
 /** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
@@ -87,25 +106,20 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
   if (details.kind === "node") {
     return isSupportedNodeVersion(details.version);
   }
+  if (details.kind === "bun") {
+    return details.hasNodeSqlite;
+  }
   return false;
+}
+
+/** Returns whether the current process runtime satisfies OpenClaw's engine contract. */
+export function isCurrentRuntimeSupported(): boolean {
+  return runtimeSatisfies(detectRuntime());
 }
 
 /** Checks a Node version label against OpenClaw's supported Node version range. */
 export function isSupportedNodeVersion(version: string | null): boolean {
-  const parsed = parseSemver(version);
-  if (!parsed) {
-    return false;
-  }
-  if (parsed.major === MIN_NODE_22.major) {
-    return isAtLeast(parsed, MIN_NODE_22);
-  }
-  if (parsed.major === MIN_NODE_24.major) {
-    return isAtLeast(parsed, MIN_NODE_24);
-  }
-  if (parsed.major === MIN_NODE_25.major) {
-    return isAtLeast(parsed, MIN_NODE_25);
-  }
-  return parsed.major > MIN_NODE_25.major;
+  return isSupportedOpenClawNodeVersion(version);
 }
 
 /** Parses simple package `engines.node` ranges of the form `>=x.y.z`. */
@@ -127,13 +141,13 @@ export function nodeVersionSatisfiesEngine(
 ): boolean | null {
   const minimum = parseMinimumNodeEngine(engine);
   if (minimum) {
-    return isAtLeast(parseSemver(version), minimum);
+    return isNodeVersionAtLeast(parseNodeReleaseVersion(version), minimum);
   }
 
   if (!engine) {
     return null;
   }
-  const parsed = parseSemver(version);
+  const parsed = parseNodeReleaseVersion(version);
   if (!parsed) {
     return false;
   }

@@ -13,12 +13,18 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import { loadSessionStoreEntry, resolveStorePath } from "./dispatch-from-config.runtime.js";
-import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  loadSessionStoreEntry,
+  resolveSessionStorePathCore,
+} from "./dispatch-from-config.runtime.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
 
@@ -72,8 +78,7 @@ function resolveHarnessDefaultChannel(params: {
     typeof params.ctx.OriginatingChannel === "string" ? params.ctx.OriginatingChannel : undefined;
 
   return (
-    params.entry?.channel ??
-    params.entry?.origin?.provider ??
+    sessionDeliveryChannel(params.entry) ??
     originatingChannel ??
     params.ctx.Provider ??
     params.ctx.Surface
@@ -92,7 +97,7 @@ function resolveHarnessDefaultParentSessionKey(params: {
 }
 
 export function resolveTurnModelOverride(
-  replyOptions: DispatchFromConfigParams["replyOptions"],
+  replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
 ): string | undefined {
   if (replyOptions?.isHeartbeat !== true) {
     return undefined;
@@ -125,9 +130,9 @@ function resolveChannelModelCandidate(params: {
     groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
     parentSessionKey: params.parentSessionKey,
     directUserIds: [
-      params.entry?.origin?.nativeDirectUserId,
-      params.entry?.origin?.from,
-      params.entry?.origin?.to,
+      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
+      sessionDeliveryOrigin(params.entry)?.from,
+      sessionDeliveryOrigin(params.entry)?.to,
       params.ctx.OriginatingTo,
       params.ctx.From,
       params.ctx.SenderId,
@@ -160,7 +165,7 @@ function resolveStoredModelCandidate(params: {
         config: params.cfg,
         fallbackAgentId: params.sessionAgentId,
       });
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+      const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
       return loadSessionStoreEntry({
         agentId,
         storePath,
@@ -199,7 +204,47 @@ function resolveModelOverrideCandidate(params: {
   })?.ref;
 }
 
-export function resolveHarnessSourceVisibleRepliesDefault(params: {
+/**
+ * Resolves the configured visible-replies mode plus the guarded harness
+ * default. One owner for dispatch and synthetic-turn binding facts: both must
+ * derive the same session-stable delivery mode or CLI session bindings
+ * ping-pong across turn kinds (#121485).
+ */
+export function resolveVisibleRepliesPolicy(params: {
+  cfg: OpenClawConfig;
+  chatType?: string;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionAgentId: string;
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+  turnModelOverride?: string;
+}): {
+  configuredVisibleReplies?: "automatic" | "message_tool";
+  harnessDefaultVisibleReplies?: "automatic" | "message_tool";
+} {
+  const configuredVisibleReplies =
+    params.chatType === "group" || params.chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : params.cfg.messages?.visibleReplies;
+  const harnessDefaultVisibleReplies =
+    configuredVisibleReplies === undefined &&
+    params.chatType !== "group" &&
+    params.chatType !== "channel"
+      ? resolveHarnessSourceVisibleRepliesDefault({
+          cfg: params.cfg,
+          ctx: params.ctx,
+          entry: params.entry,
+          sessionAgentId: params.sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionStore: params.sessionStore,
+          turnModelOverride: params.turnModelOverride,
+        })
+      : undefined;
+  return { configuredVisibleReplies, harnessDefaultVisibleReplies };
+}
+
+function resolveHarnessSourceVisibleRepliesDefault(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
@@ -218,6 +263,7 @@ export function resolveHarnessSourceVisibleRepliesDefault(params: {
     });
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
+      agentId: params.sessionAgentId,
       defaultProvider: defaultModelRef.provider,
     });
     const parentSessionKey = resolveHarnessDefaultParentSessionKey(params);
@@ -259,7 +305,9 @@ export function resolveHarnessSourceVisibleRepliesDefault(params: {
           params.entry?.modelSelectionLocked === true ? params.entry.agentHarnessId : undefined,
         agentHarnessRuntimeOverride,
       });
-      return harness.deliveryDefaults?.sourceVisibleReplies;
+      return (
+        harness.deliveryDefaults?.visibleReplies ?? harness.deliveryDefaults?.sourceVisibleReplies
+      );
     };
     const selectedModelCandidate =
       turnModelCandidate ?? storedModelCandidate ?? channelModelCandidate;
@@ -267,7 +315,7 @@ export function resolveHarnessSourceVisibleRepliesDefault(params: {
       return resolveCandidateDefault(selectedModelCandidate);
     }
     const sourceProvider = normalizeOptionalString(
-      params.entry?.origin?.provider ?? params.ctx.Provider ?? params.ctx.Surface,
+      sessionDeliveryOrigin(params.entry)?.provider ?? params.ctx.Provider ?? params.ctx.Surface,
     );
     if (sourceProvider) {
       const sourceDefault = resolveCandidateDefault({ provider: sourceProvider });

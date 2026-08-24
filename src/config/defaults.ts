@@ -9,11 +9,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "./cron-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
@@ -33,7 +32,7 @@ const defaultWarnState: WarnState = { warned: false };
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-8",
+  opus: "anthropic/claude-opus-5",
   sonnet: "anthropic/claude-sonnet-5",
 
   // OpenAI
@@ -91,15 +90,21 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   rawMaxTokens: number;
 }): number {
   const clamped = Math.min(params.rawMaxTokens, params.contextWindow);
-  if (normalizeProviderId(params.providerId) !== "mistral" || clamped < params.contextWindow) {
+  if (normalizeProviderId(params.providerId) !== "mistral") {
     return clamped;
   }
 
-  const safeMaxTokens =
-    MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
-      params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
-    ] ?? DEFAULT_MODEL_MAX_TOKENS;
-  return Math.min(safeMaxTokens, params.contextWindow);
+  const safeMaxTokens = Object.hasOwn(MISTRAL_SAFE_MAX_TOKENS_BY_MODEL, params.modelId)
+    ? MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
+        params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
+      ]
+    : undefined;
+  if (safeMaxTokens !== undefined) {
+    return Math.min(clamped, safeMaxTokens);
+  }
+  return clamped < params.contextWindow
+    ? clamped
+    : Math.min(DEFAULT_MODEL_MAX_TOKENS, params.contextWindow);
 }
 
 type SessionDefaultsOptions = {
@@ -152,6 +157,59 @@ export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawCo
   return normalizeTalkConfig(config);
 }
 
+/** Catalog metadata eligible to fill fields the operator did not author. */
+type CatalogSeedModel = Pick<
+  ModelDefinitionConfig,
+  | "input"
+  | "reasoning"
+  | "cost"
+  | "contextWindow"
+  | "contextTokens"
+  | "maxTokens"
+  | "thinkingLevelMap"
+  | "compat"
+>;
+
+/**
+ * Indexes plugin manifest catalog rows so configured model entries can inherit
+ * metadata the operator omitted. Without this, materialization would turn an
+ * override entry that pins only sizing fields into a text-only, non-reasoning,
+ * zero-cost model — silently dropping vision-gated tools downstream.
+ */
+function buildManifestCatalogModelLookup(
+  manifestRegistry: Pick<PluginManifestRegistry, "plugins"> | undefined,
+  policies: ReturnType<typeof collectManifestModelIdNormalizationPolicies> | undefined,
+): (providerId: string, modelId: string) => Partial<CatalogSeedModel> | undefined {
+  const plugins = manifestRegistry?.plugins;
+  if (!plugins || plugins.length === 0) {
+    return () => undefined;
+  }
+  let index: Map<string, Partial<CatalogSeedModel>> | undefined;
+  const keyFor = (providerId: string, modelId: string) =>
+    normalizeProviderId(providerId) +
+    " " +
+    normalizeConfiguredProviderCatalogModelId(providerId, modelId, policies).toLowerCase();
+  return (providerId, modelId) => {
+    if (!index) {
+      index = new Map();
+      for (const plugin of plugins) {
+        for (const [catalogProviderId, provider] of Object.entries(
+          plugin.modelCatalog?.providers ?? {},
+        )) {
+          for (const model of provider.models) {
+            const key = keyFor(catalogProviderId, model.id);
+            if (!index.has(key)) {
+              // SAFETY: ModelCatalogModel's seed fields are a structural subset of ModelDefinitionConfig; only the picked metadata fields are read from this entry.
+              index.set(key, model as Partial<CatalogSeedModel>);
+            }
+          }
+        }
+      }
+    }
+    return structuredClone(index.get(keyFor(providerId, modelId)));
+  };
+}
+
 export function applyModelDefaults(
   cfg: OpenClawConfig,
   options: ProviderPolicyDefaultsOptions = {},
@@ -165,6 +223,10 @@ export function applyModelDefaults(
     const modelIdNormalizationPolicies = manifestRegistry
       ? collectManifestModelIdNormalizationPolicies(manifestRegistry.plugins)
       : undefined;
+    const resolveCatalogModel = buildManifestCatalogModelLookup(
+      manifestRegistry,
+      modelIdNormalizationPolicies,
+    );
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
@@ -181,6 +243,9 @@ export function applyModelDefaults(
         continue;
       }
       const providerApi = normalizedProvider.api;
+      const providerMaxTokens = isPositiveNumber(normalizedProvider.maxTokens)
+        ? normalizedProvider.maxTokens
+        : undefined;
       const nextProvider = normalizedProvider;
       if (nextProvider !== provider) {
         mutated = true;
@@ -198,40 +263,76 @@ export function applyModelDefaults(
           modelMutated = true;
         }
 
-        const reasoning = typeof raw.reasoning === "boolean" ? raw.reasoning : false;
+        // Config entries are overrides, not full definitions: authored fields
+        // win, the owning catalog row fills omitted fields, and only then do
+        // generic defaults apply. Defaulting straight past the catalog would
+        // erase field absence (for example turning an entry that pins only
+        // contextWindow into a text-only model, dropping vision-gated tools).
+        const catalogModel = resolveCatalogModel(providerId, id);
+        const reasoning =
+          typeof raw.reasoning === "boolean" ? raw.reasoning : (catalogModel?.reasoning ?? false);
         if (raw.reasoning !== reasoning) {
           modelMutated = true;
         }
 
-        const input = raw.input ?? [...DEFAULT_MODEL_INPUT];
+        const input = raw.input ?? catalogModel?.input ?? [...DEFAULT_MODEL_INPUT];
         if (raw.input === undefined) {
           modelMutated = true;
         }
 
-        const cost = resolveModelCost(raw.cost);
+        const cost = resolveModelCost(
+          raw.cost || catalogModel?.cost ? { ...catalogModel?.cost, ...raw.cost } : undefined,
+        );
+        // resolveModelCost keeps only the flat per-token fields; carry tiered
+        // pricing through explicitly so an authored or catalog tier table is
+        // not silently discarded when other cost fields are defaulted.
+        const tieredPricing = raw.cost?.tieredPricing ?? catalogModel?.cost?.tieredPricing;
+        if (tieredPricing) {
+          cost.tieredPricing = tieredPricing;
+        }
         const costMutated =
           !raw.cost ||
           raw.cost.input !== cost.input ||
           raw.cost.output !== cost.output ||
           raw.cost.cacheRead !== cost.cacheRead ||
-          raw.cost.cacheWrite !== cost.cacheWrite;
+          raw.cost.cacheWrite !== cost.cacheWrite ||
+          raw.cost.tieredPricing !== cost.tieredPricing;
         if (costMutated) {
           modelMutated = true;
         }
 
         const contextWindow = isPositiveNumber(raw.contextWindow)
           ? raw.contextWindow
-          : DEFAULT_CONTEXT_TOKENS;
+          : isPositiveNumber(catalogModel?.contextWindow)
+            ? catalogModel.contextWindow
+            : undefined;
         if (raw.contextWindow !== contextWindow) {
           modelMutated = true;
         }
 
-        const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
-        const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
+        const contextTokens = isPositiveNumber(raw.contextTokens)
+          ? raw.contextTokens
+          : isPositiveNumber(catalogModel?.contextTokens)
+            ? catalogModel.contextTokens
+            : undefined;
+        if (raw.contextTokens !== contextTokens) {
+          modelMutated = true;
+        }
+
+        const maxTokenContextWindow = contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+        const defaultMaxTokens = Math.min(
+          providerMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+          maxTokenContextWindow,
+        );
+        const rawMaxTokens = isPositiveNumber(raw.maxTokens)
+          ? raw.maxTokens
+          : isPositiveNumber(catalogModel?.maxTokens)
+            ? catalogModel.maxTokens
+            : defaultMaxTokens;
         const maxTokens = resolveNormalizedProviderModelMaxTokens({
           providerId,
           modelId: id,
-          contextWindow,
+          contextWindow: maxTokenContextWindow,
           rawMaxTokens,
         });
         if (raw.maxTokens !== maxTokens) {
@@ -242,19 +343,38 @@ export function applyModelDefaults(
           modelMutated = true;
         }
 
+        const thinkingLevelMap =
+          raw.thinkingLevelMap === undefined && catalogModel?.thinkingLevelMap !== undefined
+            ? catalogModel.thinkingLevelMap
+            : undefined;
+        const compat =
+          raw.compat === undefined && catalogModel?.compat !== undefined
+            ? catalogModel.compat
+            : undefined;
+        if (thinkingLevelMap !== undefined || compat !== undefined) {
+          modelMutated = true;
+        }
+
         if (!modelMutated) {
           return model;
         }
         providerMutated = true;
-        return Object.assign({}, raw, {
-          id,
-          reasoning,
-          input,
-          cost,
-          contextWindow,
-          maxTokens,
-          api,
-        }) as ModelDefinitionConfig;
+        return Object.assign(
+          {},
+          raw,
+          {
+            id,
+            reasoning,
+            input,
+            cost,
+            contextWindow,
+            contextTokens,
+            maxTokens,
+            api,
+          },
+          thinkingLevelMap !== undefined ? { thinkingLevelMap } : {},
+          compat !== undefined ? { compat } : {},
+        ) as ModelDefinitionConfig;
       });
 
       if (!providerMutated) {
@@ -429,7 +549,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
   if (!hasMax) {
-    nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
+    nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
     mutated = true;
   }
 
@@ -460,34 +580,11 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const raw = cfg.cron?.maxConcurrentRuns;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    cron: {
-      ...cfg.cron,
-      maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    },
-  };
+  return cfg;
 }
 
 export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const logging = cfg.logging;
-  if (!logging) {
-    return cfg;
-  }
-  if (logging.redactSensitive) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    logging: {
-      ...logging,
-      redactSensitive: "tools",
-    },
-  };
+  return cfg;
 }
 
 function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

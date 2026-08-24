@@ -49,6 +49,7 @@ const {
   runQaCoverageReportCommand,
   runQaJsonlReplayCommand,
   runQaLabSelfCheckCommand,
+  runQaManualLaneCommand,
   runQaProfileCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
@@ -65,6 +66,7 @@ const {
   runQaCoverageReportCommand: vi.fn(),
   runQaJsonlReplayCommand: vi.fn(),
   runQaLabSelfCheckCommand: vi.fn(),
+  runQaManualLaneCommand: vi.fn(),
   runQaProfileCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
@@ -123,6 +125,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCoverageReportCommand,
   runQaJsonlReplayCommand,
   runQaLabSelfCheckCommand,
+  runQaManualLaneCommand,
   runQaProfileCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
@@ -141,6 +144,7 @@ describe("qa cli registration", () => {
     runQaCoverageReportCommand.mockReset();
     runQaJsonlReplayCommand.mockReset();
     runQaLabSelfCheckCommand.mockReset();
+    runQaManualLaneCommand.mockReset();
     runQaProfileCommand.mockReset();
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
@@ -215,9 +219,9 @@ describe("qa cli registration", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "channel-framework",
+      "channels",
       "--category",
-      "channel-framework.conversation-routing-and-delivery",
+      "channels.conversation-routing-and-delivery",
       "--scenario",
       "dm-chat-baseline",
       "--evidence-mode",
@@ -240,8 +244,8 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa-e2e/smoke-ci",
       profile: "smoke-ci",
-      surface: "channel-framework",
-      category: "channel-framework.conversation-routing-and-delivery",
+      surface: "channels",
+      category: "channels.conversation-routing-and-delivery",
       scenarioIds: ["dm-chat-baseline"],
       evidenceMode: "slim",
       transportId: "qa-channel",
@@ -255,10 +259,27 @@ describe("qa cli registration", () => {
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
   });
 
+  it("forwards fail-fast to taxonomy-backed QA profile runs", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--fail-fast",
+    ]);
+
+    expect(runQaProfileCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ failFast: true, profile: "smoke-ci" }),
+    );
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
-    ["--surface", ["agent-runtime-and-provider-execution"]],
-    ["--category", ["channel-framework.conversation-routing-and-delivery"]],
+    ["--surface", ["agents"]],
+    ["--category", ["channels.conversation-routing-and-delivery"]],
     ["--scenario", ["dm-chat-baseline"]],
     ["--evidence-mode", ["slim"]],
     ["--exclude-test-execution-evidence", []],
@@ -268,6 +289,7 @@ describe("qa cli registration", () => {
     ["--alt-model", ["anthropic/claude-sonnet-4-6"]],
     ["--concurrency", ["2"]],
     ["--allow-failures", []],
+    ["--fail-fast", []],
     ["--fast", []],
   ])("rejects qa run profile-only flag %s without --qa-profile", async (flag, values) => {
     await expect(
@@ -862,7 +884,7 @@ describe("qa cli registration", () => {
       providerMode: "live-frontier",
       primaryModel: undefined,
       alternateModel: undefined,
-      fastMode: false,
+      fastMode: undefined,
       allowFailures: false,
       scenarioIds: [],
       listScenarios: false,
@@ -870,6 +892,20 @@ describe("qa cli registration", () => {
       credentialSource: undefined,
       credentialRole: undefined,
     });
+  });
+
+  it.each([
+    ["suite", ["qa", "suite"]],
+    ["profile", ["qa", "run", "--qa-profile", "smoke-ci"]],
+    ["manual", ["qa", "manual", "--message", "hello"]],
+  ])("preserves omitted --fast intent for %s runs", async (_name, args) => {
+    await program.parseAsync(["node", "openclaw", ...args]);
+
+    const call =
+      runQaSuiteCommand.mock.calls[0]?.[0] ??
+      runQaProfileCommand.mock.calls[0]?.[0] ??
+      runQaManualLaneCommand.mock.calls[0]?.[0];
+    expect(call?.fastMode).toBeUndefined();
   });
 
   it("forwards --list-scenarios for telegram runs", async () => {
@@ -894,27 +930,34 @@ describe("qa cli registration", () => {
     expect(options.providerMode).toBeUndefined();
   });
 
-  it("forwards --pack for suite runs", async () => {
-    await program.parseAsync(["node", "openclaw", "qa", "suite", "--pack", "personal-agent"]);
-
-    const options = requireQaSuiteOptions();
-    expect(options.pack).toBe("personal-agent");
-  });
-
-  it("forwards --runtime-parity-tier for suite runs", async () => {
+  it.each(["host", "multipass"])("forwards --fail-fast to the %s suite runner", async (runner) => {
     await program.parseAsync([
       "node",
       "openclaw",
       "qa",
       "suite",
-      "--runtime-parity-tier",
-      "standard",
-      "--runtime-parity-tier",
-      "optional,soak",
+      "--runner",
+      runner,
+      "--fail-fast",
+    ]);
+
+    expect(requireQaSuiteOptions()).toEqual(expect.objectContaining({ failFast: true, runner }));
+  });
+
+  it("forwards --runtime-pair-lane for suite runs", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "suite",
+      "--runtime-pair-lane",
+      "core",
+      "--runtime-pair-lane",
+      "extended,soak",
     ]);
 
     const options = requireQaSuiteOptions();
-    expect(options.runtimeParityTier).toEqual(["standard", "optional,soak"]);
+    expect(options.runtimePairLane).toEqual(["core", "extended,soak"]);
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

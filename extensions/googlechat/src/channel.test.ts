@@ -229,10 +229,55 @@ describe("googlechatPlugin outbound", () => {
     ]);
   });
 
-  it("chunks outbound text without requiring Google Chat runtime initialization", () => {
+  it("records the API thread separately from the containing space", async () => {
+    const cfg = createGoogleChatCfg();
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-canonical",
+      threadName: "spaces/AAA/threads/canonical",
+    });
+
+    const canonical = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "canonical",
+      threadId: "threads/requested",
+    });
+
+    expect(canonical.receipt.threadId).toBe("spaces/AAA/threads/canonical");
+    expect(canonical.receipt.parts[0]?.threadId).toBe("spaces/AAA/threads/canonical");
+    expect(canonical.receipt.raw?.[0]).toMatchObject({
+      chatId: "spaces/AAA",
+      conversationId: "spaces/AAA",
+    });
+
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-fallback",
+    });
+    const fallback = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "fallback",
+      threadId: "threads/requested",
+    });
+    expect(fallback.receipt.threadId).toBe("threads/requested");
+
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-top-level",
+    });
+    const topLevel = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "top level",
+    });
+    expect(topLevel.receipt.threadId).toBeUndefined();
+  });
+
+  it("renders and chunks outbound text without requiring Google Chat runtime initialization", () => {
     const chunker = googlechatOutboundAdapter.base.chunker;
 
-    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+    expect(chunker("**alpha** [docs](https://example.com)", 32_000)).toEqual([
+      "*alpha* <https://example.com|docs>",
+    ]);
   });
 });
 
@@ -480,7 +525,7 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: ["users/alice", "googlechat:bob"] },
+          allowFrom: ["users/alice", "googlechat:bob"],
           groups: {
             "spaces/AAA": {},
             "spaces/BBB": {},
@@ -521,7 +566,7 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "] },
+          allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "],
         },
       },
     } as unknown as OpenClawConfig;
@@ -548,10 +593,8 @@ describe("googlechatPlugin security", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: {
-            policy: "allowlist",
-            allowFrom: ["  googlechat:user:Bob@Example.com  "],
-          },
+          dmPolicy: "allowlist",
+          allowFrom: ["  googlechat:user:Bob@Example.com  "],
         },
       },
     } as OpenClawConfig;
@@ -586,5 +629,9 @@ describe("googlechatPlugin outbound sanitizeText", () => {
   it("preserves ordinary assistant prose untouched", () => {
     const text = "El pipeline tiene 3 deals abiertos por USD 12.000.";
     expect(sanitizeText({ text })).toBe(text);
+  });
+
+  it("keeps CommonMark intact until chunks reach the send boundary", () => {
+    expect(sanitizeText({ text: "**bold** and ~~gone~~" })).toBe("**bold** and ~~gone~~");
   });
 });

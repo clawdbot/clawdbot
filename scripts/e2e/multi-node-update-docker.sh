@@ -438,7 +438,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let last = "timeout";
 while (Date.now() < deadline) {
   try {
-    const response = await fetch(url);
+    // Keep each request inside the outer probe budget so a stalled fetch cannot outlive it.
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const response = await fetch(url, { signal: AbortSignal.timeout(remainingMs) });
     if (response.ok) {
       process.exit(0);
     }
@@ -446,7 +448,11 @@ while (Date.now() < deadline) {
   } catch (error) {
     last = error instanceof Error ? error.message : String(error);
   }
-  await sleep(500);
+  const remainingDelayMs = deadline - Date.now();
+  if (remainingDelayMs <= 0) {
+    break;
+  }
+  await sleep(Math.min(500, remainingDelayMs));
 }
 console.error(last);
 process.exit(1);

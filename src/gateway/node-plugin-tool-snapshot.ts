@@ -1,4 +1,6 @@
 /** Connected node-hosted plugin tools available to agent tool resolution. */
+import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -40,16 +42,6 @@ function bumpSnapshotVersion(): void {
   snapshotVersion += 1;
 }
 
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function defaultParameters(): Record<string, unknown> {
   return { type: "object", properties: {}, additionalProperties: true };
 }
@@ -64,14 +56,14 @@ export function createRegisteredNodePluginToolDescriptorMap(
   const descriptors = new Map<string, NodePluginToolDescriptor>();
   for (const entry of commands ?? []) {
     const agentTool = entry.command.agentTool;
-    const name = normalizeString(agentTool?.name);
-    const description = normalizeString(agentTool?.description);
-    const command = normalizeString(entry.command.command);
+    const name = normalizeOptionalString(agentTool?.name) ?? "";
+    const description = normalizeOptionalString(agentTool?.description) ?? "";
+    const command = normalizeOptionalString(entry.command.command) ?? "";
     if (!isProviderSafeToolName(name) || !description || !command) {
       continue;
     }
-    const mcpServer = normalizeString(agentTool?.mcp?.server);
-    const mcpTool = normalizeString(agentTool?.mcp?.tool);
+    const mcpServer = normalizeOptionalString(agentTool?.mcp?.server) ?? "";
+    const mcpTool = normalizeOptionalString(agentTool?.mcp?.tool) ?? "";
     descriptors.set(`${entry.pluginId}\0${name}\0${command}`, {
       pluginId: entry.pluginId,
       name,
@@ -109,13 +101,13 @@ export function normalizeNodePluginToolDescriptors(params: {
   // Paired nodes are the trust boundary for descriptors. Operators can disable
   // publication globally with gateway.nodes.pluginTools.enabled.
   for (const tool of params.tools ?? []) {
-    const pluginId = normalizeString(tool.pluginId);
-    const name = normalizeString(tool.name);
-    const description = normalizeString(tool.description).slice(
+    const pluginId = normalizeOptionalString(tool.pluginId) ?? "";
+    const name = normalizeOptionalString(tool.name) ?? "";
+    const description = (normalizeOptionalString(tool.description) ?? "").slice(
       0,
       NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH,
     );
-    const command = normalizeString(tool.command);
+    const command = normalizeOptionalString(tool.command) ?? "";
     if (
       !pluginId ||
       !isProviderSafeToolName(name) ||
@@ -139,12 +131,12 @@ export function normalizeNodePluginToolDescriptors(params: {
       `${pluginId}\0${name}\0${command}`,
     );
     const descriptor = registeredDescriptor ?? tool;
-    const descriptorDescription = normalizeString(descriptor.description).slice(
+    const descriptorDescription = (normalizeOptionalString(descriptor.description) ?? "").slice(
       0,
       NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH,
     );
-    const mcpServer = normalizeString(descriptor.mcp?.server);
-    const mcpTool = normalizeString(descriptor.mcp?.tool);
+    const mcpServer = normalizeOptionalString(descriptor.mcp?.server) ?? "";
+    const mcpTool = normalizeOptionalString(descriptor.mcp?.tool) ?? "";
     normalized.push({
       descriptor: {
         pluginId,

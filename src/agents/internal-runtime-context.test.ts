@@ -11,7 +11,10 @@ import {
   hasInternalRuntimeContext,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+  OPENCLAW_RUNTIME_EVENT_HEADER,
   relocateCurrentRuntimeContextCarrierToTail,
   stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
@@ -103,6 +106,40 @@ describe("internal runtime context codec", () => {
         `Inline token ${INTERNAL_RUNTIME_CONTEXT_BEGIN} should not count as a block marker.`,
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    ["current turn", OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER],
+    [
+      "previous current turn",
+      "OpenClaw runtime context for the immediately preceding user message.",
+    ],
+    ["runtime event", OPENCLAW_RUNTIME_EVENT_HEADER],
+  ])("detects and strips the %s prompt preface", (_name, header) => {
+    const preface = [header, OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n");
+    const input = [
+      preface,
+      "",
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      "secret runtime context",
+      INTERNAL_RUNTIME_CONTEXT_END,
+      "",
+      "Visible reply",
+    ].join("\n");
+
+    expect(hasInternalRuntimeContext(preface)).toBe(true);
+    expect(stripInternalRuntimeContext(preface)).toBe("");
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
+  it("preserves text when the runtime-context header or notice does not match", () => {
+    for (const input of [
+      [OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER, "Ordinary user text"].join("\n"),
+      ["OpenClaw runtime context for another message.", OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n"),
+    ]) {
+      expect(hasInternalRuntimeContext(input)).toBe(false);
+      expect(stripInternalRuntimeContext(input)).toBe(input);
+    }
   });
 
   it("fuzzes delimiter injection and nested marker handling deterministically", () => {

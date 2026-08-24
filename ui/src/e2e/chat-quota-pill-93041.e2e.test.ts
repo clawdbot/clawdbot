@@ -1,19 +1,14 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
+import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const describeE2e = chromiumAvailable ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
+});
 
 const baseTime = 1_700_000_000_000;
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
@@ -23,18 +18,38 @@ const authStatusWithUsage = {
   providers: [
     {
       provider: "openai",
-      displayName: "Codex",
+      displayName: "OpenAI",
       status: "ok",
       profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
       usage: {
         providerId: "openai",
-        windows: [
-          { label: "5h", usedPercent: 42, resetAt: Date.now() + 3 * 3_600_000 },
-          { label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 },
-        ],
+        windows: [{ label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 }],
       },
     },
   ],
+};
+
+const gatewayInjectedSessions = {
+  count: 1,
+  defaults: { contextTokens: 200_000, model: "gateway-injected", modelProvider: "openclaw" },
+  path: "",
+  sessions: [
+    {
+      contextTokens: 200_000,
+      displayName: "Main",
+      hasActiveRun: false,
+      key: "main",
+      kind: "direct",
+      label: "Main",
+      model: "gateway-injected",
+      modelProvider: "openclaw",
+      status: "done",
+      totalTokens: 46_000,
+      totalTokensFresh: true,
+      updatedAt: Date.now(),
+    },
+  ],
+  ts: Date.now(),
 };
 
 const claudeSubscriptionAuthStatus = {
@@ -91,61 +106,48 @@ const claudeSubscriptionSessions = {
   ts: Date.now(),
 };
 
-let server: ControlUiE2eServer;
-
 async function openChat(
   authStatus: unknown,
   extraMethodResponses: Record<string, unknown> = {},
+  deferredMethods: string[] = [],
 ): Promise<{
-  browser: Browser;
   context: BrowserContext;
   page: Page;
 }> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
-    context = await browser.newContext({
+    context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
     page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    await installMockGateway(page, {
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    const gateway = await installMockGateway(page, {
+      deferredMethods,
       methodResponses: { "models.authStatus": authStatus, ...extraMethodResponses },
     });
-    await page.goto(`${server.baseUrl}chat`);
-    return { browser, context, page };
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await gateway.waitForRequest("models.authStatus");
+    return { context, page };
   } catch (error) {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
     throw error;
   }
 }
 
-async function closeChat(fixture: {
-  browser: Browser;
-  context: BrowserContext;
-  page: Page;
-}): Promise<void> {
+async function closeChat(fixture: { context: BrowserContext; page: Page }): Promise<void> {
   await fixture.page.close().catch(() => {});
   await fixture.context.close().catch(() => {});
-  await fixture.browser.close().catch(() => {});
 }
 
-describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)", () => {
-  beforeAll(async () => {
-    server = await startControlUiE2eServer();
-  });
-
-  afterAll(async () => {
-    await server?.close();
-  });
-
+suite.define(() => {
   it("renders provider usage inside the desktop context popover", async () => {
-    const fixture = await openChat(authStatusWithUsage);
+    const fixture = await openChat(authStatusWithUsage, {
+      "sessions.list": gatewayInjectedSessions,
+    });
     const { page } = fixture;
     try {
       const contextRing = page.locator(".context-ring");
@@ -162,8 +164,17 @@ describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
       expect(await usageLink.getAttribute("href")).toBe("/usage");
       const rows = await page.locator(".context-usage__limit").allTextContents();
       const normalized = rows.map((row) => row.replace(/\s+/g, " ").trim());
-      expect(normalized[0]).toMatch(/^5-hour limit Resets .+ 42%$/);
-      expect(normalized[1]).toMatch(/^Weekly · all models Resets .+ 71%$/);
+      expect(normalized).toHaveLength(1);
+      expect(normalized[0]).toMatch(/^Weekly Resets .+ 71%$/);
+      expect(
+        (await page.locator('[data-chat-usage-provider="true"]').textContent())
+          ?.replace(/\s+/g, " ")
+          .trim(),
+      ).toBe("Provider: OpenAI");
+      const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
+      expect(popoverText).not.toContain("openclaw");
+      expect(popoverText).not.toContain("gateway-injected");
+      expect(popoverText).not.toContain("Model:");
     } finally {
       await closeChat(fixture);
     }
@@ -187,7 +198,7 @@ describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
       const rows = await page.locator(".context-usage__limit").allTextContents();
       const normalized = rows.map((row) => row.replace(/\s+/g, " ").trim());
       expect(normalized[0]).toMatch(/^5-hour limit Resets .+ 22%$/);
-      expect(normalized[1]).toMatch(/^Weekly · all models Resets .+ 25%$/);
+      expect(normalized[1]).toMatch(/^Weekly Resets .+ 25%$/);
       expect(normalized[2]).toBe("Fable 45%");
       expect(normalized[3]).toBe("Usage credits $157.85 of $400.00");
 
@@ -201,12 +212,58 @@ describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
   });
 
   it("shows no plan usage when no provider usage windows are present", async () => {
-    const fixture = await openChat({ ts: baseTime, providers: [] });
+    const fixture = await openChat(
+      { ts: baseTime, providers: [] },
+      { "sessions.list": gatewayInjectedSessions },
+    );
     const { page } = fixture;
     try {
-      await page.locator(".agent-chat__composer-controls").first().waitFor({ state: "visible" });
-      await page.waitForTimeout(500);
+      const contextRing = page.locator(".context-ring");
+      await contextRing.waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const pane = document.querySelector("openclaw-chat-pane") as
+          | (HTMLElement & {
+              state?: { modelAuthStatusResult?: { providers?: unknown[] } | null };
+            })
+          | null;
+        return Array.isArray(pane?.state?.modelAuthStatusResult?.providers);
+      });
+      await contextRing.click();
+      const popover = page.locator(".context-usage__popover");
+      await popover.waitFor({ state: "visible" });
+      await popover.screenshot({ path: path.join(artifactDir, "04-usage-unavailable.png") });
       expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
+      const popoverText = (await popover.textContent()) ?? "";
+      expect(popoverText).not.toContain("openclaw");
+      expect(popoverText).not.toContain("gateway-injected");
+      expect(popoverText).not.toContain("Model:");
+    } finally {
+      await closeChat(fixture);
+    }
+  });
+
+  it("does not expose session routing metadata while plan usage is loading", async () => {
+    // Sidebar attention and the chat pane each request auth status at startup.
+    // Hold both so the popover is observed before any quota snapshot arrives.
+    const fixture = await openChat(
+      authStatusWithUsage,
+      { "sessions.list": gatewayInjectedSessions },
+      ["models.authStatus", "models.authStatus"],
+    );
+    const { page } = fixture;
+    try {
+      const contextRing = page.locator(".context-ring");
+      await contextRing.waitFor({ state: "visible" });
+      await contextRing.click();
+      const popover = page.locator(".context-usage__popover");
+      await popover.waitFor({ state: "visible" });
+      await popover.screenshot({ path: path.join(artifactDir, "05-usage-loading.png") });
+
+      expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
+      const popoverText = (await popover.textContent()) ?? "";
+      expect(popoverText).not.toContain("openclaw");
+      expect(popoverText).not.toContain("gateway-injected");
+      expect(popoverText).not.toContain("Model:");
     } finally {
       await closeChat(fixture);
     }

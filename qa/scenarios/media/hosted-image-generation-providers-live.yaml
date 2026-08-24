@@ -2,9 +2,8 @@ title: Hosted image generation providers live
 
 scenario:
   id: hosted-image-generation-providers-live
-  surface: long-tail-hosted-providers
-  category: long-tail-hosted-providers.hosted-media-providers
-  runtimeParityTier: live-only
+  surface: hosted-providers
+  category: hosted-providers.hosted-media-providers
   coverage:
     primary:
       - hosted-providers.image-generation-providers

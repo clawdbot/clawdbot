@@ -32,7 +32,14 @@ export function resolveBundledSkillsContext(
     return { dir, names: new Set(cachedBundledContext.names) };
   }
   // Bundled skill metadata is process-stable; cache names until restart.
-  const result = loadSkillsFromDirSafe({ dir, source: "openclaw-bundled" });
+  const result = loadSkillsFromDirSafe({
+    dir,
+    source: "openclaw-bundled",
+    onDiagnostic: (diagnostic) =>
+      skillsLogger.warn(
+        `Skipping bundled skill with invalid frontmatter (${diagnostic.path}): ${diagnostic.message}`,
+      ),
+  });
   for (const skill of result.skills) {
     if (skill.name.trim()) {
       names.add(skill.name);

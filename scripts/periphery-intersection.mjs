@@ -1,11 +1,19 @@
 #!/usr/bin/env node
-
 import fs from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const SHARED_LOCATION_PREFIX = "../shared/OpenClawKit/Sources/";
-
+const SHARED_SOURCE_ROOT = "apps/shared/OpenClawKit/Sources";
+const BARE_PERIPHERY_IGNORE_COMMENT = /\/\/\/?\s*periphery:ignore(?![:\w])/;
+function assertCompleteOptions(options) {
+  for (const key of ["iosResults", "iosStatus", "macosResults", "macosStatus", "output"]) {
+    if (!options[key]) {
+      throw new Error(`missing required option: ${key}`);
+    }
+  }
+}
 function requireValue(args, index, option) {
   const value = args[index + 1];
   if (!value || value.startsWith("--")) {
@@ -13,8 +21,7 @@ function requireValue(args, index, option) {
   }
   return value;
 }
-
-export function parseArgs(args) {
+function parseArgs(args) {
   const options = {};
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
@@ -43,28 +50,22 @@ export function parseArgs(args) {
         throw new Error(`unknown option: ${option}`);
     }
   }
-
-  for (const key of ["iosResults", "iosStatus", "macosResults", "macosStatus", "output"]) {
-    if (!options[key]) {
-      throw new Error(`missing required option: ${key}`);
-    }
-  }
+  assertCompleteOptions(options);
   return options;
 }
-
 export function validateFindings(value, label) {
   if (!Array.isArray(value)) {
     throw new Error(`${label} results must be a JSON array`);
   }
-
   return value.map((finding, index) => {
-    if (!finding || typeof finding !== "object" || Array.isArray(finding)) {
+    if (!isRecord(finding)) {
       throw new Error(`${label} finding ${index} must be an object`);
     }
+    const ids = finding.ids;
     if (
-      !Array.isArray(finding.ids) ||
-      finding.ids.length === 0 ||
-      finding.ids.some((id) => typeof id !== "string" || id.length === 0)
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      !ids.every((id) => typeof id === "string" && id.length > 0)
     ) {
       throw new Error(`${label} finding ${index} has no usable Swift USR`);
     }
@@ -77,15 +78,19 @@ export function validateFindings(value, label) {
     if (typeof finding.kind !== "string" || typeof finding.name !== "string") {
       throw new Error(`${label} finding ${index} is missing its kind or name`);
     }
-    return finding;
+    return {
+      ...finding,
+      ids,
+      kind: finding.kind,
+      location: finding.location,
+      name: finding.name,
+    };
   });
 }
-
 export function intersectFindings(iosFindings, macosFindings) {
   const ios = validateFindings(iosFindings, "iOS");
   const macos = validateFindings(macosFindings, "macOS");
   const macosIds = new Set(macos.flatMap((finding) => finding.ids));
-
   return ios
     .filter((finding) => finding.ids.some((id) => macosIds.has(id)))
     .toSorted((left, right) =>
@@ -94,36 +99,61 @@ export function intersectFindings(iosFindings, macosFindings) {
         .localeCompare([right.location, right.kind, right.name].join("\0")),
     );
 }
-
 export function parseRepoLocation(location) {
   const match = /^(.*):(\d+):(\d+)$/.exec(location);
-  if (!match || !match[1].startsWith("../shared/")) {
+  const [, relativePath, line, column] = match ?? [];
+  if (!relativePath?.startsWith("../shared/") || !line || !column) {
     throw new Error(`invalid shared Periphery location: ${location}`);
   }
   return {
-    column: match[3],
-    file: `apps/shared/${match[1].slice("../shared/".length)}`,
-    line: match[2],
+    column,
+    file: `apps/shared/${relativePath.slice("../shared/".length)}`,
+    line,
   };
 }
-
-export function escapeCommandData(value) {
+export function filterIgnoredFindings(findings, repoRoot = process.cwd()) {
+  const sourceRoot = path.resolve(repoRoot, SHARED_SOURCE_ROOT);
+  const sourceLines = new Map();
+  return findings.filter((finding) => {
+    const location = parseRepoLocation(finding.location);
+    const sourceFile = path.resolve(repoRoot, location.file);
+    const relativeSource = path.relative(sourceRoot, sourceFile);
+    if (
+      !relativeSource ||
+      path.isAbsolute(relativeSource) ||
+      relativeSource === ".." ||
+      relativeSource.startsWith(`..${path.sep}`)
+    ) {
+      throw new Error(`invalid shared Periphery source path: ${location.file}`);
+    }
+    let lines = sourceLines.get(sourceFile);
+    if (!lines) {
+      lines = fs.readFileSync(sourceFile, "utf8").split(/\r?\n/);
+      sourceLines.set(sourceFile, lines);
+    }
+    const declarationIndex = Number(location.line) - 1;
+    if (declarationIndex < 0 || declarationIndex >= lines.length) {
+      throw new Error(`invalid shared Periphery source line: ${finding.location}`);
+    }
+    return ![lines[declarationIndex - 1], lines[declarationIndex]].some(
+      (line) => typeof line === "string" && BARE_PERIPHERY_IGNORE_COMMENT.test(line),
+    );
+  });
+}
+function escapeCommandData(value) {
   return String(value ?? "")
     .replaceAll("%", "%25")
     .replaceAll("\r", "%0D")
     .replaceAll("\n", "%0A");
 }
-
-export function escapeCommandProperty(value) {
+function escapeCommandProperty(value) {
   return escapeCommandData(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
 }
-
 export function formatAnnotation(finding) {
   const location = parseRepoLocation(finding.location);
   const title = `${finding.kind || "Unused code"} ${finding.name}`.trim();
   return `::error file=${escapeCommandProperty(location.file)},line=${location.line},col=${location.column},title=Dead shared Swift code::${escapeCommandData(title)}`;
 }
-
 export function buildSummary(findings) {
   if (findings.length === 0) {
     return [
@@ -140,7 +170,6 @@ export function buildSummary(findings) {
     "The gate matches Periphery's Swift USRs, not declaration names.",
   ].join("\n");
 }
-
 function readStatus(file, label) {
   const raw = fs.readFileSync(file, "utf8").trim();
   if (!/^\d+$/.test(raw)) {
@@ -151,7 +180,6 @@ function readStatus(file, label) {
     throw new Error(`${label} Periphery scan exited with status ${status}`);
   }
 }
-
 function readFindings(file, label) {
   let parsed;
   try {
@@ -161,22 +189,21 @@ function readFindings(file, label) {
   }
   return validateFindings(parsed, label);
 }
-
-export function run(args, env = process.env) {
+function run(args, env = process.env) {
   const options = parseArgs(args);
   readStatus(options.iosStatus, "iOS");
   readStatus(options.macosStatus, "macOS");
-  const findings = intersectFindings(
-    readFindings(options.iosResults, "iOS"),
-    readFindings(options.macosResults, "macOS"),
+  const findings = filterIgnoredFindings(
+    intersectFindings(
+      readFindings(options.iosResults, "iOS"),
+      readFindings(options.macosResults, "macOS"),
+    ),
   );
-
   fs.mkdirSync(path.dirname(options.output), { recursive: true });
   fs.writeFileSync(options.output, `${JSON.stringify(findings, null, 2)}\n`);
   for (const finding of findings) {
     console.log(formatAnnotation(finding));
   }
-
   const summary = buildSummary(findings);
   if (env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
@@ -185,7 +212,6 @@ export function run(args, env = process.env) {
   }
   return findings.length === 0 ? 0 : 1;
 }
-
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     process.exitCode = run(process.argv.slice(2));

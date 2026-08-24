@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
+import { inspectGatewayHeapLimit } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -527,7 +528,7 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
-    expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
+    expect(env).not.toHaveProperty("OPENCLAW_SERVICE_VERSION");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
     expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
@@ -725,12 +726,53 @@ describe("buildServiceEnvironment", () => {
   });
 });
 
+describe("buildServiceEnvironment NODE_OPTIONS", () => {
+  it("sets the adaptive default heap flag", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).toBe(
+      `--max-old-space-size=${inspectGatewayHeapLimit(undefined).maxOldSpaceSizeMiB}`,
+    );
+  });
+
+  it("drops ambient NODE_OPTIONS", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384",
+      },
+      port: 18789,
+    });
+    expect(env.NODE_OPTIONS).not.toContain("--require");
+    expect(env.NODE_OPTIONS).not.toContain("16384");
+  });
+
+  it("keeps an explicit heap flag from the existing service only", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      existingNodeOptions: "--require /tmp/preload.js --max_old_space_size=6144",
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=6144");
+  });
+
+  it("does not apply the Gateway heap policy to node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.NODE_OPTIONS).toBeUndefined();
+  });
+});
+
 describe("buildNodeServiceEnvironment", () => {
   it("passes through HOME for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
     });
     expect(env.HOME).toBe("/home/user");
+    expect(env).not.toHaveProperty("OPENCLAW_SERVICE_VERSION");
   });
 
   it("sets the OpenClaw-owned launchd marker for macOS node services", () => {
@@ -754,6 +796,18 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user", OPENCLAW_GATEWAY_PASSWORD: " node-password " },
     });
     expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
+  });
+
+  it("passes through the Cloudflare Access service-token pair for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        CF_ACCESS_CLIENT_ID: " cf-client-id ",
+        CF_ACCESS_CLIENT_SECRET: " cf-client-secret ",
+      },
+    });
+    expect(env.CF_ACCESS_CLIENT_ID).toBe("cf-client-id");
+    expect(env.CF_ACCESS_CLIENT_SECRET).toBe("cf-client-secret");
   });
 
   it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {

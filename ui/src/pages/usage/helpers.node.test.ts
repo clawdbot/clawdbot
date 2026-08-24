@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./helpers.ts";
+import {
+  extractQueryTerms,
+  filterSessionsByQuery,
+  parseToolSummary,
+  toUsageErrorMessage,
+} from "./helpers.ts";
 
 function requireFirstTool(tools: Array<[string, number]>): [string, number] {
   const tool = tools[0];
@@ -11,6 +16,12 @@ function requireFirstTool(tools: Array<[string, number]>): [string, number] {
 }
 
 describe("usage-helpers", () => {
+  it("redacts secrets in displayed usage failures", () => {
+    expect(toUsageErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
+      "OPENAI_API_KEY=sk-123...cdef",
+    );
+  });
+
   it("tokenizes query terms including quoted strings", () => {
     const terms = extractQueryTerms('agent:main "model:gpt-5.2" has:errors');
     expect(terms.map((t) => t.raw)).toEqual(["agent:main", "model:gpt-5.2", "has:errors"]);

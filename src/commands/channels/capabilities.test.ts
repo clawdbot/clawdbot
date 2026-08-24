@@ -1,9 +1,9 @@
 // Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
-process.env.NO_COLOR = "1";
-
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { ExpectedCliError } from "../../cli/failure-output.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
@@ -22,7 +22,7 @@ vi.mock("./shared.js", async () => {
   const actual = await vi.importActual<typeof import("./shared.js")>("./shared.js");
   return {
     ...actual,
-    requireValidConfig: vi.fn(async () => ({ channels: {} })),
+    requireValidChannelConfig: vi.fn(async () => ({ channels: {} })),
     formatChannelAccountLabel: vi.fn(
       ({ channel, accountId }: { channel: string; accountId: string }) => `${channel}:${accountId}`,
     ),
@@ -73,12 +73,7 @@ function resetOutput() {
   errors.length = 0;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockArg(
   mock: { mock: { calls: unknown[][] } },
@@ -129,6 +124,7 @@ function buildPlugin(params: {
 
 describe("channelsCapabilitiesCommand", () => {
   beforeEach(() => {
+    vi.stubEnv("NO_COLOR", "1");
     resetOutput();
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
@@ -194,6 +190,77 @@ describe("channelsCapabilitiesCommand", () => {
 
     expect(errors).toStrictEqual([]);
     expect(logs).toStrictEqual([JSON.stringify({ channels: [] }, null, 2)]);
+  });
+
+  it.each([
+    {
+      name: "account without a channel",
+      options: { account: "ghost", json: true },
+      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
+      discoversChannels: false,
+    },
+    {
+      name: "account with all channels",
+      options: { channel: "all", account: "ghost" },
+      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
+      discoversChannels: false,
+    },
+    {
+      name: "target without a channel",
+      options: { target: "channel:1", json: true },
+      message: "--target requires a specific --channel. Run openclaw channels list to choose one.",
+      discoversChannels: false,
+    },
+    {
+      name: "target with all channels",
+      options: { channel: "all", target: "channel:1" },
+      message: "--target requires a specific --channel. Run openclaw channels list to choose one.",
+      discoversChannels: false,
+    },
+    {
+      name: "account before target when both lack a channel",
+      options: { account: "ghost", target: "channel:1" },
+      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
+      discoversChannels: false,
+    },
+    {
+      name: "unknown channel after installable plugin lookup",
+      options: { channel: "definitely-not-a-channel", json: true },
+      message:
+        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
+      discoversChannels: true,
+    },
+  ])("rejects $name before resolving or probing an account", async (testCase) => {
+    const plugin = buildPlugin({ id: "slack" });
+    const listAccountIds = vi.fn(() => ["default"]);
+    const resolveAccount = vi.fn(() => ({ accountId: "default" }));
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    plugin.config.listAccountIds = listAccountIds;
+    plugin.config.resolveAccount = resolveAccount;
+    plugin.status = { probeAccount };
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    const failure = channelsCapabilitiesCommand(testCase.options, runtime);
+
+    await expect(failure).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(failure).rejects.toMatchObject({
+      message: testCase.message,
+      humanOutput: testCase.message,
+      machineOutput: testCase.message,
+    });
+    expect(logs).toStrictEqual([]);
+    expect(errors).toStrictEqual([]);
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(
+      testCase.discoversChannels ? 1 : 0,
+    );
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(
+      testCase.discoversChannels ? 1 : 0,
+    );
+    expect(listAccountIds).not.toHaveBeenCalled();
+    expect(resolveAccount).not.toHaveBeenCalled();
+    expect(probeAccount).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
   it("rejects malformed timeouts before capability probes", async () => {

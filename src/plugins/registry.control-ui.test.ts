@@ -37,18 +37,19 @@ describe("plugin registry Control UI descriptors", () => {
     ]);
   });
 
-  it("accepts tab descriptors and normalizes their placement fields", () => {
+  it("accepts a bundled plugin's matching native route placement", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
       config,
-      record: createPluginRecord({ id: "tab-fixture", name: "Tab Fixture" }),
+      record: createPluginRecord({ id: "workboard", name: "Workboard", origin: "bundled" }),
       register(api) {
         api.registerControlUiDescriptor({
           surface: "tab",
-          id: "journal",
-          label: "Journal",
-          icon: "sun",
+          id: "workboard",
+          label: "Workboard",
+          placement: "route:workboard",
+          icon: "kanban",
           group: "control",
           order: 5,
           requiredScopes: ["operator.read"],
@@ -58,15 +59,73 @@ describe("plugin registry Control UI descriptors", () => {
 
     expect(registry.registry.controlUiDescriptors).toEqual([
       expect.objectContaining({
-        pluginId: "tab-fixture",
+        pluginId: "workboard",
         descriptor: expect.objectContaining({
-          id: "journal",
+          id: "workboard",
           surface: "tab",
-          label: "Journal",
-          icon: "sun",
+          label: "Workboard",
+          placement: "route:workboard",
+          icon: "kanban",
           group: "control",
           order: 5,
           requiredScopes: ["operator.read"],
+        }),
+      }),
+    ]);
+  });
+
+  it.each([
+    { id: "workboard", origin: "workspace" as const },
+    { id: "logbook", origin: "bundled" as const },
+  ])("rejects unowned native route placement from $origin plugin $id", ({ id, origin }) => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id, origin }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          surface: "tab",
+          id: "panel",
+          label: "Panel",
+          placement: "route:workboard",
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
+    expect(registry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: id,
+        message: expect.stringContaining("must be owned by its bundled plugin"),
+      }),
+    );
+  });
+
+  it("accepts trusted dashboard widget descriptors", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "workboard", name: "Workboard" }),
+      register(api) {
+        api.session.controls.registerControlUiDescriptor({
+          surface: "widget",
+          id: "card",
+          label: "Workboard card",
+          requiredScopes: ["operator.read"],
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors).toEqual([
+      expect.objectContaining({
+        pluginId: "workboard",
+        descriptor: expect.objectContaining({
+          id: "card",
+          surface: "widget",
+          label: "Workboard card",
         }),
       }),
     ]);

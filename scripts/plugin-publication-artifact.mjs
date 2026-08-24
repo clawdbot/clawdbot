@@ -39,7 +39,8 @@ const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_PLUGIN_MANIFEST_BYTES = 2 * 1024 * 1024;
-const MAX_TAR_ENTRIES = 10_000;
+// Bundled SDKs can exceed 10k files; byte, path, and expansion caps remain authoritative.
+const MAX_TAR_ENTRIES = 20_000;
 const MAX_TAR_PATH_BYTES = 4 * 1024 * 1024;
 const MAX_TAR_TOTAL_FILE_BYTES = 512 * 1024 * 1024;
 export const CLAWHUB_PUBLICATION_TAR_LIMITS = Object.freeze({

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { testApi } from "./logger.test-support.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-ts-");
 
@@ -34,12 +35,13 @@ describe("logger timestamp format", () => {
     await logPathTracker.cleanup();
   });
 
-  it("uses local time format in file logs (not UTC)", () => {
+  it("uses local time format in file logs (not UTC)", async () => {
     setLoggerOverride({ level: "info", file: logPath });
     const logger = getLogger();
 
     // Write a log entry
     logger.info("test-timestamp-format");
+    await testApi.flushFileLogQueueForTests();
 
     // Read the log file
     const content = fs.readFileSync(logPath, "utf8");

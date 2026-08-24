@@ -2,13 +2,15 @@
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
 import type { PluginRegistry } from "./registry.js";
-import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookAgentTrigger,
+  PluginHookRegistration,
+  PluginToolMatcher,
+} from "./types.js";
 
 export { addTestHook, createMockPluginRegistry };
-export type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchResult,
-} from "./hook-types.js";
+export type { PluginHookReplyDispatchResult } from "./hook-types.js";
 export type PluginTargetedInboundClaimOutcome = Awaited<
   ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
 >;
@@ -29,17 +31,19 @@ export function addStaticTestHooks<TResult>(
     hooks: ReadonlyArray<{
       pluginId: string;
       result: TResult;
+      matcher?: PluginToolMatcher;
       priority?: number;
       handler?: () => TResult | Promise<TResult>;
     }>;
   },
 ) {
-  for (const { pluginId, result, priority, handler } of params.hooks) {
+  for (const { pluginId, result, matcher, priority, handler } of params.hooks) {
     addTestHook({
       registry,
       pluginId,
       hookName: params.hookName,
       handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
+      ...(matcher ? { matcher } : {}),
       ...(priority !== undefined ? { priority } : {}),
     });
   }
@@ -52,6 +56,8 @@ export function createHookRunnerWithRegistry(
     pluginId?: string;
     priority?: number;
     timeoutMs?: number;
+    eligibleTriggers?: readonly PluginHookAgentTrigger[];
+    requiresToolAuthority?: true;
   }>,
   options?: Parameters<typeof createHookRunner>[1],
 ) {

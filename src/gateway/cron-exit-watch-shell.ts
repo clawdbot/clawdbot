@@ -5,7 +5,7 @@ export function resolveExitWatchShell(platform: NodeJS.Platform = process.platfo
 } {
   if (platform === "win32") {
     return {
-      command: process.env.ComSpec ?? "cmd.exe",
+      command: process.env.ComSpec?.trim() || "cmd.exe",
       // /d skip AutoRun, /s strip outer quotes, /c run then exit.
       argsFor: (command: string) => ["/d", "/s", "/c", command],
     };

@@ -437,6 +437,25 @@ describe("createTelegramUpdateTracker", () => {
     });
   });
 
+  it("does not record an update when checking handler dispatch before acceptance", () => {
+    const onSkip = vi.fn();
+    const tracker = createTelegramUpdateTracker({ initialUpdateId: 300, onSkip });
+    const ctx = updateCtx(301);
+
+    expect(tracker.shouldSkipHandlerDispatch(ctx)).toBe(false);
+    expect(tracker.shouldSkipHandlerDispatch(ctx)).toBe(false);
+    expect(onSkip).not.toHaveBeenCalled();
+
+    const accepted = tracker.beginUpdate(ctx);
+    if (!accepted.accepted) {
+      throw new Error("expected read-only skip checks to leave the update retryable");
+    }
+
+    expect(tracker.shouldSkipHandlerDispatch(ctx)).toBe(false);
+    tracker.finishUpdate(accepted.update, { completed: true });
+    expect(tracker.shouldSkipHandlerDispatch(ctx)).toBe(true);
+  });
+
   it("dedupes handler dispatch separately from the accepted watermark", () => {
     const onSkip = vi.fn();
     const tracker = createTelegramUpdateTracker({ initialUpdateId: 300, onSkip });

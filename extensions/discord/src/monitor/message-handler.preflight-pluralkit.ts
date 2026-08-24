@@ -5,6 +5,7 @@ import type { DiscordMessageEvent } from "./message-handler.preflight.types.js";
 
 export async function resolveDiscordPreflightPluralKitInfo(params: {
   message: DiscordMessageEvent["message"];
+  webhookId: string | null;
   config?: NonNullable<
     NonNullable<
       import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
@@ -12,7 +13,7 @@ export async function resolveDiscordPreflightPluralKitInfo(params: {
   >["pluralkit"];
   abortSignal?: AbortSignal;
 }): Promise<Awaited<ReturnType<typeof import("../pluralkit.js").fetchPluralKitMessageInfo>>> {
-  if (!params.config?.enabled) {
+  if (!params.config?.enabled || !params.webhookId) {
     return null;
   }
   try {

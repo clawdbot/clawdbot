@@ -3,8 +3,9 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectPackagePatchViolations } from "../../scripts/check-package-patches.mjs";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../helpers/temp-repo.js";
+import { collectPackagePatchViolations } from "../../scripts/check-package-patches.mts";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
@@ -60,7 +61,6 @@ describe("check-package-patches", () => {
       `packages:
   - .
 patchedDependencies:
-  "@openclaw/fs-safe@0.4.1": "patches/@openclaw__fs-safe@0.4.1.patch"
   "baileys@7.0.0-rc12": "patches/baileys@7.0.0-rc12.patch"
 `,
       "utf8",
@@ -69,13 +69,11 @@ patchedDependencies:
       path.join(dir, "pnpm-lock.yaml"),
       `lockfileVersion: '9.0'
 patchedDependencies:
-  "@openclaw/fs-safe@0.4.1": fs-safe-hash
   baileys@7.0.0-rc12: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
 `,
       "utf8",
     );
     writeFileSync(path.join(dir, "patches", "baileys@7.0.0-rc12.patch"), "diff\n", "utf8");
-    writeFileSync(path.join(dir, "patches", "@openclaw__fs-safe@0.4.1.patch"), "diff\n", "utf8");
     git(dir, ["add", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches"]);
 
     expect(collectPackagePatchViolations(dir)).toEqual([]);

@@ -234,6 +234,11 @@ export function getWindowsCmdExePath(
   return getWindowsSystem32ExePath("cmd.exe", env);
 }
 
+/** Queries one Windows registry string value via reg.exe; null when absent or unreadable. */
+export function queryWindowsRegistryValue(key: string, valueName: string): string | null {
+  return queryRegistryValueFn(key, valueName);
+}
+
 export function getWindowsSystem32ExePath(
   executableName: string,
   env: Record<string, string | undefined> = process.env,

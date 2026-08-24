@@ -56,8 +56,9 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
   readPolicyOptions?: DiscordMessagingActionOptions;
+  actionOptions: DiscordMessagingActionOptions;
 }): Promise<AgentToolResult<unknown> | undefined> {
-  const { ctx, resolveChannelId, readPolicyOptions } = params;
+  const { ctx, resolveChannelId, readPolicyOptions, actionOptions } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
@@ -86,11 +87,15 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   }
 
   if (action === "emoji-list") {
-    const guildId = readStringParam(actionParams, "guildId", {
-      required: true,
-    });
+    const guildId = readStringParam(actionParams, "guildId");
+    const limit = readPositiveIntegerParam(actionParams, "limit");
     return await handleDiscordAction(
-      { action: "emojiList", accountId: accountId ?? undefined, guildId },
+      {
+        action: "emojiList",
+        accountId: accountId ?? undefined,
+        ...(guildId ? { guildId } : { channelId: resolveChannelId() }),
+        ...(limit ? { limit } : {}),
+      },
       cfg,
       readPolicyOptions,
     );
@@ -441,7 +446,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         replyTo: replyTo ?? undefined,
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots, mediaReadFile: ctx.mediaReadFile },
+      actionOptions,
     );
   }
 

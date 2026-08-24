@@ -129,22 +129,12 @@ type FoundryConfigShape = {
   };
 };
 
-type FoundryImageDefaultPatch = {
-  agents?: {
-    defaults?: {
-      imageGenerationModel?: {
-        primary: string;
-      };
-    };
-  };
-};
-
 function normalizeFoundryModelName(value?: string | null): string | undefined {
   const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
 }
 
-export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
   const normalized = normalizeFoundryModelName(modelName);
   return normalized ? normalized.startsWith("claude") : false;
 }
@@ -182,12 +172,12 @@ export function isFoundryMaiImageModel(value?: string | null): boolean {
   );
 }
 
-export function supportsFoundryReasoningContent(value?: string | null): boolean {
+function supportsFoundryReasoningContent(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   return normalized === "mai-ds-r1" || normalized === "mai-thinking-1";
 }
 
-export function supportsFoundryImageInput(value?: string | null): boolean {
+function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {
     return false;
@@ -225,12 +215,33 @@ function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
     : false;
 }
 
+function resolveFoundryOpenAIModelTokenLimits(
+  normalized: string | undefined,
+): { contextWindow: number; maxTokens: number } | undefined {
+  if (!normalized) {
+    return undefined;
+  }
+  // Foundry publishes provider-native capacities. Keep exact families here so
+  // older GPT and continuously updated chat models retain their separate caps.
+  if (/^gpt-5\.(?:4(?:-pro)?|5|6(?:-(?:sol|terra|luna))?)$/u.test(normalized)) {
+    return { contextWindow: 1_050_000, maxTokens: 128_000 };
+  }
+  if (/^gpt-5\.4-(?:mini|nano)$/u.test(normalized)) {
+    return { contextWindow: 400_000, maxTokens: 128_000 };
+  }
+  return undefined;
+}
+
 function resolveFoundryModelTokenLimits(value?: string | null): {
   contextWindow: number;
   maxTokens: number;
 } {
   const normalized = normalizeFoundryModelName(value);
   const normalizedVersion = normalized?.replace(/\./g, "-");
+  const foundryOpenAILimits = resolveFoundryOpenAIModelTokenLimits(normalized);
+  if (foundryOpenAILimits) {
+    return foundryOpenAILimits;
+  }
   if (
     normalized &&
     (supportsClaudeAdaptiveThinking({ id: normalized }) ||
@@ -267,7 +278,7 @@ export function requiresFoundryMaxCompletionTokens(value?: string | null): boole
   );
 }
 
-export function supportsFoundryReasoningEffort(value?: string | null): boolean {
+function supportsFoundryReasoningEffort(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (
     !normalized ||
@@ -581,15 +592,17 @@ function buildFoundryImageDefaultPatch(params: {
   modelId: string;
   modelNameHint?: string | null;
   deployments?: FoundryDeploymentConfigInput[];
-}): FoundryImageDefaultPatch {
+}) {
   if (!isSelectedMaiImageDeployment(params)) {
     return {};
   }
   return {
     agents: {
       defaults: {
-        imageGenerationModel: {
-          primary: `${PROVIDER_ID}/${params.modelId}`,
+        mediaModels: {
+          image: {
+            primary: `${PROVIDER_ID}/${params.modelId}`,
+          },
         },
       },
     },
@@ -730,7 +743,7 @@ export function buildFoundryAuthResult(params: {
               api: params.api,
               deployments: params.deployments,
             },
-          ) as unknown as ModelProviderConfig,
+          ),
         },
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),

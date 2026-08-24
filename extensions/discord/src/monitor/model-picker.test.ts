@@ -517,6 +517,62 @@ describe("Discord model picker rendering", () => {
     expect(bucketIds[0]).toMatch(/a=bucket;v=providers;u=42/);
   });
 
+  it("keeps astral provider bucket prefixes intact in rendered custom ids", () => {
+    const entries: Record<string, string[]> = { "a-provider": ["model-a"] };
+    for (let i = 1; i <= 30; i += 1) {
+      entries[`🧭-provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
+    }
+    const data = createModelsProviderData(entries);
+    const page = getDiscordModelPickerProviderPage({ data, page: 1 });
+
+    expect(page.bucket?.id).toBe("a-🧭");
+    const rendered = renderDiscordModelPickerProvidersView({
+      command: "models",
+      userId: "42",
+      data,
+    });
+    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      components?: SerializedComponent[];
+    };
+    const providerSelect = requireValue(
+      extractContainerRows(payload.components)
+        .flatMap((row) => row.components ?? [])
+        .find((component) => component.custom_id?.includes(";a=provider;")),
+      "provider view should render a provider select",
+    );
+
+    expect(parseDiscordModelPickerCustomId(providerSelect.custom_id ?? "")?.providerBucket).toBe(
+      "a-🧭",
+    );
+  });
+
+  it("keeps astral model bucket prefixes intact in rendered custom ids", () => {
+    const models = [
+      "a-model",
+      ...Array.from({ length: 30 }, (_, i) => `🧭-model-${String(i + 1).padStart(2, "0")}`),
+    ];
+    const data = createModelsProviderData({ openai: models });
+    const page = requireValue(
+      getDiscordModelPickerModelPage({ data, provider: "openai", page: 1 }),
+      "model page should exist",
+    );
+
+    expect(page.bucket?.id).toBe("🧭");
+    const navStates = renderModelsViewRows({
+      command: "models",
+      userId: "42",
+      data,
+      provider: "openai",
+      page: 1,
+    })
+      .flatMap((row) => row.components ?? [])
+      .filter((component) => component.custom_id?.includes(";a=nav;"))
+      .map((component) => parseDiscordModelPickerCustomId(component.custom_id ?? ""));
+
+    expect(navStates.length).toBeGreaterThan(0);
+    expect(navStates.every((state) => state?.modelBucket === "🧭")).toBe(true);
+  });
+
   it("model select customId omits providerBucket/modelBucket (derived at re-render)", () => {
     // After reviewloop pass 3 we moved providerBucket/modelBucket OUT of
     // per-item customIds — both are pure functions of the durable state

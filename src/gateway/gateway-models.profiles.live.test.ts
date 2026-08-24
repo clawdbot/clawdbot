@@ -12,6 +12,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clampThinkingLevel,
   type Api,
@@ -29,7 +30,6 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
-import { appendPrioritizedDynamicLiveModels } from "../agents/live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
@@ -44,31 +44,45 @@ import {
   selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
-import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import {
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  readLiveTestConfig,
+} from "../agents/live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
-  shouldSkipLiveProviderDrift,
-} from "../agents/live-test-provider-drift.js";
-import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
+} from "../agents/live-test-provider-drift.test-support.js";
+import { getApiKeyForModelCore, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
+import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
+import { appendPrioritizedDynamicLiveModels } from "../agents/test-helpers/live-model-dynamic-candidates.js";
+import { createLiveTargetMatcher } from "../agents/test-helpers/live-target-matcher.js";
+import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { clearRuntimeConfigSnapshot } from "../config/io.js";
+import {
+  isSessionTranscriptProjectionUnavailableError,
+  SessionTranscriptProjectionUnavailableError,
+} from "../config/sessions/session-accessor.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { redactSecrets } from "../logging/redact.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
+import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
+import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
+import type { GatewayServer } from "./server-public.js";
 
 type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
@@ -81,7 +95,6 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe.test-helpers.js";
-import { startGatewayServer } from "./server.impl.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -147,7 +160,7 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/kimi-k2p5",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
   "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
@@ -710,7 +723,7 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(modelId)}`;
   return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -739,7 +752,7 @@ function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -880,7 +893,7 @@ describe("shouldSkipExecReadNonceMissForLiveModel", () => {
     ).toBe(true);
     expect(
       shouldSkipExecReadNonceMissForLiveModel(
-        "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+        "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
       ),
     ).toBe(true);
   });
@@ -1259,10 +1272,6 @@ function resolveBedrockDiscoveryRegion(cfg: OpenClawConfig | undefined): string 
   return typeof region === "string" ? normalizeOptionalEnvValue(region) : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function resolveAwsProfileRegion(env: NodeJS.ProcessEnv): string | undefined {
   const profile = normalizeOptionalEnvValue(env.AWS_PROFILE) ?? "default";
   const homeDir = normalizeOptionalEnvValue(env.HOME) ?? os.homedir();
@@ -1381,10 +1390,30 @@ function normalizeOptionalEnvValue(value: string | undefined): string | undefine
 }
 
 function createExplicitLiveFallbackModel(provider: string, id: string): Model {
+  const thinkingProfile = resolveEffectiveThinkingProfile({
+    provider,
+    context: {
+      provider,
+      modelId: id,
+      agentRuntime: "openclaw",
+      reasoning: true,
+    },
+  });
+  const supportsXhigh = thinkingProfile?.levels.some((level) => level.id === "xhigh") ?? false;
+  const supportsMax = thinkingProfile?.levels.some((level) => level.id === "max") ?? false;
   return {
     ...createGatewayLiveTestModel(provider, id),
     contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
     maxTokens: 4_096,
+    reasoning: thinkingProfile?.levels.some((level) => level.id !== "off") ?? false,
+    ...(supportsXhigh || supportsMax
+      ? {
+          thinkingLevelMap: {
+            ...(supportsXhigh ? { xhigh: "xhigh" } : {}),
+            ...(supportsMax ? { max: "max" } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -1702,7 +1731,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (id) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel("openai", id),
             reasoning: true,
@@ -1717,7 +1745,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("preserves exact max for max-capable GPT-5.6 metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: {
           ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
           reasoning: true,
@@ -1731,14 +1758,12 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("fails exact-proof levels instead of silently clamping them", () => {
     expect(() =>
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "max",
       }),
     ).toThrow(/does not advertise max|clamps max/u);
     expect(() =>
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "ultra",
       }),
@@ -1748,7 +1773,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: {
           ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
@@ -1769,7 +1793,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("does not let provider profiles override model-level thinking support", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "high",
       }),
@@ -1781,7 +1804,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (provider) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel(provider, "grok-4.5"),
             reasoning: true,
@@ -1805,7 +1827,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (provider) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel(provider, "grok-build-0.1"),
             reasoning: true,
@@ -1843,7 +1864,7 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          list: [{ id: "ops", default: true }],
+          entries: { ops: { default: true } },
         },
         bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
         broadcast: {
@@ -1856,15 +1877,14 @@ describe("buildLiveGatewayConfig", () => {
       liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
-    expect(cfg.agents?.list).toEqual([
-      {
-        id: GATEWAY_LIVE_AGENT_ID,
+    expect(cfg.agents?.entries).toEqual({
+      [GATEWAY_LIVE_AGENT_ID]: {
         default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
       },
-    ]);
+    });
     expect(cfg.bindings).toBeUndefined();
     expect(cfg.broadcast).toBeUndefined();
   });
@@ -1873,14 +1893,13 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          list: [
-            {
-              id: "Dev",
+          entries: {
+            dev: {
               default: true,
               agentDir: "/operator/agent",
               workspace: "/operator/workspace",
             },
-          ],
+          },
         },
       },
       candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
@@ -1888,15 +1907,14 @@ describe("buildLiveGatewayConfig", () => {
       liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
-    expect(cfg.agents?.list).toEqual([
-      {
-        id: GATEWAY_LIVE_AGENT_ID,
+    expect(cfg.agents?.entries).toEqual({
+      [GATEWAY_LIVE_AGENT_ID]: {
         default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
       },
-    ]);
+    });
   });
 
   it("keeps discovered live model metadata ahead of stale configured model rows", () => {
@@ -2450,7 +2468,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -2538,12 +2556,15 @@ describe("isTransientToolReadProbeErrorForLiveModel", () => {
 
 describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
-    expect(
+    const proPriority = expectDefined(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(4);
-    expect(
+      "curated Gemini Pro live priority",
+    );
+    const flashPriority = expectDefined(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.5-flash" }),
-    ).toBe(5);
+      "curated Gemini Flash live priority",
+    );
+    expect(proPriority).toBeLessThan(flashPriority);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -2643,7 +2664,9 @@ async function runAnthropicRefusalProbe(params: {
     client: params.client,
     sessionKey: params.sessionKey,
     idempotencyKey: `idem-${randomUUID()}-refusal`,
-    message: `Reply with the single word ok. Test token: ${magic}`,
+    // Credential redaction masks values after "token:", including the
+    // nonce needed to correlate this probe with its persisted user turn.
+    message: `Reply with the single word ok. Test trigger: ${magic}`,
     thinkingLevel: params.thinkingLevel,
     context: `${params.label}: refusal-probe`,
     modelKey: params.modelKey,
@@ -2959,22 +2982,69 @@ type SessionAssistantEntry = {
   text: string;
 };
 
+async function retryLiveTranscriptProjectionRead<T>(read: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + GATEWAY_LIVE_PROBE_TIMEOUT_MS;
+  let delayMs = 50;
+  while (true) {
+    try {
+      return await read();
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error) || Date.now() >= deadline) {
+        throw error;
+      }
+      // SQLite transcript projections rebuild asynchronously; fail only after
+      // the live probe budget, not while a successful model turn is indexing.
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(delayMs, Math.max(0, deadline - Date.now())));
+      });
+      delayMs = Math.min(delayMs * 2, 250);
+    }
+  }
+}
+
+describe("retryLiveTranscriptProjectionRead", () => {
+  it("waits for an in-flight SQLite transcript projection", async () => {
+    let attempts = 0;
+    await expect(
+      retryLiveTranscriptProjectionRead(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new SessionTranscriptProjectionUnavailableError("live-session");
+        }
+        return ["projected assistant reply"];
+      }),
+    ).resolves.toEqual(["projected assistant reply"]);
+    expect(attempts).toBe(2);
+  });
+
+  it("does not hide unrelated transcript failures", async () => {
+    const failure = new Error("transcript database unavailable");
+    await expect(
+      retryLiveTranscriptProjectionRead(async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+  });
+});
+
 async function readSessionMessagesForLiveProbe(sessionKey: string): Promise<unknown[]> {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
-  return await readSessionMessagesAsync(
-    {
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
-      mode: "full",
-      reason: "live model assistant text verification",
-    },
+  return await retryLiveTranscriptProjectionRead(async () =>
+    readSessionMessagesAsync(
+      {
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath,
+      },
+      {
+        mode: "full",
+        reason: "live model assistant text verification",
+      },
+    ),
   );
 }
 
@@ -2984,15 +3054,30 @@ function sessionMessagesAfterNextUserTurn(
   expectedUserText?: string,
 ): unknown[] {
   const nextUserOffset = messages.slice(baselineMessageCount).findIndex((message) => {
+    const actualUserText = extractTranscriptMessageText(message);
     return (
       (message as { role?: unknown } | null | undefined)?.role === "user" &&
-      (expectedUserText === undefined || extractTranscriptMessageText(message) === expectedUserText)
+      (expectedUserText === undefined || matchesLiveProbeUserText(actualUserText, expectedUserText))
     );
   });
   if (nextUserOffset < 0) {
     return [];
   }
   return messages.slice(baselineMessageCount + nextUserOffset + 1);
+}
+
+function matchesLiveProbeUserText(actual: string, expected: string): boolean {
+  if (actual === expected) {
+    return true;
+  }
+  const markerIndex = expected.indexOf(`${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_`);
+  if (markerIndex < 0) {
+    return false;
+  }
+  const nonceSuffix = expected.slice(markerIndex + ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL.length);
+  // The embedded Anthropic runtime scrubs the refusal trigger before persisting it.
+  // Its random suffix survives and still uniquely owns this live probe turn.
+  return /^_[a-f0-9]{32}$/.test(nonceSuffix) && actual.endsWith(nonceSuffix);
 }
 
 function sessionAssistantEntriesForLiveProbe(
@@ -3100,7 +3185,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   thinkingLevel: string;
 }): Promise<void> {
   const { listSubagentRunsForRequester } =
-    await import("../agents/subagent-registry.test-helpers.js");
+    await import("../agents/subagents/registry/subagent-registry.test-helpers.js");
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
   );
@@ -3118,6 +3203,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
       model: params.modelKey,
       thinking: params.thinkingLevel,
     }),
+    "Pass only those six arguments. Omit visible, worktree, worktreeName, worktreeBaseRef, cwd, context, taskName, label, streamTo, lightContext, attachments, attachAs, and resumeSessionId.",
     "Wait for the child completion to return before answering.",
     `Then reply exactly ${parentToken} ${childToken} and nothing else.`,
   ].join("\n");
@@ -3137,7 +3223,10 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   let run = listSubagentRunsForRequester(params.sessionKey).find(
     (entry) => !existingRunIds.has(entry.runId) && entry.task.includes(childToken),
   );
-  while ((!run?.endedAt || run.delivery?.status !== "delivered") && Date.now() < deadline) {
+  while (
+    (!run?.execution.endedAt || run.delivery?.status !== "delivered") &&
+    Date.now() < deadline
+  ) {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
@@ -3154,7 +3243,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   ).toHaveLength(1);
   run = matchingRuns[0];
   expect(run, `expected sessions_spawn child for ${params.modelKey}`).toBeDefined();
-  expect(run?.outcome?.status).toBe("ok");
+  expect(run?.execution.outcome?.status).toBe("ok");
   expect(run?.completion?.resultText).toContain(childToken);
   expect(run?.delivery?.status).toBe("delivered");
   expect(run?.childSessionKey).toContain(":subagent:");
@@ -3297,6 +3386,35 @@ describe("latestAssistantTextAfterBaseline", () => {
       ),
     );
     expect(latestTerminalAssistantTextAfterBaseline(secondEntries, 0)).toBe("second-a second-b");
+  });
+
+  it("correlates Anthropic refusal probes after the runtime scrubs their trigger", () => {
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const expected = `Reply with the single word ok. Test trigger: ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
+    const scrubbed = `Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+    const redacted = redactSecrets(expected);
+
+    expect(matchesLiveProbeUserText(scrubbed, expected)).toBe(true);
+    expect(redacted).toContain(nonce);
+    expect(matchesLiveProbeUserText(redacted, expected)).toBe(true);
+    expect(
+      sessionMessagesAfterNextUserTurn(
+        [
+          { role: "user", content: "previous turn" },
+          { role: "assistant", content: "previous reply", stopReason: "stop" },
+          { role: "user", content: redacted },
+          { role: "assistant", content: "ok", stopReason: "stop" },
+        ],
+        2,
+        expected,
+      ),
+    ).toEqual([{ role: "assistant", content: "ok", stopReason: "stop" }]);
+    expect(
+      matchesLiveProbeUserText(
+        "Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
+        expected,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -3812,11 +3930,83 @@ describe("OpenAI Ultra wire capture", () => {
       }
     }
   });
+
+  it("preserves model-specific capture endpoints in the provider override", () => {
+    const capture = (baseUrl: string): OpenAIUltraWireCapture => ({
+      baseUrl,
+      close: () => Promise.resolve(),
+      observations: [],
+    });
+    const candidates = [
+      {
+        ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+        baseUrl: "https://sol.test/v1",
+      },
+      {
+        ...createGatewayLiveTestModel("openai", "gpt-5.6-terra"),
+        baseUrl: "https://terra.test/v1",
+      },
+    ];
+    const capturesByModel = new Map<string, OpenAIUltraWireCapture>([
+      ["gpt-5.6-sol", capture("http://127.0.0.1:4101/v1")],
+      ["gpt-5.6-terra", capture("http://127.0.0.1:4102/v1")],
+    ]);
+
+    const override = buildOpenAIUltraWireProviderOverride({
+      candidates,
+      capturesByModel,
+      cfg: {},
+    });
+
+    expect(override.baseUrl).toBe("http://127.0.0.1:4101/v1");
+    expect(
+      Object.fromEntries(override.models?.map((model) => [model.id, model.baseUrl]) ?? []),
+    ).toEqual({
+      "gpt-5.6-sol": "http://127.0.0.1:4101/v1",
+      "gpt-5.6-terra": "http://127.0.0.1:4102/v1",
+    });
+  });
+
+  it("uses the configured or official route for explicit fallback models", () => {
+    const candidate = createExplicitLiveFallbackModel("openai", "gpt-5.6-sol");
+
+    expect(candidate.reasoning).toBe(true);
+    expect(candidate.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
+    expect(
+      resolveOpenAIUltraUpstreamBaseUrl({
+        candidate,
+        cfg: {
+          models: {
+            providers: { openai: { baseUrl: "https://proxy.test/v1", models: [] } },
+          },
+        },
+      }),
+    ).toBe("https://proxy.test/v1");
+    expect(resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: {} })).toBe(
+      "https://api.openai.com/v1",
+    );
+  });
 });
 
+const OPENAI_LIVE_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+function resolveOpenAIUltraUpstreamBaseUrl(params: {
+  candidate: Model;
+  cfg: OpenClawConfig;
+}): string {
+  const providerConfig = params.cfg.models?.providers?.openai;
+  const configuredModel = providerConfig?.models?.find((model) => model.id === params.candidate.id);
+  return (
+    params.candidate.baseUrl?.trim() ||
+    configuredModel?.baseUrl?.trim() ||
+    providerConfig?.baseUrl?.trim() ||
+    OPENAI_LIVE_DEFAULT_BASE_URL
+  );
+}
+
 function buildOpenAIUltraWireProviderOverride(params: {
-  baseUrl: string;
   candidates: Array<Model>;
+  capturesByModel: ReadonlyMap<string, OpenAIUltraWireCapture>;
   cfg: OpenClawConfig;
 }): ModelProviderConfig {
   const discovered = buildLiveProviderConfigs({
@@ -3831,10 +4021,14 @@ function buildOpenAIUltraWireProviderOverride(params: {
     base: params.cfg.models?.providers?.openai,
     discovered,
   });
+  const firstCapture = params.capturesByModel.values().next().value;
   return {
     ...merged,
-    baseUrl: params.baseUrl,
-    models: merged.models?.map((model) => Object.assign({}, model, { baseUrl: params.baseUrl })),
+    baseUrl: firstCapture?.baseUrl ?? merged.baseUrl,
+    models: merged.models?.map((model) => {
+      const capture = params.capturesByModel.get(model.id);
+      return capture ? Object.assign({}, model, { baseUrl: capture.baseUrl }) : model;
+    }),
   };
 }
 
@@ -4117,7 +4311,7 @@ function parseExplicitLiveModelRef(
     const rawModelId = trimmed.slice(slash + 1).trim();
     const modelId =
       provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
-        ? normalizeGoogleModelId(rawModelId)
+        ? normalizeGooglePreviewModelId(rawModelId)
         : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
@@ -4163,7 +4357,6 @@ function resolveExplicitLiveModelCandidates(params: {
 }
 
 function resolveGatewayLiveModelThinkingLevel(params: {
-  cfg: OpenClawConfig;
   model: Model;
   requestedLevel: string;
 }): string {
@@ -4172,9 +4365,8 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   if (!isGatewayLiveThinkingLevel(normalized)) {
     return requestedLevel;
   }
-  const profile = resolveProviderThinkingProfile({
+  const profile = resolveEffectiveThinkingProfile({
     provider: model.provider,
-    config: params.cfg,
     context: {
       provider: model.provider,
       modelId: model.id,
@@ -4286,7 +4478,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");
   }
-  expect(selected.modelRef).toBe("openai/gpt-5.6");
+  expect(selected.modelRef).toBe("openai/gpt-5.6-sol");
   return selected.modelRef;
 }
 
@@ -4328,15 +4520,14 @@ function buildLiveGatewayConfig(params: {
     ...providerOverrides,
   };
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
-  const configuredAgents = [
-    {
-      id: GATEWAY_LIVE_AGENT_ID,
+  const configuredAgents = {
+    [GATEWAY_LIVE_AGENT_ID]: {
       default: true,
       agentDir: params.liveAgentDir,
       workspace: params.liveAgentWorkspaceDir,
       sandbox: { mode: "off" },
     },
-  ] satisfies NonNullable<OpenClawConfig["agents"]>["list"];
+  } satisfies NonNullable<OpenClawConfig["agents"]>["entries"];
   const baseModels = params.cfg.models;
   return {
     ...params.cfg,
@@ -4344,7 +4535,7 @@ function buildLiveGatewayConfig(params: {
     broadcast: undefined,
     agents: {
       ...params.cfg.agents,
-      list: configuredAgents,
+      entries: configuredAgents,
       defaults: {
         ...params.cfg.agents?.defaults,
         // Live tests should avoid Docker sandboxing so tool probes can
@@ -4409,7 +4600,7 @@ async function sanitizeAuthConfig(params: {
     }
   }
 
-  if (!profiles && !order && !auth.cooldowns) {
+  if (!profiles && !order) {
     return undefined;
   }
   return {
@@ -4435,6 +4626,14 @@ function buildMinimaxProviderOverride(params: {
   };
 }
 
+async function prepareLiveGatewayWorkspace(workspaceDir: string): Promise<void> {
+  // Real workspace setup supplies both the SQLite state and survival evidence;
+  // retired JSON markers or empty initialized workspaces block the first turn.
+  await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+  await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
+  mergeWorkspaceSetupState(workspaceDir, { setupCompletedAt: new Date().toISOString() });
+}
+
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const ultraCandidates = params.candidates.filter((model) =>
     isOpenAIGpt56UltraTarget(model, params.thinkingLevel),
@@ -4444,36 +4643,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       "OPENCLAW_LIVE_GATEWAY_THINKING=ultra requires an explicit GPT-5.6 OpenAI model list",
     );
   }
-  const ultraUpstreamBaseUrls = new Set(
-    ultraCandidates.map((model) => model.baseUrl?.trim()).filter(Boolean),
-  );
-  if (ultraCandidates.length > 0 && ultraUpstreamBaseUrls.size !== 1) {
-    throw new Error(
-      `Ultra wire capture requires one explicit OpenAI base URL; found ${JSON.stringify([
-        ...ultraUpstreamBaseUrls,
-      ])}`,
-    );
-  }
-  const [ultraUpstreamBaseUrl] = [...ultraUpstreamBaseUrls];
-  const previous = {
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    token: process.env.OPENCLAW_GATEWAY_TOKEN,
-    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.OPENCLAW_SKIP_CRON,
-    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-    disableBonjour: process.env.OPENCLAW_DISABLE_BONJOUR,
-    logLevel: process.env.OPENCLAW_LOG_LEVEL,
-    agentDir: process.env.OPENCLAW_AGENT_DIR,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
+  const previousEnv = snapshotLiveEnv([
+    "OPENCLAW_DISABLE_BONJOUR",
+    "OPENCLAW_LOG_LEVEL",
+    "OPENCLAW_AGENT_DIR",
+  ]);
+  const { startGatewayServerCore } = await import("./server-start.js");
   let runtimeEnv: ReturnType<typeof enterProductionEnvForLiveRun> | undefined;
   let cleanupTempStateDir: string | undefined;
   let cleanupTempAgentDir: string | undefined;
   let cleanupToolProbePath: string | undefined;
   let cleanupTempDir: string | undefined;
-  let ultraWireCapture: OpenAIUltraWireCapture | undefined;
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  const ultraWireCapturesByModel = new Map<string, OpenAIUltraWireCapture>();
+  const ultraWireCapturesByUpstream = new Map<string, OpenAIUltraWireCapture>();
+  let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
 
   try {
@@ -4493,7 +4676,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
     const agentId = GATEWAY_LIVE_AGENT_ID;
 
-    const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
+    const hostAgentDir = resolveDefaultAgentDir(await readLiveTestConfig());
     const hostStore = ensureAuthProfileStore(hostAgentDir, {
       allowKeychainPrompt: false,
     });
@@ -4524,20 +4707,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-      `${JSON.stringify(
-        {
-          version: 1,
-          setupCompletedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
+    await prepareLiveGatewayWorkspace(workspaceDir);
     const nonceA = randomUUID();
     const nonceB = randomUUID();
     // Keep probe values out of the path: weak tool callers may echo the filename
@@ -4553,15 +4723,23 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     };
     let providerOverrides = params.providerOverrides;
     if (ultraCandidates.length > 0) {
-      if (!ultraUpstreamBaseUrl) {
-        throw new Error("Ultra wire capture requires an explicit OpenAI base URL");
+      for (const candidate of ultraCandidates) {
+        const upstreamBaseUrl = resolveOpenAIUltraUpstreamBaseUrl({
+          candidate,
+          cfg: sanitizedCfg,
+        });
+        let capture = ultraWireCapturesByUpstream.get(upstreamBaseUrl);
+        if (!capture) {
+          capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
+          ultraWireCapturesByUpstream.set(upstreamBaseUrl, capture);
+        }
+        ultraWireCapturesByModel.set(candidate.id, capture);
       }
-      ultraWireCapture = await startOpenAIUltraWireCapture(ultraUpstreamBaseUrl);
       providerOverrides = {
         ...params.providerOverrides,
         openai: buildOpenAIUltraWireProviderOverride({
-          baseUrl: ultraWireCapture.baseUrl,
           candidates: ultraCandidates,
+          capturesByModel: ultraWireCapturesByModel,
           cfg: sanitizedCfg,
         }),
       };
@@ -4595,7 +4773,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `${params.label}: gateway-port`,
       );
       server = await withGatewayLiveProbeTimeout(
-        startGatewayServer(port, {
+        startGatewayServerCore(port, {
           bind: "loopback",
           auth: { mode: "token", token },
           controlUiEnabled: false,
@@ -4648,9 +4826,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
       const strictUltraProof = isOpenAIGpt56UltraTarget(model, params.thinkingLevel);
       const skippedBeforeModel = skippedCount;
+      const ultraWireCapture = ultraWireCapturesByModel.get(model.id);
       const wireObservationStart = ultraWireCapture?.observations.length ?? 0;
       const thinkingLevel = resolveGatewayLiveModelThinkingLevel({
-        cfg: params.cfg,
         model,
         requestedLevel: params.thinkingLevel,
       });
@@ -5342,7 +5520,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           await server.close({ reason: "live test complete" });
         }
       } finally {
-        await ultraWireCapture?.close();
+        await Promise.all(
+          [...ultraWireCapturesByUpstream.values()].map((capture) => capture.close()),
+        );
       }
     } finally {
       try {
@@ -5379,16 +5559,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         if (runtimeEnv) {
           restoreProductionEnvForLiveRun(runtimeEnv);
         }
-        restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-        restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-        restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-        restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-        restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-        restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-        restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
-        restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
-        restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-        restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+        restoreLiveEnv(previousEnv);
       }
     }
   }
@@ -5405,7 +5576,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         logProgress("[all-models] loading config");
         clearRuntimeConfigSnapshot();
         const cfg = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() => getRuntimeConfig()),
+          readLiveTestConfig(),
           "[all-models] load config",
         );
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
@@ -5532,7 +5703,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const candidates: Array<Model> = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
-          if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+          if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
             continue;
           }
           if (!targetMatcher.matchesProvider(model.provider)) {
@@ -5541,7 +5712,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           const modelRef = `${model.provider}/${model.id}`;
           try {
             const apiKeyInfo = await withGatewayLiveSetupTimeout(
-              getApiKeyForModel({
+              getApiKeyForModelCore({
                 model,
                 cfg,
                 store: authProfileStore,
@@ -5645,16 +5816,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     }
     clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
-    const previous = {
-      configPath: process.env.OPENCLAW_CONFIG_PATH,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN,
-      skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-      skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.OPENCLAW_SKIP_CRON,
-      skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-      agentDir: process.env.OPENCLAW_AGENT_DIR,
-      stateDir: process.env.OPENCLAW_STATE_DIR,
-    };
+    const previousEnv = snapshotLiveEnv(["OPENCLAW_AGENT_DIR"]);
+    const { startGatewayServerCore } = await import("./server-start.js");
 
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -5664,13 +5827,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let server: GatewayServer | undefined;
     let client: GatewayClient | undefined;
     let toolProbePath: string | undefined;
     let tempDir: string | undefined;
     let tempStateDir: string | undefined;
     try {
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);
@@ -5686,12 +5849,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         return;
       }
       try {
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: anthropic,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
         });
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: zai,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
@@ -5704,19 +5867,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-zai-state-"));
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
       const workspaceDir = path.join(tempStateDir, "workspace-dev");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-      await fs.writeFile(
-        path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            setupCompletedAt: new Date().toISOString(),
-          },
-          null,
-          2,
-        )}\n`,
-      );
+      await prepareLiveGatewayWorkspace(workspaceDir);
       const nonceA = randomUUID();
       const nonceB = randomUUID();
       // Match the broad probe: the filename must not reveal either expected value.
@@ -5765,7 +5916,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           "zai-fallback: gateway-port",
         );
         server = await withGatewayLiveProbeTimeout(
-          startGatewayServer(port, {
+          startGatewayServerCore(port, {
             bind: "loopback",
             auth: { mode: "token", token },
             controlUiEnabled: false,
@@ -5882,14 +6033,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
       }
 
-      restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-      restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-      restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-      restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-      restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-      restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-      restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-      restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+      restoreLiveEnv(previousEnv);
     }
   }, 180_000);
 });

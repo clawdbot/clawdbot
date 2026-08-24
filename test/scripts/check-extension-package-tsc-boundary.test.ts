@@ -21,7 +21,14 @@ import {
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
   runNodeStepsWithConcurrency,
-} from "../../scripts/check-extension-package-tsc-boundary.mjs";
+} from "../../scripts/check-extension-package-tsc-boundary.mts";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
 
 const tempRoots = new Set<string>();
 
@@ -46,58 +53,6 @@ function createMockPipe() {
   };
   pipe.setEncoding = () => {};
   return pipe;
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await sleep(25);
-  }
-  throw new Error(`timeout waiting for ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(25);
-  }
-  throw new Error(`process still alive: ${pid}`);
-}
-
-function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
 }
 
 afterEach(() => {
@@ -574,8 +529,7 @@ describe("check-extension-package-tsc-boundary", () => {
           (error: unknown) => error,
         );
 
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         const failure = await failurePromise;
@@ -620,6 +574,7 @@ describe("check-extension-package-tsc-boundary", () => {
     async () => {
       const { rootDir: root } = createTempExtensionRoot("abort-group");
       const childPidPath = path.join(root, "child.pid");
+      const abortAckPath = path.join(root, "abort.ack");
       let childPid = 0;
       const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
         "",
@@ -632,16 +587,15 @@ describe("check-extension-package-tsc-boundary", () => {
         "process.on('SIGTERM', () => process.exit(0));",
         "setInterval(() => {}, 1000);",
       ].join("");
-      const failAfterSiblingStartsScript = [
+      // fail-fast exits only after the test writes abort.ack, which happens
+      // strictly after the child-alive assertion below. A time-based fuse here
+      // races that assertion: a descheduled worker can observe the abort chain
+      // already SIGKILLing the group. The step's 5s timeout bounds a wedged run.
+      const failAfterTestAckScript = [
         "const fs = require('node:fs');",
-        `const childPidPath = ${JSON.stringify(childPidPath)};`,
-        "const deadlineAt = Date.now() + 2_000;",
+        `const ackPath = ${JSON.stringify(abortAckPath)};`,
         "const wait = () => {",
-        "  if (fs.existsSync(childPidPath)) {",
-        "    setTimeout(() => process.exit(2), 150);",
-        "    return;",
-        "  }",
-        "  if (Date.now() >= deadlineAt) {",
+        "  if (fs.existsSync(ackPath)) {",
         "    process.exit(2);",
         "    return;",
         "  }",
@@ -655,7 +609,7 @@ describe("check-extension-package-tsc-boundary", () => {
           [
             {
               label: "fail-fast",
-              args: ["--eval", failAfterSiblingStartsScript],
+              args: ["--eval", failAfterTestAckScript],
               timeoutMs: 5_000,
             },
             {
@@ -667,9 +621,9 @@ describe("check-extension-package-tsc-boundary", () => {
           2,
         );
 
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
+        fs.writeFileSync(abortAckPath, "go");
 
         await expect(command).rejects.toThrow("fail-fast");
         await waitForDead(childPid, 2_000);
@@ -689,14 +643,19 @@ describe("check-extension-package-tsc-boundary", () => {
       const childPidPath = path.join(root, "child.pid");
       const readyPath = path.join(root, "child.ready");
       const scriptUrl = pathToFileURL(
-        path.resolve("scripts/check-extension-package-tsc-boundary.mjs"),
+        path.resolve("scripts/check-extension-package-tsc-boundary.mts"),
       ).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
       const childScript = [
         "const fs = require('node:fs');",
         "process.on('SIGTERM', () => {});",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        // Write the pid atomically: writeFileSync makes the file visible at open() (0 bytes)
+        // before the content lands, so an existsSync-then-read poller can catch an empty file
+        // and parse NaN. Rename only publishes the path once the pid is fully written.
+        `const pidPath = ${JSON.stringify(childPidPath)};`,
+        "fs.writeFileSync(pidPath + '.tmp', String(process.pid));",
+        "fs.renameSync(pidPath + '.tmp', pidPath);",
         "setInterval(() => {}, 1000);",
       ].join("");
       const parentScript = [
@@ -720,8 +679,7 @@ describe("check-extension-package-tsc-boundary", () => {
         });
 
         await waitForFile(readyPath, 2_000);
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");

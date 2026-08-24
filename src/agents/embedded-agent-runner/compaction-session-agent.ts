@@ -1,3 +1,4 @@
+import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -14,6 +15,7 @@ import { mapThinkingLevelForProvider } from "./utils.js";
 
 export async function prepareCompactionSessionAgent(params: {
   session: { agent: { streamFn?: unknown } };
+  llmRuntime: LlmRuntime;
   providerStreamFn: unknown;
   sessionId: string;
   signal: AbortSignal;
@@ -58,6 +60,7 @@ export async function prepareCompactionSessionAgent(params: {
       })
     : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+    llmRuntime: params.llmRuntime,
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
     providerStreamFn: params.providerStreamFn as never,
     sessionId: params.sessionId,
@@ -88,7 +91,7 @@ export async function prepareCompactionSessionAgent(params: {
     workspaceDir: params.effectiveWorkspace,
     model: params.effectiveModel,
   });
-  return applyExtraParamsToAgent(
+  const extraParams = applyExtraParamsToAgent(
     params.session.agent as never,
     params.config,
     params.provider,
@@ -103,9 +106,11 @@ export async function prepareCompactionSessionAgent(params: {
     {
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
       nativeWebSearchPolicyContext: {
-        // Compaction rebuilds the stream wrapper, so preserve the session policy
-        // inputs that can suppress provider-native search.
+        // Summaries have no tool loop; provider-hosted tools must not inherit
+        // the originating conversation's broader web-search authority.
         sessionKey: params.sessionKey,
+        webSearchEnabled: false,
+        runtimeToolAllowlist: [],
         sandboxToolPolicy: params.sandboxToolPolicy,
         messageProvider: params.messageProvider,
         agentAccountId: params.agentAccountId,
@@ -120,4 +125,5 @@ export async function prepareCompactionSessionAgent(params: {
       },
     },
   );
+  return { ...extraParams, transportApiKey };
 }

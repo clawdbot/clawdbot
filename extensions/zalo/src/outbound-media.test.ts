@@ -181,6 +181,42 @@ describe("zalo outbound hosted media", () => {
     expect(secondResponse.res.statusCode).toBe(404);
   });
 
+  it("serves HEAD metadata without consuming the hosted media", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+    const { pathname, search } = new URL(hostedUrl);
+    const headResponse = createMockResponse();
+
+    const handledHead = await tryHandleHostedZaloMediaRequest(
+      {
+        method: "HEAD",
+        url: `${pathname}${search}`,
+      } as never,
+      headResponse.res as never,
+    );
+
+    expect(handledHead).toBe(true);
+    expect(headResponse.res.statusCode).toBe(200);
+    expect(headResponse.headers.get("Content-Length")).toBe(
+      String(Buffer.byteLength("image-bytes")),
+    );
+    expect(headResponse.res.end).toHaveBeenCalledWith(undefined);
+
+    const getResponse = createMockResponse();
+    await tryHandleHostedZaloMediaRequest(
+      {
+        method: "GET",
+        url: `${pathname}${search}`,
+      } as never,
+      getResponse.res as never,
+    );
+    expect(getResponse.res.statusCode).toBe(200);
+    expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
+  });
+
   it("rejects hosted media preparation when the expiry would exceed a valid Date", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));
@@ -239,6 +275,27 @@ describe("zalo outbound hosted media", () => {
       {
         method: "GET",
         url: `${pathname}?token=wrong`,
+      } as never,
+      response.res as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(401);
+    expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
+  });
+
+  it("rejects hosted media requests without a token", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+    const response = createMockResponse();
+
+    const handled = await tryHandleHostedZaloMediaRequest(
+      {
+        method: "GET",
+        url: new URL(hostedUrl).pathname,
       } as never,
       response.res as never,
     );

@@ -7,6 +7,10 @@ description: "Run or recover OpenClaw macOS release signing, notarization, appca
 
 Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, release-ops mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
+This is a regular stable-release skill. Do not invoke it for extended-stable;
+that track does not inherit macOS assets, appcast promotion, or a GitHub Release
+unless the current extended-stable release policy explicitly adds them.
+
 ## Credentials
 
 - Resolve Peter-owned ASC item refs, key ids, issuer ids, and service-token provenance from `$release-private`.

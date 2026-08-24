@@ -6,9 +6,17 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import {
+  getAuthoredConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import { registerEmbeddingProvider } from "../plugins/embedding-providers.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -156,17 +164,98 @@ describe("secrets runtime snapshot core lanes", () => {
     expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
   });
 
-  it("resolves env refs for memory, talk, and gateway surfaces", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        agents: {
-          defaults: {
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
+  it.each([
+    {
+      name: "bare source resolves to a bare-looking literal",
+      authored: "$SOURCE",
+      sourceEnv: {},
+      runtimeEnv: { SOURCE: "$OTHER" },
+      expected: "$OTHER",
+      pendingSourceRef: true,
+    },
+    {
+      name: "bare source resolves to a braced-looking literal",
+      authored: "$SOURCE",
+      sourceEnv: {},
+      runtimeEnv: { SOURCE: "${OTHER}" },
+      expected: "${OTHER}",
+      pendingSourceRef: true,
+    },
+    {
+      name: "substitution resolves to a bare-looking literal",
+      authored: "${SOURCE}",
+      sourceEnv: { SOURCE: "$OTHER" },
+      runtimeEnv: {},
+      expected: "$OTHER",
+      pendingSourceRef: false,
+    },
+    {
+      name: "substitution resolves to a braced-looking literal",
+      authored: "${SOURCE}",
+      sourceEnv: { SOURCE: "${OTHER}" },
+      runtimeEnv: {},
+      expected: "${OTHER}",
+      pendingSourceRef: false,
+    },
+    {
+      name: "escaped source remains a braced-looking literal",
+      authored: "$${OTHER}",
+      sourceEnv: {},
+      runtimeEnv: {},
+      expected: "${OTHER}",
+      pendingSourceRef: false,
+    },
+  ])(
+    "materializes authored provider credentials without reinterpreting literals: $name",
+    async ({ authored, sourceEnv, runtimeEnv, expected, pendingSourceRef }) => {
+      const read = resolveConfigForRead(
+        {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: authored,
+                models: [],
               },
             },
           },
+        },
+        sourceEnv,
+      );
+      const config = asConfig(read.resolvedConfigRaw);
+      setConfigResolutionFacts(config, read.resolutionFacts);
+
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config,
+        env: runtimeEnv,
+        includeAuthStoreRefs: false,
+        loadablePluginOrigins: new Map(),
+      });
+
+      expect(snapshot.config.models?.providers?.openai?.apiKey).toBe(expected);
+      expect(
+        getAuthoredConfigSecretRef(snapshot.sourceConfig, "models.providers.openai.apiKey") !==
+          null,
+      ).toBe(pendingSourceRef);
+      expect(
+        getAuthoredConfigSecretRef(snapshot.config, "models.providers.openai.apiKey"),
+      ).toBeNull();
+    },
+  );
+
+  it("resolves env refs for memory, talk, and gateway surfaces", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
+            },
+          },
+        },
+
+        agents: {
+          defaults: {},
         },
         talk: {
           providers: {
@@ -194,12 +283,110 @@ describe("secrets runtime snapshot core lanes", () => {
       loadablePluginOrigins: new Map(),
     });
 
-    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
+    expect(snapshot.config.memory?.search?.remote?.apiKey).toBe("mem-ref-key");
     expect((snapshot.config.talk as { apiKey?: unknown } | undefined)?.apiKey).toBeUndefined();
     expect(snapshot.config.talk?.providers?.["acme-speech"]?.apiKey).toBe("talk-provider-ref-key");
     expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
     expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
   });
+
+  it.each([
+    ["openai", "openai", "auto", true],
+    ["openai", "openai", undefined, true],
+    ["gemini", "google", "gemini", true],
+    ["bedrock", "amazon-bedrock", "bedrock", true],
+    ["gemini", "google", "tenant-gemini", true],
+    ["gemini", "google", "gemini", false],
+  ] as const)(
+    "binds %s memory credentials to %s (configured=%s, metadata=%s)",
+    async (adapterId, authProviderId, configuredProviderId, registryMetadata) => {
+      const apiKeyRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "MEMORY_REMOTE_KEY",
+      };
+      const manifest: PluginManifestRecord = {
+        id: authProviderId,
+        origin: "bundled",
+        rootDir: "/test-plugin",
+        source: "/test-plugin/index.ts",
+        manifestPath: "/test-plugin/openclaw.plugin.json",
+        channels: [],
+        providers: [`${authProviderId}-secondary`, authProviderId],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        contracts: { embeddingProviders: [adapterId] },
+      };
+      const prepare = (version: "old" | "new", env: NodeJS.ProcessEnv) =>
+        prepareSecretsRuntimeSnapshot({
+          config: asConfig({
+            agents: { list: [{ id: "main", default: true }] },
+            memory: {
+              search: {
+                ...(configuredProviderId ? { provider: configuredProviderId } : {}),
+                remote: { apiKey: apiKeyRef },
+              },
+            },
+            models: {
+              providers: {
+                [authProviderId]: {
+                  baseUrl: `https://${version}.example.invalid/v1`,
+                  headers: { "X-Tenant": version },
+                  models: [],
+                },
+                ...(configuredProviderId &&
+                configuredProviderId !== "auto" &&
+                configuredProviderId !== adapterId
+                  ? {
+                      [configuredProviderId]: {
+                        api: adapterId,
+                        baseUrl: "https://tenant.example.invalid/v1",
+                        headers: { "X-Custom-Tenant": "configured" },
+                        models: [],
+                      },
+                    }
+                  : {}),
+              },
+            },
+          }),
+          env,
+          includeAuthStoreRefs: false,
+          allowUnavailableSecretOwners: true,
+          loadablePluginOrigins: new Map(),
+          ...(registryMetadata ? { manifestRegistry: { plugins: [manifest] } } : {}),
+        });
+      const active = await prepare("old", { MEMORY_REMOTE_KEY: "last-known-good" });
+      activateSecretsRuntimeSnapshot(active);
+
+      if (registryMetadata) {
+        registerEmbeddingProvider(
+          { id: adapterId, authProviderId, create: async () => ({ provider: null }) },
+          { ownerPluginId: authProviderId },
+        );
+      }
+
+      const unchanged = await prepare("old", {});
+      const changed = await prepare("new", {});
+
+      expect(unchanged.config.memory?.search?.remote?.apiKey).toBe("last-known-good");
+      expect(unchanged.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "stale" },
+      ]);
+      expect(changed.config.memory?.search?.remote?.apiKey).toEqual(apiKeyRef);
+      expect(changed.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "cold" },
+      ]);
+
+      activateSecretsRuntimeSnapshot(changed);
+      expect(() => assertSecretOwnerAvailable("capability", "memory-provider:main")).toThrow(
+        expect.objectContaining({
+          code: "SECRET_SURFACE_UNAVAILABLE",
+          ownerId: "memory-provider:main",
+        }),
+      );
+    },
+  );
 
   it("resolves env-backed auth profile SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -242,6 +429,48 @@ describe("secrets runtime snapshot core lanes", () => {
       | undefined;
     expect(copilotProfile?.type).toBe("token");
     expect(copilotProfile?.token).toBe("ghp-env-token");
+  });
+
+  it("can materialize auth stores without resolving unrelated config refs", async () => {
+    const resolvedApiKey = ["test", "auth", "profile", "value"].join("-");
+    const apiKeyRef = {
+      source: "env",
+      provider: "default",
+      id: "UNRELATED_PROVIDER_KEY",
+    } as const;
+    const config = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: apiKeyRef,
+            models: [],
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      assignmentConfig: config,
+      env: { OPENAI_API_KEY: resolvedApiKey },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      includeConfigRefs: false,
+      loadablePluginOrigins: new Map(),
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: OPENAI_ENV_KEY_REF,
+          },
+        }),
+    });
+
+    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(apiKeyRef);
+    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+      key: resolvedApiKey,
+    });
   });
 
   it("resolves inline placeholder auth profiles to env refs", async () => {

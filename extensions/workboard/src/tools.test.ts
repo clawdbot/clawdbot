@@ -1,5 +1,6 @@
 // Workboard tests cover tools plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
@@ -409,16 +410,28 @@ describe("workboard tools", () => {
       await tools.get("workboard_claim")?.execute("call-3", { id: parent.id }),
     );
     const token = claimed.token as string;
+    const pendingProof = readPayload(
+      await tools.get("workboard_proof")?.execute("call-proof", {
+        id: parent.id,
+        token,
+        command: "pnpm test extensions/workboard",
+      }),
+    );
+    expect(pendingProof.proofId).toEqual(expect.any(String));
     const completed = readPayload(
       await tools.get("workboard_complete")?.execute("call-4", {
         id: parent.id,
         token,
         summary: "Done.",
         createdCardIds: [child.id],
+        proofId: pendingProof.proofId,
         proof: { status: "passed", command: "pnpm test extensions/workboard" },
       }),
     );
-    expect(completed.card).toMatchObject({ status: "done" });
+    expect(completed.card).toMatchObject({
+      status: "done",
+      metadata: { proof: [{ id: pendingProof.proofId, status: "passed" }] },
+    });
 
     const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-5", {}));
     expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
@@ -487,9 +500,13 @@ describe("workboard tools", () => {
     );
 
     const boardPayload = readPayload(
-      await tools.get("workboard_board_create")?.execute("call-board", {
+      await expectDefined(
+        tools.get("workboard_board_create"),
+        "workboard board create tool",
+      ).execute("call-board", {
         id: "planning",
         name: "Planning",
+        automationJobId: "job-categorize-planning",
         orchestration: {
           autoDecompose: true,
           autoDecomposePerDispatch: 2,
@@ -500,12 +517,26 @@ describe("workboard tools", () => {
     expect(boardPayload.board).toMatchObject({
       id: "planning",
       name: "Planning",
+      automationJobId: "job-categorize-planning",
       orchestration: {
         autoDecompose: true,
         autoDecomposePerDispatch: 2,
         orchestratorProfile: "planner",
       },
     });
+    const boardCreate = expectDefined(
+      tools.get("workboard_board_create"),
+      "workboard board create tool",
+    );
+    expect(
+      Value.Check(boardCreate.parameters, {
+        id: "planning",
+        automationJobId: "job-categorize-planning",
+      }),
+    ).toBe(true);
+    expect(Value.Check(boardCreate.parameters, { id: "planning", automationJobId: "" })).toBe(
+      false,
+    );
 
     const parent = await store.create({
       title: "Rough",

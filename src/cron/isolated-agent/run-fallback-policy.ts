@@ -1,5 +1,5 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
-import { resolveModelCandidateChain } from "../../agents/model-fallback.js";
+import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -68,8 +68,10 @@ export function resolveCronPreflightCandidates(params: {
   });
   return resolveModelCandidateChain({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider,
     model: params.model,
+    requestedRouteResolution: "resolved",
     fallbacksOverride,
   });
 }

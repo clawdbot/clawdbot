@@ -1,5 +1,6 @@
-// Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
 import { expectDefined } from "@openclaw/normalization-core";
+// Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
@@ -256,6 +257,8 @@ type ProbeGatewayCall = {
     token?: string;
   };
   preauthHandshakeTimeoutMs?: number;
+  originScopedDeviceAuth?: boolean;
+  suppressStoredDeviceAuth?: boolean;
   timeoutMs?: number;
   tlsFingerprint?: string;
   url?: string;
@@ -315,6 +318,8 @@ async function runGatewayStatus(
     json?: boolean;
     port?: unknown;
     url?: string;
+    token?: string;
+    password?: string;
     ssh?: string;
     sshAuto?: boolean;
     sshIdentity?: string;
@@ -323,12 +328,7 @@ async function runGatewayStatus(
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireRecordArray(value: unknown, label: string): Array<Record<string, unknown>> {
   if (
@@ -447,6 +447,7 @@ describe("gateway-status command", () => {
       timeout: "1000",
       json: true,
       url: "wss://remote.example:18789",
+      token: "explicit-remote-token",
     });
 
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
@@ -458,59 +459,131 @@ describe("gateway-status command", () => {
     );
   });
 
-  it("surfaces degraded model-pricing health as a warning", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    const defaultProbeGateway = probeGateway.getMockImplementation();
-    try {
-      probeGateway.mockImplementation(async (opts: { url: string }) => {
-        const result = defaultProbeGateway
-          ? await defaultProbeGateway(opts)
-          : await mocks.probeGateway(opts);
-        return {
-          ...result,
-          health: {
-            ok: true,
-            modelPricing: {
-              state: "degraded",
-              detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-              sources: [
-                {
-                  source: "openrouter",
-                  state: "degraded",
-                  detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-                },
-              ],
+  it.each([
+    {
+      source: "configured token",
+      auth: { mode: "token", token: "configured-local-token" },
+      env: {},
+      options: {},
+    },
+    {
+      source: "configured password",
+      auth: { mode: "password", password: "configured-local-password" },
+      env: {},
+      options: {},
+    },
+    {
+      source: "environment token",
+      auth: { mode: "token" },
+      env: { OPENCLAW_GATEWAY_TOKEN: "ambient-local-token" },
+      options: {},
+    },
+    {
+      source: "environment password",
+      auth: { mode: "password" },
+      env: { OPENCLAW_GATEWAY_PASSWORD: "ambient-local-password" },
+      options: {},
+    },
+    {
+      source: "whitespace token",
+      auth: { mode: "token", token: "configured-local-token" },
+      env: {},
+      options: { token: "   " },
+    },
+    {
+      source: "whitespace password",
+      auth: { mode: "password", password: "configured-local-password" },
+      env: {},
+      options: { password: "   " },
+    },
+    {
+      source: "explicit loopback URL",
+      auth: { mode: "token", token: "configured-local-token" },
+      env: {},
+      options: { url: "ws://127.0.0.1:18991" },
+    },
+  ])(
+    "rejects a local $source before probing an explicit Gateway URL",
+    async ({ auth, env, options }) => {
+      const configuredGateway = { gateway: { mode: "local", auth } };
+
+      await withEnvAsync(
+        {
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          ...env,
+        },
+        async () => {
+          await readBestEffortConfig.withImplementation(
+            async () => configuredGateway as never,
+            async () => {
+              const { runtime } = createRuntimeCapture();
+              await expect(
+                runGatewayStatus(runtime, {
+                  timeout: "1000",
+                  json: true,
+                  url: "wss://attacker.example:18789",
+                  ...options,
+                }),
+              ).rejects.toMatchObject({
+                name: "GatewayExplicitAuthRequiredError",
+                message: expect.stringContaining(
+                  "gateway url override requires explicit credentials",
+                ),
+              });
+
+              expect(readBestEffortConfig).not.toHaveBeenCalled();
+              expect(discoverGatewayBeacons).not.toHaveBeenCalled();
+              expect(startSshPortForward).not.toHaveBeenCalled();
+              expect(probeGateway).not.toHaveBeenCalled();
             },
-          },
-        };
-      });
+          );
+        },
+      );
+    },
+  );
 
-      await runGatewayStatus(runtime, { timeout: "1000", json: true });
-    } finally {
-      probeGateway.mockReset();
-      if (defaultProbeGateway) {
-        probeGateway.mockImplementation(defaultProbeGateway);
-      }
-    }
+  it.each([
+    {
+      credential: "token",
+      options: { token: "explicit-remote-token" },
+      expectedAuth: { token: "explicit-remote-token", password: undefined },
+    },
+    {
+      credential: "password",
+      options: { password: "explicit-remote-password" },
+      expectedAuth: { token: undefined, password: "explicit-remote-password" },
+    },
+  ])(
+    "honors an explicit $credential for an explicit Gateway URL",
+    async ({ options, expectedAuth }) => {
+      const explicitUrl = "wss://attacker.example:18789";
+      readBestEffortConfig.mockResolvedValueOnce({
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token: "configured-local-token" },
+        },
+      } as never);
 
-    expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      degraded?: boolean;
-      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
-    };
-    expect(parsed.degraded).toBe(false);
-    const pricingWarnings =
-      parsed.warnings?.filter((warning) => warning.code === "model_pricing_degraded") ?? [];
-    expect(pricingWarnings).toHaveLength(2);
-    expect(pricingWarnings.map((warning) => warning.message)).toEqual([
-      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
-      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
-    ]);
-    expect(pricingWarnings.map((warning) => warning.targetIds)).toEqual([
-      ["sshTunnel"],
-      ["configRemote"],
-    ]);
-  });
+      await withEnvAsync(
+        {
+          OPENCLAW_GATEWAY_TOKEN: "ambient-local-token",
+          OPENCLAW_GATEWAY_PASSWORD: "ambient-local-password",
+        },
+        async () => {
+          const { runtime } = createRuntimeCapture();
+          await runGatewayStatus(runtime, {
+            timeout: "1000",
+            json: true,
+            url: explicitUrl,
+            ...options,
+          });
+
+          expect(requireProbeCall(explicitUrl).auth).toEqual(expectedAuth);
+        },
+      );
+    },
+  );
 
   it("includes diagnostic next steps when no gateway is reachable or discoverable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
@@ -715,8 +788,8 @@ describe("gateway-status command", () => {
     expect(unresolvedWarning.message).not.toContain("missing or empty");
   });
 
-  it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+  it("does not replace an unresolved local token SecretRef with OPENCLAW_GATEWAY_TOKEN", async () => {
+    const { runtime, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: "env-token",
@@ -731,16 +804,7 @@ describe("gateway-status command", () => {
 
     expect(runtimeErrors).toHaveLength(0);
     const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
-    expect(localProbeCall.auth?.token).toBe("env-token");
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string; message?: string }>;
-    };
-    const unresolvedWarning = parsed.warnings?.find(
-      (warning) =>
-        warning.code === "auth_secretref_unresolved" &&
-        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
-    );
-    expect(unresolvedWarning).toBeUndefined();
+    expect(localProbeCall.auth?.token).toBeUndefined();
   });
 
   it("does not resolve local password SecretRef in token mode", async () => {
@@ -863,7 +927,7 @@ describe("gateway-status command", () => {
         config: {
           ...createSecretRefGatewayConfig({ gatewayMode: "remote" }),
           discovery: {
-            wideArea: { enabled: true },
+            wideArea: { domain: "openclaw.internal" },
           },
         },
         issues: [],
@@ -927,8 +991,16 @@ describe("gateway-status command", () => {
     expect(probeGateway).toHaveBeenCalled();
     const tunnelCall = probeGateway.mock.calls.find(
       (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
-    )?.[0] as { auth?: { token?: string } } | undefined;
+    )?.[0] as
+      | {
+          auth?: { token?: string };
+          originScopedDeviceAuth?: boolean;
+          suppressStoredDeviceAuth?: boolean;
+        }
+      | undefined;
     expect(tunnelCall?.auth?.token).toBe("rtok");
+    expect(tunnelCall?.originScopedDeviceAuth).toBeUndefined();
+    expect(tunnelCall?.suppressStoredDeviceAuth).toBe(true);
     expect(sshStop).toHaveBeenCalledTimes(1);
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
@@ -953,6 +1025,7 @@ describe("gateway-status command", () => {
 
     expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
     const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
+    expect(localProbeCall.originScopedDeviceAuth).toBeUndefined();
     expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
     expect(localProbeCall.timeoutMs).toBe(15_000);
   });
@@ -1071,25 +1144,9 @@ describe("gateway-status command", () => {
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
-    expect(requireProbeCall("wss://remote.example:18789").timeoutMs).toBe(15_000);
-  });
-
-  it("uses configured handshake timeout as the default local probe budget", async () => {
-    const { runtime } = createRuntimeCapture();
-    probeGateway.mockClear();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        handshakeTimeoutMs: 30_000,
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
-
-    await gatewayStatusCommand({ json: true }, asRuntimeEnv(runtime));
-
-    const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
-    expect(localProbeCall.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(localProbeCall.timeoutMs).toBe(30_000);
+    const remoteProbeCall = requireProbeCall("wss://remote.example:18789");
+    expect(remoteProbeCall.timeoutMs).toBe(15_000);
+    expect(remoteProbeCall.originScopedDeviceAuth).toBe(true);
   });
 
   it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {

@@ -1,7 +1,7 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
 import { PassThrough, Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { runNativeHookRelayCli } from "./native-hook-relay-cli.js";
+import { runNativeHookRelayCli, runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
 
 function createReadableTextStream(text: string): NodeJS.ReadableStream {
   return Readable.from([text]);
@@ -21,6 +21,76 @@ function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => strin
 }
 
 describe("native hook relay CLI", () => {
+  it("parses the internal cold-path argument vector", async () => {
+    const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    await expect(
+      runNativeHookRelayCliFromArgv(
+        [
+          "node",
+          "openclaw.mjs",
+          "hooks",
+          "relay",
+          "--provider=codex",
+          "--relay-id",
+          "relay-1",
+          "--state-db",
+          "/tmp/profile/state/openclaw.sqlite",
+          "--generation",
+          "generation-1",
+          "--event",
+          "pre_tool_use",
+          "--pre-tool-use-unavailable",
+          "noop",
+          "--timeout",
+          "1234",
+        ],
+        {
+          stdin: createReadableTextStream("{}"),
+          invokeBridge: invokeBridge as never,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(invokeBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        relayId: "relay-1",
+        stateDbPath: "/tmp/profile/state/openclaw.sqlite",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        timeoutMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it("passes the explicit state database path to direct bridge lookup", async () => {
+    const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    await expect(
+      runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId: "relay-1",
+          stateDb: "/tmp/profile/state/openclaw.sqlite",
+          generation: "generation-1",
+          event: "post_tool_use",
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+          invokeBridge: invokeBridge as never,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(invokeBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relayId: "relay-1",
+        stateDbPath: "/tmp/profile/state/openclaw.sqlite",
+      }),
+    );
+  });
+
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {
     const callGateway = vi.fn(async (_opts: unknown) => ({ stdout: "", stderr: "", exitCode: 0 }));
     const stdout = createWritableTextBuffer();
@@ -387,6 +457,51 @@ describe("native hook relay CLI", () => {
       }),
     );
   }, 1_000);
+
+  it("handles bridge rejection when the deadline expires during bridge startup", async () => {
+    let now = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const invokeBridge = vi.fn(() => {
+      now = 26;
+      return Promise.reject(new Error("native hook relay bridge not found"));
+    });
+    const callGateway = vi.fn();
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    try {
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          timeout: "25",
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+          stdout,
+          stderr,
+          invokeBridge: invokeBridge as never,
+          callGateway: callGateway as never,
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(stdout.text())).toMatchObject({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "Native hook relay timed out",
+        },
+      });
+      expect(stderr.text()).toContain("native hook relay timed out");
+      expect(invokeBridge).toHaveBeenCalledOnce();
+      expect(callGateway).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 
   it("rejects oversized hook input without touching the gateway", async () => {
     const callGateway = vi.fn();

@@ -7,7 +7,7 @@ export {
 } from "./message-channel-info.js";
 export { hasDiscordMessageStickers } from "./message-forwarded.js";
 export {
-  buildDiscordMediaPayload,
+  formatDiscordMediaText,
   resolveForwardedMediaList,
   resolveMediaList,
   resolveReferencedReplyMediaList,
@@ -16,5 +16,6 @@ export {
 export {
   resolveDiscordEmbedText,
   resolveDiscordForwardedMessagesTextFromSnapshots,
+  resolveDiscordMessageHistoryText,
   resolveDiscordMessageText,
 } from "./message-text.js";

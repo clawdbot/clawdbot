@@ -31,7 +31,7 @@ type RunRegistry = {
       exitCode: number | null;
       exitSignal: NodeJS.Signals | number | null;
     },
-  ) => { record: RunRecord; firstFinalize: boolean } | null;
+  ) => void;
 };
 
 /**
@@ -41,36 +41,34 @@ type RunRegistry = {
 export function createRunRegistry(options?: { maxExitedRecords?: number }): RunRegistry {
   const records = new Map<string, RunRecord>();
   const maxExitedRecords = resolveMaxExitedRecords(options?.maxExitedRecords);
+  // Keep this exact across every write path so ordinary finalization never scans all records.
+  let exitedRecords = 0;
 
   const pruneExitedRecords = () => {
-    if (!records.size) {
+    if (exitedRecords <= maxExitedRecords) {
       return;
     }
-    let exited = 0;
-    for (const record of records.values()) {
-      if (record.state === "exited") {
-        exited += 1;
-      }
-    }
-    if (exited <= maxExitedRecords) {
-      return;
-    }
-    let remove = exited - maxExitedRecords;
     // Map insertion order is the retention policy: oldest exited records leave first.
     for (const [runId, record] of records.entries()) {
-      if (remove <= 0) {
+      if (exitedRecords <= maxExitedRecords) {
         break;
       }
       if (record.state !== "exited") {
         continue;
       }
       records.delete(runId);
-      remove -= 1;
+      exitedRecords -= 1;
     }
   };
 
   const add: RunRegistry["add"] = (record) => {
+    if (records.get(record.runId)?.state === "exited") {
+      exitedRecords -= 1;
+    }
     records.set(record.runId, { ...record });
+    if (record.state === "exited") {
+      exitedRecords += 1;
+    }
   };
 
   const get: RunRegistry["get"] = (runId) => {
@@ -82,6 +80,11 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
     const current = records.get(runId);
     if (!current) {
       return undefined;
+    }
+    if (current.state !== "exited" && state === "exited") {
+      exitedRecords += 1;
+    } else if (current.state === "exited" && state !== "exited") {
+      exitedRecords -= 1;
     }
     const updatedAtMs = nowMs();
     const next: RunRecord = {
@@ -110,10 +113,9 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
 
   const finalize: RunRegistry["finalize"] = (runId, exit) => {
     const current = records.get(runId);
-    if (!current) {
-      return null;
+    if (!current || current.state === "exited") {
+      return;
     }
-    const firstFinalize = current.state !== "exited";
     const ts = nowMs();
     const next: RunRecord = {
       ...current,
@@ -121,13 +123,13 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
       // First terminal observation wins; late fallback timers must not rewrite
       // the exit reason or signal after a real process exit has been recorded.
       terminationReason: current.terminationReason ?? exit.reason,
-      exitCode: current.exitCode !== undefined ? current.exitCode : exit.exitCode,
-      exitSignal: current.exitSignal !== undefined ? current.exitSignal : exit.exitSignal,
+      exitCode: exit.exitCode,
+      exitSignal: exit.exitSignal,
       updatedAtMs: ts,
     };
     records.set(runId, next);
+    exitedRecords += 1;
     pruneExitedRecords();
-    return { record: { ...next }, firstFinalize };
   };
 
   return {

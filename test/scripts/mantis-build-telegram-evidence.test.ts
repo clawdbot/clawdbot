@@ -7,7 +7,7 @@ import {
   buildTelegramEvidenceManifest,
   renderTelegramEvidenceHtml,
   writeTelegramEvidence,
-} from "../../scripts/mantis/build-telegram-evidence.mjs";
+} from "../../scripts/mantis/build-telegram-evidence.mts";
 import { loadEvidenceManifest } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
 const tempDirs: string[] = [];
@@ -80,32 +80,8 @@ function makeTelegramOutput({ includeReport = true, summary = {} } = {}) {
     ]),
   );
   if (includeReport) {
-    writeFileSync(path.join(dir, "telegram-qa-report.md"), "# Telegram QA\n\npass\n");
+    writeFileSync(path.join(dir, "qa-suite-report.md"), "# Telegram QA\n\npass\n");
   }
-  return dir;
-}
-
-function makeLegacyTelegramOutput() {
-  const dir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-evidence-test-"));
-  tempDirs.push(dir);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    path.join(dir, "telegram-qa-summary.json"),
-    JSON.stringify({
-      credentials: { source: "convex" },
-      counts: { total: 1, passed: 1, failed: 0 },
-      scenarios: [
-        {
-          id: "telegram-status-command",
-          title: "Telegram status command reply",
-          status: "pass",
-          details: "Observed expected status response.",
-        },
-      ],
-    }),
-  );
-  writeFileSync(path.join(dir, "telegram-qa-observed-messages.json"), JSON.stringify([]));
-  writeFileSync(path.join(dir, "telegram-qa-report.md"), "# Telegram QA\n\npass\n");
   return dir;
 }
 
@@ -160,7 +136,9 @@ describe("scripts/mantis/build-telegram-evidence", () => {
 
     expect(readFileSync(result.transcriptPath, "utf8")).toContain("Telegram status command reply");
     const manifest = loadEvidenceManifest(result.manifestPath);
+    expect(manifest.schemaVersion).toBe(2);
     expect(manifest.comparison.pass).toBe(true);
+    expect(manifest.comparison.candidate.expectationMet).toBe(true);
     expect(manifest.comparison.candidate.sha).toBe("abc123");
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toEqual([
       "summary.json",
@@ -202,21 +180,6 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     );
   });
 
-  it("renders historical Telegram summaries when evidence summaries are absent", () => {
-    const dir = makeLegacyTelegramOutput();
-
-    const result = writeTelegramEvidence(["--output-dir", dir]);
-
-    expect(readFileSync(result.transcriptPath, "utf8")).toContain("Telegram status command reply");
-    expect(result.manifest.comparison.pass).toBe(true);
-    expect(
-      result.manifest.artifacts.find((artifact) => artifact.targetPath === "summary.json"),
-    ).toMatchObject({ path: "telegram-qa-summary.json" });
-    expect(result.manifest.artifacts.map((artifact) => artifact.targetPath)).toContain(
-      "observed-messages.json",
-    );
-  });
-
   it("does not fabricate a required report artifact for passing Telegram summaries", () => {
     const dir = makeTelegramOutput({ includeReport: false });
 
@@ -250,7 +213,7 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     const result = writeTelegramEvidence(["--output-dir", dir]);
 
     expect(result.manifest.comparison.pass).toBe(false);
-    expect(readFileSync(path.join(dir, "telegram-qa-report.md"), "utf8")).toContain(
+    expect(readFileSync(path.join(dir, "qa-suite-report.md"), "utf8")).toContain(
       "Telegram QA report was unavailable",
     );
     expect(loadEvidenceManifest(result.manifestPath).comparison.pass).toBe(false);
@@ -276,6 +239,7 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     });
 
     expect(manifest.comparison.pass).toBe(false);
+    expect(manifest.comparison.candidate.expectationMet).toBe(false);
     expect(manifest.comparison.candidate.status).toBe("fail");
   });
 });

@@ -22,7 +22,8 @@ export const DEFAULT_RECONNECT_POLICY: ReconnectPolicy = {
 };
 
 export function resolveHeartbeatSeconds(cfg: OpenClawConfig, overrideSeconds?: number): number {
-  const candidate = overrideSeconds ?? cfg.web?.heartbeatSeconds;
+  void cfg;
+  const candidate = overrideSeconds;
   if (typeof candidate === "number" && candidate > 0) {
     return candidate;
   }
@@ -33,11 +34,10 @@ export function resolveReconnectPolicy(
   cfg: OpenClawConfig,
   overrides?: Partial<ReconnectPolicy>,
 ): ReconnectPolicy {
-  const reconnectOverrides = cfg.web?.reconnect ?? {};
+  void cfg;
   const overrideConfig = overrides ?? {};
   const merged = {
     ...DEFAULT_RECONNECT_POLICY,
-    ...reconnectOverrides,
     ...overrideConfig,
   } as ReconnectPolicy;
 

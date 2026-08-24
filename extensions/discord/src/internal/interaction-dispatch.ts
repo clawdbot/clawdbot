@@ -1,7 +1,7 @@
 // Discord plugin module implements interaction dispatch behavior.
 import { InteractionType, type APIInteraction } from "discord-api-types/v10";
 import {
-  type BaseCommand,
+  type DiscordCommand,
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
@@ -28,7 +28,7 @@ type DispatchModal = {
 };
 
 type DispatchClient = Parameters<typeof createInteraction>[0] & {
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   componentHandler: {
     resolve(customId: string, options?: { componentType?: number }): DispatchComponent | undefined;
     resolveOneOffComponent(params: {
@@ -60,20 +60,16 @@ export async function dispatchInteraction(
       await optionAutocomplete(autocompleteInteraction);
       return;
     }
-    if ("autocomplete" in command) {
-      await (
-        command as { autocomplete: (interaction: AutocompleteInteraction) => Promise<void> }
-      ).autocomplete(autocompleteInteraction);
+    if (command.commandKind === "leaf") {
+      await command.autocomplete(autocompleteInteraction);
     }
     return;
   }
   if (rawData.type === InteractionType.ApplicationCommand) {
     const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
-    if (command && "run" in command) {
+    if (command) {
       await deferCommandInteractionIfNeeded(command, interaction as CommandInteraction);
-      await (command as { run: (interaction: CommandInteraction) => Promise<void> }).run(
-        interaction as CommandInteraction,
-      );
+      await command.run(interaction as CommandInteraction);
     }
     return;
   }

@@ -16,10 +16,13 @@ function createStreamDeps(): {
   const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
     anthropicVertexCtorMock(options);
   } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
+  const MockGoogleAuth =
+    function MockGoogleAuth() {} as unknown as AnthropicVertexStreamDeps["GoogleAuth"];
 
   return {
     deps: {
       AnthropicVertex: MockAnthropicVertex,
+      GoogleAuth: MockGoogleAuth,
       streamAnthropic: streamAnthropicMock,
     },
     streamAnthropicMock,

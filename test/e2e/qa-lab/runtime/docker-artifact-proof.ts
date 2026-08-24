@@ -7,17 +7,16 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/docker-artifact-proof.ts";
 
 const PROOFS = {
   "compose-setup": {
-    secondaryCoverageIds: ["docker.compose"],
     title: "Docker Compose setup evidence",
   },
   "docker-package-install": {
-    secondaryCoverageIds: ["docker.package-artifact-generation", "cli.package-manager-installs"],
     title: "Docker package install evidence",
   },
 } as const;
@@ -43,10 +42,6 @@ type ArtifactIdentity = {
   package: { fileName: string; name: string; sha256: string; sizeBytes: number; version: string };
   scenarioId: string;
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function isProofLane(value: string): value is DockerArtifactProofLane {
   return Object.hasOwn(PROOFS, value);
@@ -173,13 +168,12 @@ async function runDockerArtifactProofProducer(
       codeRefs: [
         SOURCE_PATH,
         "scripts/test-docker-all.mjs",
-        "scripts/lib/docker-e2e-plan.mjs",
-        "scripts/lib/docker-e2e-scenarios.mjs",
-        "scripts/package-openclaw-for-docker.mjs",
+        "scripts/lib/docker-e2e-plan.mts",
+        "scripts/lib/docker-e2e-scenarios.mts",
+        "scripts/package-openclaw-for-docker.mts",
       ],
       docsRefs: ["docs/install/docker.md", "docs/help/testing.md"],
       id: options.lane,
-      secondaryCoverageIds: proof.secondaryCoverageIds,
       sourcePath: SOURCE_PATH,
       title: proof.title,
     },

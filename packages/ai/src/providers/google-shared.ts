@@ -14,11 +14,18 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
+import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
+import {
+  assignTransportErrorDetails,
+  coerceTransportToolCallArguments,
+  notifyProviderStreamOpened,
+  transportAbortError,
+} from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   StopReason,
@@ -31,10 +38,14 @@ import type {
   StreamOptions,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 
@@ -92,7 +103,7 @@ function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boole
  * a signature from being overwritten with `undefined` within the same streamed block.
  * @internal Directly tested provider implementation detail.
  */
-export function retainThoughtSignature(
+function retainThoughtSignature(
   existing: string | undefined,
   incoming: string | undefined,
 ): string | undefined {
@@ -129,7 +140,7 @@ function resolveThoughtSignature(
  * Models via Google APIs that require explicit tool call IDs in function calls/responses.
  * @internal Directly tested provider implementation detail.
  */
-export function requiresToolCallId(modelId: string): boolean {
+function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
@@ -167,7 +178,9 @@ export function convertMessages<T extends GoogleApiType>(
   };
 
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
-
+  const requiresToolCallThoughtSignature =
+    model.provider !== "google-gemini-cli" &&
+    (isGemini3ProModel(model) || isGemini3FlashModel(model));
   // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
   // live inside functionResponse, so hold them until the consecutive result run ends.
   const pendingToolResultImageTurns: Content[] = [];
@@ -186,12 +199,12 @@ export function convertMessages<T extends GoogleApiType>(
       if (typeof msg.content === "string") {
         contents.push({
           role: "user",
-          parts: [{ text: sanitizeSurrogates(msg.content) }],
+          parts: [{ text: sanitizeSurrogates(msg.content) || " " }],
         });
       } else {
         const parts: Part[] = msg.content.map((item) => {
           if (item.type === "text") {
-            return { text: sanitizeSurrogates(item.text) };
+            return { text: sanitizeSurrogates(item.text) || " " };
           }
           return {
             inlineData: {
@@ -201,7 +214,7 @@ export function convertMessages<T extends GoogleApiType>(
           };
         });
         if (parts.length === 0) {
-          continue;
+          parts.push({ text: " " });
         }
         contents.push({
           role: "user",
@@ -210,35 +223,35 @@ export function convertMessages<T extends GoogleApiType>(
       }
     } else if (msg.role === "assistant") {
       const parts: Part[] = [];
+      let sawFunctionCall = false;
       // Check if message is from same provider and model - only then keep thinking blocks
-      const isSameProviderAndModel = msg.provider === model.provider && msg.model === model.id;
+      const isSameProviderAndModel =
+        msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
 
       for (const block of msg.content) {
         if (block.type === "text") {
-          // Skip empty text blocks
-          if (!block.text || block.text.trim() === "") {
-            continue;
-          }
           const thoughtSignature = resolveThoughtSignature(
             isSameProviderAndModel,
             block.textSignature,
           );
+          if ((!block.text || block.text.trim() === "") && !thoughtSignature) {
+            continue;
+          }
           parts.push({
             text: sanitizeSurrogates(block.text),
             ...(thoughtSignature && { thoughtSignature }),
           });
         } else if (block.type === "thinking") {
-          // Skip empty thinking blocks
-          if (!block.thinking || block.thinking.trim() === "") {
+          const thoughtSignature = resolveThoughtSignature(
+            isSameProviderAndModel,
+            block.thinkingSignature,
+          );
+          if ((!block.thinking || block.thinking.trim() === "") && !thoughtSignature) {
             continue;
           }
           // Only keep as thinking block if same provider AND same model
           // Otherwise convert to plain text (no tags to avoid model mimicking them)
           if (isSameProviderAndModel) {
-            const thoughtSignature = resolveThoughtSignature(
-              isSameProviderAndModel,
-              block.thinkingSignature,
-            );
             parts.push({
               thought: true,
               text: sanitizeSurrogates(block.thinking),
@@ -250,14 +263,21 @@ export function convertMessages<T extends GoogleApiType>(
             });
           }
         } else if (block.type === "toolCall") {
-          const thoughtSignature = resolveThoughtSignature(
+          const args = coerceTransportToolCallArguments(block.arguments);
+          const ownSignature = resolveThoughtSignature(
             isSameProviderAndModel,
             block.thoughtSignature,
           );
+          const thoughtSignature =
+            ownSignature ??
+            (!sawFunctionCall && requiresToolCallThoughtSignature
+              ? "skip_thought_signature_validator"
+              : undefined);
+          sawFunctionCall = true;
           const part: Part = {
             functionCall: {
               name: block.name,
-              args: block.arguments ?? {},
+              args,
               ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
             ...(thoughtSignature && { thoughtSignature }),
@@ -277,7 +297,7 @@ export function convertMessages<T extends GoogleApiType>(
       // Extract text and image content
       const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
-        ? msg.content.filter((c): c is ImageContent => c.type === "image")
+        ? msg.content.filter(isImageWithMediaPayload)
         : [];
 
       const hasText = textResult.length > 0;
@@ -331,62 +351,28 @@ export function convertMessages<T extends GoogleApiType>(
   }
 
   flushToolResultRun();
+  if (contents.length === 0) {
+    contents.push({ role: "user", parts: [{ text: " " }] });
+  }
   return contents;
-}
-
-const JSON_SCHEMA_META_DECLARATIONS = new Set([
-  "$schema",
-  "$id",
-  "$anchor",
-  "$dynamicAnchor",
-  "$vocabulary",
-  "$comment",
-  "$defs",
-  "definitions", // pre-draft-2019-09 equivalent of $defs
-]);
-
-/**
- * Strip meta-declarations from a schema obj
- */
-function sanitizeForOpenApi(schema: unknown): unknown {
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
-    return schema;
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (JSON_SCHEMA_META_DECLARATIONS.has(key)) {
-      continue;
-    }
-    result[key] = sanitizeForOpenApi(value);
-  }
-  return result;
 }
 
 /**
  * Convert tools to Gemini function declarations format.
- *
- * By default uses `parametersJsonSchema` which supports full JSON Schema (including
- * anyOf, oneOf, const, etc.). Set `useParameters` to true to use the legacy `parameters`
- * field instead (OpenAPI 3.03 Schema). This is needed for Cloud Code Assist with Claude
- * models, where the API translates `parameters` into Anthropic's `input_schema`.
  * @internal Directly tested provider implementation detail.
  */
 export function convertTools(
   tools: Tool[],
-  useParameters = false,
 ): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
   if (tools.length === 0) {
     return undefined;
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
-        ...(useParameters
-          ? { parameters: sanitizeForOpenApi(tool.parameters as unknown) }
-          : { parametersJsonSchema: tool.parameters }),
+        parametersJsonSchema: tool.parameters,
       })),
     },
   ];
@@ -396,7 +382,7 @@ export function convertTools(
  * Map tool choice string to Gemini FunctionCallingConfigMode.
  * @internal Directly tested provider implementation detail.
  */
-export function mapToolChoice(choice: string): FunctionCallingConfigMode {
+function mapToolChoice(choice: string): FunctionCallingConfigMode {
   switch (choice) {
     case "auto":
       return FunctionCallingConfigMode.AUTO;
@@ -451,8 +437,15 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       requestParams = nextParams as GenerateContentParameters;
     }
     const googleStream = await client.models.generateContentStream(requestParams);
+    const googleIterator = googleStream[Symbol.asyncIterator]();
+    await notifyProviderStreamOpened({
+      options,
+      cancelStream: async () => {
+        await googleIterator.return?.();
+      },
+    });
     await consumeGoogleGenerateContentStream({
-      chunks: googleStream,
+      chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,
       output,
       stream,
@@ -465,9 +458,13 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
         delete (block as { index?: number }).index;
       }
     }
-    output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-    stream.push({ type: "error", reason: output.stopReason, error: output });
+    const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
+    assignTransportErrorDetails(output, failure, options?.signal);
+    stream.push({
+      type: "error",
+      reason: output.stopReason === "aborted" ? "aborted" : "error",
+      error: output,
+    });
     stream.end();
   }
 }
@@ -476,9 +473,6 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   model: Model<T>,
   context: Context,
   options: GoogleProviderOptions = {},
-  configHooks?: {
-    getDisabledThinkingConfig?: (model: Model<T>) => ThinkingConfig;
-  },
 ): GenerateContentParameters {
   const contents = convertMessages(model, context);
 
@@ -520,9 +514,10 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
     }
     config.thinkingConfig = thinkingConfig;
   } else if (model.reasoning && options.thinking && !options.thinking.enabled) {
-    config.thinkingConfig = configHooks?.getDisabledThinkingConfig
-      ? configHooks.getDisabledThinkingConfig(model)
-      : getDisabledGoogleThinkingConfig(model);
+    const disabledThinkingConfig = getDisabledGoogleThinkingConfig(model);
+    if (Object.keys(disabledThinkingConfig).length > 0) {
+      config.thinkingConfig = disabledThinkingConfig;
+    }
   }
 
   if (options.signal) {
@@ -539,6 +534,10 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   };
 }
 
+function isAdaptiveGoogleReasoningLevel(value: unknown): value is "adaptive" {
+  return value === "adaptive";
+}
+
 export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   model: Model<T>,
   options: SimpleStreamOptions | undefined,
@@ -549,6 +548,17 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
 ): GoogleThinkingOptions {
   if (!options?.reasoning || options.reasoning === "off") {
     return { enabled: false };
+  }
+  if (isAdaptiveGoogleReasoningLevel(options.reasoning)) {
+    if (!model.reasoning) {
+      return { enabled: false };
+    }
+    if (isGemma4Model(model)) {
+      return { enabled: true, level: ThinkingLevel.HIGH };
+    }
+    return isGemini3ProModel(model) || isGemini3FlashModel(model)
+      ? { enabled: true }
+      : { enabled: true, budgetTokens: -1 };
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
@@ -580,12 +590,7 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   };
 }
 
-export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
-  model: Model<T>,
-  config?: {
-    includeGemma4?: boolean;
-  },
-): ThinkingConfig {
+function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T>): ThinkingConfig {
   // Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
   // do not support full thinking-off either. For Gemini 3 models, use the lowest supported
   // thinkingLevel without includeThoughts so hidden thinking remains invisible to OpenClaw.
@@ -593,10 +598,14 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
     return { thinkingLevel: ThinkingLevel.LOW };
   }
   if (isGemini3FlashModel(model)) {
-    return { thinkingLevel: ThinkingLevel.MINIMAL };
+    return {
+      thinkingLevel: googleFlashSupportsMinimalThinking(model.id)
+        ? ThinkingLevel.MINIMAL
+        : ThinkingLevel.LOW,
+    };
   }
-  if (config?.includeGemma4 && isGemma4Model(model)) {
-    return { thinkingLevel: ThinkingLevel.MINIMAL };
+  if (isGemma4Model(model) || model.id.toLowerCase().includes("gemini-2.5-pro")) {
+    return {};
   }
 
   // Gemini 2.x supports disabling via thinkingBudget = 0.
@@ -604,16 +613,16 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
 }
 
 /** @internal Directly tested provider implementation detail. */
-export function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemma-?4/.test(model.id.toLowerCase());
 }
 
 function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-3(?:\.\d+)?-pro/.test(model.id.toLowerCase());
+  return /gemini-(?:3(?:\.\d+)?-pro|pro-latest)/.test(model.id.toLowerCase());
 }
 
 function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-3(?:\.\d+)?-flash/.test(model.id.toLowerCase());
+  return /gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)/.test(model.id.toLowerCase());
 }
 
 function getGoogleThinkingLevel<T extends GoogleApiType>(
@@ -643,7 +652,9 @@ function getGoogleThinkingLevel<T extends GoogleApiType>(
   }
   switch (effort) {
     case "minimal":
-      return ThinkingLevel.MINIMAL;
+      return isGemini3FlashModel(model) && !googleFlashSupportsMinimalThinking(model.id)
+        ? ThinkingLevel.LOW
+        : ThinkingLevel.MINIMAL;
     case "low":
       return ThinkingLevel.LOW;
     case "medium":
@@ -701,7 +712,7 @@ function getGoogleBudget<T extends GoogleApiType>(
  * Map Gemini FinishReason to our StopReason.
  * @internal Directly tested provider implementation detail.
  */
-export function mapStopReason(reason: FinishReason): StopReason {
+function mapStopReason(reason: FinishReason): StopReason {
   switch (reason) {
     case FinishReason.STOP:
       return "stop";
@@ -742,6 +753,15 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   params.stream.push({ type: "start", partial: params.output });
   let currentBlock: TextContent | ThinkingContent | null = null;
   const blocks = params.output.content;
+  let sawTerminalReason = false;
+  let terminalGenerationError: (Error & { code: string; type: string }) | undefined;
+  const knownUsage = {
+    promptTokenCount: 0,
+    cachedContentTokenCount: 0,
+    toolUsePromptTokenCount: 0,
+    candidatesTokenCount: 0,
+    thoughtsTokenCount: 0,
+  };
   const toolCallIds = new Set<string>();
   for (const block of blocks) {
     if (block.type === "toolCall") {
@@ -774,10 +794,92 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
   for await (const chunk of params.chunks) {
     params.output.responseId ||= chunk.responseId;
+    if (chunk.usageMetadata) {
+      for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
+        const value = chunk.usageMetadata[field];
+        if (typeof value === "number") {
+          knownUsage[field] = value;
+        }
+      }
+      const promptTokens = knownUsage.promptTokenCount;
+      const cacheRead = knownUsage.cachedContentTokenCount;
+      const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
+      const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
+      params.output.usage = {
+        input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
+        output: outputTokens,
+        cacheRead,
+        cacheWrite: 0,
+        totalTokens:
+          chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      };
+      calculateCost(params.model, params.output.usage);
+    }
     const candidate = chunk.candidates?.[0];
+    const promptFeedback = chunk.promptFeedback;
+    if (!candidate && promptFeedback) {
+      const blockReason = promptFeedback.blockReason ?? "PROMPT_BLOCKED";
+      const blockMessage = promptFeedback.blockReasonMessage?.trim();
+      params.output.errorCode = blockReason;
+      params.output.errorType = "google_prompt_blocked";
+      throw new Error(
+        `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`,
+      );
+    }
     if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        if (part.text !== undefined) {
+      for (const [partIndex, part] of candidate.content.parts.entries()) {
+        const text = part.text;
+        const hasText = typeof text === "string";
+        const hasThoughtSignature =
+          typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
+        const signatureOnly =
+          hasThoughtSignature &&
+          (!hasText || text.length === 0) &&
+          Object.keys(part).every(
+            (key) => key === "thought" || key === "thoughtSignature" || key === "text",
+          );
+        if (signatureOnly) {
+          if (!hasText && part.thought !== true) {
+            const latestBlock = blocks.at(-1);
+            if (
+              partIndex === 0 &&
+              latestBlock?.type === "toolCall" &&
+              !latestBlock.thoughtSignature
+            ) {
+              latestBlock.thoughtSignature = retainThoughtSignature(
+                latestBlock.thoughtSignature,
+                part.thoughtSignature,
+              );
+              continue;
+            }
+          }
+          // Empty signed Parts have their own wire identity; merging moves an opaque signature.
+          endCurrentBlock();
+        }
+
+        if (hasText || signatureOnly) {
+          if (currentBlock && (hasThoughtSignature || partIndex > 0)) {
+            const currentSignature =
+              currentBlock.type === "thinking"
+                ? currentBlock.thinkingSignature
+                : currentBlock.textSignature;
+            const currentText =
+              currentBlock.type === "thinking" ? currentBlock.thinking : currentBlock.text;
+            if (
+              currentText.length > 0 &&
+              (currentSignature !== part.thoughtSignature ||
+                (partIndex > 0 && (currentSignature || hasThoughtSignature)))
+            ) {
+              endCurrentBlock();
+            }
+          }
           const isThinking = isThinkingPart(part);
           if (
             !currentBlock ||
@@ -803,8 +905,9 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
               });
             }
           }
+          const delta = hasText ? text : "";
           if (currentBlock.type === "thinking") {
-            currentBlock.thinking += part.text;
+            currentBlock.thinking += delta;
             currentBlock.thinkingSignature = retainThoughtSignature(
               currentBlock.thinkingSignature,
               part.thoughtSignature,
@@ -812,11 +915,11 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
             params.stream.push({
               type: "thinking_delta",
               contentIndex: blockIndex(),
-              delta: part.text,
+              delta,
               partial: params.output,
             });
           } else {
-            currentBlock.text += part.text;
+            currentBlock.text += delta;
             currentBlock.textSignature = retainThoughtSignature(
               currentBlock.textSignature,
               part.thoughtSignature,
@@ -824,9 +927,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
             params.stream.push({
               type: "text_delta",
               contentIndex: blockIndex(),
-              delta: part.text,
+              delta,
               partial: params.output,
             });
+          }
+          if (signatureOnly) {
+            endCurrentBlock();
           }
         }
 
@@ -866,7 +972,17 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
     }
 
     if (candidate?.finishReason) {
+      sawTerminalReason = true;
       params.output.stopReason = mapStopReason(candidate.finishReason);
+      if (params.output.stopReason === "error") {
+        const finishMessage = candidate.finishMessage?.trim();
+        terminalGenerationError = Object.assign(
+          new Error(
+            `Google generation stopped (${candidate.finishReason})${finishMessage ? `: ${finishMessage}` : ""}`,
+          ),
+          { code: candidate.finishReason, type: "google_generation_failed" },
+        );
+      }
       // MAX_TOKENS can leave a complete-looking partial call. Only a normal
       // Google stop may promote parsed calls into an executable tool-use turn.
       if (
@@ -876,34 +992,24 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
         params.output.stopReason = "toolUse";
       }
     }
-
-    if (chunk.usageMetadata) {
-      params.output.usage = {
-        input:
-          (chunk.usageMetadata.promptTokenCount || 0) -
-          (chunk.usageMetadata.cachedContentTokenCount || 0),
-        output:
-          (chunk.usageMetadata.candidatesTokenCount || 0) +
-          (chunk.usageMetadata.thoughtsTokenCount || 0),
-        cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
-        cacheWrite: 0,
-        totalTokens: chunk.usageMetadata.totalTokenCount || 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      };
-      calculateCost(params.model, params.output.usage);
-    }
   }
 
   endCurrentBlock();
 
   if (params.signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(params.signal);
+  }
+
+  if (terminalGenerationError) {
+    params.output.errorCode = terminalGenerationError.code;
+    params.output.errorType = terminalGenerationError.type;
+    throw terminalGenerationError;
+  }
+
+  if (!sawTerminalReason) {
+    params.output.errorCode = "STREAM_INCOMPLETE";
+    params.output.errorType = "google_incomplete_stream";
+    throw new Error("Google stream ended before a terminal finish reason");
   }
 
   if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {

@@ -21,7 +21,7 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
-import { confirm, password, select, text } from "./configure.shared.js";
+import { password, select, text } from "./configure.shared.js";
 import {
   guardCancel,
   normalizeGatewayTokenInput,
@@ -55,6 +55,7 @@ export async function promptGatewayConfig(
       validate: validateGatewayPortInput,
     }),
     runtime,
+    1,
   );
   const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
 
@@ -90,6 +91,7 @@ export async function promptGatewayConfig(
       ],
     }),
     runtime,
+    1,
   );
 
   let customBindHost: string | undefined;
@@ -101,6 +103,7 @@ export async function promptGatewayConfig(
         validate: validateDottedDecimalIPv4Input,
       }),
       runtime,
+      1,
     );
     customBindHost = readStringValue(input);
   }
@@ -120,6 +123,7 @@ export async function promptGatewayConfig(
       initialValue: "token",
     }),
     runtime,
+    1,
   ) as GatewayAuthChoice;
 
   let tailscaleMode = guardCancel(
@@ -128,6 +132,7 @@ export async function promptGatewayConfig(
       options: [...TAILSCALE_EXPOSURE_OPTIONS],
     }),
     runtime,
+    1,
   );
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
@@ -140,16 +145,8 @@ export async function promptGatewayConfig(
     }
   }
 
-  let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = guardCancel(
-      await confirm({
-        message: "Reset Tailscale serve/funnel on exit?",
-        initialValue: false,
-      }),
-      runtime,
-    );
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
@@ -170,7 +167,6 @@ export async function promptGatewayConfig(
       "Note",
     );
     tailscaleMode = "off";
-    tailscaleResetOnExit = false;
   }
 
   let gatewayToken: SecretInput | undefined;
@@ -201,6 +197,7 @@ export async function promptGatewayConfig(
         initialValue: "plaintext",
       }),
       runtime,
+      1,
     );
     if (tokenInputMode === "ref") {
       const envVar = guardCancel(
@@ -221,6 +218,7 @@ export async function promptGatewayConfig(
           },
         }),
         runtime,
+        1,
       );
       const envVarName = normalizeOptionalString(envVar) ?? "";
       gatewayToken = {
@@ -237,6 +235,7 @@ export async function promptGatewayConfig(
           message: "Gateway token (blank to generate)",
         }),
         runtime,
+        1,
       );
       gatewayTokenForCalls = normalizeGatewayTokenInput(tokenInput) || randomToken();
       gatewayToken = gatewayTokenForCalls;
@@ -250,6 +249,7 @@ export async function promptGatewayConfig(
         validate: validateGatewayPasswordInput,
       }),
       runtime,
+      1,
     );
     gatewayPassword = normalizeOptionalString(passwordInput) ?? "";
   }
@@ -275,6 +275,7 @@ export async function promptGatewayConfig(
         validate: (value) => (value?.trim() ? undefined : "User header is required"),
       }),
       runtime,
+      1,
     );
 
     const requiredHeadersRaw = guardCancel(
@@ -283,6 +284,7 @@ export async function promptGatewayConfig(
         placeholder: "x-forwarded-proto,x-forwarded-host",
       }),
       runtime,
+      1,
     );
     const requiredHeaders = requiredHeadersRaw
       ? normalizeStringEntries(requiredHeadersRaw.split(","))
@@ -294,6 +296,7 @@ export async function promptGatewayConfig(
         placeholder: "nick@example.com,admin@company.com",
       }),
       runtime,
+      1,
     );
     const allowUsers = allowUsersRaw ? normalizeStringEntries(allowUsersRaw.split(",")) : [];
 
@@ -309,6 +312,7 @@ export async function promptGatewayConfig(
         },
       }),
       runtime,
+      1,
     );
     trustedProxies = normalizeStringEntries(trustedProxiesRaw.split(","));
 
@@ -340,7 +344,6 @@ export async function promptGatewayConfig(
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };

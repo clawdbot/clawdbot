@@ -1,7 +1,11 @@
-import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionOrigin } from "../../config/sessions.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { normalizeDeliveryChannelRoute } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
-export function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
+export function stripThreadFromSessionRoute(
+  route: ChannelRouteRef | undefined,
+): ChannelRouteRef | undefined {
   const normalized = normalizeDeliveryChannelRoute(route);
   if (!normalized?.thread) {
     return normalized;
@@ -11,8 +15,8 @@ export function stripThreadFromSessionRoute(route: SessionEntry["route"]): Sessi
 }
 
 export function stripThreadIdFromDeliveryContext(
-  context: SessionEntry["deliveryContext"],
-): SessionEntry["deliveryContext"] {
+  context: DeliveryContext | undefined,
+): DeliveryContext | undefined {
   if (!context || context.threadId == null || context.threadId === "") {
     return context;
   }
@@ -20,7 +24,9 @@ export function stripThreadIdFromDeliveryContext(
   return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
-export function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
+export function stripThreadIdFromOrigin(
+  origin: SessionOrigin | undefined,
+): SessionOrigin | undefined {
   if (!origin || origin.threadId == null || origin.threadId === "") {
     return origin;
   }

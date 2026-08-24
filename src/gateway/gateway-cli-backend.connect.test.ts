@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -22,7 +23,7 @@ const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-gateway-connect-
 
 async function createTempDeviceIdentity() {
   const tempRoot = await tempDirs.make("device");
-  return loadOrCreateDeviceIdentity(path.join(tempRoot, "device.json"));
+  return loadOrCreateDeviceIdentity({ path: path.join(tempRoot, "device.sqlite") });
 }
 
 async function startMinimalGatewayServer(params: { token: string }) {
@@ -94,9 +95,12 @@ describe("gateway cli backend connect", () => {
     await tempDirs.cleanup();
   });
 
-  it(
-    "connects a test gateway client through the live helper",
-    async () => {
+  it.each([
+    { label: "default capabilities", caps: undefined },
+    { label: "plugin approval capability", caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] },
+  ])(
+    "connects a test gateway client through the live helper with $label",
+    async ({ caps }) => {
       const token = `test-${Date.now()}`;
       const deviceIdentity = await createTempDeviceIdentity();
       const server = await startMinimalGatewayServer({ token });
@@ -109,6 +113,7 @@ describe("gateway cli backend connect", () => {
           deviceIdentity,
           timeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
           maxAttemptTimeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
+          ...(caps ? { caps } : {}),
           requestTimeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
           waitForEventLoopReady: false,
         });
@@ -121,6 +126,7 @@ describe("gateway cli backend connect", () => {
         expect(connectClient?.displayName).toBe("vitest-live");
         expect(connectClient?.version).toBe("dev");
         expect(connectClient?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
+        expect(server.connectParams?.caps).toEqual(caps ?? []);
         expect(server.requests).toEqual(["connect", "health"]);
       } finally {
         await client

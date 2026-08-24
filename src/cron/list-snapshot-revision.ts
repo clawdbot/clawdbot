@@ -1,4 +1,4 @@
-import { stableStringify } from "../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import type { CronJob } from "./types.js";
 

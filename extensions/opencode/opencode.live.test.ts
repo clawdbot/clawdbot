@@ -5,10 +5,13 @@ import {
   type Model,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
-import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { buildStaticOpencodeZenProviderConfig } from "./provider-catalog.js";
+import {
+  buildStaticOpencodeZenProviderConfig,
+  listOpencodeZenModelCatalogEntries,
+} from "./provider-catalog.js";
 
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
@@ -89,24 +92,46 @@ function listStaticOpencodeZenModelIds(): string[] {
 }
 
 describeCatalogLive("opencode Zen live catalog drift", () => {
-  it("keeps the provider-owned static seed aligned with the live model ids", async () => {
+  it("covers every global live id with trusted metadata and filters deprecated rows", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
     const staticIds = listStaticOpencodeZenModelIds();
     expect(new Set(staticIds).size).toBe(staticIds.length);
 
-    const staticIdSet = new Set(staticIds);
-    const liveIdSet = new Set(liveIds);
-    const missingStaticMetadata = liveIds.filter((id) => !staticIdSet.has(id));
-    const staleStaticRows = staticIds.filter((id) => !liveIdSet.has(id));
+    const trustedRows = listOpencodeZenModelCatalogEntries();
+    const trustedIdSet = new Set(trustedRows.map((row) => row.id));
+    const missingTrustedMetadata = liveIds.filter((id) => !trustedIdSet.has(id));
+    const deprecatedLiveIds = trustedRows
+      .filter((row) => row.status === "deprecated" && liveIds.includes(row.id))
+      .map((row) => row.id)
+      .toSorted();
+    const expectedActiveIds = liveIds.filter((id) => !deprecatedLiveIds.includes(id));
 
     expect(
-      { missingStaticMetadata, staleStaticRows },
+      { missingTrustedMetadata, deprecatedLiveIds, staticIds },
       [
-        "OpenCode Zen live catalog drifted from the provider-owned static seed.",
-        "Add routing/baseUrl/cost/context/capability metadata for missing live ids,",
-        "or remove stale static rows if OpenCode retired them.",
+        "OpenCode Zen global catalog has ids without trusted provider metadata,",
+        "or active discovery no longer matches global availability after lifecycle filtering.",
+        "Key-scoped absence is not retirement evidence.",
       ].join(" "),
-    ).toEqual({ missingStaticMetadata: [], staleStaticRows: [] });
+    ).toEqual({
+      missingTrustedMetadata: [],
+      deprecatedLiveIds: [
+        "claude-opus-4-8",
+        "claude-sonnet-4",
+        "glm-5",
+        "gpt-5-codex",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2-codex",
+        "gpt-5.5",
+        "kimi-k2.5",
+        "ling-3.0-flash-free",
+        "minimax-m2.5",
+        "minimax-m2.7",
+      ],
+      staticIds: expectedActiveIds,
+    });
   }, 30_000);
 });
 

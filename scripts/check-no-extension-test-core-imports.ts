@@ -32,7 +32,7 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
   {
     pattern: /["'](?:\.\.\/)+(?:test\/helpers\/media-generation\/)[^"']+["']/,
-    hint: "Use openclaw/plugin-sdk/provider-test-contracts or openclaw/plugin-sdk/provider-http-test-mocks instead of repo-only media provider helper bridges.",
+    hint: "Use openclaw/plugin-sdk/test-media-generation, provider-test-contracts, or provider-http-test-mocks instead of repo-only media provider helper bridges.",
   },
   {
     pattern:

@@ -262,13 +262,15 @@ describe("node.invoke approval bypass", () => {
       gateway: {
         nodes: {
           pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
-          allowCommands: [
-            "system.run",
-            "system.run.prepare",
-            "system.which",
-            "browser.proxy",
-            "fs.listDir",
-          ],
+          commands: {
+            allow: [
+              "system.run",
+              "system.run.prepare",
+              "system.which",
+              "browser.proxy",
+              "fs.listDir",
+            ],
+          },
         },
       },
     });
@@ -285,8 +287,9 @@ describe("node.invoke approval bypass", () => {
   });
 
   const approveAllPendingPairings = async () => {
-    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    const { approveNodePairing, listNodePairing } = await import("../infra/device-pairing-node.js");
     const deviceList = await listDevicePairing();
     for (const pending of deviceList.pending) {
       await approveDevicePairing(pending.requestId, {
@@ -302,7 +305,7 @@ describe("node.invoke approval bypass", () => {
   };
 
   const approvePendingNodePairings = async (nodeId: string) => {
-    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const { approveNodePairing, listNodePairing } = await import("../infra/device-pairing-node.js");
     const list = await listNodePairing();
     let approved = false;
     for (const pending of list.pending) {
@@ -556,38 +559,41 @@ describe("node.invoke approval bypass", () => {
     }
   });
 
-  test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
-    let sawInvoke = false;
-    const node = await connectLinuxNode(
-      () => {
-        sawInvoke = true;
-      },
-      undefined,
-      ["browser.proxy"],
-    );
-    const ws = await connectOperator(["operator.write"]);
-    try {
-      const nodeId = await getConnectedNodeIdForTest(ws);
-      const res = await rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "browser.proxy",
-        params: {
-          method: "POST",
-          path: "/profiles/create",
-          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+  test.each(["browser.proxy", "browser.proxy.upload.v1"])(
+    "rejects %s persistent profile mutations before forwarding",
+    async (command) => {
+      let sawInvoke = false;
+      const node = await connectLinuxNode(
+        () => {
+          sawInvoke = true;
         },
-        idempotencyKey: crypto.randomUUID(),
-      });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain(
-        "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+        undefined,
+        [command],
       );
-      await expectNoForwardedInvoke(() => sawInvoke);
-    } finally {
-      ws.close();
-      node.stop();
-    }
-  });
+      const ws = await connectOperator(["operator.write"]);
+      try {
+        const nodeId = await getConnectedNodeIdForTest(ws);
+        const res = await rpcReq(ws, "node.invoke", {
+          nodeId,
+          command,
+          params: {
+            method: "POST",
+            path: "/profiles/create",
+            body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+          },
+          idempotencyKey: crypto.randomUUID(),
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain(
+          `node.invoke cannot mutate persistent browser profiles via ${command}`,
+        );
+        await expectNoForwardedInvoke(() => sawInvoke);
+      } finally {
+        ws.close();
+        node.stop();
+      }
+    },
+  );
 
   test("requires admin scope for direct browser.proxy node.invoke", async () => {
     let sawInvoke = false;
@@ -618,7 +624,15 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(directProxy.ok).toBe(false);
-      expect(directProxy.error?.message ?? "").toContain("missing scope: operator.admin");
+      expect(directProxy.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
       await expectNoForwardedInvoke(() => sawInvoke);
     } finally {
       ws.close();
@@ -674,7 +688,14 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(directList.ok).toBe(false);
-      expect(directList.error?.message ?? "").toContain("missing scope: operator.admin");
+      expect(directList.error).toMatchObject({
+        code: "FORBIDDEN",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
       await expectNoForwardedInvoke(() => sawInvoke);
     } finally {
       ws.close();

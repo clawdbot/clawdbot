@@ -1,6 +1,7 @@
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   agentUsesCodexRuntimeForCompaction,
   asAgentRuntimePolicyConfig,
@@ -145,18 +146,14 @@ export function collectLegacyLosslessCompactionConfigs(params: {
     currentRuntime: resolveRuntime({ defaultsRuntime }),
     env: params.env,
   });
-  const agents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id = readAgentPathId(agentRecord, index);
+  for (const { agent: agentRecord, agentId: id, path } of listMutableCodexRouteAgentEntries(
+    params.cfg,
+  )) {
     hits.push(
       ...collectLegacyLosslessCompactionForAgent({
         cfg: params.cfg,
         agent: agentRecord,
-        path: `agents.list.${id}`,
+        path,
         agentId: id,
         currentRuntime: resolveRuntime({
           agentRuntime: params.ignoreLegacyAgentRuntimePins
@@ -192,18 +189,14 @@ export function collectUnsupportedCodexCompactionOverrides(params: {
     currentRuntime: resolveRuntime({ defaultsRuntime }),
     env: params.env,
   });
-  const agents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id = readAgentPathId(agentRecord, index);
+  for (const { agent: agentRecord, agentId: id, path } of listMutableCodexRouteAgentEntries(
+    params.cfg,
+  )) {
     hits.push(
       ...collectUnsupportedCodexCompactionOverridesForAgent({
         cfg: params.cfg,
         agent: agentRecord,
-        path: `agents.list.${id}`,
+        path,
         agentId: id,
         currentRuntime: resolveRuntime({
           agentRuntime: params.ignoreLegacyAgentRuntimePins
@@ -256,12 +249,7 @@ export function getSharedDefaultCompactionOverrideConsumers(params: {
       return consumers;
     }
   }
-  const agents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
+  for (const { agent: agentRecord, agentId: id } of listMutableCodexRouteAgentEntries(params.cfg)) {
     const compaction = asMutableRecord(agentRecord.compaction);
     const inheritsDefaultModel =
       Boolean(hasDefaultModel) &&
@@ -272,7 +260,6 @@ export function getSharedDefaultCompactionOverrideConsumers(params: {
     if (!inheritsDefaultModel && !inheritsDefaultProvider) {
       continue;
     }
-    const id = readAgentPathId(agentRecord, index);
     const usesCodexCompaction = agentUsesCodexRuntimeForCompaction({
       cfg: params.cfg,
       agent: agentRecord,
@@ -325,12 +312,7 @@ export function sharedDefaultLosslessCompactionHasNonCodexConsumer(params: {
     return true;
   }
   const inheritedModelRef = readAgentPrimaryModelRef(defaults);
-  const agents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
+  for (const { agent: agentRecord, agentId: id } of listMutableCodexRouteAgentEntries(params.cfg)) {
     const compaction = asMutableRecord(agentRecord.compaction);
     const inheritsDefaultProvider =
       hasDefaultLosslessProvider &&
@@ -341,7 +323,6 @@ export function sharedDefaultLosslessCompactionHasNonCodexConsumer(params: {
     if (!inheritsDefaultProvider && !inheritsDefaultModel) {
       continue;
     }
-    const id = readAgentPathId(agentRecord, index);
     if (
       !agentUsesCodexRuntimeForCompaction({
         cfg: params.cfg,
@@ -437,8 +418,4 @@ function dedupeUnsupportedCompactionOverrides(
     seen.add(key);
     return true;
   });
-}
-
-function readAgentPathId(agent: MutableRecord, index: number): string {
-  return typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
 }

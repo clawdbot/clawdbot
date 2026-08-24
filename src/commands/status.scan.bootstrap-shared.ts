@@ -35,6 +35,7 @@ export function buildColdStartStatusSummary() {
     },
     channelSummary: [],
     queuedSystemEvents: [],
+    degradedSecretOwners: [],
     tasks: createEmptyTaskRegistrySummary(),
     taskAudit: createEmptyTaskAuditSummary(),
     sessions: {
@@ -139,7 +140,6 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
       buildTailscaleHttpsUrl({
         tailscaleMode,
         tailscaleDns: await tailscaleDnsPromise,
-        serviceName: params.cfg.gateway?.tailscale?.serviceName,
         controlUiBasePath: params.cfg.gateway?.controlUi?.basePath,
       }),
   };

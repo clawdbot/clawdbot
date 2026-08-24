@@ -118,6 +118,11 @@ describe("resolveRuntimeOsLabel", () => {
     });
 
     expect(resolveRuntimeOsLabel()).toBe("macOS 26.6.0");
+    expect(spawnSyncMock).toHaveBeenCalledWith("sw_vers", ["-productVersion"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
   });
 
   it("falls back to the Darwin release when sw_vers output is blank", () => {

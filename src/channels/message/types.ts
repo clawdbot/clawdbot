@@ -13,6 +13,10 @@ import type { PollInput } from "../../polls.js";
 /** Delivery durability requested by core when a channel sends agent output. */
 export type MessageDurabilityPolicy = "required" | "best_effort" | "disabled";
 
+export type OutboundReplyFacts =
+  | Readonly<{ source: "explicit"; replyToId: string }>
+  | Readonly<{ source: "implicit"; replyToId: string; mode: "first" | "all" }>;
+
 /** Capability names a channel must advertise before core can rely on durable final delivery. */
 export const durableFinalDeliveryCapabilities = [
   "text",
@@ -39,7 +43,7 @@ export type DurableFinalDeliveryRequirementMap = Partial<
 >;
 
 /** Minimal payload facts used to derive required durable-delivery capabilities. */
-export type DurableFinalDeliveryPayloadShape = {
+type DurableFinalDeliveryPayloadShape = {
   text?: string | null;
   replyToId?: string | null;
   mediaUrl?: string | null;
@@ -50,6 +54,10 @@ export type DurableFinalDeliveryPayloadShape = {
 export type MessageReceiptSourceResult = {
   channel?: string;
   messageId?: string;
+  target?: {
+    kind: "chat" | "channel" | "room" | "conversation";
+    id: string;
+  };
   chatId?: string;
   channelId?: string;
   roomId?: string;
@@ -134,7 +142,7 @@ export type RenderedMessageBatch<TPayload = unknown> = {
 };
 
 /** Lifecycle phase for a live preview or streaming message send. */
-export type LiveMessagePhase = "idle" | "previewing" | "finalizing" | "finalized" | "cancelled";
+type LiveMessagePhase = "idle" | "previewing" | "finalizing" | "finalized" | "cancelled";
 
 /** Mutable state snapshot for live preview/finalization flows. */
 export type LiveMessageState<TPayload = unknown> = {
@@ -183,6 +191,10 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   deliveryQueueId?: string;
   /** @internal Stable platform-send index within one durable payload. */
   deliveryPartIndex?: number;
+  /** @internal Exact platform-send count within one durable payload. */
+  deliveryPartCount?: number;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before another fallible step. */
@@ -228,6 +240,7 @@ export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
 export type ChannelMessageSendResult = {
   receipt: MessageReceipt;
   messageId?: string;
+  target?: MessageReceiptSourceResult["target"];
 };
 
 /** Discriminator for lifecycle hooks around a concrete adapter send attempt. */
@@ -252,7 +265,7 @@ export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
   | (ChannelMessageSendPollContext<TConfig> & { kind: "poll" });
 
 /** Lifecycle context emitted after an adapter send succeeds but before commit finishes. */
-export type ChannelMessageSendSuccessContext<
+type ChannelMessageSendSuccessContext<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
 > = ChannelMessageSendAttemptContext<TConfig> & {
@@ -261,7 +274,7 @@ export type ChannelMessageSendSuccessContext<
 };
 
 /** Lifecycle context emitted after an adapter send throws or rejects. */
-export type ChannelMessageSendFailureContext<TConfig = OpenClawConfig> =
+type ChannelMessageSendFailureContext<TConfig = OpenClawConfig> =
   ChannelMessageSendAttemptContext<TConfig> & {
     error: unknown;
     attemptToken?: unknown;
@@ -339,7 +352,7 @@ export type ChannelMessageSendLifecycleAdapter<
 };
 
 /** Adapter methods a message channel can implement for outbound text/media/payload/poll sends. */
-export type ChannelMessageSendAdapter<
+type ChannelMessageSendAdapter<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
 > = {
@@ -353,6 +366,8 @@ export type ChannelMessageSendAdapter<
 /** Durable final-delivery extension for queue reconciliation and capability declaration. */
 export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
+  /** Opt into provider reconciliation for ordinary single-payload queued sends. */
+  automaticUnknownSendReconciliation?: boolean;
   /**
    * Synchronous provider admission before a durable intent is created or replayed.
    * Providers must not perform I/O from this hook.
@@ -368,6 +383,8 @@ export type ChannelMessageDurableFinalAdapter = {
     | Promise<ChannelMessageUnknownSendReconciliationResult | null>
     | ChannelMessageUnknownSendReconciliationResult
     | null;
+  /** Cleanup after core authoritatively retires an ambiguous send as failed. */
+  afterUnknownSendTerminal?: (ctx: ChannelMessageUnknownSendContext) => Promise<void> | void;
 };
 
 /** Live-message feature key declared by adapters that support preview or streaming behavior. */
@@ -405,7 +422,7 @@ export type LivePreviewFinalizerCapabilityMap = Partial<
 >;
 
 /** Adapter shape for finalizing live previews. */
-export type ChannelMessageLiveFinalizerAdapterShape = {
+type ChannelMessageLiveFinalizerAdapterShape = {
   capabilities?: LivePreviewFinalizerCapabilityMap;
 };
 
@@ -454,7 +471,7 @@ export type ChannelMessageAdapter<
 > = TAdapter;
 
 /** Extra durable-final requirement map for caller-derived capability checks. */
-export type DurableFinalRequirementExtras = DurableFinalDeliveryRequirementMap;
+type DurableFinalRequirementExtras = DurableFinalDeliveryRequirementMap;
 
 /** Inputs used to derive durable final-delivery requirements for a planned send. */
 export type DeriveDurableFinalDeliveryRequirementsParams = {

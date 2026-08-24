@@ -2,6 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
 import {
   collectProdResolvedPackagesFromLockfile,
@@ -248,6 +249,26 @@ snapshots:
     expect(text.length).toBeLessThan(4200);
   });
 
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      responseBody: `abc\u{1f600}tail`,
+      expectedText: "abc\n[truncated]",
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      responseBody: `ab\u{1f600}tail`,
+      expectedText: `ab\u{1f600}\n[truncated]`,
+    },
+  ])(
+    "keeps bulk advisory error truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedText }) => {
+      const response = new Response(responseBody, { status: 500 });
+
+      await expect(readBoundedBulkAdvisoryErrorText(response, 4)).resolves.toBe(expectedText);
+    },
+  );
+
   it("aborts stalled bulk advisory requests", async () => {
     let signal: AbortSignal | undefined;
     const request = fetchBulkAdvisories({
@@ -465,17 +486,3 @@ snapshots:
     }
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

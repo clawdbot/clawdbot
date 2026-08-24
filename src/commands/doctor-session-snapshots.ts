@@ -5,14 +5,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { hydrateSessionStoreSkillPromptRefs } from "../config/sessions/skill-prompt-blobs.js";
-import { updateSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -214,13 +214,14 @@ function resolveExpectedBundledSkillPath(params: {
   cachedPath: string;
   bundledSkillsDir: string;
   pathExists: (filePath: string) => boolean;
-  homeDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const expandedCachedPath = expandHomePrefix(params.cachedPath, {
-    home: params.homeDir,
-    env: params.env,
-  });
+  // Snapshot paths use shell `~` semantics. OPENCLAW_HOME may point at an isolated
+  // runtime profile, so expanding against it would make the active runtime look stale.
+  const osHomeDir = resolveOsHomeDir(params.env);
+  const expandedCachedPath = osHomeDir
+    ? expandHomePrefix(params.cachedPath, { home: osHomeDir })
+    : params.cachedPath;
   if (!isAbsolutePathLike(expandedCachedPath)) {
     return undefined;
   }
@@ -263,7 +264,6 @@ function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
   pathExists?: (filePath: string) => boolean;
-  homeDir?: string;
   env?: NodeJS.ProcessEnv;
 }): StaleSessionSnapshotPathFinding[] {
   const bundledSkillsDir = params.bundledSkillsDir?.trim();
@@ -282,7 +282,6 @@ function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
         cachedPath: cached.path,
         bundledSkillsDir,
         pathExists,
-        homeDir: params.homeDir,
         env: params.env,
       });
       if (!expectedPath) {
@@ -564,7 +563,7 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
-        const repairResult = await updateSessionStore(
+        const repairResult = await updateLegacySessionStore(
           storePath,
           async (store) => {
             const raw = fs.readFileSync(storePath, "utf-8");

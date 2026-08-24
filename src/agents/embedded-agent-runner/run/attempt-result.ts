@@ -8,6 +8,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -15,13 +16,13 @@ import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
-import { shouldRunLlmOutputHooksForAttempt } from "./attempt.run-decisions.js";
+import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
 import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
-  resolveSilentToolResultReplyPayload,
-  shouldTreatEmptyAssistantReplyAsSilent,
-} from "./incomplete-turn.js";
+} from "./attempt-terminal-evidence.js";
+import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
+import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -32,6 +33,26 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 
+/** Keeps presentation state sticky while retry attempts replace their result object. */
+export function createMcpAttemptCarryover() {
+  let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
+  let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  return {
+    apply(
+      attempt: Pick<EmbeddedRunAttemptResult, "latestMcpAppChannelView" | "latestMcpConnectAction">,
+    ): void {
+      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
+      latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
+      attempt.latestMcpConnectAction = latestMcpConnectAction;
+    },
+  };
+}
+
+export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
+  successfulNestedToolNames?: string[];
+};
+
 export type EmbeddedAttemptClientToolCallSlot = {
   toolCallId: string;
   name: string;
@@ -40,16 +61,8 @@ export type EmbeddedAttemptClientToolCallSlot = {
 };
 
 type EmbeddedAttemptResultState = Pick<
-  EmbeddedRunAttemptResult,
-  | "aborted"
-  | "externalAbort"
-  | "timedOut"
-  | "idleTimedOut"
-  | "timedOutDuringCompaction"
-  | "timedOutDuringToolExecution"
-  | "timedOutByRunBudget"
-  | "promptError"
-  | "promptErrorSource"
+  EmbeddedRunAttemptWithReceiptEvidence,
+  | "terminal"
   | "preflightRecovery"
   | "sessionIdUsed"
   | "sessionFileUsed"
@@ -59,10 +72,14 @@ type EmbeddedAttemptResultState = Pick<
   | "beforeAgentFinalizeRevisionReason"
   | "lastAssistant"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
+  | "codeModeReconciliationCandidate"
+  | "successfulNestedToolNames"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"
   | "yieldDetected"
+  | "yieldAcknowledgment"
   | "didDeliverSourceReplyViaMessageTool"
 > & {
   diagnosticTrace: DiagnosticTraceContext;
@@ -94,17 +111,8 @@ function normalizeEmbeddedAttemptToolMetas(
 ): EmbeddedRunAttemptResult["toolMetas"] {
   return entries
     .filter(
-      (
-        entry,
-      ): entry is {
-        toolName: string;
-        meta?: string;
-        replaySafe?: boolean;
-        isError?: true;
-        asyncStarted?: boolean;
-        asyncTaskRunId?: string;
-        asyncTaskId?: string;
-      } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+      (entry): entry is EmbeddedAttemptSubscription["toolMetas"][number] & { toolName: string } =>
+        typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
     )
     .map((entry) => {
       const normalized: EmbeddedRunAttemptResult["toolMetas"][number] = {
@@ -112,8 +120,14 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
-      if (entry.isError === true) {
-        normalized.isError = true;
+      if (entry.toolCallId) {
+        normalized.toolCallId = entry.toolCallId;
+      }
+      if (typeof entry.isError === "boolean") {
+        normalized.isError = entry.isError;
+      }
+      if (entry.terminate === true) {
+        normalized.terminate = true;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;
@@ -148,19 +162,23 @@ function hasVisiblePendingToolMediaReply(
 /** Runs output hooks, classifies terminal effects, and returns the finalized attempt result. */
 export function completeEmbeddedAttemptResult(
   input: CompleteEmbeddedAttemptResultInput,
-): EmbeddedRunAttemptResult {
+): EmbeddedRunAttemptWithReceiptEvidence {
   const { attempt, state, subscription } = input;
+  const terminal = projectAgentRunAttemptTerminal(state.terminal);
   const {
     assistantTexts,
     didSendDeterministicApprovalPrompt,
     didSendViaMessagingTool,
     getAcceptedSessionSpawns,
+    getAssistantTurnCount,
     getCompactionCount,
     getHeartbeatToolResponse,
     getItemLifecycle,
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
+    getLatestMcpAppChannelView,
+    getLatestMcpConnectAction,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
     getMessagingToolSentTexts,
@@ -215,8 +233,9 @@ export function completeEmbeddedAttemptResult(
   }
 
   if (
+    attempt.operation !== "settled-tool-finalization" &&
     input.hookRunner?.hasHooks("llm_output") &&
-    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: state.promptErrorSource })
+    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: terminal.promptErrorSource })
   ) {
     input.hookRunner
       .runLlmOutput(
@@ -332,8 +351,8 @@ export function completeEmbeddedAttemptResult(
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: attempt.trigger === "cron",
     payloadCount: pendingToolMediaPayloadCount,
-    aborted: state.aborted,
-    timedOut: state.timedOut,
+    aborted: terminal.aborted,
+    timedOut: terminal.timedOut,
     attempt: {
       clientToolCalls,
       yieldDetected: state.yieldDetected,
@@ -350,9 +369,10 @@ export function completeEmbeddedAttemptResult(
     (silentToolResultReplyPayload ? 1 : 0);
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation: attempt.terminalReplyExpectation,
     payloadCount: 0,
-    aborted: state.aborted,
-    timedOut: state.timedOut,
+    aborted: terminal.aborted,
+    timedOut: terminal.timedOut,
     attempt: {
       assistantTexts,
       clientToolCalls,
@@ -367,23 +387,28 @@ export function completeEmbeddedAttemptResult(
       lastToolError,
       lastAssistant: state.lastAssistant,
       itemLifecycle: getItemLifecycle(),
+      messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,
       replayMetadata,
-      promptErrorSource: state.promptErrorSource,
-      timedOutDuringCompaction: state.timedOutDuringCompaction,
+      terminal: state.terminal,
     },
   });
-  const result: EmbeddedRunAttemptResult = {
+  const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,
     replayMetadata,
     currentAttemptReplayMetadata,
+    codeModeReconciliationCandidate: state.codeModeReconciliationCandidate,
     itemLifecycle: getItemLifecycle(),
+    assistantTurns: getAssistantTurnCount(),
     setTerminalLifecycleMeta,
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
     assistantTexts,
+    latestMcpAppChannelView: getLatestMcpAppChannelView(),
+    latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
+    successfulNestedToolNames: state.successfulNestedToolNames,
     acceptedSessionSpawns,
     lastToolError,
     didSendViaMessagingTool: didSendViaMessagingTool(),
@@ -406,6 +431,7 @@ export function completeEmbeddedAttemptResult(
     compactionTokensAfter: getLastCompactionTokensAfter(),
     clientToolCalls,
     yieldDetected: state.yieldDetected || undefined,
+    yieldAcknowledgment: state.yieldAcknowledgment,
   };
   return finalizeEmbeddedAttempt({
     result,

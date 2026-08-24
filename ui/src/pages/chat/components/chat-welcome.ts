@@ -1,12 +1,7 @@
 // Control UI chat module implements chat welcome behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
-import {
-  canonicalLobsterLook,
-  LOBSTER_PET_PALETTES,
-  renderLobsterSvg,
-} from "../../../components/lobster-pet.ts";
+import "../../../components/openclaw-mascot.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -34,10 +29,14 @@ type ChatWelcomeProps = {
   sessions?: SessionsListResult | null;
   sessionKey?: string;
   sessionHost?: UiSessionDefaultsHost | null;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onOpenSession?: (sessionKey: string) => void;
 };
+
+type WelcomeMascot = HTMLElement & { tease: boolean; catchOnce: () => void };
 
 const WELCOME_SUGGESTION_KEYS = [
   "chat.welcome.suggestions.whatCanYouDo",
@@ -96,20 +95,10 @@ function selectWelcomeRecentSessions(
   );
 }
 
-// The default Clawd mascot: same species as the sidebar lobster pet, rendered
-// big and borderless with its own gentle idle loop (see layout.css).
 function renderWelcomeClawd() {
-  const palette =
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
-    expectDefined(LOBSTER_PET_PALETTES[0], "welcome lobster palette");
-  const look = canonicalLobsterLook(palette);
   return html`
-    <div
-      class="agent-chat__welcome-clawd"
-      style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
-      aria-hidden="true"
-    >
-      ${renderLobsterSvg(look)}
+    <div class="agent-chat__welcome-clawd" aria-hidden="true">
+      <openclaw-mascot mood="idle" .size=${112}></openclaw-mascot>
     </div>
   `;
 }
@@ -182,10 +171,60 @@ function renderWelcomeHero(
 
 /** The start-screen welcome block, shared by the empty chat and the new-session draft. */
 export function renderWelcomeState(props: ChatWelcomeProps) {
+  if (props.modelSetupRequired) {
+    return html`
+      <div class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
+        ${renderWelcomeClawd()}
+        <h2>${t("modelSetup.required.title")}</h2>
+        <p class="agent-chat__hint">${t("modelSetup.required.body")}</p>
+        <button class="btn primary" type="button" @click=${props.onModelSetup}>
+          ${t("modelSetup.required.action")}
+        </button>
+      </div>
+    `;
+  }
   const recentSessions = selectWelcomeRecentSessions(props);
+  let fileDragDepth = 0;
+  const mascotFor = (event: DragEvent): WelcomeMascot | null => {
+    const target = event.currentTarget;
+    return target instanceof HTMLElement
+      ? target.querySelector<WelcomeMascot>(".agent-chat__welcome-clawd openclaw-mascot")
+      : null;
+  };
 
   return html`
-    <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
+    <div
+      class="agent-chat__welcome"
+      style="--agent-color: var(--accent)"
+      @dragenter=${(event: DragEvent) => {
+        if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+          return;
+        }
+        fileDragDepth += 1;
+        const mascot = mascotFor(event);
+        if (mascot) {
+          mascot.tease = true;
+        }
+      }}
+      @dragleave=${(event: DragEvent) => {
+        fileDragDepth = Math.max(0, fileDragDepth - 1);
+        const mascot = mascotFor(event);
+        if (mascot && fileDragDepth === 0) {
+          mascot.tease = false;
+        }
+      }}
+      @drop=${(event: DragEvent) => {
+        if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+          return;
+        }
+        fileDragDepth = 0;
+        const mascot = mascotFor(event);
+        if (mascot) {
+          mascot.tease = false;
+          mascot.catchOnce();
+        }
+      }}
+    >
       ${renderWelcomeHero({
         assistantName: props.assistantName,
         assistantAvatar: props.assistantAvatar,

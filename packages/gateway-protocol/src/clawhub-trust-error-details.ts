@@ -1,3 +1,5 @@
+import { isProtocolRecord } from "./protocol-value-normalization.js";
+
 /** Structured ClawHub trust details carried in gateway error payloads. */
 export const ClawHubTrustErrorCodes = {
   SECURITY_UNAVAILABLE: "clawhub_security_unavailable",
@@ -5,8 +7,7 @@ export const ClawHubTrustErrorCodes = {
   DOWNLOAD_BLOCKED: "clawhub_download_blocked",
 } as const;
 
-export type ClawHubTrustErrorCode =
-  (typeof ClawHubTrustErrorCodes)[keyof typeof ClawHubTrustErrorCodes];
+type ClawHubTrustErrorCode = (typeof ClawHubTrustErrorCodes)[keyof typeof ClawHubTrustErrorCodes];
 
 export type ClawHubTrustErrorDetails = {
   clawhubTrustCode?: ClawHubTrustErrorCode;
@@ -44,7 +45,7 @@ export function buildClawHubTrustErrorDetails(params: {
 export function readClawHubTrustErrorDetails(
   details: unknown,
 ): ClawHubTrustErrorDetails | undefined {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return undefined;
   }
   const raw = details as {

@@ -6,7 +6,6 @@ type CronActiveJobState = {
   generation: number;
   nextToken: number;
   emptyWaiters: Set<() => void>;
-  activeJobIds?: Set<string>;
 };
 
 const CRON_ACTIVE_JOB_STATE_KEY = Symbol.for("openclaw.cron.activeJobs");
@@ -15,8 +14,15 @@ export type CronActiveJobMarker = {
   jobId: string;
   generation: number;
   token: number;
-  legacy?: boolean;
+  cancellation?:
+    | { kind: "bound"; cancel: (reason: string) => void }
+    | { kind: "requested"; reason: string };
+  scheduleMutated?: true;
+  triggerMutated?: true;
+  jobRemoved?: true;
   preserveAcrossGenerationAdvance?: boolean;
+  onInactive?: Set<() => void>;
+  inactiveNotified?: true;
 };
 
 function getCronActiveJobState(): CronActiveJobState {
@@ -27,31 +33,11 @@ function getCronActiveJobState(): CronActiveJobState {
     generation: 0,
     nextToken: 1,
     emptyWaiters: new Set<() => void>(),
-    activeJobIds: new Set<string>(),
   }));
   state.generation ??= 0;
   state.nextToken ??= 1;
   state.activeJobs ??= new Map<string, CronActiveJobMarker>();
   state.emptyWaiters ??= new Set<() => void>();
-  state.activeJobIds ??= new Set<string>();
-  if (state.activeJobIds) {
-    for (const [jobId, marker] of state.activeJobs) {
-      if (marker.legacy === true && !state.activeJobIds.has(jobId)) {
-        state.activeJobs.delete(jobId);
-      }
-    }
-    for (const jobId of state.activeJobIds) {
-      if (!state.activeJobs.has(jobId)) {
-        state.activeJobs.set(jobId, {
-          jobId,
-          generation: state.generation,
-          token: state.nextToken,
-          legacy: true,
-        });
-        state.nextToken += 1;
-      }
-    }
-  }
   return state;
 }
 
@@ -69,6 +55,15 @@ function isMarkerActiveInGeneration(marker: CronActiveJobMarker, generation: num
   return marker.generation === generation || marker.preserveAcrossGenerationAdvance === true;
 }
 
+function getCurrentCronActiveJobMarker(jobId: string): CronActiveJobMarker | undefined {
+  if (!jobId) {
+    return undefined;
+  }
+  const state = getCronActiveJobState();
+  const marker = state.activeJobs.get(jobId);
+  return marker && isMarkerActiveInGeneration(marker, state.generation) ? marker : undefined;
+}
+
 function notifyActiveCronJobWaitersIfEmpty(state: CronActiveJobState) {
   if (getActiveCronJobCountForGeneration(state) > 0) {
     return;
@@ -77,6 +72,17 @@ function notifyActiveCronJobWaitersIfEmpty(state: CronActiveJobState) {
     resolve();
   }
   state.emptyWaiters.clear();
+}
+
+function notifyCronJobInactive(marker: CronActiveJobMarker) {
+  if (marker.inactiveNotified) {
+    return;
+  }
+  marker.inactiveNotified = true;
+  for (const callback of marker.onInactive ?? []) {
+    callback();
+  }
+  marker.onInactive?.clear();
 }
 
 /** Marks a cron job id as currently executing for duplicate-run suppression. */
@@ -97,7 +103,6 @@ export function markCronJobActive(
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
   };
   state.activeJobs.set(jobId, marker);
-  state.activeJobIds?.add(jobId);
   return marker;
 }
 
@@ -113,9 +118,64 @@ export function clearCronJobActive(jobId: string, marker?: CronActiveJobMarker) 
     (!marker || (marker.jobId === jobId && marker.token === activeMarker.token))
   ) {
     state.activeJobs.delete(jobId);
-    state.activeJobIds?.delete(jobId);
+    notifyCronJobInactive(activeMarker);
+  } else if (marker?.jobId === jobId) {
+    // The caller is finalizing this exact run even when a same-id replacement
+    // now owns the map slot. Notify only the retired marker's listeners.
+    notifyCronJobInactive(marker);
   }
   notifyActiveCronJobWaitersIfEmpty(state);
+}
+
+/** Records a durable schedule edit against the exact run that was active for it. */
+export function noteActiveCronJobScheduleMutation(jobId: string): void {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (marker) {
+    // Keep mutation history on the admitted run: A→B→A has the original
+    // schedule value but still belongs to the operator's newer edit.
+    marker.scheduleMutated = true;
+  }
+}
+
+/** Records a durable trigger edit against the exact run that evaluated it. */
+export function noteActiveCronJobTriggerMutation(jobId: string): void {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (marker) {
+    // A→B→A restores the script but cannot return ownership of the new
+    // trigger state to an evaluation admitted before either durable edit.
+    marker.triggerMutated = true;
+  }
+}
+
+/** Retires the admitted job identity after its deletion becomes durable. */
+export function noteActiveCronJobRemoval(jobId: string): CronActiveJobMarker | undefined {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (!marker) {
+    return undefined;
+  }
+  // A reused ID names a new job, not a reschedule of the old invocation.
+  // Keep its marker until completion so duplicate-run guards remain intact.
+  marker.scheduleMutated = true;
+  marker.jobRemoved = true;
+  requestCronActiveJobMarkerCancellation(marker, "Cron job removed by operator.");
+  return marker;
+}
+
+function requestCronActiveJobMarkerCancellation(marker: CronActiveJobMarker, reason: string): void {
+  const cancellation = marker.cancellation;
+  if (cancellation?.kind === "requested") {
+    return;
+  }
+  marker.cancellation = { kind: "requested", reason };
+  cancellation?.cancel(reason);
+}
+
+/** Requests cancellation now or when the exact active run binds its controller. */
+export function requestActiveCronJobCancellation(jobId: string, reason: string): void {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (marker) {
+    requestCronActiveJobMarkerCancellation(marker, reason);
+  }
 }
 
 /** Returns whether the given cron job id is currently executing in this process. */
@@ -126,6 +186,19 @@ export function isCronJobActive(jobId: string) {
   const state = getCronActiveJobState();
   const marker = state.activeJobs.get(jobId);
   return marker ? isMarkerActiveInGeneration(marker, state.generation) : false;
+}
+
+/** Runs a callback when the exact cron job no longer has an active in-process run. */
+export function onCronJobInactive(
+  marker: CronActiveJobMarker | undefined,
+  callback: () => void,
+): void {
+  if (!marker || marker.inactiveNotified) {
+    callback();
+    return;
+  }
+  marker.onInactive ??= new Set<() => void>();
+  marker.onInactive.add(callback);
 }
 
 export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undefined) {
@@ -142,6 +215,22 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
 /** Returns whether any cron run is active in this process. */
 export function hasActiveCronJobs() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
+}
+
+/**
+ * Ignore only the caller's own marker. Unrelated runs must still block its wake,
+ * because cron jobs may execute concurrently.
+ */
+export function hasActiveCronJobsExceptMarker(markerToIgnore: CronActiveJobMarker) {
+  const state = getCronActiveJobState();
+  for (const marker of state.activeJobs.values()) {
+    const isIgnoredMarker =
+      marker.jobId === markerToIgnore.jobId && marker.token === markerToIgnore.token;
+    if (!isIgnoredMarker && isMarkerActiveInGeneration(marker, state.generation)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Returns the number of active cron runs in this process. */
@@ -188,7 +277,7 @@ export function advanceCronActiveJobGeneration() {
     }
     if (marker.generation < state.generation - 1) {
       state.activeJobs.delete(jobId);
-      state.activeJobIds?.delete(jobId);
+      notifyCronJobInactive(marker);
     }
   }
   notifyActiveCronJobWaitersIfEmpty(state);
@@ -198,7 +287,9 @@ export function advanceCronActiveJobGeneration() {
 export function resetCronActiveJobs() {
   const state = getCronActiveJobState();
   state.generation += 1;
+  for (const marker of state.activeJobs.values()) {
+    notifyCronJobInactive(marker);
+  }
   state.activeJobs.clear();
-  state.activeJobIds?.clear();
   notifyActiveCronJobWaitersIfEmpty(state);
 }

@@ -20,7 +20,8 @@ export function createFirecrawlFreeWebSearchProvider(): WebSearchProviderPlugin 
       description:
         "Search the web using Firecrawl's free hosted starter tier (no API key required). Returns structured results with snippets. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
-      execute: async (args) => {
+      execute: async (args, executionContext) => {
+        executionContext?.signal?.throwIfAborted();
         const { runFirecrawlSearch } = await loadFirecrawlClientModule();
         return await runFirecrawlSearch({
           cfg: ctx.config,
@@ -30,6 +31,7 @@ export function createFirecrawlFreeWebSearchProvider(): WebSearchProviderPlugin 
             max: 10,
           }),
           access: "keyless",
+          ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
         });
       },
     }),

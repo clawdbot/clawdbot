@@ -4,52 +4,27 @@
  */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildBootstrapPromptWarning,
+  normalizeBootstrapWarningSignatures,
+} from "./bootstrap-budget-warning.js";
+import type {
+  BootstrapBudgetAnalysis,
+  BootstrapInjectionStat,
+  BootstrapPromptWarning,
+  BootstrapPromptWarningMode,
+  BootstrapTruncationCause,
+} from "./bootstrap-budget.types.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import {
+  resolveBootstrapMaxChars,
+  resolveBootstrapTotalMaxChars,
+  USER_BOOTSTRAP_MAX_CHARS,
+} from "./embedded-agent-helpers/bootstrap.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
-const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
-const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
-
-type BootstrapTruncationCause = "per-file-limit" | "total-limit";
-type BootstrapPromptWarningMode = "off" | "once" | "always";
-
-type BootstrapInjectionStat = {
-  name: string;
-  path: string;
-  missing: boolean;
-  rawChars: number;
-  injectedChars: number;
-  truncated: boolean;
-};
-
-type BootstrapAnalyzedFile = BootstrapInjectionStat & {
-  nearLimit: boolean;
-  causes: BootstrapTruncationCause[];
-};
-
-type BootstrapBudgetAnalysis = {
-  files: BootstrapAnalyzedFile[];
-  truncatedFiles: BootstrapAnalyzedFile[];
-  nearLimitFiles: BootstrapAnalyzedFile[];
-  totalNearLimit: boolean;
-  hasTruncation: boolean;
-  totals: {
-    rawChars: number;
-    injectedChars: number;
-    truncatedChars: number;
-    bootstrapMaxChars: number;
-    bootstrapTotalMaxChars: number;
-    nearLimitRatio: number;
-  };
-};
-
-type BootstrapPromptWarning = {
-  signature?: string;
-  warningShown: boolean;
-  lines: string[];
-  warningSignaturesSeen: string[];
-};
 
 type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
@@ -68,43 +43,10 @@ function normalizePositiveLimit(value: number): number {
   return Math.floor(value);
 }
 
-function formatWarningCause(cause: BootstrapTruncationCause): string {
-  return cause === "per-file-limit" ? "max/file" : "max/total";
-}
-
-function isAgentsBootstrapName(name: string | undefined): boolean {
-  return name?.toLowerCase() === "agents.md";
-}
-
-function normalizeSeenSignatures(signatures?: string[]): string[] {
-  if (!Array.isArray(signatures) || signatures.length === 0) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const signature of signatures) {
-    const value = normalizeOptionalString(signature) ?? "";
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
-function appendSeenSignature(signatures: string[], signature: string): string[] {
-  if (!signature.trim()) {
-    return signatures;
-  }
-  if (signatures.includes(signature)) {
-    return signatures;
-  }
-  const next = [...signatures, signature];
-  if (next.length <= DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX) {
-    return next;
-  }
-  return next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
+function effectiveBootstrapFileLimit(name: string, bootstrapMaxChars: number): number {
+  return name.toLowerCase() === "user.md"
+    ? Math.min(bootstrapMaxChars, USER_BOOTSTRAP_MAX_CHARS)
+    : bootstrapMaxChars;
 }
 
 /** Restores prompt-warning dedupe state from a previous bootstrap report. */
@@ -116,7 +58,7 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   };
 }): string[] {
   const truncation = report?.bootstrapTruncation;
-  const seenFromReport = normalizeSeenSignatures(truncation?.warningSignaturesSeen);
+  const seenFromReport = normalizeBootstrapWarningSignatures(truncation?.warningSignaturesSeen);
   if (seenFromReport.length > 0) {
     return seenFromReport;
   }
@@ -154,16 +96,23 @@ export function buildBootstrapInjectionStats(params: {
   }
   return params.bootstrapFiles.map((file) => {
     const pathValue = normalizeOptionalString(file.path) ?? "";
+    const normalizedPath = pathValue.replace(/\\/g, "/");
+    // Bootstrap hooks are extension-facing and may provide path/content only.
+    // Derive the display name before budget classification so those entries
+    // keep working and cannot crash the turn when filename-specific caps run.
+    const name =
+      normalizeOptionalString(file.name) ??
+      (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
       (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
+      injectedByPath.get(name) ??
+      injectedByBaseName.get(name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
-      name: file.name,
-      path: pathValue || file.name,
+      name,
+      path: pathValue || name,
       missing: file.missing,
       rawChars,
       injectedChars,
@@ -192,24 +141,26 @@ export function analyzeBootstrapBudget(params: {
   const rawChars = nonMissing.reduce((sum, file) => sum + file.rawChars, 0);
   const injectedChars = nonMissing.reduce((sum, file) => sum + file.injectedChars, 0);
   const totalNearLimit = injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
-  const totalOverLimit = injectedChars >= bootstrapTotalMaxChars;
-
+  let remainingTotalChars = bootstrapTotalMaxChars;
   const files = params.files.map((file) => {
+    const effectiveFileLimit = effectiveBootstrapFileLimit(file.name, bootstrapMaxChars);
+    const availableTotalChars = remainingTotalChars;
+    remainingTotalChars = Math.max(0, remainingTotalChars - file.injectedChars);
     if (file.missing) {
-      return { ...file, nearLimit: false, causes: [] };
+      return { ...file, effectiveFileLimit, nearLimit: false, causes: [] };
     }
-    const perFileOverLimit = file.rawChars > bootstrapMaxChars;
-    const nearLimit = file.rawChars >= Math.ceil(bootstrapMaxChars * nearLimitRatio);
+    const perFileOverLimit = file.rawChars > effectiveFileLimit;
+    const nearLimit = file.rawChars >= Math.ceil(effectiveFileLimit * nearLimitRatio);
     const causes: BootstrapTruncationCause[] = [];
     if (file.truncated) {
       if (perFileOverLimit) {
         causes.push("per-file-limit");
       }
-      if (totalOverLimit) {
+      if (availableTotalChars < effectiveFileLimit && file.rawChars > availableTotalChars) {
         causes.push("total-limit");
       }
     }
-    return { ...file, nearLimit, causes };
+    return { ...file, effectiveFileLimit, nearLimit, causes };
   });
 
   const truncatedFiles = files.filter((file) => file.truncated);
@@ -232,117 +183,38 @@ export function analyzeBootstrapBudget(params: {
   };
 }
 
-/** Builds a stable signature for once-per-truncation warning suppression. */
-function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): string | undefined {
-  if (!analysis.hasTruncation) {
-    return undefined;
-  }
-  const files = analysis.truncatedFiles
-    .map((file) => ({
-      path: file.path || file.name,
-      rawChars: file.rawChars,
-      injectedChars: file.injectedChars,
-      causes: [...file.causes].toSorted(),
-    }))
-    .toSorted((a, b) => {
-      const pathCmp = a.path.localeCompare(b.path);
-      if (pathCmp !== 0) {
-        return pathCmp;
-      }
-      if (a.rawChars !== b.rawChars) {
-        return a.rawChars - b.rawChars;
-      }
-      if (a.injectedChars !== b.injectedChars) {
-        return a.injectedChars - b.injectedChars;
-      }
-      return a.causes.join("+").localeCompare(b.causes.join("+"));
-    });
-  return JSON.stringify({
-    bootstrapMaxChars: analysis.totals.bootstrapMaxChars,
-    bootstrapTotalMaxChars: analysis.totals.bootstrapTotalMaxChars,
-    files,
-  });
-}
-
-/** Formats human-readable warning lines for the most important truncated files. */
-function formatBootstrapTruncationWarningLines(params: {
-  analysis: BootstrapBudgetAnalysis;
-  maxFiles?: number;
-}): string[] {
-  if (!params.analysis.hasTruncation) {
-    return [];
-  }
-  const maxFiles =
-    typeof params.maxFiles === "number" && Number.isFinite(params.maxFiles) && params.maxFiles > 0
-      ? Math.floor(params.maxFiles)
-      : DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES;
-  const lines: string[] = [];
-  const duplicateNameCounts = params.analysis.truncatedFiles.reduce((acc, file) => {
-    acc.set(file.name, (acc.get(file.name) ?? 0) + 1);
-    return acc;
-  }, new Map<string, number>());
-  const topFiles = params.analysis.truncatedFiles.slice(0, maxFiles);
-  for (const file of topFiles) {
-    const pct =
-      file.rawChars > 0
-        ? Math.round(((file.rawChars - file.injectedChars) / file.rawChars) * 100)
-        : 0;
-    const causeText =
-      file.causes.length > 0
-        ? file.causes.map((cause) => formatWarningCause(cause)).join(", ")
-        : "";
-    const nameLabel =
-      (duplicateNameCounts.get(file.name) ?? 0) > 1 && file.path.trim().length > 0
-        ? `${file.name} (${file.path})`
-        : file.name;
-    lines.push(
-      `${nameLabel}: ${file.rawChars} raw -> ${file.injectedChars} injected (~${Math.max(0, pct)}% removed${causeText ? `; ${causeText}` : ""}).`,
-    );
-  }
-  if (params.analysis.truncatedFiles.length > topFiles.length) {
-    lines.push(
-      `+${params.analysis.truncatedFiles.length - topFiles.length} more truncated file(s).`,
-    );
-  }
-  if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name))) {
-    lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
-  }
-  lines.push(
-    "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
-  );
-  return lines;
-}
-
-/** Decides whether to show a prompt warning and returns the updated dedupe state. */
-export function buildBootstrapPromptWarning(params: {
-  analysis: BootstrapBudgetAnalysis;
-  mode: BootstrapPromptWarningMode;
+/** Builds the canonical bootstrap budget diagnosis after caller-owned routing. */
+export function buildBootstrapBudgetState(params: {
+  config?: OpenClawConfig;
+  agentId?: string | null;
+  bootstrapFiles: WorkspaceBootstrapFile[];
+  injectedFiles: EmbeddedContextFile[];
   previousSignature?: string;
   seenSignatures?: string[];
-  maxFiles?: number;
-}): BootstrapPromptWarning {
-  const signature = buildBootstrapTruncationSignature(params.analysis);
-  let seenSignatures = normalizeSeenSignatures(params.seenSignatures);
-  if (params.previousSignature && !seenSignatures.includes(params.previousSignature)) {
-    seenSignatures = appendSeenSignature(seenSignatures, params.previousSignature);
-  }
-  const hasSeenSignature = Boolean(signature && seenSignatures.includes(signature));
-  const warningShown =
-    params.mode !== "off" && Boolean(signature) && (params.mode === "always" || !hasSeenSignature);
-  const warningSignaturesSeen =
-    signature && params.mode !== "off"
-      ? appendSeenSignature(seenSignatures, signature)
-      : seenSignatures;
+}) {
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, params.agentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, params.agentId);
+  const bootstrapAnalysis = analyzeBootstrapBudget({
+    files: buildBootstrapInjectionStats({
+      bootstrapFiles: params.bootstrapFiles,
+      injectedFiles: params.injectedFiles,
+    }),
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
+  const bootstrapPromptWarningMode: BootstrapPromptWarningMode = "always";
+  const bootstrapPromptWarning = buildBootstrapPromptWarning({
+    analysis: bootstrapAnalysis,
+    mode: bootstrapPromptWarningMode,
+    seenSignatures: params.seenSignatures,
+    previousSignature: params.previousSignature,
+  });
   return {
-    signature,
-    warningShown,
-    lines: warningShown
-      ? formatBootstrapTruncationWarningLines({
-          analysis: params.analysis,
-          maxFiles: params.maxFiles,
-        })
-      : [],
-    warningSignaturesSeen,
+    bootstrapAnalysis,
+    bootstrapMaxChars,
+    bootstrapPromptWarning,
+    bootstrapPromptWarningMode,
+    bootstrapTotalMaxChars,
   };
 }
 

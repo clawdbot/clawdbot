@@ -25,12 +25,19 @@ describe("googlechatPlugin config adapter", () => {
     expect(googlechatPlugin.capabilities?.reactions).toBeUndefined();
   });
 
+  it("classifies Google Chat users as direct and spaces as groups", () => {
+    const inferTargetChatType = googlechatPlugin.messaging?.inferTargetChatType;
+
+    expect(inferTargetChatType?.({ to: "users/abc" })).toBe("direct");
+    expect(inferTargetChatType?.({ to: "spaces/xyz" })).toBe("group");
+    expect(inferTargetChatType?.({ to: "unknown" })).toBeUndefined();
+  });
+
   it("does not advertise user-auth-only actions", () => {
     const cfg = {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          actions: { reactions: true },
         },
       },
     } as OpenClawConfig;
@@ -64,9 +71,7 @@ describe("googlechatPlugin config adapter", () => {
             provider: "google_chat_service_account",
             id: "value",
           },
-          dm: {
-            allowFrom: ["users/123"],
-          },
+          allowFrom: ["users/123"],
           defaultTo: "spaces/AAA",
         },
       },
@@ -93,7 +98,7 @@ describe("googlechatPlugin config adapter", () => {
           },
           audienceType: "app-url",
           audience: "https://chat-app.example.test/googlechat",
-          dm: { allowFrom: ["users/123"] },
+          allowFrom: ["users/123"],
         },
       },
     } as OpenClawConfig;

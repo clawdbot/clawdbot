@@ -17,7 +17,7 @@ function shouldPatchAnthropicMessagesPayload(model: ProviderWrapStreamFnContext[
  * Creates a wrapper that removes trailing assistant prefill messages before
  * extended-thinking Anthropic requests are sent through Cloudflare.
  */
-export function createCloudflareAiGatewayAnthropicThinkingPrefillWrapper(
+function createCloudflareAiGatewayAnthropicThinkingPrefillWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
   return createAnthropicThinkingPrefillPayloadWrapper(baseStreamFn, (stripped) => {
@@ -38,6 +38,3 @@ export function wrapCloudflareAiGatewayProviderStream(
   }
   return createCloudflareAiGatewayAnthropicThinkingPrefillWrapper(ctx.streamFn);
 }
-
-/** Test-only access to wrapper decisions and logger injection points. */
-export const testing = { log, shouldPatchAnthropicMessagesPayload };

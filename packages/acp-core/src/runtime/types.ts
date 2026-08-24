@@ -32,6 +32,13 @@ export type AcpRuntimeHandle = {
   backendSessionId?: string;
   /** Upstream harness session identifier, if exposed by adapter/runtime. */
   agentSessionId?: string;
+  /**
+   * Effective model the backend applied during session creation, when it can differ from the
+   * requested model. A backend that drops an unsupported inherited default reports `dropped` so
+   * the manager omits that model from persisted runtime controls instead of replaying a rejected
+   * model before the first turn. Absent when the backend did not deviate from the request.
+   */
+  appliedModel?: { kind: "applied"; model: string } | { kind: "dropped" };
 };
 
 export type AcpRuntimeEnsureInput = {
@@ -42,6 +49,12 @@ export type AcpRuntimeEnsureInput = {
   resumeSessionId?: string;
   /** Optional runtime model override that must be available during session creation. */
   model?: string;
+  /**
+   * Whether `model` was an explicit caller selection rather than an inherited default. A backend
+   * that cannot honor an explicit unsupported model must fail closed; an unsupported inherited
+   * default may be dropped so the backend starts on its own default.
+   */
+  modelExplicit?: boolean;
   /** Optional runtime thinking/reasoning override that must be available during session creation. */
   thinking?: string;
   cwd?: string;
@@ -53,6 +66,38 @@ export type AcpRuntimeTurnAttachment = {
   data: string;
 };
 
+export type AcpJsonRpcId = string | number | null;
+
+export type AcpElicitationMeta = Record<string, unknown> | null;
+
+/** Structural ACP wire boundary; the harness-owned compiler validates concrete modes and schemas. */
+export type AcpElicitationRequest = {
+  mode: string;
+  message: string;
+  [key: string]: unknown;
+};
+
+export type AcpElicitationContentValue = string | number | boolean | string[];
+
+export type AcpElicitationResponse =
+  | {
+      action: "accept";
+      content?: Record<string, AcpElicitationContentValue> | null;
+      _meta?: AcpElicitationMeta;
+    }
+  | { action: "decline"; _meta?: AcpElicitationMeta }
+  | { action: "cancel"; _meta?: AcpElicitationMeta };
+
+export type AcpElicitationContext = {
+  requestId: AcpJsonRpcId;
+  signal: AbortSignal;
+};
+
+export type AcpElicitationHandler = (
+  request: AcpElicitationRequest,
+  context: AcpElicitationContext,
+) => Promise<AcpElicitationResponse>;
+
 /** Per-turn payload delivered to ACP adapters. */
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
@@ -61,6 +106,8 @@ export type AcpRuntimeTurnInput = {
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
+  /** Handles provider-neutral user input requests owned by this exact turn. */
+  onElicitation?: AcpElicitationHandler;
 };
 
 export type AcpRuntimeCapabilities = {
@@ -163,6 +210,8 @@ export type AcpRuntimeTurnResult =
 
 export interface AcpRuntimeTurn {
   readonly requestId: string;
+  /** Resolves when the backend has submitted this prompt; older third-party runtimes may omit it. */
+  readonly promptStarted?: Promise<void>;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
   /** Requests backend cancellation while keeping result/error reporting adapter-owned. */

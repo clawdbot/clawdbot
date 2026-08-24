@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
+import { registerDaemonCli } from "./register.js";
 
 const runDaemonInstall = vi.fn(async (_opts: unknown) => {});
 const runDaemonRestart = vi.fn(async (_opts: unknown) => {});
@@ -91,6 +92,14 @@ describe("addGatewayServiceCommands", () => {
       },
     },
     {
+      name: "forwards stop force control",
+      argv: ["stop", "--force"],
+      assert: () => {
+        const opts = expectSingleDaemonCall(runDaemonStop);
+        expect(opts.force).toBe(true);
+      },
+    },
+    {
       name: "forwards status auth collisions from parent gateway command",
       argv: ["status", "--token", "tok_status", "--password", "pw_status"],
       assert: () => {
@@ -112,5 +121,26 @@ describe("addGatewayServiceCommands", () => {
     const gateway = createGatewayParentLikeCommand();
     await gateway.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it.each(
+    [
+      { leaf: "status", runner: runDaemonStatus },
+      { leaf: "install", runner: runDaemonInstall },
+      { leaf: "uninstall", runner: runDaemonUninstall },
+      { leaf: "start", runner: runDaemonStart },
+      { leaf: "stop", runner: runDaemonStop },
+      { leaf: "restart", runner: runDaemonRestart },
+    ].flatMap(({ leaf, runner }) => [
+      { name: `daemon --json ${leaf}`, argv: ["daemon", "--json", leaf], runner },
+      { name: `daemon ${leaf} --json`, argv: ["daemon", leaf, "--json"], runner },
+    ]),
+  )("forwards JSON mode for $name", async ({ argv, runner }) => {
+    const program = new Command().enablePositionalOptions().exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(argv, { from: "user" });
+
+    expect(expectSingleDaemonCall(runner).json).toBe(true);
   });
 });

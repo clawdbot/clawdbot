@@ -36,6 +36,6 @@
     }
   },
   "dependencies": {
-    "typebox": "1.3.3"
+    "typebox": "1.3.6"
   }
 }

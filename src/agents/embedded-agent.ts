@@ -9,12 +9,12 @@ export type {
 export {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
+  preemptAndDrainEmbeddedHeartbeatRun,
   compactEmbeddedAgentSession,
   isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
   isEmbeddedAgentRunStreaming,
-  queueEmbeddedAgentMessage,
   queueEmbeddedAgentMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,

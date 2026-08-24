@@ -1,13 +1,12 @@
 // Defines view-model shapes for approval prompts and resolutions.
-import type { InteractiveReplyButton, MessagePresentationAction } from "../interactive/payload.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
-import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-} from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+  MessagePresentationAction,
+  MessagePresentationButton,
+} from "../interactive/payload.js";
+import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
+import type { CommandExplanationSummary } from "./command-analysis/explain.js";
+import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -16,7 +15,7 @@ export type ApprovalActionView = {
   kind?: "command" | "decision";
   decision: ExecApprovalDecision;
   label: string;
-  style: NonNullable<InteractiveReplyButton["style"]>;
+  style: NonNullable<MessagePresentationButton["style"]>;
   action?: MessagePresentationAction;
   /** Copyable command fallback for non-interactive surfaces. */
   command: string;
@@ -110,6 +109,6 @@ export type ExpiredApprovalView = ExecApprovalExpiredView | PluginApprovalExpire
 export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | ExpiredApprovalView;
 
 /** Stored approval request variants accepted by the view-model builders. */
-export type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+export type ApprovalRequest = ApprovalRequestInput;
 /** Stored approval resolution variants accepted by resolved view builders. */
 export type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;

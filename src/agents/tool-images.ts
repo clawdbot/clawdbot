@@ -3,7 +3,7 @@
  *
  * Downscales and recompresses oversized base64 image blocks before provider replay.
  */
-import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
@@ -33,6 +33,11 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 // tool outputs do not break later turns or silent channel replies.
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
 const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
+// Hard cap on decoded input bytes before Buffer.from/resizer allocation. A
+// conservative limit well below demonstrated OOM thresholds, leaving headroom
+// for canonicalization, decode, and image-processing allocations while still
+// permitting legitimate tool-output images.
+const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 
 function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
@@ -129,10 +134,9 @@ function inferImageFileName(params: {
   label?: string;
   mediaPathHint?: string;
 }): string | undefined {
-  const rec = params.block as unknown as Record<string, unknown>;
   const explicitKeys = ["fileName", "filename", "path", "url"] as const;
   for (const key of explicitKeys) {
-    const raw = rec[key];
+    const raw = Reflect.get(params.block, key);
     if (typeof raw !== "string" || raw.trim().length === 0) {
       continue;
     }
@@ -142,8 +146,9 @@ function inferImageFileName(params: {
     }
   }
 
-  if (typeof rec.name === "string" && rec.name.trim().length > 0) {
-    return rec.name.trim();
+  const name = Reflect.get(params.block, "name");
+  if (typeof name === "string" && name.trim().length > 0) {
+    return name.trim();
   }
 
   if (params.mediaPathHint) {
@@ -244,7 +249,7 @@ async function resizeImageBase64IfNeeded(params: {
             ? Number((((buf.byteLength - out.byteLength) / buf.byteLength) * 100).toFixed(1))
             : 0;
         log.info(
-          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (-${byteReductionPct}%)`,
+          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (${byteReductionPct < 0 ? "+" : ""}${-byteReductionPct}%)`,
           {
             label: params.label,
             fileName: params.fileName,
@@ -326,6 +331,19 @@ export async function sanitizeContentBlocksImages(
         continue;
       }
       out.push(block);
+      continue;
+    }
+
+    // Estimate decoded bytes on the raw payload before trim/canonicalize/decode
+    // so pathological multi-GB base64 cannot force a transient large allocation.
+    // maxBytes is the post-decode resize target; MAX_IMAGE_INPUT_BYTES is a
+    // conservative pre-decode ceiling (10 MiB) far below the 25MP/100MB
+    // processing headroom, so legitimate tool images still decode and resize.
+    if (estimateBase64DecodedBytes(block.data) > MAX_IMAGE_INPUT_BYTES) {
+      out.push({
+        type: "text",
+        text: `[${label}] omitted image payload: image exceeds input size limit (${formatBytesShort(MAX_IMAGE_INPUT_BYTES)})`,
+      } satisfies TextContentBlock);
       continue;
     }
 

@@ -1,30 +1,18 @@
 // Hermes MCP config mapping and manual follow-up planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  asBoolean,
+  isRecord,
+  normalizeOptionalString,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mcpValueHasEnvReferences, resolveMcpEnvReferences } from "./config-env.js";
 import { readPositiveNumber } from "./config-provider-contract.js";
-import { isRecord, readString, sanitizeName } from "./helpers.js";
+import { sanitizeName } from "./helpers.js";
 
 const MCP_RESOURCE_UTILITY_TOOLS = ["resources_list", "resources_read"] as const;
 const MCP_PROMPT_UTILITY_TOOLS = ["prompts_list", "prompts_get"] as const;
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readBooleanish(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (["true", "1", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  return ["false", "0", "no", "off"].includes(normalized) ? false : undefined;
-}
 
 function readPositiveNumeric(value: unknown): number | undefined {
   if (typeof value === "number") {
@@ -68,8 +56,8 @@ function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unk
   }
   const include = readToolFilterList(tools.include);
   const exclude = readToolFilterList(tools.exclude);
-  const resourcesEnabled = readBooleanish(tools.resources) !== false;
-  const promptsEnabled = readBooleanish(tools.prompts) !== false;
+  const resourcesEnabled = parseBooleanValue(tools.resources) !== false;
+  const promptsEnabled = parseBooleanValue(tools.prompts) !== false;
 
   // Hermes tests set truthiness here: `include: []` means no whitelist, so native tools remain.
   if (include && include.length > 0) {
@@ -94,13 +82,13 @@ function mapHermesClientCertificate(value: Record<string, unknown>): {
   clientKey?: string;
 } {
   const cert = value.clientCert ?? value.client_cert;
-  const key = readString(value.clientKey) ?? readString(value.client_key);
+  const key = normalizeOptionalString(value.clientKey) ?? normalizeOptionalString(value.client_key);
   if (Array.isArray(cert) && cert.length === 2) {
-    const certPath = readString(cert[0]);
-    const keyPath = readString(cert[1]);
+    const certPath = normalizeOptionalString(cert[0]);
+    const keyPath = normalizeOptionalString(cert[1]);
     return certPath && keyPath ? { clientCert: certPath, clientKey: keyPath } : {};
   }
-  const certPath = readString(cert);
+  const certPath = normalizeOptionalString(cert);
   return certPath && key ? { clientCert: certPath, clientKey: key } : {};
 }
 
@@ -113,7 +101,6 @@ const MCP_CONNECTION_FIELDS = [
   "url",
   "connectionTimeoutMs",
   "requestTimeoutMs",
-  "timeout",
 ] as const;
 
 export function importsMcpSensitiveValues(
@@ -135,7 +122,7 @@ function mapHermesMcpOauth(value: Record<string, unknown>): Record<string, unkno
   }
   const mapped: Record<string, unknown> = {};
   for (const key of ["authProfileId", "scope", "redirectUrl", "clientMetadataUrl"]) {
-    const fieldValue = readString(oauth[key]);
+    const fieldValue = normalizeOptionalString(oauth[key]);
     if (fieldValue) {
       mapped[key] = fieldValue;
     }
@@ -165,20 +152,39 @@ export function mapMcpServer(
       }
     }
   }
-  const transport = readString(value.transport) ?? readString(value.type);
+  const transport = normalizeOptionalString(value.transport) ?? normalizeOptionalString(value.type);
   if (transport === "http" || transport === "streamable-http") {
     next.transport = "streamable-http";
   } else if (transport === "sse" || transport === "stdio") {
     next.transport = transport;
-  } else if (!transport && readString(next.url)) {
+  } else if (!transport && normalizeOptionalString(next.url)) {
     next.transport = "streamable-http";
   }
-  next.connectTimeout = value.connectTimeout ?? value.connect_timeout;
-  next.supportsParallelToolCalls = readBoolean(
+  // Canonical timeout fields are finite().positive(); drop non-positive or
+  // overflowing source values instead of importing config that fails validation.
+  const connectionTimeoutSeconds = value.connectTimeout ?? value.connect_timeout;
+  if (
+    next.connectionTimeoutMs === undefined &&
+    typeof connectionTimeoutSeconds === "number" &&
+    connectionTimeoutSeconds > 0 &&
+    Number.isFinite(connectionTimeoutSeconds * 1_000)
+  ) {
+    next.connectionTimeoutMs = connectionTimeoutSeconds * 1_000;
+  }
+  const requestTimeoutSeconds = value.timeout;
+  if (
+    next.requestTimeoutMs === undefined &&
+    typeof requestTimeoutSeconds === "number" &&
+    requestTimeoutSeconds > 0 &&
+    Number.isFinite(requestTimeoutSeconds * 1_000)
+  ) {
+    next.requestTimeoutMs = requestTimeoutSeconds * 1_000;
+  }
+  next.supportsParallelToolCalls = asBoolean(
     value.supportsParallelToolCalls ?? value.supports_parallel_tool_calls,
   );
-  next.sslVerify = readBoolean(value.sslVerify ?? value.ssl_verify);
-  next.auth = readString(value.auth) === "oauth" ? "oauth" : undefined;
+  next.sslVerify = asBoolean(value.sslVerify ?? value.ssl_verify);
+  next.auth = normalizeOptionalString(value.auth) === "oauth" ? "oauth" : undefined;
   next.oauth = mapHermesMcpOauth(value);
   Object.assign(next, mapHermesClientCertificate(value));
   const toolFilter = mapHermesToolFilter(value);
@@ -196,7 +202,9 @@ export function mapMcpServer(
   const mapped = Object.fromEntries(
     Object.entries(next).filter(([, entry]) => entry !== undefined),
   );
-  return readString(mapped.command) || readString(mapped.url) ? mapped : {};
+  return normalizeOptionalString(mapped.command) || normalizeOptionalString(mapped.url)
+    ? mapped
+    : {};
 }
 
 export function mcpManualItems(params: {
@@ -251,7 +259,7 @@ export function mcpManualItems(params: {
   }
 
   const cert = raw.clientCert ?? raw.client_cert;
-  const key = readString(raw.clientKey) ?? readString(raw.client_key);
+  const key = normalizeOptionalString(raw.clientKey) ?? normalizeOptionalString(raw.client_key);
   if (Array.isArray(cert) && cert.length === 3) {
     add(
       "client-cert-password",
@@ -261,8 +269,11 @@ export function mcpManualItems(params: {
   } else if (
     (cert !== undefined || key !== undefined) &&
     !(
-      (Array.isArray(cert) && cert.length === 2 && readString(cert[0]) && readString(cert[1])) ||
-      (readString(cert) && key)
+      (Array.isArray(cert) &&
+        cert.length === 2 &&
+        normalizeOptionalString(cert[0]) &&
+        normalizeOptionalString(cert[1])) ||
+      (normalizeOptionalString(cert) && key)
     )
   ) {
     add(
@@ -279,7 +290,7 @@ export function mcpManualItems(params: {
     );
   }
 
-  const transport = readString(raw.transport) ?? readString(raw.type);
+  const transport = normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.type);
   if (transport && !["http", "streamable-http", "sse", "stdio"].includes(transport)) {
     add(
       "transport",
@@ -288,7 +299,7 @@ export function mcpManualItems(params: {
     );
   }
 
-  const auth = readString(raw.auth);
+  const auth = normalizeOptionalString(raw.auth);
   if (auth && auth !== "oauth") {
     add(
       "auth",
@@ -326,8 +337,8 @@ export function mcpManualItems(params: {
     ) ||
       (tools.include !== undefined && !readToolFilterList(tools.include)) ||
       (tools.exclude !== undefined && !readToolFilterList(tools.exclude)) ||
-      (tools.resources !== undefined && readBooleanish(tools.resources) === undefined) ||
-      (tools.prompts !== undefined && readBooleanish(tools.prompts) === undefined))
+      (tools.resources !== undefined && parseBooleanValue(tools.resources) === undefined) ||
+      (tools.prompts !== undefined && parseBooleanValue(tools.prompts) === undefined))
   ) {
     add(
       "tool-policy",

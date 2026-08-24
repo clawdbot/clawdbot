@@ -641,7 +641,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       (eventValue, ctx) => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
-          details: { compacted: true, runtime: ctx.runtime, harness: ctx.harness },
+          details: { compacted: true, runtime: ctx.runtime },
         },
       }),
     ]);
@@ -654,6 +654,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
 
     expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
-    expect(result.details).toEqual({ compacted: true, runtime: "codex", harness: "codex" });
+    expect(result.details).toEqual({ compacted: true, runtime: "codex" });
   });
 });

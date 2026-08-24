@@ -47,6 +47,23 @@ proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-pr
   --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
 ```
 
+When the scenario needs Telegram link previews explicitly enabled or disabled,
+set the SUT config before Gateway startup:
+
+```bash
+"$proof_cmd" start \
+  --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz \
+  --link-preview false \
+  --mock-response-chunk-delay-ms 1200 \
+  --mock-response-file .artifacts/qa-e2e/telegram-user-crabbox/reply.txt \
+  --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
+```
+
+Do not edit the generated config or restart the held-session Gateway to apply
+this setting; that bypasses the runner's lifecycle and cleanup ownership.
+The chunk delay splits the configured response into two streaming deltas so a
+recording can show the initial preview and a later in-place edit.
+
 The runner defaults to `--class standard`, `--record-fps 24`,
 `--preview-fps 24`, and `--preview-width 1920`. Keep those defaults unless the
 proof needs something else.

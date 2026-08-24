@@ -15,6 +15,7 @@ import {
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BLOCKED_TOO_LONG_MS,
@@ -27,7 +28,6 @@ import type { WorkboardMutationScope } from "./store-inputs.js";
 import {
   metadataIsEmpty,
   normalizeEvents,
-  normalizeOptionalString,
   normalizeTimestamp,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
@@ -84,9 +84,9 @@ export function syncExecutionAttemptMetadata(
     id: existingAttempt?.id ?? key,
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
-    engine: execution.engine,
     mode: execution.mode,
-    model: execution.model,
+    ...(execution.engine ? { engine: execution.engine } : {}),
+    ...(execution.model ? { model: execution.model } : {}),
     ...(execution.sessionKey ? { sessionKey: execution.sessionKey } : {}),
     ...(execution.runId ? { runId: execution.runId } : {}),
     ...(attemptStatus !== "running" && { endedAt: execution.updatedAt || now }),
@@ -180,6 +180,22 @@ export function shouldSkipPersistedLifecycleStatusUpdate(
   }
   const statusTransitionAt = latestStatusTransitionAt(existing);
   return statusTransitionAt !== undefined && sourceUpdatedAt < statusTransitionAt;
+}
+
+export function shouldSyncWorkboardLifecycleStatus(
+  card: WorkboardCard,
+  target: WorkboardStatus | undefined,
+): boolean {
+  if (!target || card.status === target) {
+    return false;
+  }
+  if (target === "running") {
+    return card.status === "backlog" || card.status === "todo" || card.status === "ready";
+  }
+  return (
+    (target === "blocked" || target === "review") &&
+    (card.status === "running" || card.status === "todo" || card.status === "ready")
+  );
 }
 
 export function updateEvent(
@@ -394,6 +410,25 @@ export function mergeDiagnostics(
 }
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  if (card.metadata?.archivedAt) {
+    // Archived cards intentionally skip automation. Keep nonterminal cards
+    // visible as a transient diagnostic without rewriting archived metadata.
+    if (card.status !== "done") {
+      return [
+        diagnostic(
+          {
+            kind: "archived_but_active",
+            severity: "warning",
+            title: "Archived card is still in an active status",
+            detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
+            actions: [],
+          },
+          now,
+        ),
+      ];
+    }
+    return [];
+  }
   const diagnostics: WorkboardDiagnostic[] = [];
   const claim = card.metadata?.claim;
   const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;

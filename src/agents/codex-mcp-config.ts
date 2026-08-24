@@ -5,6 +5,9 @@
  */
 import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
@@ -12,64 +15,19 @@ import {
 } from "../plugins/bundle-mcp.js";
 import { isRecord } from "../utils.js";
 import {
-  applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
-  normalizeStringRecord,
-} from "./cli-runner/bundle-mcp-adapter-shared.js";
+  normalizeBundleMcpServerConfig,
+  normalizeMcpStringRecord,
+} from "./bundle-mcp-adapter.js";
+import { prepareOwnedBundleMcpDataDirs } from "./bundle-mcp-config.js";
 import type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { resolveProjectedMcpCodexToolApprovalMode } from "./mcp-codex-tool-approval.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
-
-function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
-  return (
-    name === "openclaw" &&
-    typeof server.url === "string" &&
-    /^https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/mcp(?:[?#].*)?$/.test(server.url)
-  );
-}
-
-type CodexMcpToolApprovalMode = "auto" | "prompt" | "approve";
-
-const CODEX_MCP_TOOL_APPROVAL_MODES = new Set<CodexMcpToolApprovalMode>([
-  "auto",
-  "prompt",
-  "approve",
-]);
-
-function readCodexProjectionConfig(server: BundleMcpServerConfig): Record<string, unknown> {
-  return isRecord(server.codex) ? server.codex : {};
-}
-
-function normalizeCodexToolApprovalMode(value: unknown): CodexMcpToolApprovalMode | undefined {
-  return typeof value === "string" &&
-    CODEX_MCP_TOOL_APPROVAL_MODES.has(value as CodexMcpToolApprovalMode)
-    ? (value as CodexMcpToolApprovalMode)
-    : undefined;
-}
-
-function resolveCodexDefaultToolsApprovalMode(
-  server: BundleMcpServerConfig,
-): CodexMcpToolApprovalMode | undefined {
-  const codex = readCodexProjectionConfig(server);
-  return (
-    normalizeCodexToolApprovalMode(codex.defaultToolsApprovalMode) ??
-    normalizeCodexToolApprovalMode(codex.default_tools_approval_mode)
-  );
-}
-
-function normalizeToolFilterList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
 
 function assertCodexExactToolFilters(
   serverName: string,
@@ -94,8 +52,8 @@ function applyCodexToolFilter(
   if (!isRecord(server.toolFilter)) {
     return;
   }
-  const include = normalizeToolFilterList(server.toolFilter.include);
-  const exclude = normalizeToolFilterList(server.toolFilter.exclude);
+  const include = normalizeTrimmedStringList(server.toolFilter.include);
+  const exclude = normalizeTrimmedStringList(server.toolFilter.exclude);
   assertCodexExactToolFilters(name, "include", include);
   assertCodexExactToolFilters(name, "exclude", exclude);
   if (include.length > 0) {
@@ -106,23 +64,40 @@ function applyCodexToolFilter(
   }
 }
 
+/** Adds exact session denials to a server's configured filter before Codex projection. */
+export function applyCodexSessionMcpToolDenials(
+  name: string,
+  server: BundleMcpServerConfig,
+  toolOverrides?: Pick<SessionToolOverrides, "mcpToolsDeny">,
+): BundleMcpServerConfig {
+  const denialMap = toolOverrides?.mcpToolsDeny;
+  const denied = denialMap && Object.hasOwn(denialMap, name) ? denialMap[name] : undefined;
+  if (!denied?.length) {
+    return server;
+  }
+  const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
+  const existing = normalizeTrimmedStringList(toolFilter.exclude);
+  return {
+    ...server,
+    toolFilter: {
+      ...toolFilter,
+      exclude: [...new Set([...existing, ...denied])].toSorted(),
+    },
+  };
+}
+
 /** Normalizes one bundle MCP server into Codex's mcp_servers shape. */
 export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,
 ): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
-  applyCommonServerConfig(next, server);
+  const next = normalizeBundleMcpServerConfig(server);
   applyCodexToolFilter(next, name, server);
-  const defaultToolsApprovalMode = resolveCodexDefaultToolsApprovalMode(server);
+  const defaultToolsApprovalMode = resolveProjectedMcpCodexToolApprovalMode(name, server);
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
-  } else if (isOpenClawLoopbackMcpServer(name, server)) {
-    // OpenClaw's loopback MCP exposes local tools; Codex should ask for approval
-    // unless plugin metadata explicitly selected another approval mode.
-    next.default_tools_approval_mode = "approve";
   }
-  const httpHeaders = normalizeStringRecord(server.headers);
+  const httpHeaders = normalizeMcpStringRecord(server.headers);
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
     const envHeaders: Record<string, string> = {};
@@ -186,7 +161,7 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 }
 
 /** Load bundle MCP config for one Codex app-server thread. */
-export function loadCodexBundleMcpThreadConfig(
+export function loadCodexBundleMcpThreadConfigCore(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
@@ -198,25 +173,78 @@ export function loadCodexBundleMcpThreadConfig(
     return {
       diagnostics: [],
       evaluated: true,
+      staticServerNames: [],
+      userStaticServerNames: [],
     };
   }
   const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
   });
-  const mcpServers = buildCodexMcpServersConfig(bundleMcp.config);
+  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const serverOverrides = params.toolOverrides?.mcpServers;
+  const effectiveConfig: BundleMcpConfig = {
+    mcpServers: Object.fromEntries(
+      Object.entries(bundleMcp.config.mcpServers)
+        .filter(([name]) => {
+          const override =
+            serverOverrides && Object.hasOwn(serverOverrides, name)
+              ? serverOverrides[name]
+              : undefined;
+          return (
+            override !== false && (override === true || configuredMcp[name]?.enabled !== false)
+          );
+        })
+        .map(([name, server]) => [
+          name,
+          applyCodexSessionMcpToolDenials(name, server, params.toolOverrides),
+        ]),
+    ),
+  };
+  const enabledConfiguredMcp = Object.fromEntries(
+    Object.entries(configuredMcp).filter(([name, server]) => {
+      const override =
+        serverOverrides && Object.hasOwn(serverOverrides, name) ? serverOverrides[name] : undefined;
+      return override !== false && (override === true || server.enabled !== false);
+    }),
+  );
+  // The native thread projection has separate bundle and owner-config paths,
+  // but scheduled ownership covers their one merged static execution surface.
+  const { staticServers: configuredStaticServers } = partitionMcpServersByConnectionScope({
+    ...effectiveConfig.mcpServers,
+    ...enabledConfiguredMcp,
+  });
+  const { staticServers: userStaticServers } =
+    partitionMcpServersByConnectionScope(enabledConfiguredMcp);
+  const staticServerNames = Object.keys(configuredStaticServers).toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  const userStaticServerNames = Object.keys(userStaticServers).toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+    config: effectiveConfig,
+    prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
+  });
+  const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];
+  const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config);
   if (Object.keys(mcpServers).length === 0) {
     return {
-      diagnostics: bundleMcp.diagnostics,
+      diagnostics,
       evaluated: true,
+      staticServerNames,
+      userStaticServerNames,
     };
   }
   return {
     configPatch: {
       mcp_servers: mcpServers,
     },
-    diagnostics: bundleMcp.diagnostics,
+    diagnostics,
     evaluated: true,
     fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
+    staticServerNames,
+    userStaticServerNames,
   };
 }

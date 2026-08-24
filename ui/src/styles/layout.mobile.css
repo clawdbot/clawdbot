@@ -89,6 +89,19 @@
   --shell-nav-width: 0px;
 }
 
+/* Plain-browser chat owns the only narrow chrome row in its pane header. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome {
+  --shell-topbar-height: 0px;
+  grid-template-rows: 0px minmax(0, 1fr);
+}
+
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome
+  .topbar {
+  display: none;
+}
+
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
@@ -98,7 +111,7 @@
   z-index: 70;
   width: min(86vw, 320px);
   min-width: 0;
-  border-right: none;
+  border-inline-end: none;
   box-shadow: 0 30px 80px color-mix(in srgb, black 40%, transparent);
   transform: translateX(-100%);
   opacity: 0;
@@ -108,6 +121,33 @@
     opacity var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+/* A session dashboard keeps the board primary on narrow shells. Every desktop
+   edge becomes one bounded bottom sheet; the stored tab preference is left
+   untouched and returns when the viewport widens. */
+.shell--mobile-nav .board-session-surface--dock-bottom {
+  flex-direction: column;
+}
+
+.shell--mobile-nav .board-session-surface__board {
+  order: 1;
+}
+
+.shell--mobile-nav .board-session-surface__divider {
+  display: none;
+}
+
+.shell--mobile-nav .board-session-surface__chat {
+  order: 2;
+  width: 100% !important;
+  height: min(42dvh, 360px) !important;
+  min-width: 0;
+  min-height: 180px;
+  max-width: none;
+  max-height: 48dvh;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
+}
+
 .shell--mobile-nav .sidebar-resizer {
   display: none;
 }
@@ -115,23 +155,6 @@
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
   transform: translateX(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.shell--mobile-nav .shell-nav-backdrop {
-  display: block;
-  position: fixed;
-  inset: 0;
-  z-index: 65;
-  border: 0;
-  background: color-mix(in srgb, black 52%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
   opacity: 1;
   pointer-events: auto;
 }
@@ -153,7 +176,7 @@
 
 .shell--mobile-nav .topnav-shell {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
   gap: 10px;
 }
 
@@ -181,45 +204,26 @@
   padding: 0;
 }
 
-.shell--mobile-nav .sidebar-brand__actions {
-  display: none;
-}
-
 .shell--mobile-nav .sidebar {
   width: 100%;
   min-width: 0;
   flex: 1 1 auto;
   flex-direction: column;
   align-items: stretch;
-  border-right: none;
+  border-inline-end: none;
 }
 
 .shell--mobile-nav .sidebar-shell {
-  padding: 18px 16px 14px;
+  --sidebar-pad-x: 16px;
+  padding: 18px var(--sidebar-pad-x) 14px;
   border-radius: 0;
-}
-
-.shell--mobile-nav .sidebar-nav {
-  /* Match the desktop pinned-nav layout so the session list keeps the
-     remaining drawer height. */
-  flex: 0 0 auto;
-  max-height: 60%;
-  display: block;
-  padding: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.shell--mobile-nav .sidebar-nav::-webkit-scrollbar {
-  display: none;
 }
 
 .shell--mobile-nav .nav-item {
   margin: 0;
   min-height: 40px;
-  padding: 0 12px;
-  font-size: 13px;
+  padding: 0 12px 0 8px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   border-radius: var(--radius-md);
   white-space: nowrap;
   flex: 0 0 auto;
@@ -314,16 +318,12 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .shell--mobile-nav .sidebar-shell {
-    padding: 16px 14px 12px;
+    --sidebar-pad-x: 14px;
+    padding: 16px var(--sidebar-pad-x) 12px;
   }
 
   .shell--mobile-nav .nav-item {
-    font-size: 12px;
-  }
-
-  /* Content */
-  .content-header {
-    display: none;
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
@@ -357,8 +357,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     left: auto;
     z-index: 100;
     width: min(420px, calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 16px));
-    background: var(--card, #161b22);
-    border: 1px solid var(--border, #30363d);
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     padding: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
@@ -416,12 +416,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     grid-area: session;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
-    min-height: 44px;
-    padding: 10px 12px;
-    font-size: 14px;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
   }
@@ -434,14 +428,12 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     font-size: 14px;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-menu {
-    bottom: auto;
-    top: calc(100% + 6px);
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model-menu,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__effort-menu {
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
     width: 100%;
     font-size: 14px;
     min-height: 44px;
@@ -492,20 +484,11 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     border-radius: var(--radius-md);
   }
 
-  .stat-label {
-    font-size: 12px; /* was 11px */
-  }
-
   .stat-value {
     font-size: 18px;
   }
 
   /* Forms */
-  .form-grid {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-
   .field input,
   .field textarea,
   .field select {
@@ -527,21 +510,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   /* Chat */
-  .chat-header {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  .chat-header__left {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .chat-header__right {
-    justify-content: space-between;
-  }
-
   .chat-session {
     min-width: unset;
     width: 100%;
@@ -571,20 +539,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
 
-  .agent-chat__toolbar {
-    align-items: stretch;
-    gap: 8px;
-    padding: 6px 8px;
-  }
-
-  .agent-chat__toolbar-left,
-  .agent-chat__toolbar-right {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost,
   .chat-send-btn {
     width: 44px;
     min-width: 44px;
@@ -592,7 +547,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg,
   .chat-send-btn svg {
     width: 16px;
     height: 16px;
@@ -681,13 +635,9 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 8px 10px;
   }
 
-  .brand-title {
-    font-size: 13px;
-  }
-
   .nav-item {
     padding: 6px 8px;
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm); /* was 11px */
   }
 
   .content {
@@ -774,10 +724,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 8px 10px;
   }
 
-  .data-table-wrapper {
-    border-radius: var(--radius-sm);
-  }
-
   .session-key-cell {
     max-width: 200px;
   }
@@ -814,8 +760,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 }
 
-/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
-@media (max-width: 500px) {
+/* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
+@media (max-width: 560px) {
   .data-table.sessions-table {
     min-width: 320px;
   }

@@ -1,7 +1,7 @@
 // HTTP common tests cover JSON/text response helpers, auth failures, security
 // headers, SSE headers, body parsing, and disconnect diagnostics.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
@@ -15,6 +15,7 @@ import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
+  sendMissingScopeForbidden,
   sendRateLimited,
   sendUnauthorized,
   setDefaultSecurityHeaders,
@@ -122,6 +123,23 @@ describe("sendJson", () => {
   });
 });
 
+describe("sendMissingScopeForbidden", () => {
+  it("preserves the legacy response when no concrete scope is available", () => {
+    const { res, end } = makeMockHttpResponse();
+    sendMissingScopeForbidden(res, undefined);
+    expect(res.statusCode).toBe(403);
+    expect(end).toHaveBeenCalledWith(
+      JSON.stringify({
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: "missing scope: undefined",
+        },
+      }),
+    );
+  });
+});
+
 describe("sendMethodNotAllowed", () => {
   it("defaults the Allow header to POST and responds 405", () => {
     const { res, setHeader, end } = makeMockHttpResponse();
@@ -214,7 +232,17 @@ describe("sendInvalidRequest", () => {
 });
 
 describe("readJsonBodyOrError", () => {
-  const makeRequest = () => ({}) as IncomingMessage;
+  const makeRequest = (headers: Record<string, string> = {}) => {
+    const req = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      headers,
+      destroy: vi.fn(() => {
+        req.destroyed = true;
+        return req;
+      }),
+    }) as IncomingMessage & { destroy: ReturnType<typeof vi.fn> };
+    return req;
+  };
 
   it("returns the parsed body on success", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { hello: "world" } });
@@ -230,7 +258,7 @@ describe("readJsonBodyOrError", () => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((event) => events.push(event));
     const { res, end } = makeMockHttpResponse();
-    const req = { headers: { "content-length": "2048" } } as IncomingMessage;
+    const req = makeRequest({ "content-length": "2048" });
     const result = await readJsonBodyOrError(req, res, 1024);
     stop();
     expect(result).toBeUndefined();
@@ -246,12 +274,18 @@ describe("readJsonBodyOrError", () => {
     expect(event?.bytes).toBe(2048);
     expect(event?.limitBytes).toBe(1024);
     expect(event?.reason).toBe("json_body_limit");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
+    expect(req.destroy).toHaveBeenCalledOnce();
   });
 
   it("responds with 408 when the request body times out", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "request body timeout" });
     const { res, end } = makeMockHttpResponse();
-    const result = await readJsonBodyOrError(makeRequest(), res, 1024);
+    const req = makeRequest();
+    const result = await readJsonBodyOrError(req, res, 1024);
     expect(result).toBeUndefined();
     expect(res.statusCode).toBe(408);
     expect(end).toHaveBeenCalledWith(
@@ -259,17 +293,25 @@ describe("readJsonBodyOrError", () => {
         error: { message: "Request body timeout", type: "invalid_request_error" },
       }),
     );
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
+    res.emit("close");
+    expect(req.destroy).toHaveBeenCalledOnce();
   });
 
   it("responds with 400 for other parse failures", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "bad json" });
     const { res, end } = makeMockHttpResponse();
-    const result = await readJsonBodyOrError(makeRequest(), res, 1024);
+    const req = makeRequest();
+    const result = await readJsonBodyOrError(req, res, 1024);
     expect(result).toBeUndefined();
     expect(res.statusCode).toBe(400);
     expect(end).toHaveBeenCalledWith(
       JSON.stringify({ error: { message: "bad json", type: "invalid_request_error" } }),
     );
+    res.emit("finish");
+    expect(req.destroy).not.toHaveBeenCalled();
   });
 });
 
@@ -322,6 +364,103 @@ describe("watchClientDisconnect", () => {
     socket.emit("close");
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("immediately aborts when the request socket was already destroyed", () => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: true });
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(1);
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("immediately aborts when the response was already destroyed", () => {
+    const socket = new EventEmitter();
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    Object.assign(res, { destroyed: true });
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(socket.listenerCount("close")).toBe(0);
+    expect(res.listenerCount("error")).toBe(1);
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("handles response stream errors as client disconnects", () => {
+    const socket = new EventEmitter();
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("keeps real response errors handled after cleanup until the response closes", async () => {
+    const socket = new EventEmitter();
+    const req = { socket } as IncomingMessage;
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+
+    expect(res.listenerCount("error")).toBeGreaterThan(0);
+    cleanup();
+    res.end();
+    res.write("late SSE frame");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("keeps deferred errors handled when a real response was already destroyed", async () => {
+    const socket = new EventEmitter();
+    const req = { socket } as IncomingMessage;
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    const controller = new AbortController();
+    const deferredError = new Promise<void>((resolve) => {
+      process.nextTick(() => {
+        res.emit("error", new Error("destroyed response failed during cleanup"));
+        resolve();
+      });
+    });
+    res.destroy();
+
+    const cleanup = watchClientDisconnect(req, res, controller);
+    expect(controller.signal.aborted).toBe(true);
+    expect(res.listenerCount("error")).toBe(1);
+
+    await deferredError;
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
   });
 
   it("does not double-abort when the controller is already aborted", () => {

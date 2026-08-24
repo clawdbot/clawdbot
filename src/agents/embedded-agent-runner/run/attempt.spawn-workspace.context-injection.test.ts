@@ -4,14 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
+import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
-  assembleAttemptContextEngine,
   type AttemptContextEngine,
   resolveAttemptBootstrapContext,
-} from "./attempt.context-engine-helpers.js";
-import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-context-engine-helpers.js";
+import { resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
 
 async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip" | "never";
@@ -36,7 +36,6 @@ async function resolveBootstrapContext(params: {
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     bootstrapMode: params.bootstrapMode ?? "none",
-    sessionFile: "/tmp/session.jsonl",
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
   });
@@ -59,7 +58,7 @@ describe("embedded attempt context injection", () => {
     expect(result.isContinuationTurn).toBe(true);
     expect(result.bootstrapFiles).toStrictEqual([]);
     expect(result.contextFiles).toStrictEqual([]);
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
@@ -144,7 +143,7 @@ describe("embedded attempt context injection", () => {
     expect(input.requesterSenderId).toBe("@alice:example.org");
   });
 
-  it.each(["heartbeat", "commitment-only"] as const)(
+  it.each(["heartbeat"] as const)(
     "never skips %s bootstrap filtering",
     async (bootstrapContextRunKind) => {
       const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
@@ -179,7 +178,7 @@ describe("embedded attempt context injection", () => {
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md", content: "bootstrap context" }]);
   });
 
-  it.each(["heartbeat", "commitment-only"] as const)(
+  it.each(["heartbeat"] as const)(
     "does not record full bootstrap completion for %s runs",
     async (bootstrapContextRunKind) => {
       const { result } = await resolveBootstrapContext({
@@ -201,7 +200,7 @@ describe("embedded attempt context injection", () => {
       });
 
     expect(result.isContinuationTurn).toBe(true);
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
   });
@@ -217,7 +216,14 @@ describe("embedded attempt context injection", () => {
       { role: "user", content: "real question", timestamp: 1 } as AgentMessage,
       { role: "assistant", content: "real answer", timestamp: 2 } as unknown as AgentMessage,
       { role: "user", content: HEARTBEAT_PROMPT, timestamp: 3 } as AgentMessage,
-      { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Checking the heartbeat." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+        timestamp: 4,
+      } as unknown as AgentMessage,
     ];
 
     const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
@@ -226,7 +232,7 @@ describe("embedded attempt context injection", () => {
       HEARTBEAT_PROMPT,
     );
     const limited = limitHistoryTurns(heartbeatFiltered, 1);
-    await assembleAttemptContextEngine({
+    await assembleHarnessContextEngine({
       contextEngine: {
         info: { id: "test", name: "Test", version: "0.0.1" },
         ingest: async () => ({ ingested: true }),

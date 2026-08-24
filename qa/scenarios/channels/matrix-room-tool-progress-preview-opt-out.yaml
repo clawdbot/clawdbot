@@ -4,14 +4,13 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.streaming
+      - matrix.message-presentation-metadata
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 60000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         streaming:
           mode: quiet

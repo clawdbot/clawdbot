@@ -8,8 +8,15 @@ title: "macOS app"
 ---
 
 The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
-permission prompts, notifications, WebChat, voice input, Canvas, and
-Mac-hosted node tools such as `system.run`.
+permission prompts, notifications, WebChat, voice input, a hosted-widget panel,
+and Mac-hosted node tools such as `system.run`.
+
+Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
+
+The full native chat accepts image attachments through its picker, paste, and
+drag and drop. Assistant-generated images render inline through short-lived
+Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
+bounded image model and renderer.
 
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
@@ -31,9 +38,12 @@ has no macOS app asset, use the newest one that does, or build from source with
 2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
 3. Wait while the app installs the matching CLI runtime. In local mode it also
    installs and starts the Gateway.
-4. Establish inference with a live model check. After it passes, OpenClaw
-   handles the remaining setup.
-5. Complete the macOS permission checklist and send the onboarding test message.
+4. Establish inference with a live model check. If the app reused a login you
+   did not want, **Choose a different AI** on the success banner reopens the
+   picker, including the API-key option.
+5. Finish. The app opens the dashboard, where OpenClaw guides the rest of the
+   setup (memory import, channels, permissions) in one conversation. Grant
+   macOS permissions any time from **Settings → Permissions**.
 
 If the app reaches an existing Gateway whose default agent has a configured
 model, it treats that Gateway as already set up, skips provider onboarding and
@@ -56,6 +66,10 @@ The dashboard update card names what the app will update:
   managed local Gateway, or another install the app does not own. The button
   runs that Gateway's normal update flow instead of changing the Mac app.
 
+Either button asks for confirmation first. The card hands the update to the app
+only after you choose **Update Mac app and restart**, so a misclick never starts
+Sparkle.
+
 A failed coordinated update stays in its setup-style window with retry,
 [update guide](/install/updating), and Discord actions. Automatic repair never
 downgrades a newer Gateway or overrides an `extended-stable` channel pin.
@@ -68,8 +82,9 @@ updates only the local Mac node runtime and skips the notification when the
 remote Gateway is older than the app.
 
 Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
-to beta app builds; `stable`, `extended-stable`, and missing or unknown values
-stay on stable app builds.
+to beta app builds; `extended-stable` accepts only extended-stable app releases,
+so it stays quiet when no matching app release exists. `stable`, missing, and
+unknown values stay on stable app builds.
 
 ## Open dashboard links
 
@@ -82,6 +97,14 @@ Right-click an external link to choose **Open in Sidebar**, **Open in Default Br
 ## Import browser logins
 
 The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+
+## Sync cookies to a remote computer
+
+Import copies cookies once into a profile on the same Mac. When your Gateway and agent browser run on a **separate computer** (a dedicated box, a headless Linux host, or a cloud container), turn on cookie sync so this Mac keeps that remote browser signed in to the sites you choose.
+
+Open **Settings → General → Cookie sync**. It is **off by default** and only takes effect while the app runs in remote mode. Turn on **Sync cookies to the remote computer**, add the sites you want kept in sync to the **Domains** allowlist (for example `github.com` and `accounts.google.com`), and set the **Target profile** that receives them (the managed profile name on the remote Gateway, `imported` by default). A status row shows whether sync is running.
+
+While enabled, the app supervises the [`openclaw browser cookie-sync --watch`](/cli/browser#cookie-sync-to-a-remote-gateway) command against the connected Gateway. Cookies are decrypted locally on this Mac (one macOS Keychain or Touch ID prompt per session) and pushed to the remote profile over the app's existing encrypted Gateway connection; only the domains on the allowlist are ever sent, and cookie values are never written to logs. An empty allowlist syncs nothing. As with import, some Google sessions use device-bound session credentials (DBSC) that stay tied to this Mac and may still require re-authentication after sync; for those sites, drive the browser on the Mac itself through the [browser node proxy](/cli/browser#remote-browser-control-node-host-proxy) instead.
 
 ## Choose a Gateway mode
 
@@ -98,15 +121,18 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
-- Menu bar status, notifications, health, and WebChat.
+- Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
-- One Mac node that combines native Canvas, camera/screen capture, notifications,
+- One Mac node that combines the native widget panel, camera/screen capture, notifications,
   location, and computer control with the CLI node host's system, browser,
   plugin, skill, and MCP commands.
 - Exec approval prompts for Mac-hosted commands.
 - App-context execution for approved shell commands, preserving the app's macOS
   permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
+
+In the embedded Control UI, **Settings → Notifications** shows the app's native
+notification permission instead of browser push because the app delivers notifications natively.
 
 The app does **not** replace the Gateway or general CLI docs. Gateway
 configuration, providers, plugins, channels, tools, and security live in their
@@ -119,14 +145,14 @@ own docs.
 | Install or debug the CLI/Gateway service | [Gateway on macOS](/platforms/mac/bundled-gateway)                                          |
 | Keep state out of cloud-synced folders   | [Gateway on macOS](/platforms/mac/bundled-gateway#state-directory-on-macos)                 |
 | Debug app discovery and connectivity     | [Gateway on macOS](/platforms/mac/bundled-gateway#debug-app-connectivity)                   |
-| Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)                                           |
+| Understand launchd behavior              | [Gateway on macOS](/platforms/mac/bundled-gateway)                                          |
 | Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)                                             |
 | Detect the Mac you most recently used    | [Active computer presence](/nodes/presence)                                                 |
 | Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)                                                     |
 | Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
 | Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |
 | Use voice wake or push-to-talk           | [Voice wake](/platforms/mac/voicewake)                                                      |
-| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                                                             |
+| Present hosted widgets in the Mac panel  | [Widget panel](/platforms/mac/canvas)                                                       |
 | Host PeekabooBridge for UI automation    | [Peekaboo bridge](/platforms/mac/peekaboo)                                                  |
 | Configure command approvals              | [Exec approvals](/tools/exec-approvals), [advanced details](/tools/exec-approvals-advanced) |
 | Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |

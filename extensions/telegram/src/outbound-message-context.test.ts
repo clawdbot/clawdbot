@@ -6,8 +6,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import {
+  createTelegramMessageCache,
+  hasProviderObservedTelegramThreadBinding,
+} from "./message-cache.js";
+import {
+  recordOutboundMessageForPromptContext,
+  registerTelegramOutboundGroupHistoryRecorder,
+} from "./outbound-message-context.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -103,6 +112,160 @@ describe("recordOutboundMessageForPromptContext", () => {
       },
     });
     expect(cached?.sourceMessage.from).not.toHaveProperty("last_name");
+  });
+
+  it("binds topics only when the successful provider response identifies the thread", async () => {
+    const common = {
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1001,
+      messageId: 700,
+      text: "Bot just replied",
+      messageThreadId: 77,
+    } as const;
+    const callerOnlyThread = await recordAndRead({
+      ...common,
+      successfulSendThread: { id: 77, scope: "forum" },
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 700,
+        text: "Bot just replied",
+      },
+    });
+    expect(hasProviderObservedTelegramThreadBinding(callerOnlyThread, 77)).toBe(false);
+
+    const providerThread = await recordAndRead({
+      ...common,
+      messageId: 701,
+      successfulSendThread: { id: 77, scope: "forum" },
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_701,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 701,
+        message_thread_id: 77,
+        text: "Bot replied in the topic",
+      },
+    });
+    expect(hasProviderObservedTelegramThreadBinding(providerThread, 77)).toBe(true);
+  });
+
+  it("records the successful channel Direct Messages spec ahead of raw message_thread_id", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1002,
+      messageId: 704,
+      messageThreadId: 999,
+      successfulSendThread: { id: 77, scope: "direct-messages" },
+      message: {
+        chat: {
+          id: -1002,
+          type: "supergroup",
+          title: "Channel replies",
+        },
+        date: 1_736_380_704,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 704,
+        message_thread_id: 999,
+        direct_messages_topic: { topic_id: 77 },
+        text: "Bot replied in channel Direct Messages",
+      },
+    });
+
+    expect(cached?.threadId).toBe("77");
+    expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "direct-messages", id: 77 });
+  });
+
+  it("records forum and channel Direct Messages replies with the same topic ID in separate histories", async () => {
+    const chatId = -1001;
+    const history = new Map<string, Array<{ sender: string; body: string; messageId: string }>>();
+    const unregister = registerTelegramOutboundGroupHistoryRecorder({
+      accountId: "default",
+      recorder: (record) =>
+        recordTelegramGroupHistoryEntry({
+          historyMap: history,
+          historyKey: buildTelegramGroupPeerId(record.chatId, record.threadSpec),
+          limit: 10,
+          entry: {
+            sender: "Configured Agent (you)",
+            body: record.text ?? "<media>",
+            messageId: String(record.messageId),
+          },
+        }),
+    });
+
+    try {
+      for (const { scope, messageId, body } of [
+        { scope: "forum", messageId: 710, body: "Forum reply" },
+        { scope: "direct-messages", messageId: 711, body: "Direct-topic reply" },
+      ] as const) {
+        await recordOutboundMessageForPromptContext({
+          cfg,
+          account: { accountId: "default", name: "Configured Agent" },
+          chatId,
+          messageId,
+          messageThreadId: 77,
+          successfulSendThread: { scope, id: 77 },
+          message: {
+            chat: { id: chatId, type: "supergroup" },
+            date: 1_736_380_700,
+            message_id: messageId,
+            ...(scope === "forum"
+              ? { message_thread_id: 77 }
+              : { direct_messages_topic: { topic_id: 77 } }),
+            text: body,
+          },
+        });
+      }
+
+      expect(history.get("-1001:direct-topic:77")).toEqual([
+        expect.objectContaining({ body: "Direct-topic reply", messageId: "711" }),
+      ]);
+      expect(history.get("-1001:topic:77")).toEqual([
+        expect.objectContaining({ body: "Forum reply", messageId: "710" }),
+      ]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("binds a successful General-topic response from trusted send context", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1001,
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 702,
+        text: "Bot replied in General",
+      },
+      messageId: 702,
+      messageThreadId: 1,
+      successfulSendThread: { id: 1, scope: "forum" },
+    });
+
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(true);
+  });
+
+  it("does not infer a General-topic binding for DM thread context", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: 42,
+      message: {
+        chat: { id: 42, type: "private" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 703,
+        text: "Bot replied in a DM topic",
+      },
+      messageId: 703,
+      messageThreadId: 1,
+      successfulSendThread: { id: 1, scope: "dm" },
+    });
+
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(false);
   });
 
   it("falls back to the Telegram bot name when no configured name exists", async () => {

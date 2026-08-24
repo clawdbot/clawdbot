@@ -1,4 +1,5 @@
 // Memory Core tests cover manager embedding policy plugin behavior.
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
@@ -94,6 +95,66 @@ describe("memory embedding policy", () => {
     ).rejects.toThrow("memory embeddings query timed out after 60s");
 
     expect(run).toHaveBeenCalledTimes(1);
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-progress retry delay without starting another provider request", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const abortReason = new Error("memory search was cancelled");
+      const run = vi.fn(async () => {
+        throw new Error("memory embeddings query timed out after 60s");
+      });
+      const waitForRetry = vi.fn(async (delayMs: number) => {
+        await sleepWithAbort(delayMs, controller.signal);
+      });
+
+      const pending = runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(run).toHaveBeenCalledOnce();
+      expect(waitForRetry).toHaveBeenCalledWith(500);
+      expect(vi.getTimerCount()).toBe(1);
+
+      controller.abort(abortReason);
+
+      await expect(pending).rejects.toMatchObject({
+        message: "aborted",
+        cause: abortReason,
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves permanent provider error identity without retrying", async () => {
+    const permanentError = new Error("embedding validation failed");
+    const run = vi.fn(async () => {
+      throw permanentError;
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 3,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toBe(permanentError);
+
+    expect(run).toHaveBeenCalledOnce();
     expect(waitForRetry).not.toHaveBeenCalled();
   });
 

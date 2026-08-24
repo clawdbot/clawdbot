@@ -1,4 +1,4 @@
-/** Shared cron store sidecar and quarantine types. */
+/** Shared cron SQLite store and quarantine types. */
 import type { CronStoreFile } from "../types.js";
 
 /** Invalid config-backed cron job captured for quarantine instead of runtime load. */
@@ -12,11 +12,8 @@ export type QuarantinedCronConfigJob = {
   scheduleIdentity?: string;
 };
 
-/** Sidecar file that records config jobs skipped during cron store loading. */
-export type CronQuarantineFile = {
-  version: 1;
-  jobs: Array<QuarantinedCronConfigJob & { quarantinedAtMs: number }>;
-};
+/** Durable recovery record for a cron job skipped during store loading. */
+export type CronQuarantinedJob = QuarantinedCronConfigJob & { quarantinedAtMs: number };
 
 /** Runtime state retained for config-sourced jobs that are not persisted as canonical jobs. */
 export type CronConfigJobRuntimeEntry = {

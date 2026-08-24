@@ -7,50 +7,98 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
+import { resolveSessionAgentId as defaultResolveSessionAgentId } from "../agents/agent-scope.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+import { normalizeChannelId as defaultNormalizeChannelId } from "../channels/plugins/index.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import { agentCommandFromIngress } from "../commands/agent.js";
+import { getRuntimeConfig as defaultGetRuntimeConfig } from "../config/io.js";
+import { resolveSystemMainSessionTarget as defaultResolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
+import { loadOrCreateProcessDeviceIdentity as defaultLoadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import {
+  updatePairedDevicePresence as defaultUpdatePairedDevicePresence,
+  type NodePairingGeneration,
+} from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import { requestHeartbeat as defaultRequestHeartbeat } from "../infra/heartbeat-wake.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
+import {
+  ApnsRegistrationPairingChangedError as DefaultApnsRegistrationPairingChangedError,
+  registerApnsRegistration as defaultRegisterApnsRegistration,
+} from "../infra/push-apns.js";
+import { withSystemEventOwner as defaultWithSystemEventOwner } from "../infra/system-event-ownership.js";
+import { enqueueSystemEvent as defaultEnqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { deleteMediaBuffer } from "../media/store.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { normalizeMainKey as defaultNormalizeMainKey } from "../routing/session-key.js";
+import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { resolveChatAttachmentMaxBytes as defaultResolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
+import {
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER as DEFAULT_INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+  parseMessageWithAttachments as defaultParseMessageWithAttachments,
+  persistInboundImagesForTranscript as defaultPersistInboundImagesForTranscript,
+} from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments as defaultNormalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
-  agentCommandFromIngress,
-  buildOutboundSessionContext,
-  createOutboundSendDeps,
-  defaultRuntime,
-  deleteMediaBuffer,
-  enqueueSystemEvent,
-  formatForLog,
-  getRuntimeConfig,
-  loadOrCreateProcessDeviceIdentity,
-  loadSessionEntry,
-  normalizeChannelId,
-  normalizeMainKey,
-  normalizeRpcAttachmentsToChatAttachments,
-  parseMessageWithAttachments,
-  registerApnsRegistration,
-  requestHeartbeat,
-  resolveChatAttachmentMaxBytes,
-  resolveGatewayModelSupportsImages,
-  resolveOutboundTarget,
-  resolveSessionAgentId,
-  resolveSessionModelRef,
-  persistInboundImagesForTranscript,
-  sanitizeInboundSystemTags,
-  sendDurableMessageBatch,
-  canonicalizeSessionEntryAliases,
-} from "./server-node-events.runtime.js";
+  loadSessionEntry as defaultLoadSessionEntry,
+  resolveGatewayModelSupportsImages as defaultResolveGatewayModelSupportsImages,
+  resolveSessionModelRef as defaultResolveSessionModelRef,
+} from "./session-utils.js";
+import { formatForLog as defaultFormatForLog } from "./ws-log.js";
+
+function resolveDefaultServerNodeEventDependencies() {
+  return {
+    agentCommandFromIngress,
+    ApnsRegistrationPairingChangedError: DefaultApnsRegistrationPairingChangedError,
+    buildOutboundSessionContext,
+    createOutboundSendDeps,
+    defaultRuntime,
+    deleteMediaBuffer,
+    enqueueSystemEvent: defaultEnqueueSystemEvent,
+    formatForLog: defaultFormatForLog,
+    getRuntimeConfig: defaultGetRuntimeConfig,
+    INLINE_IMAGE_DURABLE_OMISSION_MARKER: DEFAULT_INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+    loadOrCreateProcessDeviceIdentity: defaultLoadOrCreateProcessDeviceIdentity,
+    loadSessionEntry: defaultLoadSessionEntry,
+    normalizeChannelId: defaultNormalizeChannelId,
+    normalizeMainKey: defaultNormalizeMainKey,
+    normalizeRpcAttachmentsToChatAttachments: defaultNormalizeRpcAttachmentsToChatAttachments,
+    parseMessageWithAttachments: defaultParseMessageWithAttachments,
+    persistInboundImagesForTranscript: defaultPersistInboundImagesForTranscript,
+    registerApnsRegistration: defaultRegisterApnsRegistration,
+    requestHeartbeat: defaultRequestHeartbeat,
+    resolveChatAttachmentMaxBytes: defaultResolveChatAttachmentMaxBytes,
+    resolveGatewayModelSupportsImages: defaultResolveGatewayModelSupportsImages,
+    resolveOutboundTarget,
+    resolveSessionAgentId: defaultResolveSessionAgentId,
+    resolveSessionModelRef: defaultResolveSessionModelRef,
+    resolveSystemMainSessionTarget: defaultResolveSystemMainSessionTarget,
+    sendDurableMessageBatchCore,
+    updatePairedDevicePresence: defaultUpdatePairedDevicePresence,
+    upsertSessionEntryCore,
+    withSystemEventOwner: defaultWithSystemEventOwner,
+  };
+}
+
+type ServerNodeEventDependencies = ReturnType<typeof resolveDefaultServerNodeEventDependencies>;
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
@@ -62,6 +110,18 @@ const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+type VoiceTranscriptReservationAdmission = { work: Promise<unknown> } | null;
+type VoiceTranscriptReservation = {
+  fingerprint: string;
+  receivedAt: number;
+  status: "pending" | "ready" | "checking" | "rejected";
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  start?: () => Promise<unknown>;
+  resolve: (admission: VoiceTranscriptReservationAdmission) => void;
+  rejectDecision: (reason: unknown) => void;
+  decision: Promise<VoiceTranscriptReservationAdmission>;
+};
+const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
@@ -82,13 +142,21 @@ function dispatchNodeAgentCommand(
   ctx: NodeEventContext,
   nodeId: string,
   input: NodeAgentCommandInput,
+  dependencies: ServerNodeEventDependencies,
+  isConnectionCurrent?: () => boolean | Promise<boolean>,
+  onAdmissionRejected?: () => void | Promise<void>,
 ): void {
   // The node RPC can finish before the agent starts its own session admission.
-  // Reserve a root now so suspension cannot acknowledge and then strand the turn.
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    agentCommandFromIngress(input, defaultRuntime, ctx.deps),
-  ).catch((err: unknown) => {
-    ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+  // Reserve a root now so suspension cannot acknowledge and then strand the turn,
+  // but recheck the admitted connection before agent work actually starts.
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    if (isConnectionCurrent && !(await isConnectionCurrent())) {
+      await onAdmissionRejected?.();
+      return;
+    }
+    await dependencies.agentCommandFromIngress(input, dependencies.defaultRuntime, ctx.deps);
+  }).catch((err: unknown) => {
+    ctx.logGateway.warn(`agent failed node=${nodeId}: ${dependencies.formatForLog(err)}`);
   });
 }
 
@@ -152,16 +220,136 @@ function shouldDropDuplicateVoiceTranscript(params: {
         break;
       }
     }
-    while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
-      const oldestKey = recentVoiceTranscripts.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentVoiceTranscripts.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentVoiceTranscripts, MAX_RECENT_VOICE_TRANSCRIPTS);
   }
 
   return false;
+}
+
+function reserveVoiceTranscript(params: {
+  sessionKey: string;
+  fingerprint: string;
+  receivedAt: number;
+}): {
+  admit: (params: {
+    isConnectionCurrent?: () => boolean | Promise<boolean>;
+    start: () => Promise<unknown>;
+  }) => Promise<VoiceTranscriptReservationAdmission>;
+  reject: () => void;
+} {
+  // Resolve reservations in receipt order so delayed currentness checks cannot
+  // change the dedupe window, while rejected connections leave no committed state.
+  let resolveDecision: (admission: VoiceTranscriptReservationAdmission) => void = () => {};
+  let rejectDecision: (reason: unknown) => void = () => {};
+  const decision = new Promise<VoiceTranscriptReservationAdmission>((resolve, reject) => {
+    resolveDecision = resolve;
+    rejectDecision = reject;
+  });
+  const reservation: VoiceTranscriptReservation = {
+    fingerprint: params.fingerprint,
+    receivedAt: params.receivedAt,
+    status: "pending",
+    resolve: resolveDecision,
+    rejectDecision,
+    decision,
+  };
+  const queue = pendingVoiceTranscriptReservations.get(params.sessionKey) ?? [];
+  queue.push(reservation);
+  pendingVoiceTranscriptReservations.set(params.sessionKey, queue);
+
+  const drain = () => {
+    while (queue[0]?.status === "rejected") {
+      const next = queue.shift();
+      if (!next) {
+        break;
+      }
+      next.resolve(null);
+    }
+    const next = queue[0];
+    if (!next) {
+      pendingVoiceTranscriptReservations.delete(params.sessionKey);
+      return;
+    }
+    if (next.status !== "ready") {
+      return;
+    }
+    next.status = "checking";
+    void (async () => {
+      try {
+        const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
+        const admission =
+          isCurrent &&
+          !shouldDropDuplicateVoiceTranscript({
+            sessionKey: params.sessionKey,
+            fingerprint: next.fingerprint,
+            now: next.receivedAt,
+          }) &&
+          next.start
+            ? { work: next.start() }
+            : null;
+        queue.shift();
+        next.resolve(admission);
+      } catch (err) {
+        queue.shift();
+        next.rejectDecision(err);
+      }
+      drain();
+    })();
+  };
+  const settle = (status: "ready" | "rejected") => {
+    if (reservation.status !== "pending") {
+      return;
+    }
+    reservation.status = status;
+    drain();
+  };
+
+  return {
+    admit: ({ isConnectionCurrent, start }) => {
+      reservation.isConnectionCurrent = isConnectionCurrent;
+      reservation.start = start;
+      settle("ready");
+      return reservation.decision;
+    },
+    reject: () => settle("rejected"),
+  };
+}
+
+function dispatchReservedVoiceAgentCommand(params: {
+  ctx: NodeEventContext;
+  nodeId: string;
+  input: NodeAgentCommandInput;
+  reservation: ReturnType<typeof reserveVoiceTranscript>;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  onStart: () => void;
+  dependencies: ServerNodeEventDependencies;
+}): void {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
+      params.reservation.reject();
+      return;
+    }
+    const admission = await params.reservation.admit({
+      isConnectionCurrent: params.isConnectionCurrent,
+      start: () => {
+        params.onStart();
+        return params.dependencies.agentCommandFromIngress(
+          params.input,
+          params.dependencies.defaultRuntime,
+          params.ctx.deps,
+        );
+      },
+    });
+    if (!admission) {
+      return;
+    }
+    await admission.work;
+  }).catch((err: unknown) => {
+    params.reservation.reject();
+    params.ctx.logGateway.warn(
+      `agent failed node=${params.nodeId}: ${params.dependencies.formatForLog(err)}`,
+    );
+  });
 }
 
 function shouldDropDuplicateExecFinished(params: {
@@ -189,13 +377,7 @@ function shouldDropDuplicateExecFinished(params: {
         break;
       }
     }
-    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-      const oldestKey = recentExecFinishedRuns.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentExecFinishedRuns.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
   }
 
   return false;
@@ -217,13 +399,7 @@ function pruneBoundedTimestampMap(
       return;
     }
   }
-  while (map.size > params.maxEntries) {
-    const oldestKey = map.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    map.delete(oldestKey);
-  }
+  pruneMapToMaxSize(map, params.maxEntries);
 }
 
 function compactExecEventOutput(raw: string) {
@@ -250,28 +426,26 @@ function compactNotificationEventText(raw: string) {
   return `${sliceUtf16Safe(normalized, 0, safe)}…`;
 }
 
-type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
+type LoadedSessionEntry = ReturnType<typeof defaultLoadSessionEntry>;
 
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
+  dependencies: ServerNodeEventDependencies;
 }) {
   const { storePath } = params;
   if (!storePath) {
     return;
   }
-  await canonicalizeSessionEntryAliases({
-    storePath,
-    target: {
-      canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
+  await params.dependencies.upsertSessionEntryCore(
+    {
+      sessionKey: params.canonicalKey,
+      storePath,
     },
-    update: (entry) => ({
-      ...entry,
+    {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -280,37 +454,73 @@ async function touchSessionStore(params: {
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,
       sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
-      lastAccountId: params.entry?.lastAccountId,
-      lastThreadId: params.entry?.lastThreadId,
-    }),
-  });
+      delivery: params.entry?.delivery,
+    },
+  );
 }
 
 function queueSessionStoreTouch(params: {
   ctx: NodeEventContext;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  dependencies: ServerNodeEventDependencies;
 }) {
   // Voice dispatch intentionally does not wait for persistence, but a host
   // snapshot must not race the accepted write after its node RPC returns.
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    touchSessionStore({
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
+      return;
+    }
+    await touchSessionStore({
       storePath: params.storePath,
       canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
       entry: params.entry,
       sessionId: params.sessionId,
       now: params.now,
-    }),
-  ).catch((err: unknown) => {
-    params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
+      dependencies: params.dependencies,
+    });
+  }).catch((err: unknown) => {
+    params.ctx.logGateway.warn(
+      "voice session-store update failed: " + params.dependencies.formatForLog(err),
+    );
   });
+}
+
+async function isNodeEventConnectionCurrent(opts?: {
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+}): Promise<boolean> {
+  if (!opts?.isConnectionCurrent) {
+    return true;
+  }
+  try {
+    return await opts.isConnectionCurrent();
+  } catch {
+    return false;
+  }
+}
+
+function pairingChangedResult(event: string): NodeEventHandleResult {
+  return { ok: true, event, handled: false, reason: "pairing_changed" };
+}
+
+async function cleanupNodeEventMedia(
+  ids: Iterable<string>,
+  ctx: Pick<NodeEventContext, "logGateway">,
+  dependencies: ServerNodeEventDependencies,
+): Promise<void> {
+  for (const id of ids) {
+    try {
+      await dependencies.deleteMediaBuffer(id);
+    } catch (cleanupErr) {
+      ctx.logGateway.warn(
+        `Failed to cleanup orphaned media ${id}: ${formatErrorMessage(cleanupErr)}`,
+      );
+    }
+  }
 }
 
 function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
@@ -350,8 +560,9 @@ async function sendReceiptAck(params: {
   channel: string;
   to: string;
   text: string;
+  dependencies: ServerNodeEventDependencies;
 }) {
-  const resolved = resolveOutboundTarget({
+  const resolved = params.dependencies.resolveOutboundTarget({
     channel: params.channel,
     to: params.to,
     cfg: params.cfg,
@@ -360,11 +571,11 @@ async function sendReceiptAck(params: {
   if (!resolved.ok) {
     throw new Error(String(resolved.error));
   }
-  const session = buildOutboundSessionContext({
+  const session = params.dependencies.buildOutboundSessionContext({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  const send = await sendDurableMessageBatch({
+  const send = await params.dependencies.sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
@@ -372,7 +583,7 @@ async function sendReceiptAck(params: {
     session,
     bestEffort: true,
     durability: "best_effort",
-    deps: createOutboundSendDeps(params.deps),
+    deps: params.dependencies.createOutboundSendDeps(params.deps),
   });
   if (send.status === "failed") {
     throw send.error;
@@ -383,8 +594,42 @@ export const handleNodeEvent = async (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: { connId?: string; deviceId?: string; presenceAllowed?: boolean },
+  opts?: {
+    connId?: string;
+    deviceId?: string;
+    pairingGeneration?: NodePairingGeneration;
+    presenceAllowed?: boolean;
+    isConnectionCurrent?: () => boolean | Promise<boolean>;
+    resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
+  },
+  dependencies: ServerNodeEventDependencies = resolveDefaultServerNodeEventDependencies(),
 ): Promise<NodeEventHandleResult | undefined> => {
+  const {
+    ApnsRegistrationPairingChangedError,
+    enqueueSystemEvent,
+    formatForLog,
+    getRuntimeConfig,
+    INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+    loadOrCreateProcessDeviceIdentity,
+    loadSessionEntry,
+    normalizeChannelId,
+    normalizeMainKey,
+    normalizeRpcAttachmentsToChatAttachments,
+    parseMessageWithAttachments,
+    persistInboundImagesForTranscript,
+    registerApnsRegistration,
+    requestHeartbeat,
+    resolveChatAttachmentMaxBytes,
+    resolveGatewayModelSupportsImages,
+    resolveSessionAgentId,
+    resolveSessionModelRef,
+    resolveSystemMainSessionTarget,
+    updatePairedDevicePresence,
+    withSystemEventOwner,
+  } = dependencies;
+  if (!(await isNodeEventConnectionCurrent(opts))) {
+    return pairingChangedResult(evt.event);
+  }
   switch (evt.event) {
     case "voice.transcript": {
       const obj = parsePayloadObject(evt.payloadJSON);
@@ -402,48 +647,60 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
-      const now = Date.now();
+      const receivedAt = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
-      if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
-        return undefined;
-      }
       const sessionId = entry?.sessionId ?? randomUUID();
-      queueSessionStoreTouch({
-        ctx,
-        storePath,
-        canonicalKey,
-        storeKeys,
-        entry,
-        sessionId,
-        now,
-      });
       const runId = randomUUID();
-
-      // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-      // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
-      ctx.addChatRun(runId, {
+      const transcriptReservation = reserveVoiceTranscript({
         sessionKey: canonicalKey,
-        clientRunId: `voice-${randomUUID()}`,
+        fingerprint,
+        receivedAt,
       });
 
-      dispatchNodeAgentCommand(ctx, nodeId, {
-        runId,
-        message: text,
-        sessionId,
-        sessionKey: canonicalKey,
-        thinking: "low",
-        deliver: false,
-        messageChannel: "node",
-        inputProvenance: {
-          kind: "external_user",
-          sourceChannel: "voice",
-          sourceTool: "gateway.voice.transcript",
+      dispatchReservedVoiceAgentCommand({
+        ctx,
+        nodeId,
+        dependencies,
+        input: {
+          runId,
+          message: text,
+          sessionId,
+          sessionKey: canonicalKey,
+          thinking: "low",
+          deliver: false,
+          messageChannel: "node",
+          inputProvenance: {
+            kind: "external_user",
+            sourceChannel: "voice",
+            sourceTool: "gateway.voice.transcript",
+          },
+          allowModelOverride: false,
         },
-        allowModelOverride: false,
+        reservation: transcriptReservation,
+        isConnectionCurrent: opts?.isConnectionCurrent,
+        onStart: () => {
+          queueSessionStoreTouch({
+            ctx,
+            dependencies,
+            storePath,
+            canonicalKey,
+            entry,
+            sessionId,
+            now: receivedAt,
+            isConnectionCurrent: opts?.isConnectionCurrent,
+          });
+
+          // Voice now has a unique per-turn run id, so it is also the stable
+          // client identity for chat streaming and abort lifecycle ownership.
+          ctx.addChatRun(runId, {
+            sessionKey: canonicalKey,
+            clientRunId: runId,
+          });
+        },
       });
       return undefined;
     }
@@ -480,17 +737,17 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
 
       let message = (link?.message ?? "").trim();
-      const transcriptMessage = message;
+      let transcriptMessage = message;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
-      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let images: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
       let imageOrder: PromptImageOrderEntry[] = [];
       let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
         [];
@@ -505,19 +762,32 @@ export const handleNodeEvent = async (
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot: ctx.loadGatewayModelCatalogSnapshot,
+          agentId: sessionAgentId,
           provider: modelRef.provider,
           model: modelRef.model,
         });
+        if (!(await isNodeEventConnectionCurrent(opts))) {
+          return pairingChangedResult(evt.event);
+        }
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: ctx.logGateway,
             supportsInlineImages,
             // server-node-events dispatches via agentCommandFromIngress which
-            // has no ctx.MediaPaths wiring; reject non-image attachments
+            // has no structured media wiring; reject non-image attachments
             // explicitly rather than saving them where the agent cannot reach them.
             acceptNonImage: false,
           });
+          if (!(await isNodeEventConnectionCurrent(opts))) {
+            await cleanupNodeEventMedia(
+              (parsed.offloadedRefs ?? []).map((ref) => ref.id),
+              ctx,
+              dependencies,
+            );
+            return pairingChangedResult(evt.event);
+          }
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
@@ -527,15 +797,11 @@ export const handleNodeEvent = async (
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
             );
             if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
-              for (const ref of parsed.offloadedRefs) {
-                try {
-                  await deleteMediaBuffer(ref.id);
-                } catch (cleanupErr) {
-                  ctx.logGateway.warn(
-                    `Failed to cleanup orphaned media ${ref.id}: ${formatErrorMessage(cleanupErr)}`,
-                  );
-                }
-              }
+              await cleanupNodeEventMedia(
+                parsed.offloadedRefs.map((ref) => ref.id),
+                ctx,
+                dependencies,
+              );
             }
             return undefined;
           }
@@ -560,21 +826,37 @@ export const handleNodeEvent = async (
 
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          (offloadedRefs ?? []).map((ref) => ref.id),
+          ctx,
+          dependencies,
+        );
+        return pairingChangedResult(evt.event);
+      }
       await touchSessionStore({
         storePath,
         canonicalKey,
-        storeKeys,
         entry,
         sessionId,
         now,
+        dependencies,
       });
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          (offloadedRefs ?? []).map((ref) => ref.id),
+          ctx,
+          dependencies,
+        );
+        return pairingChangedResult(evt.event);
+      }
 
       if (deliverRequested && (!channel || !to)) {
-        const entryChannel =
-          typeof entry?.lastChannel === "string"
-            ? normalizeChannelId(entry.lastChannel)
-            : undefined;
-        const entryTo = normalizeOptionalString(entry?.lastTo) ?? "";
+        const entryContext = deliveryContextFromSession(entry);
+        const entryChannel = entryContext?.channel
+          ? normalizeChannelId(entryContext.channel)
+          : undefined;
+        const entryTo = normalizeOptionalString(entryContext?.to) ?? "";
         if (!channel && entryChannel) {
           channel = entryChannel;
         }
@@ -591,19 +873,52 @@ export const handleNodeEvent = async (
         );
       }
 
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          (offloadedRefs ?? []).map((ref) => ref.id),
+          ctx,
+          dependencies,
+        );
+        return pairingChangedResult(evt.event);
+      }
+      const persistedTranscriptMedia = await persistInboundImagesForTranscript({
+        images,
+        offloadedRefs,
+        log: ctx.logGateway,
+        logContext: "agent.request",
+      });
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        await cleanupNodeEventMedia(
+          persistedTranscriptMedia.entries.map((media) => media.id),
+          ctx,
+          dependencies,
+        );
+        return pairingChangedResult(evt.event);
+      }
+      if (persistedTranscriptMedia.omission === "inline-image-save-failed") {
+        transcriptMessage = [transcriptMessage, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
+          .filter(Boolean)
+          .join("\n");
+      }
+      const transcriptMedia = persistedTranscriptMedia.entries.map((media) => media.fact);
+
       if (wantsReceipt && deliveryChannel && deliveryTo) {
         // Delivery stays detached from agent startup, but remains part of the
         // accepted node request until the durable send settles.
-        void runWithGatewayIndependentRootWorkContinuation(() =>
-          sendReceiptAck({
+        void runWithGatewayIndependentRootWorkContinuation(async () => {
+          if (!(await isNodeEventConnectionCurrent(opts))) {
+            return;
+          }
+          await sendReceiptAck({
             cfg,
             deps: ctx.deps,
+            dependencies,
             sessionKey: canonicalKey,
             channel: deliveryChannel,
             to: deliveryTo,
             text: receiptText,
-          }),
-        ).catch((err: unknown) => {
+          });
+        }).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -612,33 +927,38 @@ export const handleNodeEvent = async (
         );
       }
 
-      const transcriptMedia = (
-        await persistInboundImagesForTranscript({
+      dispatchNodeAgentCommand(
+        ctx,
+        nodeId,
+        {
+          runId: sessionId,
+          message,
           images,
           imageOrder,
-          offloadedRefs,
-          log: ctx.logGateway,
-          logContext: "agent.request",
-        })
-      ).map((media) => ({ path: media.path, contentType: media.contentType }));
-
-      dispatchNodeAgentCommand(ctx, nodeId, {
-        runId: sessionId,
-        message,
-        images,
-        imageOrder,
-        ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
-        sessionId,
-        sessionKey: canonicalKey,
-        thinking: link?.thinking ?? undefined,
-        deliver,
-        to: deliveryTo,
-        channel: deliveryChannel,
-        timeout:
-          typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
-        messageChannel: "node",
-        allowModelOverride: false,
-      });
+          ...(transcriptMedia.length > 0 ||
+          persistedTranscriptMedia.omission === "inline-image-save-failed"
+            ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
+            : {}),
+          sessionId,
+          sessionKey: canonicalKey,
+          thinking: link?.thinking ?? undefined,
+          deliver,
+          to: deliveryTo,
+          channel: deliveryChannel,
+          timeout:
+            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
+          messageChannel: "node",
+          allowModelOverride: false,
+        },
+        dependencies,
+        opts?.isConnectionCurrent,
+        () =>
+          cleanupNodeEventMedia(
+            persistedTranscriptMedia.entries.map((media) => media.id),
+            ctx,
+            dependencies,
+          ),
+      );
       return undefined;
     }
     case "notifications.changed": {
@@ -656,20 +976,28 @@ export const handleNodeEvent = async (
       if (!keyRaw) {
         return undefined;
       }
-      const key = sanitizeInboundSystemTags(keyRaw);
-      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
+      const key = keyRaw;
+      const requestedSessionKey = normalizeOptionalString(obj.sessionKey);
+      let target: { sessionKey: string; agentId?: string };
+      try {
+        target = requestedSessionKey
+          ? { sessionKey: requestedSessionKey }
+          : resolveSystemMainSessionTarget(getRuntimeConfig());
+      } catch (error) {
+        ctx.logGateway.warn(
+          `notification event not delivered node=${nodeId}: ${formatErrorMessage(error)}`,
+        );
+        return undefined;
+      }
+      const sessionKeyRaw = target.sessionKey;
       const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
       }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
-      const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
-      const title = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.title) ?? ""),
-      );
-      const text = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
-      );
+      const packageName = packageNameRaw ?? null;
+      const title = compactNotificationEventText(normalizeOptionalString(obj.title) ?? "");
+      const text = compactNotificationEventText(normalizeOptionalString(obj.text) ?? "");
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -683,15 +1011,20 @@ export const handleNodeEvent = async (
         }
       }
 
-      const queued = enqueueSystemEvent(summary, {
+      const eventOptions = {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
-      });
+      };
+      const queued = enqueueSystemEvent(
+        summary,
+        target.agentId ? withSystemEventOwner(eventOptions, target.agentId) : eventOptions,
+      );
       if (queued) {
         requestHeartbeat({
           source: "notifications-event",
           intent: "event",
           reason: "notifications-event",
+          ...(target.agentId ? { agentId: target.agentId } : {}),
           sessionKey,
         });
       }
@@ -705,7 +1038,9 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      ctx.nodeSubscribe(nodeId, sessionKey);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
+      await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "chat.unsubscribe": {
@@ -716,7 +1051,8 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      ctx.nodeUnsubscribe(nodeId, sessionKey);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "exec.started":
@@ -763,22 +1099,17 @@ export const handleNodeEvent = async (
       if (evt.event === "exec.denied") {
         return undefined;
       }
-      const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
+      const command = normalizeOptionalString(obj.command) ?? "";
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
-      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
-      // matching the first balanced `(...)` and stray parens in user-supplied
-      // input would break the metadata/body boundary. We strip pre-sanitize so
-      // that legitimate `[System Message]` style tags can still be converted to
-      // `(System Message)` by sanitizeInboundSystemTags afterward.
-      const reason = sanitizeInboundSystemTags(
-        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
-      );
+      const output = normalizeOptionalString(obj.output) ?? "";
+      // Strip parens from the raw reason: the `Exec denied (node=..., <reason>): cmd`
+      // wire format is parsed by matching the first balanced `(...)`, and stray
+      // parens in user-supplied input would break the metadata/body boundary.
+      const reason = (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, "");
 
       let text;
       if (evt.event === "exec.started") {
@@ -847,6 +1178,13 @@ export const handleNodeEvent = async (
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {
+        const expectedPairingGeneration = await opts?.resolveApnsRegistrationGeneration?.();
+        if (!expectedPairingGeneration) {
+          ctx.logGateway.warn(
+            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
+          );
+          return pairingChangedResult(evt.event);
+        }
         if (transport === "relay") {
           const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
           const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
@@ -867,6 +1205,7 @@ export const handleNodeEvent = async (
             distribution: obj.distribution,
             relayOrigin: obj.relayOrigin,
             tokenDebugSuffix: obj.tokenDebugSuffix,
+            expectedPairingGeneration,
           });
         } else {
           await registerApnsRegistration({
@@ -875,9 +1214,16 @@ export const handleNodeEvent = async (
             token: typeof obj.token === "string" ? obj.token : "",
             topic,
             environment,
+            expectedPairingGeneration,
           });
         }
       } catch (err) {
+        if (err instanceof ApnsRegistrationPairingChangedError) {
+          ctx.logGateway.warn(
+            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
+          );
+          return pairingChangedResult(evt.event);
+        }
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
       }
       return undefined;
@@ -886,6 +1232,25 @@ export const handleNodeEvent = async (
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj || !validateNodePresenceActivityPayload(obj)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      if ("action" in obj) {
+        const cleared = ctx.clearNodePresenceActivity?.({ nodeId, connId: opts?.connId });
+        if (cleared === null || cleared === undefined) {
+          return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+        }
+        if (cleared) {
+          ctx.broadcast(
+            "node.presence",
+            { nodeId, lastActiveAtMs: null, presenceUpdatedAtMs: null },
+            { dropIfSlow: true },
+          );
+        }
+        return {
+          ok: true,
+          event: evt.event,
+          handled: true,
+          reason: cleared ? "cleared" : "already_clear",
+        };
       }
       if (opts?.presenceAllowed !== true) {
         return { ok: true, event: evt.event, handled: false, reason: "permission_required" };
@@ -911,8 +1276,13 @@ export const handleNodeEvent = async (
       if (!deviceId) {
         return { ok: true, event: evt.event, handled: false, reason: "missing_device_identity" };
       }
+      const pairingGeneration = opts?.pairingGeneration;
+      if (!pairingGeneration || pairingGeneration.nodeId !== deviceId) {
+        return pairingChangedResult(evt.event);
+      }
       const now = Date.now();
-      const lastPersistedAt = recentNodePresencePersistAt.get(deviceId) ?? 0;
+      const presenceOwnerKey = `${deviceId}\0${pairingGeneration.key}`;
+      const lastPersistedAt = recentNodePresencePersistAt.get(presenceOwnerKey) ?? 0;
       if (now - lastPersistedAt < NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS) {
         return { ok: true, event: evt.event, handled: true, reason: "throttled" };
       }
@@ -921,14 +1291,18 @@ export const handleNodeEvent = async (
       try {
         // Node last-seen lives on the device record; node.pair.list projects
         // it from there, so one write covers both surfaces.
-        const deviceUpdated = await updatePairedDeviceMetadata(deviceId, {
-          lastSeenAtMs: now,
-          lastSeenReason,
-        });
+        const deviceUpdated = await updatePairedDevicePresence(
+          deviceId,
+          {
+            lastSeenAtMs: now,
+            lastSeenReason,
+          },
+          pairingGeneration,
+        );
         if (!deviceUpdated) {
-          return { ok: true, event: evt.event, handled: false, reason: "unpaired" };
+          return pairingChangedResult(evt.event);
         }
-        recentNodePresencePersistAt.set(deviceId, now);
+        recentNodePresencePersistAt.set(presenceOwnerKey, now);
         pruneBoundedTimestampMap(recentNodePresencePersistAt, {
           now,
           ttlMs: NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS * 10,
@@ -941,7 +1315,7 @@ export const handleNodeEvent = async (
       }
     }
     default:
-      return undefined;
+      return { ok: true, event: evt.event, handled: false, reason: "unsupported_event" };
   }
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

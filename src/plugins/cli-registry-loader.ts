@@ -3,10 +3,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPluginCliRegistry, loadPluginRegistryHandle } from "./loader.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import {
@@ -16,8 +17,8 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import type {
-  OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliContext,
+  OpenClawPluginCliRootCommandDescriptor,
   PluginLogger,
 } from "./types.js";
 
@@ -41,10 +42,12 @@ export type PluginCliRegistryLoadResult = PluginCliLoadContext & {
 export type PluginCliCommandGroupEntry = {
   pluginId: string;
   parentPath: readonly string[];
-  placeholders: readonly OpenClawPluginCliCommandDescriptor[];
+  placeholders: readonly OpenClawPluginCliRootCommandDescriptor[];
   names: readonly string[];
   register: (program: OpenClawPluginCliContext["program"]) => Promise<void>;
 };
+
+const log = createSubsystemLogger("plugins/cli-registry-loader");
 
 /** Creates the default plugin CLI logger shared with runtime loading. */
 export function createPluginCliLogger(): PluginLogger {
@@ -179,13 +182,12 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   }
   return {
     ...params.context,
-    registry: loadOpenClawPlugins(
+    registry: loadPluginRegistryHandle(
       buildPluginRuntimeLoadOptions(params.context, {
         ...params.loaderOptions,
         ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-        activate: false,
         cache: false,
-        forceFullRuntimeForChannelPlugins: true,
+        channelPluginLoadIntent: "full",
         runtimeOptions: {
           nodes: createPluginCliGatewayNodesRuntime(),
         },
@@ -219,7 +221,7 @@ function buildPluginCliCommandGroupEntries(params: {
 
 export async function loadPluginCliDescriptors(
   params: PluginCliPublicLoadParams,
-): Promise<OpenClawPluginCliCommandDescriptor[]> {
+): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   try {
     const logger = resolvePluginCliLogger(params.logger);
     const context = resolvePluginCliLoadContext({
@@ -237,7 +239,11 @@ export async function loadPluginCliDescriptors(
         .filter((entry) => (entry.parentPath ?? []).length === 0)
         .map((entry) => entry.descriptors),
     );
-  } catch {
+  } catch (error) {
+    // Callers pass a muted per-plugin logger for descriptor scans; a total
+    // load failure still removes every plugin command from help/dispatch and
+    // must not vanish with it.
+    log.warn(`plugin CLI descriptor load failed: ${String(error)}`);
     return [];
   }
 }

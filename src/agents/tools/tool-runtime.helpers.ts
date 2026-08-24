@@ -4,13 +4,10 @@
  * Tools import from this module when they need model auth, fallback, discovery,
  * sandbox media paths, or workspace helpers without depending on broad agent barrels.
  */
-export { getApiKeyForModel, requireApiKey } from "../model-auth.js";
-export { runWithImageModelFallback } from "../model-fallback.js";
-export { ensureOpenClawModelsJson } from "../models-config.js";
-export { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
+export { getApiKeyForModelCore, requireApiKey } from "../model-auth.js";
+export { runWithImageModelFallback } from "../model-fallback-image.js";
 export {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   type SandboxedBridgeMediaPathConfig,
 } from "../sandbox-media-paths.js";
 export type { SandboxFsBridge } from "../sandbox/fs-bridge.js";

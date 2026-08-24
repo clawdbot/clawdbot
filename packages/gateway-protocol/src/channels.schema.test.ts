@@ -1,7 +1,11 @@
 // Gateway Protocol tests cover channels.schema behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { ChannelsStatusResultSchema, WebLoginWaitParamsSchema } from "./schema/channels.js";
+import {
+  ChannelsStatusResultSchema,
+  TalkSessionCancelOutputResultSchema,
+  WebLoginWaitParamsSchema,
+} from "./schema/channels.js";
 
 /**
  * Channel schema regressions for browser login and status diagnostics.
@@ -33,6 +37,31 @@ describe("WebLoginWaitParamsSchema", () => {
   });
 });
 
+describe("TalkSessionCancelOutputResultSchema", () => {
+  const validate = Compile(TalkSessionCancelOutputResultSchema);
+
+  it("accepts only closed cancellation outcomes with an explicit ok field", () => {
+    for (const value of [
+      { ok: true },
+      { ok: true, status: "applied", turnId: "turn-7" },
+      { ok: true, status: "stale" },
+      { ok: true, status: "idle" },
+    ]) {
+      expect(validate.Check(value)).toBe(true);
+    }
+    for (const value of [
+      {},
+      { status: "applied" },
+      { ok: false },
+      { ok: true, status: "unknown" },
+      { ok: true, turnId: "" },
+      { ok: true, extra: true },
+    ]) {
+      expect(validate.Check(value)).toBe(false);
+    }
+  });
+});
+
 describe("ChannelsStatusResultSchema", () => {
   /** Compiled status validator for channel docking diagnostics. */
   const validate = Compile(ChannelsStatusResultSchema);
@@ -53,6 +82,16 @@ describe("ChannelsStatusResultSchema", () => {
               running: true,
               connected: false,
               healthState: "stale-socket",
+              lastError: null,
+              lastStartAt: null,
+              lastStopAt: null,
+              lastInboundAt: null,
+              lastOutboundAt: null,
+              credentialSource: "service-account",
+              audienceType: "app-url",
+              audience: "https://chat.example.test",
+              webhookPath: "/googlechat",
+              webhookUrl: null,
             },
           ],
         },
@@ -61,6 +100,7 @@ describe("ChannelsStatusResultSchema", () => {
         warnings: ["discord:default probe timed out after 1000ms"],
         eventLoop: {
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["event_loop_delay", "cpu"],
           intervalMs: 62_000,
           delayP99Ms: 1_250.5,

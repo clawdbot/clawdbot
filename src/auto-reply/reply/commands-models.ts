@@ -12,15 +12,14 @@ import {
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { loadModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
+import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
-import { loadModelCatalogSnapshot } from "../../agents/model-catalog.js";
-import { isRetiredModelPickerProvider } from "../../agents/model-picker-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
+import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
@@ -29,21 +28,19 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import {
-  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  createModelVisibilityPolicy,
-} from "../../agents/model-visibility-policy.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -156,29 +153,32 @@ export async function buildModelsProviderData(
   agentId?: string,
   options: { view?: "default" | "all"; workspaceDir?: string } = {},
 ): Promise<ModelsProviderData> {
+  const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
+    ...runtimeNormalization,
   });
+  const catalogWorkspaceDir = options.workspaceDir;
   const workspaceDir =
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
     resolveDefaultAgentWorkspaceDir();
-  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config: cfg,
-    workspaceDir,
-    env: process.env,
-    allowScopedSnapshot: true,
-  });
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
 
-  const snapshot = await loadModelCatalogSnapshotForBrowse({
+  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
+    agentId,
     view: options.view ?? "default",
     loadCatalog: ({ readOnly }) =>
-      loadModelCatalogSnapshot({ config: cfg, readOnly, metadataSnapshot }),
+      loadPreparedModelCatalogSnapshot({
+        config: cfg,
+        readOnly,
+        ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
+        ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
+      }),
   });
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
@@ -187,7 +187,7 @@ export async function buildModelsProviderData(
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    ...runtimeNormalization,
   });
   const authChecker = createProviderAuthChecker({
     cfg,
@@ -211,6 +211,7 @@ export async function buildModelsProviderData(
     agentId,
     workspaceDir,
     view: options.view,
+    policy: visibilityPolicy,
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
@@ -237,6 +238,8 @@ export async function buildModelsProviderData(
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: resolvedDefault.provider,
+    agentId,
+    ...runtimeNormalization,
   });
   const restrictToProviderWildcards =
     options.view !== "all" && visibilityPolicy.hasProviderWildcards;
@@ -270,12 +273,17 @@ export async function buildModelsProviderData(
           catalog,
           model: trimmed,
           defaultProvider: resolvedDefault.provider,
+          agentId,
+          manifestPlugins: runtimeNormalization.manifestPlugins,
         })
       : resolvedDefault.provider;
     const resolved = resolveModelRefFromString({
+      cfg,
+      agentId,
       raw: trimmed,
       defaultProvider,
       aliasIndex,
+      ...runtimeNormalization,
     });
     if (!resolved) {
       return;

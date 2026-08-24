@@ -3,9 +3,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { clearCliSession } from "../../agents/cli-session.js";
-import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
-import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
+import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
+import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import {
   DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
@@ -18,94 +18,25 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agents/tool-display.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import {
-  emitAgentEvent,
-  onAgentEvent,
-  withAgentRunLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
+import {
+  type AgentEventDeliveryStartOrder,
+  createAgentEventBridge,
+  createAgentEventDeliveryStartOrder,
+} from "./agent-event-bridge.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 
-type AgentEventDeliveryStartOrder = {
-  schedule: (deliver: () => Promise<void>) => Promise<void>;
+type RunCliAgentInternalParams = RunCliAgentParams & {
+  mediaImageLayout?: MediaImageLayout;
 };
-
-function createAgentEventDeliveryStartOrder(): AgentEventDeliveryStartOrder {
-  let startTail = Promise.resolve();
-  return {
-    schedule: async (deliver) => {
-      // Reserve at raw event receipt, then release at callback invocation. CLI streams drain
-      // independently, so waiting for callback completion here would reorder later streams.
-      const previousStart = startTail;
-      let releaseStart: (() => void) | undefined;
-      startTail = new Promise<void>((resolve) => {
-        releaseStart = resolve;
-      });
-      await previousStart;
-      let delivery: Promise<void>;
-      try {
-        delivery = deliver();
-      } finally {
-        releaseStart?.();
-      }
-      await delivery;
-    },
-  };
-}
-
-function createAgentEventBridge<T>(params: {
-  runId: string;
-  suppressed?: boolean;
-  read: (evt: AgentEventPayload) => T | undefined;
-  deliver?: (payload: T) => Promise<void>;
-  startOrder?: AgentEventDeliveryStartOrder;
-}) {
-  const deliver = params.deliver;
-  if (!deliver) {
-    return {
-      unsubscribe: () => undefined,
-      drain: async (): Promise<void> => undefined,
-    };
-  }
-  let unsubscribed = false;
-  let delivery = Promise.resolve();
-  const rawUnsubscribe = onAgentEvent((evt) => {
-    if (evt.runId !== params.runId) {
-      return;
-    }
-    if (params.suppressed) {
-      return;
-    }
-    const payload = params.read(evt);
-    if (payload === undefined) {
-      return;
-    }
-    if (!params.startOrder) {
-      delivery = delivery.then(() => deliver(payload)).catch(() => undefined);
-      return;
-    }
-    const scheduled = params.startOrder.schedule(() => deliver(payload)).catch(() => undefined);
-    // Start ordering stays global; each bridge still owns and drains its callback completion.
-    delivery = Promise.all([delivery, scheduled]).then(() => undefined);
-  });
-  return {
-    unsubscribe() {
-      if (unsubscribed) {
-        return;
-      }
-      unsubscribed = true;
-      rawUnsubscribe();
-    },
-    async drain(): Promise<void> {
-      await delivery;
-    },
-  };
-}
 
 type AgentEventBridge = {
   unsubscribe: () => void;
@@ -124,7 +55,7 @@ async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Prom
 function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
-  deliver?: (text: string) => Promise<void>;
+  deliver?: (text: string) => Promise<boolean | void>;
   startOrder?: AgentEventDeliveryStartOrder;
 }) {
   let lastText: string | undefined;
@@ -292,8 +223,9 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
   };
 }
 
-export async function clearDroppedCliSessionBinding(params: {
+export async function clearCliSessionBindingForRun(params: {
   provider: string;
+  expectedSessionId?: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -302,6 +234,14 @@ export async function clearDroppedCliSessionBinding(params: {
   const updatedAt = Date.now();
   const clearEntry = (entry: SessionEntry | undefined) => {
     if (!entry) {
+      return;
+    }
+    // A later turn may already have adopted a replacement session; only the
+    // failed run that still owns this binding may clear it.
+    if (
+      params.expectedSessionId &&
+      getCliSessionBinding(entry, params.provider)?.sessionId !== params.expectedSessionId
+    ) {
       return;
     }
     clearCliSession(entry, params.provider);
@@ -366,33 +306,36 @@ function createToolEventBridge(params: {
  */
 export function createCliToolSummaryTracker(params: {
   detailMode?: "explain" | "raw";
+  commandDetailsVisible: boolean;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
 }) {
-  const metaByCallId = new Map<string, string | undefined>();
+  const toolByCallId = new Map<string, { meta?: string; commandBearing: boolean }>();
   return {
-    noteToolEvent: async (payload: CliToolEventPayload): Promise<void> => {
+    noteToolEvent: async (payload: CliToolEventPayload): Promise<boolean> => {
       if (payload.phase === "start") {
         if (payload.toolCallId && payload.name) {
-          metaByCallId.set(
-            payload.toolCallId,
-            inferToolMetaFromArgs(payload.name, payload.args, {
+          toolByCallId.set(payload.toolCallId, {
+            meta: inferToolMetaFromArgsCore(payload.name, payload.args, {
               detailMode: params.detailMode ?? "explain",
             }),
-          );
+            commandBearing: isCommandBearingToolCall(payload.name, payload.args),
+          });
         }
-        return;
+        return false;
       }
       if (payload.phase !== "result") {
-        return;
+        return false;
       }
-      const meta = payload.toolCallId ? metaByCallId.get(payload.toolCallId) : undefined;
+      const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
+      const meta =
+        params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
-        metaByCallId.delete(payload.toolCallId);
+        toolByCallId.delete(payload.toolCallId);
       }
       if (!params.shouldEmitToolResult()) {
-        return;
+        return storedTool?.commandBearing === true;
       }
       const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
         markdown: true,
@@ -405,9 +348,10 @@ export function createCliToolSummaryTracker(params: {
         }
       }
       if (!text.trim()) {
-        return;
+        return storedTool?.commandBearing === true;
       }
       await params.deliver({ text, ...(payload.isError === true ? { isError: true } : {}) });
+      return storedTool?.commandBearing === true;
     },
   };
 }
@@ -424,6 +368,38 @@ function createCommentaryEventBridge(params: {
     deliver: params.deliver,
     startOrder: params.startOrder,
     read: readCommentaryTextPayload,
+  });
+}
+
+function createPlanUpdateBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: GetReplyOptions["onPlanUpdate"];
+  startOrder?: AgentEventDeliveryStartOrder;
+}) {
+  const deliver = params.deliver;
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    // GetReplyOptions callbacks may return void; the bridge awaits promises.
+    deliver: deliver
+      ? async (payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0]) => {
+          await deliver(payload);
+        }
+      : undefined,
+    startOrder: params.startOrder,
+    read: (evt) => {
+      if (evt.stream !== "plan") {
+        return undefined;
+      }
+      return {
+        phase: normalizeOptionalString(evt.data.phase),
+        title: normalizeOptionalString(evt.data.title),
+        explanation: normalizeOptionalString(evt.data.explanation),
+        steps: normalizeAgentPlanSteps(evt.data.steps),
+        source: normalizeOptionalString(evt.data.source),
+      };
+    },
   });
 }
 
@@ -450,9 +426,8 @@ type RunCliAgentWithLifecycleParams = {
   runId: string;
   lifecycleGeneration?: string;
   provider: string;
-  runParams: RunCliAgentParams;
+  runParams: RunCliAgentInternalParams;
   startedAt?: number;
-  emitLifecycleStart?: boolean;
   emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
@@ -464,11 +439,12 @@ type RunCliAgentWithLifecycleParams = {
    */
   onActivity?: () => void;
   preserveProgressCallbackStartOrder?: boolean;
-  onAssistantText?: (text: string) => Promise<void>;
+  onAssistantText?: (text: string) => Promise<boolean | void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
+  onPlanUpdate?: GetReplyOptions["onPlanUpdate"];
   onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
@@ -553,23 +529,20 @@ async function runCliAgentWithLifecycleInternal(
       fastAutoOnSeconds: fastModeAutoOnSeconds,
     });
   };
-  const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
   params.onAgentRunStart?.();
-  if (emitLifecycleStart) {
-    emitAgentEvent({
-      runId: params.runId,
-      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-      stream: "lifecycle",
-      data: {
-        phase: "start",
-        startedAt,
-      },
-    });
-  }
+  emitAgentEvent({
+    runId: params.runId,
+    ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
+    ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+    ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+    stream: "lifecycle",
+    data: {
+      phase: "start",
+      startedAt,
+    },
+  });
   // One delivery-independent activity seam for every CLI agent event.
   // Suppressed (silentExpected) runs still emit real events and must keep
   // stamping, or a healthy silent stream looks stale to the takeover window.
@@ -619,6 +592,12 @@ async function runCliAgentWithLifecycleInternal(
     deliver: params.onCommentaryText,
     startOrder: progressStartOrder,
   });
+  const planBridge = createPlanUpdateBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: params.onPlanUpdate,
+    startOrder: progressStartOrder,
+  });
   const toolBoundaryBridge = createToolBoundaryBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
@@ -631,6 +610,7 @@ async function runCliAgentWithLifecycleInternal(
     reasoningProgressBridge,
     toolBridge,
     commentaryBridge,
+    planBridge,
     toolBoundaryBridge,
   ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
   let lifecycleTerminalEmitted = false;

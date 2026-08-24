@@ -4,14 +4,15 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - matrix.mention-gates
   execution:
     kind: flow
     channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Asserts fresh model-driven configured-bot admission and cannot inherit allowBots session history from the shared Matrix worker.
     timeoutMs: 45000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         allowBots: true
         configuredBotRoles:

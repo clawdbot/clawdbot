@@ -45,8 +45,24 @@ export async function extractFilename(url: string): Promise<string> {
   // Try to extract from URL pathname
   try {
     const pathname = new URL(url).pathname;
-    const basename = path.basename(pathname);
-    const existingExt = getFileExtension(pathname);
+    let basename = path.basename(pathname);
+    if (basename.includes("%")) {
+      try {
+        const decodedBasename = decodeURIComponent(basename);
+        // Attachment names are display values; never turn escaped delimiters
+        // into a different filesystem or URL path.
+        if (
+          !decodedBasename.includes("/") &&
+          !decodedBasename.includes("\\") &&
+          !decodedBasename.includes("\0")
+        ) {
+          basename = decodedBasename;
+        }
+      } catch {
+        // Keep malformed percent escapes as the original literal filename.
+      }
+    }
+    const existingExt = getFileExtension(basename);
     if (basename && existingExt) {
       return basename;
     }
@@ -65,7 +81,7 @@ export async function extractFilename(url: string): Promise<string> {
  * Check if a URL refers to a local file path.
  */
 export function isLocalPath(url: string): boolean {
-  if (url.startsWith("file://") || url.startsWith("/") || url.startsWith("~")) {
+  if (/^file:\/\//iu.test(url) || url.startsWith("/") || url.startsWith("~")) {
     return true;
   }
 

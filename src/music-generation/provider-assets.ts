@@ -1,11 +1,29 @@
 // Validates and normalizes provider asset attachments for music generation.
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readProviderBinaryResponse } from "../agents/provider-http-errors.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
-import { fetchProviderDownloadResponse } from "../media-understanding/shared.js";
+import {
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  fetchProviderDownloadResponse,
+  type ProviderOperationDeadline,
+} from "../media-understanding/shared.js";
 import type { GeneratedMusicAsset } from "./types.js";
+
+type GeneratedMusicResponseHandle = {
+  response: Response;
+  release?: () => Promise<void>;
+  mimeType?: string;
+};
+
+type GeneratedMusicResponseFactory = (params: {
+  deadline: ProviderOperationDeadline;
+  timeoutMs: () => number;
+}) => Promise<GeneratedMusicResponseHandle>;
 
 /**
  * Asset extraction and download helpers for music generation providers.
@@ -80,9 +98,13 @@ export function generatedMusicAssetFromBase64(params: {
   index?: number;
   fileName?: string;
 }): GeneratedMusicAsset {
+  const canonicalAudio = canonicalizeBase64(params.base64);
+  if (!canonicalAudio) {
+    throw new Error("Generated music asset contains malformed base64 audio data");
+  }
   const ext = extensionForMime(params.mimeType)?.replace(/^\./u, "") || "mp3";
   return {
-    buffer: Buffer.from(params.base64, "base64"),
+    buffer: Buffer.from(canonicalAudio, "base64"),
     mimeType: params.mimeType,
     fileName: params.fileName ?? `track-${(params.index ?? 0) + 1}.${ext}`,
   };
@@ -97,30 +119,60 @@ export async function downloadGeneratedMusicAsset(params: {
   requestFailedMessage: string;
   index?: number;
   maxBytes?: number;
+  validateBinaryResponse?: boolean;
+  includeSourceUrl?: boolean;
+  fetchResponse?: GeneratedMusicResponseFactory;
 }): Promise<GeneratedMusicAsset> {
-  const response = await fetchProviderDownloadResponse({
-    url: params.candidate.url,
-    init: { method: "GET" },
+  const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-    provider: params.provider,
-    requestFailedMessage: params.requestFailedMessage,
+    label: `${params.provider} generated music download`,
   });
-  const mimeType =
-    normalizeSpecificAudioMimeType(response.headers.get("content-type")) ??
-    normalizeSpecificAudioMimeType(params.candidate.mimeType) ??
-    "audio/mpeg";
-  const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
-  const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
-  return {
-    buffer: await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: params.timeoutMs,
+  });
+  const handle = params.fetchResponse
+    ? await params.fetchResponse({ deadline, timeoutMs })
+    : {
+        response: await fetchProviderDownloadResponse({
+          url: params.candidate.url,
+          init: { method: "GET" },
+          deadline,
+          fetchFn: params.fetchFn,
+          provider: params.provider,
+          requestFailedMessage: params.requestFailedMessage,
+        }),
+      };
+  try {
+    const mimeType =
+      handle.mimeType ??
+      normalizeSpecificAudioMimeType(handle.response.headers.get("content-type")) ??
+      normalizeSpecificAudioMimeType(params.candidate.mimeType) ??
+      "audio/mpeg";
+    const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
+    const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
+    const readOptions = {
+      maxBytes,
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }: { timeoutMs: number }) =>
+        new Error(
+          `${params.provider} generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
+      onOverflow: ({ maxBytes: maxBytesLocal }: { maxBytes: number }) =>
         new Error(`${params.provider} generated music download exceeds ${maxBytesLocal} bytes`),
-    }),
-    mimeType,
-    fileName: params.candidate.fileName ?? `track-${(params.index ?? 0) + 1}.${ext}`,
-    metadata: {
-      url: params.candidate.url,
-    },
-  };
+    };
+    const buffer = params.validateBinaryResponse
+      ? Buffer.from(
+          await readProviderBinaryResponse(handle.response, deadline.label, "audio", readOptions),
+        )
+      : await readResponseWithLimit(handle.response, maxBytes, readOptions);
+    return {
+      buffer,
+      mimeType,
+      fileName: params.candidate.fileName ?? `track-${(params.index ?? 0) + 1}.${ext}`,
+      ...(params.includeSourceUrl === false ? {} : { metadata: { url: params.candidate.url } }),
+    };
+  } finally {
+    await handle.release?.();
+  }
 }

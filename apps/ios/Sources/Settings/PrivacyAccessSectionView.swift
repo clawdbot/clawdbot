@@ -33,9 +33,8 @@ struct PrivacyAccessSectionView: View {
     @State private var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
     @State private var remindersStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
     @State private var photosStatus = PhotoLibraryAccess.authorizationStatus()
-    @State private var healthEnabled = HealthAuthorization.isEnabled
-    @State private var healthError: String?
     @State private var requestingIdentifiers: Set<String> = []
+    @State private var eventKitPermissions = EventKitPermissionRequester()
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -46,13 +45,6 @@ struct PrivacyAccessSectionView: View {
             self.calendarAddRow
             self.calendarViewRow
             self.remindersRow
-            self.healthRow
-
-            if let healthError {
-                Text(healthError)
-                    .font(OpenClawType.footnote)
-                    .foregroundStyle(OpenClawBrand.danger)
-            }
         } label: {
             Text("Privacy & Access")
                 .font(OpenClawType.subheadSemiBold)
@@ -143,20 +135,6 @@ struct PrivacyAccessSectionView: View {
             })
     }
 
-    private var healthRow: some View {
-        DevicePermissionRow(
-            identifierPrefix: "privacy-access",
-            identifier: "health",
-            symbol: "heart.text.clipboard",
-            tint: .red,
-            title: LocalizedStringResource("Health Summaries"),
-            detail: self.healthDetail,
-            grant: self.healthGrant,
-            isRequesting: self.requestingIdentifiers.contains("health"),
-            actionTitle: self.healthActionTitle,
-            action: HealthAuthorization.isAvailable ? { self.handleHealthAction() } : nil)
-    }
-
     private func permissionRow(
         identifier: String,
         kind: DevicePermissionKind,
@@ -188,7 +166,7 @@ struct PrivacyAccessSectionView: View {
     {
         switch grant {
         case .notRequested:
-            LocalizedStringResource("Allow")
+            LocalizedStringResource("Continue")
         case .denied:
             LocalizedStringResource("Open Settings")
         case .limited:
@@ -244,61 +222,6 @@ struct PrivacyAccessSectionView: View {
         self.refreshAll()
     }
 
-    private var healthGrant: DevicePermissionGrant {
-        guard HealthAuthorization.isAvailable else { return .denied }
-        // HealthKit hides read authorization; this is only OpenClaw's sharing switch.
-        return self.healthEnabled ? .granted : .notRequested
-    }
-
-    private var healthDetail: LocalizedStringResource {
-        if !HealthAuthorization.isAvailable {
-            return LocalizedStringResource("Health data is unavailable on this device.")
-        }
-        if self.healthEnabled {
-            return LocalizedStringResource(
-                """
-                Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway \
-                with your configured AI provider. Results may remain in chat history.
-                """)
-        }
-        return LocalizedStringResource(
-            """
-            Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured \
-            AI provider.
-            """)
-    }
-
-    private var healthActionTitle: LocalizedStringResource? {
-        guard HealthAuthorization.isAvailable else { return nil }
-        return self.healthEnabled
-            ? LocalizedStringResource("Disable")
-            : LocalizedStringResource("Enable & Share Summaries")
-    }
-
-    private func handleHealthAction() {
-        if self.healthEnabled {
-            HealthAuthorization.disable()
-            self.healthEnabled = false
-            self.healthError = nil
-            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-            return
-        }
-
-        guard !self.requestingIdentifiers.contains("health") else { return }
-        Task { @MainActor in
-            self.requestingIdentifiers.insert("health")
-            defer { self.requestingIdentifiers.remove("health") }
-            do {
-                try await HealthAuthorization.enable()
-                self.healthEnabled = true
-                self.healthError = nil
-                self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-            } catch {
-                self.healthError = error.localizedDescription
-            }
-        }
-    }
-
     private func refreshAll() {
         let previousPermissions = PrivacyGatewayPermissionSnapshot(
             contactsStatus: self.contactsStatus,
@@ -319,7 +242,6 @@ struct PrivacyAccessSectionView: View {
         self.photosStatus = photosStatus
         self.calendarStatus = calendarStatus
         self.remindersStatus = remindersStatus
-        self.healthEnabled = HealthAuthorization.isEnabled
         if previousPermissions != currentPermissions {
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
         }
@@ -334,30 +256,15 @@ struct PrivacyAccessSectionView: View {
     }
 
     private func requestCalendarWriteOnly() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestWriteOnlyAccessToEvents { granted, _ in
-                completion(granted)
-            }
-        }
+        await self.eventKitPermissions.requestWriteOnlyAccessToEvents()
     }
 
     private func requestCalendarFull() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToEvents { granted, _ in
-                completion(granted)
-            }
-        }
+        await self.eventKitPermissions.requestFullAccessToEvents()
     }
 
     private func requestRemindersFull() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToReminders { granted, _ in
-                completion(granted)
-            }
-        }
+        await self.eventKitPermissions.requestFullAccessToReminders()
     }
 
     private func openSettings() {

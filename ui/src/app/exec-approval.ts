@@ -1,5 +1,6 @@
 // Application-owned approval parsing and queue state.
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type ExecApprovalRequestPayload = {
   command: string;
@@ -10,6 +11,7 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  runId?: string | null;
   commandSpans?: readonly {
     startIndex: number;
     endIndex: number;
@@ -45,18 +47,14 @@ export type ExecApprovalPromptState = {
   } | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
-  execApprovalError: string | null;
+  execApprovalErrors: Map<string, string>;
   execApprovalRefreshes?: Set<{ removedIds: Set<string> }>;
   execApprovalExpiryTimers?: Map<string, ReturnType<typeof globalThis.setTimeout>>;
-  execApprovalExpired?: () => void;
+  execApprovalChanged?: () => void;
 };
 
 const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function parseCommandSpans(
   value: unknown,
@@ -136,6 +134,7 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      runId: typeof request.runId === "string" ? request.runId : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
     },
@@ -144,8 +143,16 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
   };
 }
 
-export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolved | null {
-  if (!isRecord(payload)) {
+export function parseApprovalResolvedEvent(
+  event: string,
+  payload: unknown,
+): ExecApprovalResolved | null {
+  if (
+    (event !== "exec.approval.resolved" &&
+      event !== "plugin.approval.resolved" &&
+      event !== "openclaw.approval.resolved") ||
+    !isRecord(payload)
+  ) {
     return null;
   }
   const id = normalizeOptionalString(payload.id) ?? "";
@@ -275,8 +282,8 @@ function addExecApproval(
   entry: ExecApprovalRequest,
 ): ExecApprovalRequest[] {
   const next = pruneExecApprovalQueue(queue).filter((item) => item.id !== entry.id);
-  next.unshift(entry);
-  return next;
+  next.push(entry);
+  return sortApprovalsOldestFirst(next);
 }
 
 function removeExecApproval(queue: ExecApprovalRequest[], id: string): ExecApprovalRequest[] {
@@ -329,8 +336,8 @@ function parseApprovalList(
   });
 }
 
-function sortApprovalsNewestFirst(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
-  return queue.toSorted((a, b) => b.createdAtMs - a.createdAtMs);
+function sortApprovalsOldestFirst(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
+  return queue.toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id));
 }
 
 function currentApprovalsForKind(
@@ -358,7 +365,7 @@ function mergeRefreshedApprovalQueue(
   const arrivedDuringRefresh = prunedCurrentQueue.filter(
     (entry) => !refreshStartIds.has(entry.id) && !refreshedIds.has(entry.id),
   );
-  return sortApprovalsNewestFirst([...currentRefreshed, ...arrivedDuringRefresh]);
+  return sortApprovalsOldestFirst([...currentRefreshed, ...arrivedDuringRefresh]);
 }
 
 function clearApprovalExpiryTimer(state: ExecApprovalPromptState, id: string): void {
@@ -385,7 +392,7 @@ function scheduleApprovalExpiryPrune(
       const hadEntry = state.execApprovalQueue.some((item) => item.id === entry.id);
       removeExecApprovalFromState(state, entry.id);
       if (hadEntry) {
-        state.execApprovalExpired?.();
+        state.execApprovalChanged?.();
       }
     },
     Math.max(0, entry.expiresAtMs - Date.now() + 500),
@@ -395,11 +402,24 @@ function scheduleApprovalExpiryPrune(
 
 function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string): void {
   clearApprovalExpiryTimer(state, id);
-  const activeId = state.execApprovalQueue[0]?.id ?? null;
   state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
-  if (activeId !== (state.execApprovalQueue[0]?.id ?? null)) {
-    state.execApprovalError = null;
+  state.execApprovalErrors.delete(id);
+}
+
+function pruneExecApprovalErrors(state: ExecApprovalPromptState): void {
+  const pendingIds = new Set(state.execApprovalQueue.map((entry) => entry.id));
+  for (const id of state.execApprovalErrors.keys()) {
+    if (!pendingIds.has(id)) {
+      state.execApprovalErrors.delete(id);
+    }
   }
+}
+
+export function clearExecApprovalTimers(state: ExecApprovalPromptState): void {
+  for (const timer of state.execApprovalExpiryTimers?.values() ?? []) {
+    globalThis.clearTimeout(timer);
+  }
+  state.execApprovalExpiryTimers?.clear();
 }
 
 export function enqueueExecApprovalPrompt(
@@ -407,7 +427,6 @@ export function enqueueExecApprovalPrompt(
   entry: ExecApprovalRequest,
 ): void {
   state.execApprovalQueue = addExecApproval(state.execApprovalQueue, entry);
-  state.execApprovalError = null;
   scheduleApprovalExpiryPrune(state, entry);
 }
 
@@ -447,7 +466,7 @@ export async function refreshPendingApprovalQueue(
         ? (parseApprovalList(systemAgentResult.value, parseSystemAgentApprovalRequested) ?? [])
         : currentApprovalsForKind(state.execApprovalQueue, "system-agent");
     const refreshed = mergeRefreshedApprovalQueue(
-      sortApprovalsNewestFirst([...execApprovals, ...pluginApprovals, ...systemAgentApprovals]),
+      sortApprovalsOldestFirst([...execApprovals, ...pluginApprovals, ...systemAgentApprovals]),
       refreshStartedWith,
       state.execApprovalQueue,
       refresh.removedIds,
@@ -456,6 +475,7 @@ export async function refreshPendingApprovalQueue(
       return false;
     }
     state.execApprovalQueue = refreshed;
+    pruneExecApprovalErrors(state);
     const refreshedIds = new Set(refreshed.map((entry) => entry.id));
     for (const id of state.execApprovalExpiryTimers?.keys() ?? []) {
       if (!refreshedIds.has(id)) {
@@ -472,14 +492,6 @@ export async function refreshPendingApprovalQueue(
       state.execApprovalRefreshes = undefined;
     }
   }
-}
-
-export function dismissExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
-  removeExecApprovalFromState(state, id);
-  for (const refresh of state.execApprovalRefreshes ?? []) {
-    refresh.removedIds.add(id);
-  }
-  state.execApprovalError = null;
 }
 
 export function clearResolvedExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {

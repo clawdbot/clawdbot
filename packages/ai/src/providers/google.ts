@@ -8,7 +8,6 @@ import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
   createGoogleAssistantOutput,
-  getDisabledGoogleThinkingConfig,
   type GoogleProviderOptions,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
@@ -94,8 +93,5 @@ function buildParams(
   context: Context,
   options: GoogleOptions = {},
 ): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options, {
-    getDisabledThinkingConfig: (modelLocal) =>
-      getDisabledGoogleThinkingConfig(modelLocal, { includeGemma4: true }),
-  });
+  return buildGoogleGenerateContentParams(model, context, options);
 }

@@ -9,7 +9,7 @@ import {
   renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
 } from "./lib/android-version.ts";
-import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 const MACOS_INFO_PLIST = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
 const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";

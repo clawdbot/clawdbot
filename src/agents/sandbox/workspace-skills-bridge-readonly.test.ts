@@ -1,45 +1,20 @@
 // Workspace skills bridge tests cover read-only skill mounts across local and
 // remote sandbox filesystem bridges.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createSandbox, withTempDir } from "./fs-bridge.test-helpers.js";
 import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths.js";
 import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
 
-const runRemoteShellScript: RemoteShellSandboxHandle["runRemoteShellScript"] = async (command) => {
-  // Run the remote shell bridge scripts locally so path and permission checks are
-  // exercised without an SSH server.
-  const result = command.script.includes('python3 /dev/fd/3 "$@" 3<<')
-    ? spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...(command.args ?? [])], {
-        input: command.stdin,
-        encoding: "buffer",
-        stdio: ["pipe", "pipe", "pipe"],
-      })
-    : spawnSync("sh", ["-c", command.script, "openclaw-test", ...(command.args ?? [])], {
-        input: command.stdin,
-        encoding: "buffer",
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-  const stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? []);
-  const stderr = Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.from(result.stderr ?? []);
-  const code = result.status ?? (result.signal ? 128 : 1);
-  if (result.error) {
-    throw result.error;
-  }
-  if (code !== 0 && !command.allowFailure) {
-    throw Object.assign(
-      new Error(stderr.toString("utf8").trim() || `shell exited with code ${code}`),
-      { code, stdout, stderr },
-    );
-  }
-  return { stdout, stderr, code };
-};
+// Run remote shell snippets locally so path and permission checks are exercised
+// without an SSH server.
+const runRemoteShellScript: RemoteShellSandboxHandle["runRemoteShellScript"] =
+  createLocalRemoteShellScriptRunner({ shellArg0: "openclaw-test" });
 
 describe("workspace skills bridge mount policy", () => {
   it("resolves workspace skill roots as read-only", async () => {

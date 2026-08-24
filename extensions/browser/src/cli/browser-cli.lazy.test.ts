@@ -1,6 +1,7 @@
 // Browser tests cover browser cli.lazy plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isBrowserMachineOutput } from "../../cli-output-mode.js";
 
 const manageMocks = vi.hoisted(() => {
   const doctorAction = vi.fn();
@@ -36,6 +37,9 @@ const manageMocks = vi.hoisted(() => {
     tabsAction,
   };
 });
+const cookieSyncMocks = vi.hoisted(() => ({
+  registerBrowserCookieSyncCommand: vi.fn(),
+}));
 const inspectMocks = vi.hoisted(() => ({
   registerBrowserInspectCommands: vi.fn(),
 }));
@@ -51,13 +55,18 @@ const debugMocks = vi.hoisted(() => ({
 const stateMocks = vi.hoisted(() => ({
   registerBrowserStateCommands: vi.fn(),
 }));
+const extensionMocks = vi.hoisted(() => ({
+  registerBrowserExtensionCommands: vi.fn(),
+}));
 
 vi.mock("./browser-cli-manage.js", () => manageMocks);
+vi.mock("./browser-cli-cookie-sync.js", () => cookieSyncMocks);
 vi.mock("./browser-cli-inspect.js", () => inspectMocks);
 vi.mock("./browser-cli-actions-input.js", () => actionInputMocks);
 vi.mock("./browser-cli-actions-observe.js", () => actionObserveMocks);
 vi.mock("./browser-cli-debug.js", () => debugMocks);
 vi.mock("./browser-cli-state.js", () => stateMocks);
+vi.mock("./browser-cli-extension.js", () => extensionMocks);
 
 const { registerBrowserCli } = await import("./browser-cli.js");
 
@@ -81,6 +90,32 @@ function requireTrailingCommand(args: unknown[], label: string): Command {
 }
 
 describe("registerBrowserCli lazy browser subcommands", () => {
+  it.each([
+    ["evaluate", ["browser", "evaluate", "--fn", "return 1"]],
+    ["console", ["browser", "console"]],
+    ["cookies", ["browser", "cookies"]],
+    ["local storage", ["browser", "storage", "local", "get"]],
+    ["session storage", ["browser", "storage", "session", "get", "key"]],
+    ["native host", ["browser", "extension", "native-host"]],
+  ])("declares default JSON output for %s", (_name, args) => {
+    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
+  });
+
+  it("keeps human browser commands out of machine-output mode", () => {
+    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "status"] })).toBe(false);
+    expect(
+      isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "cookies", "set"] }),
+    ).toBe(false);
+  });
+
+  it("accepts supported root options after browser", () => {
+    expect(
+      isBrowserMachineOutput({
+        argv: ["node", "openclaw", "browser", "--log-level", "debug", "evaluate"],
+      }),
+    ).toBe(true);
+  });
+
   beforeEach(() => {
     vi.unstubAllEnvs();
     manageMocks.registerBrowserManageCommands.mockClear();
@@ -90,11 +125,13 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     manageMocks.statusAction.mockClear();
     manageMocks.tabNewAction.mockClear();
     manageMocks.tabsAction.mockClear();
+    cookieSyncMocks.registerBrowserCookieSyncCommand.mockClear();
     inspectMocks.registerBrowserInspectCommands.mockClear();
     actionInputMocks.registerBrowserActionInputCommands.mockClear();
     actionObserveMocks.registerBrowserActionObserveCommands.mockClear();
     debugMocks.registerBrowserDebugCommands.mockClear();
     stateMocks.registerBrowserStateCommands.mockClear();
+    extensionMocks.registerBrowserExtensionCommands.mockClear();
   });
 
   afterEach(() => {
@@ -260,13 +297,15 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
     registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 
-    await vi.waitFor(() =>
-      expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1),
-    );
-    expect(inspectMocks.registerBrowserInspectCommands).toHaveBeenCalledTimes(1);
-    expect(actionInputMocks.registerBrowserActionInputCommands).toHaveBeenCalledTimes(1);
-    expect(actionObserveMocks.registerBrowserActionObserveCommands).toHaveBeenCalledTimes(1);
-    expect(debugMocks.registerBrowserDebugCommands).toHaveBeenCalledTimes(1);
-    expect(stateMocks.registerBrowserStateCommands).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
+      expect(cookieSyncMocks.registerBrowserCookieSyncCommand).toHaveBeenCalledTimes(1);
+      expect(inspectMocks.registerBrowserInspectCommands).toHaveBeenCalledTimes(1);
+      expect(actionInputMocks.registerBrowserActionInputCommands).toHaveBeenCalledTimes(1);
+      expect(actionObserveMocks.registerBrowserActionObserveCommands).toHaveBeenCalledTimes(1);
+      expect(debugMocks.registerBrowserDebugCommands).toHaveBeenCalledTimes(1);
+      expect(stateMocks.registerBrowserStateCommands).toHaveBeenCalledTimes(1);
+      expect(extensionMocks.registerBrowserExtensionCommands).toHaveBeenCalledTimes(1);
+    });
   });
 });

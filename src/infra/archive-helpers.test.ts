@@ -106,26 +106,28 @@ describe("archive helpers", () => {
   });
 
   it("preflights tar entries for blocked link types, path escapes, and size budgets", () => {
-    const checker = createTarEntryPreflightChecker({
-      rootDir: "/tmp/dest",
-      limits: {
-        maxEntries: 1,
-        maxEntryBytes: 8,
-        maxExtractedBytes: 12,
-      },
-    });
+    const createChecker = () =>
+      createTarEntryPreflightChecker({
+        rootDir: "/tmp/dest",
+        limits: {
+          maxEntries: 1,
+          maxEntryBytes: 8,
+          maxExtractedBytes: 12,
+        },
+      });
 
     expectTarPreflightError(
-      checker,
+      createChecker(),
       { path: "package/link", type: "SymbolicLink", size: 0 },
       "tar entry is a link: package/link",
     );
     expectTarPreflightError(
-      checker,
+      createChecker(),
       { path: "../escape.txt", type: "File", size: 1 },
       /escapes destination|absolute/i,
     );
 
+    const checker = createChecker();
     checker({ path: "package/ok.txt", type: "File", size: 8 });
     expectTarPreflightError(
       checker,

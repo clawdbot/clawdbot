@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NodeHostWorkerBridgeClient,
   parseNodeHostWorkerInput,
@@ -30,6 +31,10 @@ describe("parseNodeHostWorkerInput", () => {
 });
 
 describe("NodeHostWorkerBridgeClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("forwards invoke results and events without creating gateway request waits", async () => {
     const messages: unknown[] = [];
     const client = new NodeHostWorkerBridgeClient((message) => messages.push(message));
@@ -118,6 +123,59 @@ describe("NodeHostWorkerBridgeClient", () => {
     client.close();
 
     await expect(response).rejects.toThrow("node-host worker stopped");
+  });
+
+  it("does not keep the worker alive for a pending gateway timeout", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const client = new NodeHostWorkerBridgeClient(() => {});
+    try {
+      const response = client.request("skills.bins", {}, { timeoutMs: 60_000 });
+      const timer = timeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
+
+      expect(timer?.hasRef()).toBe(false);
+      client.close();
+      await expect(response).rejects.toThrow("node-host worker stopped");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { requested: Number.MAX_SAFE_INTEGER, expected: MAX_TIMER_TIMEOUT_MS },
+    { requested: Number.POSITIVE_INFINITY, expected: 15_000 },
+    { requested: Number.NaN, expected: 15_000 },
+    { requested: 0, expected: 1 },
+    { requested: -5, expected: 1 },
+    { requested: 7.9, expected: 7 },
+  ])("normalizes a gateway request timeout of $requested", async ({ requested, expected }) => {
+    vi.useFakeTimers();
+    const messages: Array<Record<string, unknown>> = [];
+    const client = new NodeHostWorkerBridgeClient((message) => {
+      messages.push(message as Record<string, unknown>);
+    });
+
+    const response = client.request("skills.bins", {}, { timeoutMs: requested });
+
+    expect(messages).toEqual([
+      {
+        type: "gateway-request",
+        id: "gateway-1",
+        method: "skills.bins",
+        params: {},
+        timeoutMs: expected,
+      },
+    ]);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(
+      client.handleResponse({
+        type: "gateway-response",
+        id: "gateway-1",
+        ok: true,
+        result: { bins: [] },
+      }),
+    ).toBe(true);
+    await expect(response).resolves.toEqual({ bins: [] });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

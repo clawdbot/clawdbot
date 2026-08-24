@@ -14,6 +14,7 @@ import {
   agentUsesCodexRuntimeForCompaction,
   isOpenAICodexModelRef,
   toCanonicalOpenAIModelRef,
+  type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import { rewriteStringModelSlot } from "./codex-route-model-slots.js";
 import {
@@ -45,6 +46,7 @@ export function rewriteAgentCompactionRefs(params: {
   rewrittenInheritedCompactionModels?: Map<string, string>;
   runtimePolicyChanges: string[];
   unsupportedCompactionChanges: string[];
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): void {
   const compaction = asMutableRecord(params.agent.compaction);
@@ -65,6 +67,7 @@ export function rewriteAgentCompactionRefs(params: {
       container: compaction,
       key: "model",
       path: `${params.path}.compaction.model`,
+      blockedModelIdentities: params.blockedModelIdentities,
       env: params.env,
     });
     rewriteCompactionMemoryFlushModel(params, compaction);
@@ -89,6 +92,7 @@ export function rewriteAgentCompactionRefs(params: {
         container: compaction,
         key: "model",
         path: `${params.path}.compaction.model`,
+        blockedModelIdentities: params.blockedModelIdentities,
       });
     }
   }
@@ -106,6 +110,7 @@ function rewriteLosslessCompactionModel(
     container: compaction,
     key: "model",
     path: `${params.path}.compaction.model`,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   preserveCodexRuntimePolicyForHits(params, start);
 
@@ -126,6 +131,7 @@ function rewriteLosslessCompactionModel(
     container: inheritedCompaction,
     key: "model",
     path: inheritedModelPath,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   const inheritedHit = params.hits[inheritedStart];
   const inheritedCanonicalModel =
@@ -180,6 +186,7 @@ function rewriteCompactionMemoryFlushModel(
     container: asMutableRecord(compaction?.memoryFlush),
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
+    blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
 }

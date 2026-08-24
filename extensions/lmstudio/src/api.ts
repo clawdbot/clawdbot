@@ -37,7 +37,9 @@ export {
 } from "./runtime.js";
 export {
   configureLmstudioNonInteractive,
+  detectAppGuidedLmstudioAvailability,
   discoverLmstudioProvider,
-  prepareLmstudioDynamicModels,
+  prepareAppGuidedLmstudioSetup,
+  prepareLmstudioDynamicModel,
   promptAndConfigureLmstudioInteractive,
 } from "./setup.js";

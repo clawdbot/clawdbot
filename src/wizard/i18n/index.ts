@@ -49,7 +49,10 @@ function resolveWizardLocale(value: string | undefined): WizardLocale {
 }
 
 function resolveWizardLocaleFromEnv(env: NodeJS.ProcessEnv = process.env): WizardLocale {
-  return resolveWizardLocale(env.OPENCLAW_LOCALE ?? env.LC_ALL ?? env.LC_MESSAGES ?? env.LANG);
+  const locale = [env.OPENCLAW_LOCALE, env.LC_ALL, env.LC_MESSAGES, env.LANG].find((value) =>
+    value?.trim(),
+  );
+  return resolveWizardLocale(locale);
 }
 
 function readKey(map: WizardTranslationMap, key: string): string | undefined {

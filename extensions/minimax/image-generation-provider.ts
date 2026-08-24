@@ -3,7 +3,8 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import { canonicalizeBase64, MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -19,7 +20,6 @@ const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const MINIMAX_MAX_IMAGE_RESULTS = 9;
-const MB = 1024 * 1024;
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -79,27 +79,13 @@ function resolveMinimaxImageBaseUrl(
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
-function resolveGeneratedImageMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return MAX_IMAGE_BYTES;
-}
-
 function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: providerId,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
@@ -188,7 +174,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
           {
             maxBytes: resolveInlineImageJsonResponseMaxBytes(
               MINIMAX_MAX_IMAGE_RESULTS,
-              resolveGeneratedImageMaxBytes(req),
+              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
             ),
           },
         );

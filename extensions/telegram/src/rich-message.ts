@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import type {
   ForceReply,
   InlineKeyboardMarkup,
+  LinkPreviewOptions,
   Message,
   ReplyKeyboardMarkup,
   ReplyKeyboardRemove,
@@ -35,16 +36,12 @@ export type TelegramInputRichMessage = {
   skip_entity_detection?: boolean;
 };
 
-export function isEmptyTelegramRichMessage(richMessage: TelegramInputRichMessage): boolean {
-  return richMessage.blocks.length === 0;
-}
-
 type TelegramRichMessageOptions = {
   skipEntityDetection?: boolean;
   tableMode?: MarkdownTableMode;
 };
 
-export type TelegramRichTextChunk = {
+type TelegramRichTextChunk = {
   richMessage: TelegramInputRichMessage;
   plainText: string;
   degradationReasons: readonly TelegramRichBlocksDegradationReason[];
@@ -73,15 +70,16 @@ type TelegramSendRichMessageParams = {
 
 export type TelegramRichMessageContextParams = Pick<
   TelegramSendRichMessageParams,
-  "disable_notification" | "message_thread_id" | "reply_parameters"
+  "disable_notification" | "direct_messages_topic_id" | "message_thread_id" | "reply_parameters"
 >;
 
-export type TelegramEditRichMessageTextParams = {
+type TelegramEditRichMessageTextParams = {
   business_connection_id?: string;
   chat_id?: number | string;
   message_id?: number;
   inline_message_id?: string;
   rich_message: TelegramInputRichMessage;
+  link_preview_options?: LinkPreviewOptions;
   reply_markup?: InlineKeyboardMarkup;
 };
 
@@ -127,9 +125,14 @@ export function toTelegramRichMessageContextParams(
   params: Record<string, unknown> | undefined,
 ): TelegramRichMessageContextParams {
   const richParams: TelegramRichMessageContextParams = {};
-  const messageThreadId = finiteInteger(params?.message_thread_id);
-  if (messageThreadId !== undefined) {
-    richParams.message_thread_id = messageThreadId;
+  const directMessagesTopicId = finiteInteger(params?.direct_messages_topic_id);
+  if (directMessagesTopicId !== undefined) {
+    richParams.direct_messages_topic_id = directMessagesTopicId;
+  } else {
+    const messageThreadId = finiteInteger(params?.message_thread_id);
+    if (messageThreadId !== undefined) {
+      richParams.message_thread_id = messageThreadId;
+    }
   }
   if (params?.disable_notification === true) {
     richParams.disable_notification = true;
@@ -216,18 +219,28 @@ export function buildTelegramRichBlocksPlan(
   };
 }
 
-export function splitTelegramRichMessageTextChunks(params: {
-  text: string;
-  textLimit: number;
-  tableMode?: MarkdownTableMode;
-  skipEntityDetection?: boolean;
-}): TelegramRichTextChunk[] {
+export function splitTelegramRichMessageTextChunks(
+  params:
+    | {
+        text: string;
+        textLimit: number;
+        tableMode?: MarkdownTableMode;
+        skipEntityDetection?: boolean;
+      }
+    | {
+        plan: TelegramRichMessagePlan;
+        textLimit: number;
+      },
+): TelegramRichTextChunk[] {
   // Convert the full markdown document first so fences/tables stay intact, then
   // enforce block/char limits on the typed block list (including oversized pre).
-  const plan = buildTelegramRichMarkdownPlan(params.text, {
-    tableMode: params.tableMode,
-    skipEntityDetection: params.skipEntityDetection,
-  });
+  const plan =
+    "plan" in params
+      ? params.plan
+      : buildTelegramRichMarkdownPlan(params.text, {
+          tableMode: params.tableMode,
+          skipEntityDetection: params.skipEntityDetection,
+        });
   // The render already committed to the document-level linkify decision (a
   // skip anywhere disables our file-ref code-wrapping everywhere), so every
   // chunk must carry the same wire flag; re-deriving per chunk would let
@@ -245,7 +258,7 @@ export function splitTelegramRichMessageTextChunks(params: {
       degradationReasons: index === 0 ? plan.degradationReasons : [],
     };
   });
-  if (chunked.length === 0 && params.text.trim()) {
+  if (chunked.length === 0 && "text" in params && params.text.trim()) {
     // Markdown that projects to zero blocks (e.g. link definitions only) must
     // still send readable source text instead of silently dropping the reply.
     const blocks: InputRichBlock[] = [{ type: "paragraph", text: params.text }];

@@ -5,11 +5,9 @@ scenario:
   surface: personal
   category: tool-safety
   coverage:
-    primary:
-      - personal.tool-safety
     secondary:
-      - tools.followthrough
-      - runtime.approvals
+      - security.approval-policy-followthrough
+      - security.approval-policy-approvals
   risk: medium
   capabilities:
     - tools.read

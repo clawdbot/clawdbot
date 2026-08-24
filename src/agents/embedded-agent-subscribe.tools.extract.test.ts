@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { extractMessagingToolSend } from "./embedded-agent-subscribe.tools.js";
+import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
 
 function normalizeTelegramMessagingTargetForTest(raw: string): string | undefined {
   // Test normalizer mirrors channel plugins that canonicalize human targets
@@ -13,6 +13,22 @@ function normalizeTelegramMessagingTargetForTest(raw: string): string | undefine
 }
 
 describe("extractMessagingToolSend", () => {
+  it.each(["conversations_send", "conversations_turn"])(
+    "records opaque targets for %s",
+    (toolName) => {
+      expect(
+        extractMessagingToolSend(toolName, {
+          conversationRef: "conv_0123456789abcdef0123456789abcdef",
+          message: "hello",
+        }),
+      ).toEqual({
+        tool: toolName,
+        provider: "conversation",
+        to: "conv_0123456789abcdef0123456789abcdef",
+      });
+    },
+  );
+
   beforeEach(() => {
     // Active registry state drives provider-specific extraction; reset it for
     // each case so channel plugin behavior is deterministic.

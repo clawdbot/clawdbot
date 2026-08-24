@@ -55,9 +55,8 @@ import {
   listChannelsForTeamWithPageInfo,
   listTeamsByName,
   listTeamsByNameWithPageInfo,
+  mutateGraphJson,
   normalizeQuery,
-  postGraphBetaJson,
-  postGraphJson,
   resolveGraphToken,
 } from "./graph.js";
 
@@ -110,20 +109,13 @@ function graphStreamResponse(body: unknown): {
       controller.close();
     },
   });
-  const arrayBuffer = vi.fn(async () => {
+  const response = new Response(stream, {
+    headers: { "content-type": "application/json" },
+  });
+  const arrayBuffer = vi.spyOn(response, "arrayBuffer").mockImplementation(async () => {
     throw new Error("Graph response must stay streaming");
   });
-  return {
-    response: {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: new Headers({ "content-type": "application/json" }),
-      body: stream,
-      arrayBuffer,
-    } as unknown as Response,
-    arrayBuffer,
-  };
+  return { response, arrayBuffer };
 }
 
 function graphCollection<T>(...items: T[]) {
@@ -324,27 +316,42 @@ describe("msteams graph helpers", () => {
     );
   });
 
-  it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {
-    mockFetch(async (input) => {
+  it("mutates Graph JSON at v1 and beta roots and treats empty responses as undefined", async () => {
+    mockFetch(async (input, init) => {
       if (requestUrl(input).startsWith("https://graph.microsoft.com/beta")) {
         return new Response(null, { status: 204 });
+      }
+      if (init?.method === "PATCH") {
+        return new Response(null, { headers: { "content-length": "0" } });
       }
       return jsonResponse({ id: "created-1" });
     });
 
     await expect(
-      postGraphJson<{ id: string }>({
+      mutateGraphJson<{ id: string }>({
         token: graphToken,
         path: "/chats/chat-1/pinnedMessages",
+        method: "POST",
         body: { messageId: "msg-1" },
       }),
     ).resolves.toEqual({ id: "created-1" });
 
     await expect(
-      postGraphBetaJson<undefined>({
+      mutateGraphJson<undefined>({
         token: graphToken,
         path: "/chats/chat-1/messages/msg-1/setReaction",
+        method: "POST",
         body: { reactionType: "like" },
+        beta: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      mutateGraphJson<undefined>({
+        token: graphToken,
+        path: "/chats/chat-1",
+        method: "PATCH",
+        body: { topic: "New topic" },
       }),
     ).resolves.toBeUndefined();
 
@@ -358,6 +365,9 @@ describe("msteams graph helpers", () => {
     );
     expect(fetchCallInit(1)?.method).toBe("POST");
     expect(fetchCallInit(1)?.body).toBe(JSON.stringify({ reactionType: "like" }));
+    expect(fetchCallUrl(2)).toBe("https://graph.microsoft.com/v1.0/chats/chat-1");
+    expect(fetchCallInit(2)?.method).toBe("PATCH");
+    expect(fetchCallInit(2)?.body).toBe(JSON.stringify({ topic: "New topic" }));
   });
 
   it("surfaces POST and DELETE graph failures with method-specific labels", async () => {
@@ -370,9 +380,10 @@ describe("msteams graph helpers", () => {
     });
 
     await expectRejectsToThrow(
-      postGraphJson({
+      mutateGraphJson({
         token: graphToken,
         path: "/teams/team-1/channels",
+        method: "POST",
         body: { displayName: "Deployments" },
       }),
       "Graph POST /teams/team-1/channels failed (403): denied",
@@ -385,6 +396,32 @@ describe("msteams graph helpers", () => {
       }),
       "Graph DELETE /teams/team-1/channels/channel-1 failed (404): not found",
     );
+  });
+
+  it("releases a successful bodyful DELETE response", async () => {
+    const upstreamCancel = vi.fn();
+    const release = vi.fn(async () => undefined);
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("deleted"));
+        },
+        cancel: upstreamCancel,
+      }),
+    );
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      finalUrl: "https://graph.microsoft.com/v1.0/chats/chat-1/messages/msg-1",
+      release,
+    });
+
+    await deleteGraphRequest({
+      token: graphToken,
+      path: "/chats/chat-1/messages/msg-1",
+    });
+
+    expect(upstreamCancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("resolves Graph tokens through the SDK auth provider", async () => {

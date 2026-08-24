@@ -10,6 +10,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
 } from "./manager-db.js";
@@ -36,6 +38,77 @@ describe("memory manager database publication", () => {
 
   afterEach(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("sets busy_timeout on memory sqlite connections", () => {
+    const db = openMemoryDatabaseAtPath(path.join(fixtureRoot, "index.sqlite"), false);
+    try {
+      const row = db.prepare("PRAGMA busy_timeout").get() as
+        | { busy_timeout?: number; timeout?: number }
+        | undefined;
+      expect(row?.busy_timeout ?? row?.timeout).toBe(5000);
+    } finally {
+      closeMemoryDatabase(db);
+    }
+  });
+
+  it("lazily adds recall metadata storage before publishing to an existing database", async () => {
+    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    const sourcePath = path.join(fixtureRoot, "source.sqlite");
+    const targetDb = new DatabaseSync(targetPath);
+    const sourceDb = new DatabaseSync(sourcePath);
+    try {
+      targetDb.exec(`
+        CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+        CREATE TABLE memory_index_sources (
+          id INTEGER PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL, mtime REAL NOT NULL, size INTEGER NOT NULL, UNIQUE (path, source)
+        ) STRICT;
+        CREATE TABLE memory_index_chunks (
+          id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
+          model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE memory_index_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO memory_index_state (id, revision) VALUES (1, 0);
+      `);
+      ensureTestMemorySchema(sourceDb, false);
+      sourceDb
+        .prepare(
+          `INSERT INTO memory_index_chunks
+           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run("new", "MEMORY.md", "memory", 1, 1, "hash", "model", "body", "[]", 1);
+      sourceDb
+        .prepare(
+          `INSERT INTO memory_index_chunk_recall_metadata
+           (chunk_id, importance, triggers) VALUES (?, ?, ?)`,
+        )
+        .run("new", 9, "when flying");
+      sourceDb.close();
+
+      await publishMemoryDatabaseTables({
+        targetDb,
+        sourcePath,
+        metaKey: "meta",
+        expectedRevision: 0,
+      });
+
+      expect(
+        targetDb
+          .prepare("SELECT importance, triggers FROM memory_index_chunk_recall_metadata")
+          .get(),
+      ).toEqual({ importance: 9, triggers: "when flying" });
+    } finally {
+      try {
+        sourceDb.close();
+      } catch {}
+      targetDb.close();
+    }
   });
 
   it("removes a stale vector table when the shadow index has no vectors", async () => {

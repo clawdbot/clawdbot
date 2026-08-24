@@ -20,22 +20,18 @@ vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrac
 vi.mock("../session-prompt-state.js", () => ({
   getEmbeddedSessionPromptState: mocks.getSessionPromptState,
 }));
-vi.mock("./attempt-context-guards.js", () => ({
+vi.mock("./attempt-setup.js", () => ({
   installEmbeddedAttemptContextGuards: mocks.installContextGuards,
 }));
-vi.mock("./attempt-session-boundary.js", () => ({
+vi.mock("./attempt-session-prepare.js", () => ({
+  prepareEmbeddedAttemptAgentSession: mocks.prepareAgentSession,
   prepareEmbeddedAttemptSessionBoundary: mocks.prepareSessionBoundary,
-}));
-vi.mock("./attempt-session-manager-prepare.js", () => ({
   prepareEmbeddedAttemptSessionManager: mocks.prepareSessionManager,
 }));
 vi.mock("./attempt-session-settle.js", () => ({
   createEmbeddedAttemptSessionSettleTracker: mocks.createSessionSettleTracker,
 }));
-vi.mock("./attempt-session.js", () => ({
-  prepareEmbeddedAttemptAgentSession: mocks.prepareAgentSession,
-}));
-vi.mock("./attempt-stream-transport.js", () => ({
+vi.mock("./attempt-stream-settle.js", () => ({
   prepareEmbeddedAttemptTransport: mocks.prepareTransport,
 }));
 vi.mock("./attempt-trajectory.js", () => ({
@@ -155,7 +151,7 @@ function createFixture() {
   };
   const input = {
     attempt: {
-      model: { api: "openai-responses" },
+      model: { api: "openai-responses", contextWindow: 128_000 },
       modelId: "gpt-5",
       provider: "openai",
       runId: "run-1",
@@ -171,8 +167,8 @@ function createFixture() {
       replayAllowedToolNames: new Set(["read"]),
       resolveActiveContextEnginePluginId: vi.fn(),
       sessionAgentId: "main",
-      sessionLockController: {},
-      withOwnedSessionWriteLock: vi.fn(),
+      transcriptLifecycle: {},
+      withOwnedTranscriptWrite: vi.fn(),
     },
     agentSession: {
       agentCoreThinkingLevel: "medium",
@@ -258,6 +254,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       }),
     );
     expect(result.state).toEqual({
+      currentTurnImageFailureCount: 0,
       prePromptMessageCount: 2,
       promptCache: undefined,
       systemPromptText: "runtime prompt",
@@ -287,6 +284,9 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(guardInput.getPromptCache()).toEqual({ cacheRead: 3 });
     expect(guardInput.getPromptCacheRetention()).toBe("long");
     expect(guardInput.getSystemPrompt()).toBe("updated prompt");
+    guardInput.onCurrentTurnImageFailure(2);
+    guardInput.onCurrentTurnImageFailure(1);
+    expect(result.state.currentTurnImageFailureCount).toBe(2);
   });
 
   it("publishes every cleanup owner before a later transport failure", async () => {
@@ -308,5 +308,26 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(fixture.lifecycle.onTrajectoryRecorderCreated).toHaveBeenCalledWith(
       fixture.trajectoryRecorder,
     );
+  });
+
+  it("settles pending user-turn persistence before reconciling the session boundary", async () => {
+    const fixture = createFixture();
+    let releasePersistence: (() => void) | undefined;
+    const pendingPersistence = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const waitForRuntimePersistence = vi.fn(async () => await pendingPersistence);
+    fixture.input.attempt.userTurnTranscriptRecorder = {
+      waitForRuntimePersistence,
+    } as unknown as PrepareInput["attempt"]["userTurnTranscriptRecorder"];
+
+    const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    await vi.waitFor(() => expect(waitForRuntimePersistence).toHaveBeenCalledOnce());
+    expect(mocks.prepareSessionBoundary).not.toHaveBeenCalled();
+
+    releasePersistence?.();
+    await preparing;
+
+    expect(mocks.prepareSessionBoundary).toHaveBeenCalledOnce();
   });
 });

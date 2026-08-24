@@ -3,8 +3,11 @@ run_hosted_prepare_gates() {
   local current_head="$2"
   local changelog_only="$3"
   local recent_sha=""
-  local remote_head
-  remote_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  local remote_record remote_head remote_head_ref remote_is_cross_repository
+  remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+  remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
+  remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
+  remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
   if [ "$remote_head" != "$current_head" ]; then
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
     return 1
@@ -40,7 +43,60 @@ run_hosted_prepare_gates() {
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
+  if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+    return 0
+  fi
+
+  if rg -F -q "Missing successful recent CI workflow for $current_head. Observed: none" \
+    .local/gates-hosted-checks.log
+  then
+    if [ "$remote_is_cross_repository" = "true" ]; then
+      cat <<EOF_RECOVERY
+Missing hosted CI recovery:
+  scripts/pr ci-dispatch $pr
+  unavailable: PR #$pr comes from a fork, and release-gate dispatch requires the exact target SHA on a base-repository branch.
+EOF_RECOVERY
+      return 1
+    fi
+    cat <<EOF_RECOVERY
+Missing hosted CI recovery:
+  scripts/pr ci-dispatch $pr
+Underlying command:
+EOF_RECOVERY
+    printf '  gh workflow run ci.yml --ref %q -f %q -f release_gate=true -f %q\n' \
+      "$remote_head_ref" \
+      "target_ref=$remote_head" \
+      "pull_request_number=$pr"
+  fi
+  return 1
+}
+
+ci_dispatch() {
+  local pr="$1"
+  local record head_ref head_sha is_cross_repository
+  record=$(gh pr view "$pr" --json headRefName,headRefOid,isCrossRepository)
+  head_ref=$(printf '%s\n' "$record" | jq -r .headRefName)
+  head_sha=$(printf '%s\n' "$record" | jq -r .headRefOid)
+  is_cross_repository=$(printf '%s\n' "$record" | jq -r .isCrossRepository)
+  if [ -z "$head_ref" ] || [ "$head_ref" = "null" ] || [ -z "$head_sha" ] || [ "$head_sha" = "null" ]; then
+    echo "PR #$pr is missing remote headRefName/headRefOid metadata." >&2
+    return 1
+  fi
+  if [ "$is_cross_repository" = "true" ]; then
+    echo "PR #$pr comes from a fork; release-gate workflow dispatch requires a base-repository branch at $head_sha." >&2
+    return 1
+  fi
+
+  mark_pr_operation_side_effects_if_available
+  node "$script_parent_dir/pr-lib/ci-dispatch.mjs" "$pr" "$head_ref" "$head_sha" false
+}
+
+mark_pr_operation_side_effects_if_available() {
+  # scripts/pr sources operation-lock.sh first. Policy tests may source this
+  # library alone, where advancing a lock phase is neither possible nor needed.
+  if declare -F mark_pr_operation_side_effects_started >/dev/null; then
+    mark_pr_operation_side_effects_started
+  fi
 }
 
 pin_worktree_bundled_plugins_dir() {
@@ -66,57 +122,9 @@ resolve_pr_gates_remote_mode() {
   esac
 }
 
-PR_GATES_LOCK_PID=""
-PR_GATES_LOCK_STATUS_FILE=""
-
-acquire_pr_gates_lock() {
-  # Serialize whole gate blocks across .worktrees on the shared heavy-check
-  # lock; a queued gate run waits here, before its first command, instead of
-  # dying on child lock timeouts or shard no-output watchdog kills mid-test.
-  if [ "${OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD:-}" = "1" ]; then
-    return 0
-  fi
-
-  PR_GATES_LOCK_STATUS_FILE=$(mktemp)
-  # Use the canonical helper: the PR branch under test may predate it.
-  local scripts_dir="${script_parent_dir:-}"
-  if [ -z "$scripts_dir" ]; then
-    scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-  fi
-  node "$scripts_dir/pr-gates-lock.mjs" --status-file "$PR_GATES_LOCK_STATUS_FILE" &
-  PR_GATES_LOCK_PID=$!
-  while [ ! -s "$PR_GATES_LOCK_STATUS_FILE" ]; do
-    if ! kill -0 "$PR_GATES_LOCK_PID" 2>/dev/null; then
-      wait "$PR_GATES_LOCK_PID" 2>/dev/null || true
-      PR_GATES_LOCK_PID=""
-      echo "Failed to acquire the shared local heavy-check lock for prepare gates."
-      exit 1
-    fi
-    sleep 0.2
-  done
-  # Same held-lock contract check-changed uses for its children: gate stages
-  # must not re-acquire the lock the block holder already owns.
-  export OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD=1
-  export OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD=1
-  export OPENCLAW_OXLINT_SKIP_LOCK=1
-}
-
 prepare_local_gate_workspace() {
   pin_worktree_bundled_plugins_dir
-  acquire_pr_gates_lock
   bootstrap_deps_if_needed
-}
-
-release_pr_gates_lock() {
-  if [ -z "${PR_GATES_LOCK_PID:-}" ]; then
-    return 0
-  fi
-  kill "$PR_GATES_LOCK_PID" 2>/dev/null || true
-  wait "$PR_GATES_LOCK_PID" 2>/dev/null || true
-  PR_GATES_LOCK_PID=""
-  rm -f "$PR_GATES_LOCK_STATUS_FILE"
-  PR_GATES_LOCK_STATUS_FILE=""
-  unset OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD OPENCLAW_OXLINT_SKIP_LOCK
 }
 
 run_remote_testbox_full_test_gate() {
@@ -137,7 +145,7 @@ run_remote_testbox_full_test_gate() {
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
-    -- env CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test
+    -- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test
 }
 
 read_remote_testbox_gate_stamp() {
@@ -264,7 +272,6 @@ run_prepare_push_retry_gates() {
   local remote_gates_run_url=""
 
   if [ "$docs_only" = "true" ]; then
-    release_pr_gates_lock
     gates_mode="docs_only"
     # No test ran: carry the prior full-gates proof and how it was produced.
     full_gates_head="${FULL_GATES_HEAD_SHA:-}"
@@ -272,7 +279,6 @@ run_prepare_push_retry_gates() {
     remote_gates_lease_id="${REMOTE_GATES_LEASE_ID:-}"
     remote_gates_run_url="${REMOTE_GATES_RUN_URL:-}"
   elif [ "$gates_remote_mode" = "testbox" ]; then
-    release_pr_gates_lock
     gates_mode="remote_testbox"
     run_remote_testbox_full_test_gate \
       "pnpm test (lease-retry, blacksmith-testbox)" \
@@ -286,7 +292,6 @@ run_prepare_push_retry_gates() {
     echo "Remote testbox lease-retry gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
   else
     run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
-    release_pr_gates_lock
   fi
 
   write_gates_env_stamp \
@@ -313,6 +318,8 @@ prepare_gates() {
 
   enter_worktree "$pr" false
 
+  mark_pr_operation_side_effects_if_available
+  refresh_prep_branch_for_reviewed_head "$pr"
   checkout_prep_branch "$pr"
   require_artifact .local/pr-meta.env
   # shellcheck disable=SC1091
@@ -327,7 +334,13 @@ prepare_gates() {
   local has_changelog_update=false
   local unsupported_changelog_fragments=""
   local changed_path
-  while IFS= read -r changed_path; do
+  while [ -n "$changed_files" ]; do
+    changed_path="${changed_files%%$'\n'*}"
+    if [ "$changed_path" = "$changed_files" ]; then
+      changed_files=""
+    else
+      changed_files="${changed_files#*$'\n'}"
+    fi
     [ -n "$changed_path" ] || continue
     case "$changed_path" in
       CHANGELOG.md)
@@ -337,7 +350,7 @@ prepare_gates() {
         unsupported_changelog_fragments="${unsupported_changelog_fragments}${changed_path}"$'\n'
         ;;
     esac
-  done <<<"$changed_files"
+  done
   if [ -n "$unsupported_changelog_fragments" ]; then
     echo "Unsupported changelog fragment files detected:"
     printf '%s\n' "$unsupported_changelog_fragments"
@@ -412,7 +425,6 @@ prepare_gates() {
     run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
 
     if [ "$docs_only" = "true" ]; then
-      release_pr_gates_lock
       gates_mode="docs_only"
       previous_full_gates_head=""
       remote_gates_provider=""
@@ -420,9 +432,6 @@ prepare_gates() {
       remote_gates_run_url=""
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     elif [ "$gates_remote_mode" = "testbox" ]; then
-      # The full suite runs on a Blacksmith Testbox, so free the local lock
-      # for other heavy work while we wait on remote proof.
-      release_pr_gates_lock
       gates_mode="remote_testbox"
       echo "Running pnpm test on Blacksmith Testbox (OPENCLAW_PR_GATES_REMOTE=testbox)."
       run_remote_testbox_full_test_gate \
@@ -448,7 +457,6 @@ prepare_gates() {
         echo "Running pnpm test with host-aware scheduling defaults."
         run_quiet_logged "pnpm test" ".local/gates-test.log" pnpm test
       fi
-      release_pr_gates_lock
       remote_gates_provider=""
       remote_gates_lease_id=""
       remote_gates_run_url=""

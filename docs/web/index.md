@@ -58,26 +58,6 @@ When `hooks.enabled=true`, the Gateway also exposes a webhook endpoint on the sa
     Open `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`).
 
   </Tab>
-  <Tab title="Tailnet bind + token">
-    ```json5
-    {
-      gateway: {
-        bind: "tailnet",
-        controlUi: { enabled: true },
-        auth: { mode: "token", token: "your-token" },
-      },
-    }
-    ```
-
-    Start the gateway (this non-loopback example uses shared-secret token auth):
-
-    ```bash
-    openclaw gateway
-    ```
-
-    Open `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`).
-
-  </Tab>
   <Tab title="Public internet (Funnel)">
     ```json5
     {

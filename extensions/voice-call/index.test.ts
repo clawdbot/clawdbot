@@ -139,6 +139,7 @@ function setup(
     description: "test",
     version: "0",
     source: "test",
+    registrationMode: "full",
     config: {},
     pluginConfig: config,
     runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
@@ -186,10 +187,6 @@ function firstRuntimeConfig(): VoiceCallRuntime["config"] | undefined {
   return options?.config;
 }
 
-function expectWarningIncludes(text: string): void {
-  expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
-}
-
 function expectRedactedVoiceCallStatus(value: unknown): void {
   expect(value).toEqual({
     callId: "call-1",
@@ -219,6 +216,7 @@ async function registerVoiceCallCli(
     description: "test",
     version: "0",
     source: "test",
+    registrationMode: "full",
     config: {},
     pluginConfig,
     runtime: { tts: { textToSpeechTelephony: vi.fn() } },
@@ -245,7 +243,13 @@ describe("voice-call plugin", () => {
     noopLogger.debug.mockClear();
     runtimeStub = createRuntimeStub();
     callGatewayFromCliMock.mockReset();
-    callGatewayFromCliMock.mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:18789"));
+    callGatewayFromCliMock.mockRejectedValue(
+      Object.assign(new Error("gateway transport failed"), {
+        name: "GatewayTransportError",
+        kind: "closed",
+        connectionDetails: { url: "ws://127.0.0.1:18789" },
+      }),
+    );
     vi.mocked(createVoiceCallRuntime).mockReset();
     vi.mocked(createVoiceCallRuntime).mockImplementation(async () => runtimeStub);
   });
@@ -253,13 +257,36 @@ describe("voice-call plugin", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.voice-call.runtime")];
     delete (globalThis as Record<PropertyKey, unknown>)[
-      Symbol.for("openclaw.voice-call.runtimePromise")
+      Symbol.for("openclaw.voice-call.runtimeCoordinator")
     ];
-    delete (globalThis as Record<PropertyKey, unknown>)[
-      Symbol.for("openclaw.voice-call.runtimeStopPromise")
-    ];
+  });
+
+  it("keeps config presentation metadata manifest-owned", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      uiHints?: Record<string, Record<string, unknown>>;
+      configSchema?: { properties?: Record<string, unknown> };
+    };
+    const entry = plugin as unknown as { configSchema: Record<string, unknown> };
+
+    expect(entry.configSchema).not.toHaveProperty("uiHints");
+    expect(manifest.uiHints?.agentId).toEqual({
+      label: "Response Agent ID",
+      help: 'Agent workspace used for voice response generation. Defaults to "main".',
+      advanced: true,
+    });
+    expect(manifest.configSchema?.properties?.agentId).toEqual({
+      type: "string",
+      minLength: 1,
+    });
+    expect(manifest.uiHints?.["realtime.consultThinkingLevel"]).toHaveProperty("advanced", true);
+    expect(manifest.uiHints?.["realtime.consultFastMode"]).toHaveProperty("advanced", true);
+    expect(manifest.uiHints?.sessionScope).toMatchObject({
+      label: "Session Scope",
+      help: expect.stringContaining("per-phone"),
+    });
   });
 
   it("defaults canonical plugin config to an enabled mock runtime", async () => {
@@ -289,53 +316,6 @@ describe("voice-call plugin", () => {
     expect(createVoiceCallRuntime).not.toHaveBeenCalled();
   });
 
-  it("reuses a started runtime across plugin registration contexts", async () => {
-    const first = setup({ provider: "mock" });
-    const second = setup({ provider: "mock" });
-
-    await first.service?.start(createServiceContext());
-    const handler = second.methods.get("voicecall.initiate") as
-      | ((ctx: {
-          params: Record<string, unknown>;
-          respond: ReturnType<typeof vi.fn>;
-        }) => Promise<void>)
-      | undefined;
-    const respond = vi.fn();
-    await handler?.({ params: { message: "Hi" }, respond });
-
-    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
-    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
-  });
-
-  it("does not block service startup while runtime exposure initializes", async () => {
-    let resolveRuntime: ((runtime: VoiceCallRuntime) => void) | undefined;
-    vi.mocked(createVoiceCallRuntime).mockReturnValueOnce(
-      new Promise<VoiceCallRuntime>((resolve) => {
-        resolveRuntime = resolve;
-      }),
-    );
-    const { service, methods } = setup({ provider: "mock" });
-
-    if (!service) {
-      throw new Error("expected voice-call service");
-    }
-    expect(service.start(createServiceContext())).toBeUndefined();
-    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
-
-    resolveRuntime?.(runtimeStub);
-    const handler = methods.get("voicecall.initiate") as
-      | ((ctx: {
-          params: Record<string, unknown>;
-          respond: ReturnType<typeof vi.fn>;
-        }) => Promise<void>)
-      | undefined;
-    const respond = vi.fn();
-    await handler?.({ params: { message: "Hi" }, respond });
-
-    expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
-  });
-
   it("does not start the webhook runtime for CLI-only plugin loading", async () => {
     vi.stubEnv("OPENCLAW_CLI", "1");
     const { service } = setup({ provider: "mock" });
@@ -359,42 +339,26 @@ describe("voice-call plugin", () => {
     }
   });
 
-  it("creates a fresh shared runtime after service stop", async () => {
-    const first = setup({ provider: "mock" });
-    await first.service?.start(createServiceContext());
-    await first.service?.stop?.(createServiceContext());
-
-    runtimeStub = createRuntimeStub("call-2");
-    const second = setup({ provider: "mock" });
-    const handler = second.methods.get("voicecall.initiate") as
-      | ((ctx: {
-          params: Record<string, unknown>;
-          respond: ReturnType<typeof vi.fn>;
-        }) => Promise<void>)
-      | undefined;
-    const respond = vi.fn();
-    await handler?.({ params: { message: "Hi" }, respond });
-
-    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
-    expect(respond).toHaveBeenCalledWith(true, { callId: "call-2", initiated: true });
-  });
-
-  it("does not log a startup error when provider setup is incomplete", async () => {
+  it("reports degraded service health when provider setup is incomplete", async () => {
     vi.stubEnv("TWILIO_ACCOUNT_SID", "");
     vi.stubEnv("TWILIO_AUTH_TOKEN", "");
     vi.stubEnv("TWILIO_FROM_NUMBER", "");
     const { service } = setup({ provider: "twilio" });
+    const reportFailure = vi.fn();
 
-    await service?.start(createServiceContext());
+    await service?.start({
+      ...createServiceContext(),
+      serviceHealth: { reportFailure, clearFailure: vi.fn() },
+    });
 
     expect(createVoiceCallRuntime).not.toHaveBeenCalled();
-    expect(
-      noopLogger.error.mock.calls.some(([message]) =>
-        String(message).includes("Failed to start runtime"),
-      ),
-    ).toBe(false);
-    expectWarningIncludes("Runtime not started; setup incomplete");
-    expectWarningIncludes("TWILIO_ACCOUNT_SID");
+    expect(noopLogger.error.mock.calls.flat().join("\n")).toContain(
+      "Runtime not started: setup incomplete",
+    );
+    expect(noopLogger.error.mock.calls.flat().join("\n")).toContain("TWILIO_ACCOUNT_SID");
+    expect(reportFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("TWILIO_ACCOUNT_SID") }),
+    );
   });
 
   it("registers Twilio configs with SecretRef auth tokens", async () => {
@@ -696,6 +660,47 @@ describe("voice-call plugin", () => {
     ]);
   });
 
+  it("routes tool speech through the active realtime bridge", async () => {
+    runtimeStub.config.realtime.enabled = true;
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() =>
+      createCallRecord({ callId: "call-1", providerCallId: "CA123" }),
+    );
+    runtimeStub.webhookServer.speakRealtime = vi.fn(() => ({ success: true }));
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    const result = (await tool.execute("id", {
+      action: "speak_to_user",
+      callId: "CA123",
+      message: "hello",
+    })) as { details: { success?: boolean } };
+
+    expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).not.toHaveBeenCalled();
+    expect(result.details.success).toBe(true);
+  });
+
+  it("keeps the tool's classic speech fallback when no realtime bridge is active", async () => {
+    runtimeStub.config.realtime.enabled = true;
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    const result = (await tool.execute("id", {
+      action: "speak_to_user",
+      callId: "call-1",
+      message: "hello",
+    })) as { details: { success?: boolean } };
+
+    expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(result.details.success).toBe(true);
+  });
+
   it("reports ended call history when speaking to a stale call", async () => {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
@@ -758,23 +763,41 @@ describe("voice-call plugin", () => {
     expect(error?.message).not.toContain("endedAt=");
   });
 
-  it("freezes the invoking agent on tool-created calls", async () => {
-    const { tools } = setup({ provider: "mock" }, { agentId: "support" });
-    const tool = tools[0] as {
-      execute: (id: string, params: unknown) => Promise<unknown>;
-    };
+  it.each([{ action: "initiate_call", message: "Hello" }, { message: "Hello" }])(
+    "freezes invocation context for tool-created calls ($action)",
+    async (params) => {
+      const { tools } = setup(
+        { provider: "mock" },
+        { agentId: "support", sessionKey: "agent:support:discord:channel:general" },
+      );
+      const tool = tools[0] as {
+        execute: (id: string, params: unknown) => Promise<unknown>;
+      };
 
-    await tool.execute("id", {
-      action: "initiate_call",
-      to: "+15550001234",
-      message: "Hello",
-    });
+      await tool.execute("id", {
+        ...params,
+        to: "+15550001234",
+        requesterSessionKey: "agent:spoofed:requester",
+        sessionKey: "agent:support:voice:call-1",
+      });
 
-    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
-      "+15550001234",
-      undefined,
-      expect.objectContaining({ agentId: "support", message: "Hello" }),
-    );
+      expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
+        "+15550001234",
+        "agent:support:voice:call-1",
+        expect.objectContaining({
+          agentId: "support",
+          message: "Hello",
+          requesterSessionKey: "agent:support:discord:channel:general",
+        }),
+      );
+    },
+  );
+
+  it("does not expose requester session identity to the model", () => {
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as { parameters: unknown };
+
+    expect(JSON.stringify(tool.parameters)).not.toContain("requesterSessionKey");
   });
 
   it("tool get_status returns json payload", async () => {
@@ -1041,7 +1064,7 @@ describe("voice-call plugin", () => {
     }
   });
 
-  it("gateway continue operations return pending then completed results", async () => {
+  it("gateway continue operations return pending, completed, and failed results", async () => {
     let finishContinue: ((value: { success: true; transcript: string }) => void) | undefined;
     const continuePromise = new Promise<{ success: true; transcript: string }>((resolve) => {
       finishContinue = resolve;
@@ -1093,18 +1116,41 @@ describe("voice-call plugin", () => {
 
     finishContinue?.({ success: true, transcript: "gateway hello" });
     await continuePromise;
-    await Promise.resolve();
-
-    const completedRespond = vi.fn();
-    await result?.({
-      params: { operationId: startPayload?.operationId },
-      respond: completedRespond,
+    const completedCall = await vi.waitFor(async () => {
+      const respond = vi.fn();
+      await result?.({ params: { operationId: startPayload?.operationId }, respond });
+      const call = firstRespondCall(respond);
+      const payload = call[1] as { status?: unknown } | undefined;
+      expect(payload?.status).toBe("completed");
+      return call;
     });
-    const completedCall = firstRespondCall(completedRespond);
     const completedPayload = completedCall[1] as { status?: unknown; result?: unknown } | undefined;
     expect(completedCall[0]).toBe(true);
-    expect(completedPayload?.status).toBe("completed");
     expect(completedPayload?.result).toEqual({ success: true, transcript: "gateway hello" });
+
+    runtimeStub.manager.continueCall = vi.fn(async () => ({
+      success: false,
+      error: "turn failed",
+    })) as VoiceCallRuntime["manager"]["continueCall"];
+    const failedStartRespond = vi.fn();
+    await start?.({
+      params: { callId: "call-1", message: "Try again" },
+      respond: failedStartRespond,
+    });
+    const failedOperationId = (
+      firstRespondCall(failedStartRespond)[1] as { operationId?: string } | undefined
+    )?.operationId;
+
+    const failedCall = await vi.waitFor(async () => {
+      const respond = vi.fn();
+      await result?.({ params: { operationId: failedOperationId }, respond });
+      const call = firstRespondCall(respond);
+      const payload = call[1] as { status?: unknown } | undefined;
+      expect(payload?.status).toBe("failed");
+      return call;
+    });
+    expect(failedCall[0]).toBe(true);
+    expect(failedCall[1]).toMatchObject({ status: "failed", error: "turn failed" });
   });
 
   it("CLI setup prints human-readable checks by default", async () => {
@@ -1187,7 +1233,7 @@ describe("voice-call plugin", () => {
     }
   });
 
-  it("CLI status lists active calls without a call id", async () => {
+  it("CLI status stays read-only when the gateway is unavailable", async () => {
     const program = new Command();
     const stdout = captureStdout();
     await registerVoiceCallCli(program);
@@ -1197,8 +1243,8 @@ describe("voice-call plugin", () => {
       const parsed = JSON.parse(stdout.output()) as {
         calls?: Array<{ callId?: string }>;
       };
-      expect(parsed.calls).toHaveLength(1);
-      expect(parsed.calls?.[0]?.callId).toBe("call-1");
+      expect(parsed.calls).toEqual([]);
+      expect(createVoiceCallRuntime).not.toHaveBeenCalled();
     } finally {
       stdout.restore();
     }

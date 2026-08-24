@@ -109,7 +109,7 @@ function getProcEnv(key: string): string | undefined {
 }
 
 function getEnvValue(key: string): string | undefined {
-  return getProcessEnv()?.[key] || getProcEnv(key);
+  return (getProcessEnv()?.[key] || getProcEnv(key))?.trim() || undefined;
 }
 
 let cachedVertexAdcCredentialsExists: true | null = null;

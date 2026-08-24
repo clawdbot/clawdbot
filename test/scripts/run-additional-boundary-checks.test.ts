@@ -16,7 +16,7 @@ import {
   runChecks,
   runSingleCheck,
   selectChecksForShard,
-} from "../../scripts/run-additional-boundary-checks.mjs";
+} from "../../scripts/run-additional-boundary-checks.mts";
 
 function createOutputBuffer() {
   const chunks: string[] = [];
@@ -32,10 +32,14 @@ function createOutputBuffer() {
 }
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/run-additional-boundary-checks.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/run-additional-boundary-checks.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -66,7 +70,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     if (fs.existsSync(filePath)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for ${filePath}`);
 }
@@ -77,7 +81,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -88,7 +92,7 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
     if (!isProcessAlive(pid) || isProcessZombie(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still running: ${pid}`);
 }
@@ -110,9 +114,9 @@ async function waitForChildClose(
 
 describe("run-additional-boundary-checks", () => {
   it("keeps prompt snapshot drift checks in their dedicated CI lane", () => {
-    // The snapshot check regenerates prompts with real embedded-agent turns
-    // (~2min); packing it into a boundary shard makes that shard the PR wall
-    // clock, so it owns the check-prompt-snapshots lane instead.
+    // The snapshot check regenerates prompt fixtures over the full agent
+    // tool/prompt import graph; packing it into a boundary shard makes that
+    // shard the PR wall clock, so it owns the check-prompt-snapshots lane.
     expect(BOUNDARY_CHECKS.some((check) => check.label === "prompt:snapshots:check")).toBe(false);
     const workflow = fs.readFileSync(".github/workflows/ci.yml", "utf8");
     expect(workflow).toContain("check_name: check-prompt-snapshots");
@@ -155,6 +159,21 @@ describe("run-additional-boundary-checks", () => {
     expect(output.read()).toBe("[output truncated to last 12 bytes]\nsecond-line\n");
   });
 
+  it("drops split UTF-8 prefixes when one chunk exceeds the output byte cap", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
+  it("drops split UTF-8 prefixes when older buffered output overflows", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀");
+    output.append("new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
   it("parses and applies CI shard specs", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
     expect(parseShardSelection("2/4,3/4")).toEqual([
@@ -194,7 +213,9 @@ describe("run-additional-boundary-checks", () => {
   it("does not start checks for CLI help or invalid arguments", () => {
     const help = runCli("--help");
     expect(help.status).toBe(0);
-    expect(help.stdout).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(help.stdout).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
     expect(help.stdout).not.toContain("::group::");
     expect(help.stderr).toBe("");
 
@@ -202,7 +223,9 @@ describe("run-additional-boundary-checks", () => {
     expect(unknown.status).toBe(1);
     expect(unknown.stdout).toBe("");
     expect(unknown.stderr).toContain("Unknown argument: --wat");
-    expect(unknown.stderr).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(unknown.stderr).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
     expect(unknown.stderr).not.toContain("::group::");
     expect(unknown.stderr).not.toContain("pnpm");
   });
@@ -223,11 +246,43 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps widen-then-assert lint in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:no-widen-then-assert",
+      command: "pnpm",
+      args: ["run", "lint:no-widen-then-assert"],
+    });
+  });
+
+  it("keeps chained-type-assertions lint in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:no-chained-type-assertions",
+      command: "pnpm",
+      args: ["run", "lint:no-chained-type-assertions"],
+    });
+  });
+
   it("keeps the Telegram grammY type import guard in source boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:extensions:telegram-grammy-types",
       command: "pnpm",
       args: ["run", "lint:extensions:telegram-grammy-types"],
+    });
+  });
+
+  it("keeps the production plugin normalization boundary in CI checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "extension-normalization-core-bypass-boundary",
+      command: "pnpm",
+      args: ["run", "lint:extensions:no-normalization-core-bypass"],
+    });
+  });
+
+  it("keeps native and Node state schema versions aligned in CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "native-state-schema-version",
+      command: "node",
+      args: ["scripts/check-native-state-schema-version.mjs"],
     });
   });
 
@@ -278,6 +333,30 @@ describe("run-additional-boundary-checks", () => {
     expect(result.code).toBe(1);
     expect(result.timedOut).toBe(true);
     expect(result.output).toContain("timed out after 50ms");
+  });
+
+  it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {
+    const script = [
+      'const bytes = Buffer.from("old😀new");',
+      "process.stdout.write(bytes.subarray(0, 5));",
+      "setTimeout(() => process.stdout.end(bytes.subarray(5)), 20);",
+    ].join("");
+    const result = await runSingleCheck(
+      {
+        label: "split-utf8",
+        command: process.execPath,
+        args: ["-e", script],
+      },
+      {
+        checkTimeoutMs: 2_000,
+        cwd: process.cwd(),
+        env: process.env,
+        outputMaxBytes: 5,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("[output truncated to last 5 bytes]\nnew");
   });
 
   it("clamps oversized check timers before scheduling", async () => {
@@ -372,7 +451,7 @@ describe("run-additional-boundary-checks", () => {
         ].join("");
         const runnerScript = `
 import { runChecks } from ${JSON.stringify(
-          new URL("../../scripts/run-additional-boundary-checks.mjs", import.meta.url).href,
+          new URL("../../scripts/run-additional-boundary-checks.mts", import.meta.url).href,
         )};
 
 await runChecks(

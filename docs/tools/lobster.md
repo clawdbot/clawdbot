@@ -92,14 +92,14 @@ Or per-agent:
 ```json
 {
   "agents": {
-    "list": [
-      {
-        "id": "main",
+    "entries": {
+      "main": {
+        "default": true,
         "tools": {
           "alsoAllow": ["lobster"]
         }
       }
-    ]
+    }
   }
 }
 ```
@@ -166,12 +166,12 @@ For a **structured LLM step** inside a workflow, enable the optional
     }
   },
   "agents": {
-    "list": [
-      {
-        "id": "main",
+    "entries": {
+      "main": {
+        "default": true,
         "tools": { "alsoAllow": ["llm-task"] }
       }
-    ]
+    }
   }
 }
 ```
@@ -248,6 +248,25 @@ Notes:
 
 - `stdin: $step.stdout` and `stdin: $step.json` pass a prior step's output.
 - `condition` (or `when`) can gate steps on `$step.approved`.
+
+### Injected environment variables
+
+Every step shell inherits the parent environment plus these Lobster-injected
+variables, so commands can reference resolved workflow args without embedding
+raw values into the command string:
+
+- `LOBSTER_ARG_<NAME>` - one per workflow arg. The name is uppercased with each
+  run of non-alphanumeric characters collapsed to `_`, so arg `user-id` becomes
+  `LOBSTER_ARG_USER_ID`.
+- `LOBSTER_ARGS_JSON` - every resolved arg as a single JSON string.
+
+That is the complete injected set. There are **no** per-step output variables
+such as `LOBSTER_STEP_<id>_STDOUT` or `LOBSTER_STEP_<id>_JSON_<field>`; shells
+treat those names as unset, so parameter-expansion defaults can hide the error.
+Read a prior step's output through step references instead - `$step.stdout`,
+`$step.json`, or `$step.json.<field>` - in a `stdin:`, `env:`, or `condition:`
+value. (`LOBSTER_STATE_DIR` is a separate runtime setting for the state
+directory, not a per-run arg.)
 
 ## Tool parameters
 
@@ -330,13 +349,6 @@ approval requests without custom jq/heredoc glue. Resume state is stored as
 small JSON files under the Lobster state directory (`~/.lobster/state` by
 default, override with `LOBSTER_STATE_DIR`); the token itself only encodes a
 pointer to that state, not the full pipeline state.
-
-## OpenProse
-
-OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent
-prep, then run a Lobster pipeline for deterministic approvals. If a Prose
-program needs Lobster, allow the `lobster` tool for sub-agents via
-`tools.subagents.tools`. See [OpenProse](/prose).
 
 ## Safety
 

@@ -1,11 +1,11 @@
 /** SQLite column codec for cron payload variants. */
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { CronPayload } from "../types.js";
 import {
   booleanToInteger,
   integerToBoolean,
   normalizeNumber,
   parseJsonArray,
-  parseJsonValue,
   serializeJson,
 } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
@@ -40,14 +40,14 @@ function payloadToolAllowFromRow(
 }
 
 function parseExternalContentSource(raw: string | null): "gmail" | "webhook" | undefined {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
 }
 
 function parseCommandPayloadMessage(
   raw: string | null,
 ): Omit<Extract<CronPayload, { kind: "command" }>, "kind" | "timeoutSeconds"> | null {
-  const parsed = raw ? parseJsonValue<unknown>(raw, undefined) : undefined;
+  const parsed = raw ? safeParseJson(raw) : undefined;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
@@ -89,6 +89,28 @@ function parseCommandPayloadMessage(
   };
 }
 
+function parseScriptPayloadMessage(
+  raw: string | null,
+): Omit<Extract<CronPayload, { kind: "script" }>, "kind" | "timeoutSeconds"> | null {
+  const parsed = raw ? safeParseJson(raw) : undefined;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.script !== "string" || !record.script.trim()) {
+    return null;
+  }
+  const toolBudget = normalizeNumber(
+    typeof record.toolBudget === "number" || typeof record.toolBudget === "bigint"
+      ? record.toolBudget
+      : null,
+  );
+  return {
+    script: record.script,
+    ...(toolBudget != null ? { toolBudget } : {}),
+  };
+}
+
 /** Maps cron payload variants into normalized SQLite columns. */
 export function bindPayloadColumns(
   payload: CronPayload,
@@ -106,50 +128,37 @@ export function bindPayloadColumns(
   | "payload_tools_allow_json"
   | "payload_tools_allow_is_default"
 > {
+  const agentTurn = payload.kind === "agentTurn" ? payload : undefined;
+  let payloadMessage: string | null;
   if (payload.kind === "systemEvent") {
-    return {
-      payload_kind: "systemEvent",
-      payload_message: payload.text,
-      payload_model: null,
-      payload_fallbacks_json: null,
-      payload_thinking: null,
-      payload_timeout_seconds: null,
-      payload_allow_unsafe_external_content: null,
-      payload_external_content_source_json: null,
-      payload_light_context: null,
-      ...bindPayloadToolAllowColumns(payload),
-    };
-  }
-  if (payload.kind === "command") {
+    payloadMessage = payload.text;
+  } else if (payload.kind === "heartbeat") {
+    payloadMessage = null;
+  } else if (agentTurn) {
+    payloadMessage = agentTurn.message;
+  } else {
     const {
       timeoutSeconds: _timeoutSeconds,
       toolsAllow: _toolsAllow,
       toolsAllowIsDefault: _toolsAllowIsDefault,
-      ...payloadMessage
+      ...serializedPayload
     } = payload;
-    return {
-      payload_kind: "command",
-      payload_message: serializeJson(payloadMessage),
-      payload_model: null,
-      payload_fallbacks_json: null,
-      payload_thinking: null,
-      payload_timeout_seconds: payload.timeoutSeconds ?? null,
-      payload_allow_unsafe_external_content: null,
-      payload_external_content_source_json: null,
-      payload_light_context: null,
-      ...bindPayloadToolAllowColumns(payload),
-    };
+    payloadMessage = serializeJson(serializedPayload);
   }
+
   return {
-    payload_kind: "agentTurn",
-    payload_message: payload.message,
-    payload_model: payload.model ?? null,
-    payload_fallbacks_json: serializeJson(payload.fallbacks),
-    payload_thinking: payload.thinking ?? null,
-    payload_timeout_seconds: payload.timeoutSeconds ?? null,
-    payload_allow_unsafe_external_content: booleanToInteger(payload.allowUnsafeExternalContent),
-    payload_external_content_source_json: serializeJson(payload.externalContentSource),
-    payload_light_context: booleanToInteger(payload.lightContext),
+    payload_kind: payload.kind,
+    payload_message: payloadMessage,
+    payload_model: agentTurn?.model ?? null,
+    payload_fallbacks_json: serializeJson(agentTurn?.fallbacks),
+    payload_thinking: agentTurn?.thinking ?? null,
+    payload_timeout_seconds:
+      payload.kind === "systemEvent" || payload.kind === "heartbeat"
+        ? null
+        : (payload.timeoutSeconds ?? null),
+    payload_allow_unsafe_external_content: booleanToInteger(agentTurn?.allowUnsafeExternalContent),
+    payload_external_content_source_json: serializeJson(agentTurn?.externalContentSource),
+    payload_light_context: booleanToInteger(agentTurn?.lightContext),
     ...bindPayloadToolAllowColumns(payload),
   };
 }
@@ -205,6 +214,22 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
     return {
       kind: "command",
       ...command,
+      ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
+      ...payloadToolAllowFromRow(row),
+    };
+  }
+  if (row.payload_kind === "heartbeat") {
+    return { kind: "heartbeat" };
+  }
+  if (row.payload_kind === "script") {
+    const script = parseScriptPayloadMessage(row.payload_message);
+    if (!script) {
+      return null;
+    }
+    const timeoutSeconds = normalizeNumber(row.payload_timeout_seconds);
+    return {
+      kind: "script",
+      ...script,
       ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
       ...payloadToolAllowFromRow(row),
     };

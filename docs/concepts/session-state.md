@@ -39,16 +39,19 @@ Log-only kinds exist for reconciliation history, not notification: ordinary chil
 
 ## Watchers
 
-A watcher is a session that holds a cursor (`session_watch_cursors`) on a target. Cursors come from two places:
+A watcher is a session that holds a cursor (`session_watch_cursors`) on a target. Cursors come from three places:
 
 - **Implicit (spawn edges).** When a session spawns a sub-agent or ACP child, the parent's cursor is seeded automatically at the child's spawn version. Parents never subscribe manually.
+- **Ambient groups.** Under `session.groupScope: "per-group"`, the agent's main session watches its isolated group, room, and channel sessions after their first human turn. This is independent of `session.dmScope`; routing a room into main needs no watch because it already shares the main conversation.
 - **Explicit (`sessions_send watch: true`).** Any coordinator can watch a non-spawned target: pass `watch: true` on `sessions_send`, and after the send dispatches successfully the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
 
 Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
 
 Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are deleted with either session. There is no unwatch verb in v1.
 
-Watched sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Detected activity enters the same signal log and watcher flow as other direct human turns.
+Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
+
+OpenCode detection is deliberately conservative. OpenCode's v1 tables do not preserve message provenance, so reporting ambiguous rows would create false alarms; per-message provenance exists only in its v2 schema. OpenCode therefore does not report image-only turns, `@file`-mention-only turns, slash commands routed to a subagent, or turns from ACP clients that annotate content with an audience (mapped by OpenCode to `synthetic` or `ignored`). It also suppresses text matching any of the preceding 50 user messages to catch compaction replay, which means a human deliberately repeating the same text within that window can be missed.
 
 If an adopted session's upstream source is deleted externally, three consecutive missing checks (about three monitor ticks) produce one `upstream_missing` signal for its watchers and remove the upstream link. Continuing the catalog session again creates a fresh link.
 
@@ -105,6 +108,9 @@ Current limits:
 - Cancelled-outcome payload detail is currently produced by ACP child runs; native sub-agent cancellations surface as generic failures.
 - Upstream self-echo detection compares normalized user text. An external prompt matching one of the session's 10 most recent OpenClaw-side user messages is treated as self-echo.
 - A single local Claude JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1; unclassified bytes are never skipped.
+- A single Pi JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1; unclassified bytes are never skipped.
+- Legacy Pi sessions are adopted without an upstream link. Resume once to migrate the file to v3, then continue it from the catalog again to start monitoring.
+- OpenCode checks issue one batched database query per cadence. A session export runs only when that query shows its durable event sequence advanced.
 - Paired-node Claude checks classify the latest 50 transcript items per cadence. Larger bursts can fall outside the v1 scan window.
 - Paired-node Claude history reads do not expose a definitive thread-not-found result, so remote Claude deletions are not classified as `upstream_missing` in v1.
 - Catalog sessions that have not been adopted remain outside the awareness layer in v1.

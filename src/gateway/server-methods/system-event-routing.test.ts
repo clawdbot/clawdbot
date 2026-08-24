@@ -1,8 +1,14 @@
 /** Targeted system-event routing and wake behavior. */
 
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
+  SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
+} from "../../../packages/gateway-protocol/src/schema.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { listSystemPresence } from "../../infra/system-presence.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -63,6 +69,77 @@ describe("system-event routing", () => {
       intent: "immediate",
       reason: "wake",
       sessionKey,
+      heartbeat: { target: "last" },
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("routes a bare targeted wake through the persisted fixed-store owner", async () => {
+    const respond = vi.fn();
+    mocks.loadGatewaySessionRow.mockReturnValue({ key: "global", archived: false });
+    const request = {
+      params: { text: "Wake the retained session.", sessionKey: "global", wake: true },
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        incrementPresenceVersion: vi.fn(() => 1),
+        getHealthVersion: vi.fn(() => 1),
+        getRuntimeConfig: vi.fn(() => ({
+          session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+            defaults: { sessionStore: { agentId: "ops" } },
+          },
+        })),
+      },
+    } as unknown as GatewayRequestHandlerOptions;
+
+    await expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    )(request);
+
+    expect(mocks.loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global" }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("keeps ambient explicit-owner events on the global session queue", async () => {
+    const respond = vi.fn();
+    const request = {
+      params: { text: "Wake the system owner.", wake: true },
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        incrementPresenceVersion: vi.fn(() => 1),
+        getHealthVersion: vi.fn(() => 1),
+        getRuntimeConfig: vi.fn(() => ({
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, molty: {} },
+          },
+        })),
+      },
+    } as unknown as GatewayRequestHandlerOptions;
+
+    await expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    )(request);
+
+    expect(peekSystemEvents("global")).toEqual(["Wake the system owner."]);
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      agentId: "main",
+      sessionKey: "global",
       heartbeat: { target: "last" },
     });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -164,5 +241,46 @@ describe("system-event routing", () => {
       undefined,
       expect.objectContaining({ message: "wake is not supported for node presence events" }),
     );
+  });
+
+  it("passes explicit input activity clearing into system presence", async () => {
+    const instanceId = `presence-clear-${randomUUID()}`;
+    const handler = expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    );
+    const context = {
+      broadcast: vi.fn(),
+      incrementPresenceVersion: vi.fn(() => 1),
+      getHealthVersion: vi.fn(() => 1),
+      getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+    };
+
+    await handler({
+      params: {
+        text: "Node: Operator Mac",
+        instanceId,
+        host: "Operator Mac",
+        mode: "ui",
+        lastInputSeconds: 5,
+      },
+      respond: vi.fn(),
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+    await handler({
+      params: {
+        text: "Node: Operator Mac",
+        instanceId,
+        host: "Operator Mac",
+        mode: "ui",
+        lastInputSeconds: SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
+        tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
+      },
+      respond: vi.fn(),
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+
+    const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
+    expect(entry?.lastInputSeconds).toBeUndefined();
   });
 });

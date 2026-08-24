@@ -23,6 +23,7 @@ AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
 ATTACH_ONLY=1
+BACKGROUND_ONLY=0
 TARGET_ONLY=0
 TARGET_APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
 TARGET_EXECUTABLE="${TARGET_APP_BUNDLE}/${APP_EXECUTABLE_RELATIVE_PATH}"
@@ -113,14 +114,16 @@ for arg in "$@"; do
     --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
     --attach-only) ATTACH_ONLY=1 ;;
     --no-attach-only) ATTACH_ONLY=0 ;;
+    --background-only) BACKGROUND_ONLY=1 ;;
     --target-only) TARGET_ONLY=1 ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only] [--target-only]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only] [--background-only] [--target-only]"
       log "  --wait    Wait for other restart to complete instead of exiting"
       log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
       log "  --attach-only    Launch app with --attach-only (skip launchd install)"
       log "  --no-attach-only Launch app without attach-only override"
+      log "  --background-only Launch app without automatic windows or prompts"
       log "  --target-only    Restart only this checkout's dist app; fail if another OpenClaw app is active"
       log ""
       log "Env:"
@@ -150,6 +153,12 @@ fi
 if [[ "$TARGET_ONLY" -eq 1 && -n "$APP_BUNDLE" ]]; then
   fail "--target-only does not accept OPENCLAW_APP_BUNDLE"
 fi
+if [[ -n "${OPENCLAW_PROFILE:-}" ]]; then
+  normalized_profile="$(printf '%s' "${OPENCLAW_PROFILE}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${normalized_profile}" != "default" ]]; then
+    fail "restart-mac.sh cannot safely target one app profile; launch that profile directly instead"
+  fi
+fi
 canonicalize_app_bundle
 
 mkdir -p "$(dirname "$LOG_PATH")"
@@ -162,11 +171,18 @@ fi
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
   log "==> Using --attach-only (skip launchd install)"
 fi
+if [[ "$BACKGROUND_ONLY" -eq 1 ]]; then
+  log "==> Using --background-only (suppress automatic presentation)"
+fi
 
 acquire_lock
 
 kill_all_openclaw() {
-  for _ in {1..10}; do
+  local max_attempts=20
+  local poll_seconds=0.3
+  # The app's signal watcher forces exit after 3s. Keep a scheduling margin, then
+  # fail closed if a truly stuck process still survives the bounded grace period.
+  for ((attempt=0; attempt<max_attempts; attempt++)); do
     local pids=""
     pids="$(openclaw_process_pids)"
     if [[ -z "${pids}" ]]; then
@@ -175,7 +191,7 @@ kill_all_openclaw() {
     while IFS= read -r pid; do
       kill "${pid}" 2>/dev/null || true
     done <<< "${pids}"
-    sleep 0.3
+    sleep "${poll_seconds}"
   done
   [[ -z "$(openclaw_process_pids)" ]]
 }
@@ -389,7 +405,6 @@ elif [ "$SIGN" -eq 1 ]; then
     fail "No signing identity found. Use --no-sign or install a signing key."
   fi
   unset ALLOW_ADHOC_SIGNING
-  unset SIGN_IDENTITY
 fi
 
 # 3) Package and sign outside the live bundle. A failed package/sign operation
@@ -467,9 +482,12 @@ if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
   run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" verify_gateway_port_listening "${GATEWAY_PORT}"
 fi
 
-ATTACH_ONLY_ARGS=()
+APP_LAUNCH_ARGS=()
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
-  ATTACH_ONLY_ARGS+=(--args --attach-only)
+  APP_LAUNCH_ARGS+=(--attach-only)
+fi
+if [[ "$BACKGROUND_ONLY" -eq 1 ]]; then
+  APP_LAUNCH_ARGS+=(--background-only)
 fi
 
 if [[ "$TARGET_ONLY" -eq 1 ]]; then
@@ -484,18 +502,23 @@ fi
 
 run_step "install packaged app" install_staged_app
 choose_app_bundle
+OPEN_ARGS=(-n "${APP_BUNDLE}")
+if [[ "$ATTACH_ONLY" -eq 1 || "$BACKGROUND_ONLY" -eq 1 ]]; then
+  OPEN_ARGS+=(--args "${APP_LAUNCH_ARGS[@]}")
+fi
 
 # 4) Launch the installed app in the foreground so the menu bar extra appears.
 # LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).
 # That can cause launchd spawn failures and is undesirable for a GUI app anyway.
-run_step "launch app" env -i \
-  HOME="${HOME}" \
-  USER="${USER:-$(id -un)}" \
-  LOGNAME="${LOGNAME:-$(id -un)}" \
-  TMPDIR="${TMPDIR:-/tmp}" \
-  PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-  LANG="${LANG:-en_US.UTF-8}" \
-  /usr/bin/open -n "${APP_BUNDLE}" ${ATTACH_ONLY_ARGS[@]:+"${ATTACH_ONLY_ARGS[@]}"}
+LAUNCH_ENV=(
+  "HOME=${HOME}"
+  "USER=${USER:-$(id -un)}"
+  "LOGNAME=${LOGNAME:-$(id -un)}"
+  "TMPDIR=${TMPDIR:-/tmp}"
+  "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+  "LANG=${LANG:-en_US.UTF-8}"
+)
+run_step "launch app" env -i "${LAUNCH_ENV[@]}" /usr/bin/open "${OPEN_ARGS[@]}"
 
 # 5) Verify the app is alive.
 sleep 1.5

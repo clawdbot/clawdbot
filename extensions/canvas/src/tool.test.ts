@@ -1,281 +1,188 @@
-// Canvas tests cover tool plugin behavior.
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NodeListNode } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanvasTool } from "./tool.js";
 
-const VALID_A2UI_V08_JSONL = [
-  JSON.stringify({
-    surfaceUpdate: {
-      surfaceId: "main",
-      components: [
-        {
-          id: "root",
-          component: { Text: { text: { literalString: "Canvas proof" }, usageHint: "body" } },
-        },
-      ],
-    },
-  }),
-  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
-].join("\n");
-
 const mocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(),
-  imageResultFromFile: vi.fn(async (params) => ({ content: [], details: params })),
-  listNodes: vi.fn(async () => []),
-  resolveNodeIdFromList: vi.fn(() => "node-1"),
+  callGatewayTool: vi.fn(async () => ({})),
+  listNodes: vi.fn<() => Promise<NodeListNode[]>>(async () => []),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   callGatewayTool: mocks.callGatewayTool,
   listNodes: mocks.listNodes,
-  resolveNodeIdFromList: mocks.resolveNodeIdFromList,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-actions", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-actions")>()),
-  imageResultFromFile: mocks.imageResultFromFile,
-}));
+const eligibleMac = {
+  nodeId: "mac-1",
+  displayName: "Studio",
+  platform: "macos",
+  connected: true,
+  commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
+};
 
-describe("Canvas tool", () => {
-  let tempRoot: string | undefined;
+const actions = [
+  { args: { action: "present" }, command: "canvas.present" },
+  { args: { action: "hide" }, command: "canvas.hide" },
+  { args: { action: "navigate", url: "/widget" }, command: "canvas.navigate" },
+] as const;
 
+describe("Canvas presenter tool", () => {
   beforeEach(() => {
-    mocks.callGatewayTool.mockReset();
-    mocks.imageResultFromFile.mockClear();
-    mocks.listNodes.mockClear();
-    mocks.listNodes.mockResolvedValue([]);
-    mocks.resolveNodeIdFromList.mockClear();
-    mocks.resolveNodeIdFromList.mockReturnValue("node-1");
+    vi.clearAllMocks();
+    mocks.callGatewayTool.mockResolvedValue({});
+    mocks.listNodes.mockResolvedValue([eligibleMac]);
   });
 
-  afterEach(async () => {
-    if (tempRoot) {
-      await rm(tempRoot, { recursive: true, force: true });
-      tempRoot = undefined;
-    }
-  });
+  it.each(actions)("invokes $command with the default deadline", async ({ args, command }) => {
+    const result = await createCanvasTool().execute("tool-call", args);
 
-  it.skipIf(process.platform === "win32")(
-    "rejects jsonlPath symlinks that resolve outside the workspace",
-    async () => {
-      tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-tool-"));
-      const workspaceDir = path.join(tempRoot, "workspace");
-      await mkdir(workspaceDir);
-      const outsidePath = path.join(tempRoot, "outside.jsonl");
-      await writeFile(outsidePath, '{"secret":true}\n');
-      await symlink(outsidePath, path.join(workspaceDir, "events.jsonl"));
-
-      const tool = createCanvasTool({ workspaceDir });
-
-      await expect(
-        tool.execute("tool-call-1", {
-          action: "a2ui_push",
-          jsonlPath: "events.jsonl",
-        }),
-      ).rejects.toThrow("jsonlPath outside workspace");
-      expect(mocks.listNodes).not.toHaveBeenCalled();
-      expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-    },
-  );
-
-  it("applies configured image limits to canvas snapshots", async () => {
-    mocks.callGatewayTool.mockResolvedValue({
-      payload: {
-        format: "png",
-        base64: Buffer.from("not-a-real-png").toString("base64"),
-      },
-    });
-    const tool = createCanvasTool({
-      config: {
-        agents: {
-          defaults: {
-            imageMaxDimensionPx: 1600.9,
-          },
-        },
-      },
-    });
-
-    await tool.execute("tool-call-1", { action: "snapshot" });
-
-    expect(mocks.imageResultFromFile).toHaveBeenCalledTimes(1);
-    const imageResultParams = mocks.imageResultFromFile.mock.calls[0]?.[0] as
-      | {
-          label?: string;
-          path?: string;
-          details?: unknown;
-          imageSanitization?: unknown;
-        }
-      | undefined;
-    expect(imageResultParams?.label).toBe("canvas:snapshot");
-    expect(imageResultParams?.path).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
-    expect(imageResultParams?.details).toEqual({ format: "png" });
-    expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
-  });
-
-  it("normalizes numeric string params before invoking node canvas commands", async () => {
-    mocks.callGatewayTool.mockResolvedValue({
-      payload: {
-        format: "png",
-        base64: Buffer.from("not-a-real-png").toString("base64"),
-      },
-    });
-    const tool = createCanvasTool();
-
-    await tool.execute("tool-call-1", {
-      action: "present",
-      timeoutMs: "1500",
-      x: "10.5",
-      y: "-2",
-      width: "640",
-      height: "480",
-    });
-
-    expect(mocks.callGatewayTool).toHaveBeenLastCalledWith(
+    expect(mocks.listNodes).toHaveBeenCalledWith({ timeoutMs: undefined });
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 1500 },
+      { timeoutMs: 40_000 },
+      expect.objectContaining({
+        nodeId: "mac-1",
+        command,
+        timeoutMs: 30_000,
+        idempotencyKey: expect.any(String),
+      }),
+    );
+    expect(result.details).toMatchObject({ ok: true, node: "mac-1" });
+  });
+
+  it("preserves present placement and hosted target parameters", async () => {
+    const result = await createCanvasTool({ agentSessionKey: "agent:main:panel" }).execute(
+      "tool-call",
+      {
+        action: "present",
+        target: "/__openclaw__/canvas/documents/cv_1/index.html",
+        x: "10.5",
+        y: "-2",
+        width: "640",
+        height: "480",
+        timeoutMs: "1500",
+      },
+    );
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 11_500 },
       expect.objectContaining({
         command: "canvas.present",
         params: {
-          placement: {
-            x: 10.5,
-            y: -2,
-            width: 640,
-            height: 480,
-          },
+          url: "/__openclaw__/canvas/documents/cv_1/index.html",
+          placement: { x: 10.5, y: -2, width: 640, height: 480 },
         },
+        timeoutMs: 1500,
+        sessionKey: "agent:main:panel",
       }),
     );
-
-    await tool.execute("tool-call-2", {
-      action: "snapshot",
-      maxWidth: "800",
-      quality: "0.75",
-    });
-
-    expect(mocks.callGatewayTool).toHaveBeenLastCalledWith(
-      "node.invoke",
-      {},
-      expect.objectContaining({
-        command: "canvas.snapshot",
-        params: {
-          format: "png",
-          maxWidth: 800,
-          quality: 0.75,
-        },
-      }),
-    );
-  });
-
-  it("preserves an empty canvas eval result", async () => {
-    mocks.callGatewayTool.mockResolvedValue({ payload: { result: "" } });
-    const tool = createCanvasTool();
-
-    const result = await tool.execute("tool-call-1", {
-      action: "eval",
-      javaScript: `""`,
-    });
-
-    expect(result).toEqual({
-      content: [{ type: "text", text: "" }],
-      details: { result: "" },
+    expect(result.details).toEqual({
+      ok: true,
+      node: "mac-1",
+      url: "/__openclaw__/canvas/documents/cv_1/index.html",
     });
   });
 
-  it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
-    const tool = createCanvasTool({ agentSessionKey: "agent:main:canvas" });
-
-    await tool.execute("tool-call-1", {
-      action: "a2ui_push",
-      jsonl: VALID_A2UI_V08_JSONL,
+  it("accepts target as the navigate URL alias", async () => {
+    const result = await createCanvasTool().execute("tool-call", {
+      action: "navigate",
+      target: "openclaw://widget/local",
     });
 
-    expect(mocks.callGatewayTool).toHaveBeenCalledTimes(1);
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
-      {
-        nodeId: "node-1",
-        command: "canvas.a2ui.pushJSONL",
-        params: { jsonl: VALID_A2UI_V08_JSONL },
-        idempotencyKey: expect.any(String),
-        sessionKey: "agent:main:canvas",
-      },
+      expect.any(Object),
+      expect.objectContaining({
+        command: "canvas.navigate",
+        params: { url: "openclaw://widget/local" },
+      }),
     );
-  });
-
-  it.each([
-    ["malformed JSONL", "{not-json}", /Invalid A2UI JSONL/],
-    [
-      "A2UI v0.9 createSurface JSONL",
-      JSON.stringify({
-        version: "v0.9",
-        createSurface: {
-          surfaceId: "main",
-          catalogId: "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json",
-        },
-      }),
-      /OpenClaw currently supports v0\.8 only/,
-    ],
-    [
-      "legacy createSurface JSONL",
-      JSON.stringify({ createSurface: { surfaceId: "main", root: "root" } }),
-      /OpenClaw currently supports v0\.8 only/,
-    ],
-    [
-      "A2UI v0.9 deleteSurface JSONL",
-      JSON.stringify({ version: "v0.9", deleteSurface: { surfaceId: "main" } }),
-      /OpenClaw currently supports v0\.8 only/,
-    ],
-    [
-      "an unsupported explicit A2UI version",
-      JSON.stringify({ version: "v1.0", deleteSurface: { surfaceId: "main" } }),
-      /unsupported A2UI version: "v1\.0"/,
-    ],
-    [
-      "an explicit version on an A2UI v0.8 message",
-      JSON.stringify({ version: "v0.8", deleteSurface: { surfaceId: "main" } }),
-      /A2UI v0\.8 messages must not include a version field/,
-    ],
-  ])("rejects %s before resolving or invoking a node", async (_label, jsonl, message) => {
-    const tool = createCanvasTool();
-
-    await expect(
-      tool.execute("tool-call-1", {
-        action: "a2ui_push",
-        jsonl,
-      }),
-    ).rejects.toThrow(message);
-    expect(mocks.listNodes).not.toHaveBeenCalled();
-    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("rejects malformed numeric canvas params before invoking node commands", async () => {
-    const tool = createCanvasTool();
-
-    await expect(
-      tool.execute("tool-call-1", {
-        action: "snapshot",
-        maxWidth: "800px",
-      }),
-    ).rejects.toThrow("maxWidth must be a positive integer");
-    expect(mocks.listNodes).not.toHaveBeenCalled();
-    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("rejects node-controlled snapshot formats before creating image results", async () => {
-    mocks.callGatewayTool.mockResolvedValue({
-      payload: {
-        format: "/../../target.sh",
-        base64: Buffer.from("not-a-real-png").toString("base64"),
-      },
+    expect(result.details).toEqual({
+      ok: true,
+      node: "mac-1",
+      url: "openclaw://widget/local",
     });
+  });
+
+  it("forwards gateway and node selection options", async () => {
+    await createCanvasTool().execute("tool-call", {
+      action: "hide",
+      gatewayUrl: "ws://gateway.test",
+      gatewayToken: "token",
+      node: "Studio",
+      timeoutMs: 120_000,
+    });
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {
+        gatewayUrl: "ws://gateway.test",
+        gatewayToken: "token",
+        timeoutMs: 130_000,
+      },
+      expect.objectContaining({ command: "canvas.hide", timeoutMs: 120_000 }),
+    );
+  });
+
+  it("rejects an explicit legacy non-macOS Canvas node", async () => {
+    mocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "legacy-android",
+        displayName: "Old Canvas",
+        platform: "android",
+        connected: true,
+        commands: ["canvas.present"],
+      },
+      eligibleMac,
+    ]);
+
+    await expect(
+      createCanvasTool().execute("tool-call", {
+        action: "present",
+        node: "legacy-android",
+      }),
+    ).rejects.toThrow(
+      'node "legacy-android" is not an eligible Canvas panel (requires a connected macOS node advertising canvas.present; eligible node ids: mac-1)',
+    );
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed presenter arguments before invoking a node", async () => {
     const tool = createCanvasTool();
 
-    await expect(tool.execute("tool-call-1", { action: "snapshot" })).rejects.toThrow(
-      /invalid canvas\.snapshot payload/i,
+    await expect(tool.execute("tool-call", { action: "present", width: "640px" })).rejects.toThrow(
+      "width must be a finite number",
     );
-    expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
+    await expect(tool.execute("tool-call", { action: "navigate" })).rejects.toThrow("url required");
+    await expect(tool.execute("tool-call", { action: "removed" })).rejects.toThrow(
+      "Unknown action: removed",
+    );
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("advertises only surviving presenter controls", () => {
+    const tool = createCanvasTool();
+    const schema = tool.parameters as { properties?: Record<string, unknown> };
+
+    expect(tool.resultContentSource).toBe("network");
+    expect(schema.properties?.action).toMatchObject({
+      type: "string",
+      enum: ["present", "hide", "navigate"],
+    });
+    expect(Object.keys(schema.properties ?? {}).toSorted()).toEqual([
+      "action",
+      "gatewayToken",
+      "gatewayUrl",
+      "height",
+      "node",
+      "target",
+      "timeoutMs",
+      "url",
+      "width",
+      "x",
+      "y",
+    ]);
   });
 });

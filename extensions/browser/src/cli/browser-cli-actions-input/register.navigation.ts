@@ -3,12 +3,13 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "../../browser/act-policy.js";
-import { runBrowserResizeWithOutput } from "../browser-cli-resize.js";
+import {
+  parseBrowserViewportDimension,
+  runBrowserResizeWithOutput,
+} from "../browser-cli-resize.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
-  parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
@@ -19,21 +20,6 @@ export function registerBrowserNavigationCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  const parsePositiveInteger = (value: unknown, label: string): number | undefined => {
-    const parsed = parseBrowserPositiveIntegerValue(value);
-    if (parsed === undefined) {
-      defaultRuntime.error(danger(`Invalid ${label}: must be a positive integer`));
-      defaultRuntime.exit(1);
-      return undefined;
-    }
-    if (parsed > ACT_MAX_VIEWPORT_DIMENSION) {
-      defaultRuntime.error(danger(`Invalid ${label}: maximum is ${ACT_MAX_VIEWPORT_DIMENSION}`));
-      defaultRuntime.exit(1);
-      return undefined;
-    }
-    return parsed;
-  };
-
   browser
     .command("navigate")
     .description("Navigate the current tab to a URL")
@@ -73,8 +59,8 @@ export function registerBrowserNavigationCommands(
     .argument("<height>", "Viewport height")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (width: string, height: string, opts, cmd) => {
-      const normalizedWidth = parsePositiveInteger(width, "width");
-      const normalizedHeight = parsePositiveInteger(height, "height");
+      const normalizedWidth = parseBrowserViewportDimension(width, "width");
+      const normalizedHeight = parseBrowserViewportDimension(height, "height");
       if (normalizedWidth === undefined || normalizedHeight === undefined) {
         return;
       }

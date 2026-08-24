@@ -36,18 +36,22 @@ pnpm changed:lanes --json
 
 In Codex worktrees under `.codex/worktrees`, `node_modules` must be a symlink to
 the main OpenClaw checkout. Do not run `pnpm install` there. For broad or
-package-heavy proof, use Blacksmith Testbox or GitHub Actions.
+package-heavy proof, use a prepared normal checkout on the current dedicated
+Linux worker, Blacksmith Testbox, or GitHub Actions according to the required
+artifact and capability boundary.
 
 ## Runner Choice
 
 Prefer this order:
 
 1. **GitHub Package Acceptance** for installable-package product proof.
-2. **`ci-build-artifacts-testbox.yml` Testbox** when Docker/package lanes need
+2. **Current dedicated Linux worker** for trusted source/package/Docker proof
+   when it has the required dependencies and capabilities.
+3. **`ci-build-artifacts-testbox.yml` Testbox** when Docker/package lanes need
    seeded `dist`, `dist-runtime`, and package caches.
-3. **`ci-check-testbox.yml` Testbox** for source checks, targeted Vitest,
+4. **`ci-check-testbox.yml` Testbox** for source checks, targeted Vitest,
    package-boundary checks, or focused Docker lanes.
-4. **Local targeted commands only** for small format/static/unit probes.
+5. **Workstation targeted commands only** for small format/static/unit probes.
 
 Avoid long package Docker runs from a stale sparse worktree. If Testbox sync
 reports hundreds of changed files or starts deleting package inputs, stop and
@@ -116,6 +120,23 @@ gh workflow run package-acceptance.yml \
 Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
 `workflow_ref` as trusted current harness code unless the release process says
 otherwise.
+
+For extended-stable, branch-owned Full Release Validation is publication
+evidence; Package Acceptance is a post-publish selector smoke:
+
+```bash
+gh workflow run package-acceptance.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=npm \
+  -f package_spec=openclaw@extended-stable \
+  -f suite_profile=package \
+  -f telegram_mode=mock-openai
+```
+
+Record the resolved version. Still verify every package and selector in the
+tag's `all-publishable` inventory; one smoke is not registry readback.
 
 ## Plugin npm Artifact Preflight
 

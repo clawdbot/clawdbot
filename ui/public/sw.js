@@ -24,10 +24,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      const [cacheKeys, windowClients] = await Promise.all([
-        caches.keys(),
-        self.clients.matchAll({ type: "window", includeUncontrolled: true }),
-      ]);
+      const cacheKeys = await caches.keys();
       const controlKeys = cacheKeys.filter((key) => key.startsWith(CACHE_PREFIX));
       const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
       // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
@@ -42,6 +39,12 @@ self.addEventListener("activate", (event) => {
           controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
         ),
       ]);
+      // Enumerate after claim so a concurrent reload receives the activation event
+      // instead of leaving the new document unaware of the replacement worker.
+      const windowClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
 
       for (const client of windowClients) {
         // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Service Worker Client.postMessage does not take targetOrigin.
@@ -126,7 +129,10 @@ self.addEventListener("push", (event) => {
     icon: "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
-    data: { url: data.url || "./" },
+    data: {
+      url: data.url || self.registration.scope,
+      explicitUrl: Boolean(data.url),
+    },
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -135,17 +141,81 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification.data?.url || "./";
+  const scopeUrl = new URL(self.registration.scope);
+  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  // Relative targets belong beneath the registered scope even when its URL
+  // omits a trailing slash; keep the exact scope for default navigation.
+  const scopeNavigationBase = new URL(scopePath, scopeUrl);
+  const notificationUrl = event.notification.data?.url;
+  // Notifications shown before an update stored "./" for implicit targets.
+  // Preserve their existing in-scope tabs when the new worker handles the click.
+  const hasExplicitTarget =
+    event.notification.data?.explicitUrl ?? Boolean(notificationUrl && notificationUrl !== "./");
+  const isInScope = (url) =>
+    url.origin === scopeUrl.origin &&
+    (url.pathname === scopeUrl.pathname || url.pathname.startsWith(scopePath));
+
+  let targetUrl = scopeUrl;
+  try {
+    const requestedUrl = new URL(
+      (hasExplicitTarget ? notificationUrl : undefined) || scopeUrl.href,
+      scopeNavigationBase,
+    );
+    if (isInScope(requestedUrl)) {
+      targetUrl = requestedUrl;
+    }
+  } catch {
+    // Malformed notification targets can only fall back to the registered app scope.
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      // Focus an existing window if one is open.
+      let targetClient;
+      let targetClientRank = -1;
       for (const client of clients) {
-        if (new URL(client.url).pathname === new URL(targetUrl, self.location.origin).pathname) {
+        let clientUrl;
+        try {
+          clientUrl = new URL(client.url);
+        } catch {
+          continue;
+        }
+
+        if (!isInScope(clientUrl)) {
+          continue;
+        }
+        if (!hasExplicitTarget) {
           return client.focus();
         }
+
+        // Prefer the existing target tab before repurposing another app tab.
+        // Client.url can lag SPA history, so its match only chooses a candidate.
+        const clientRank =
+          clientUrl.href === targetUrl.href
+            ? 3
+            : clientUrl.pathname === targetUrl.pathname
+              ? clientUrl.search === targetUrl.search
+                ? 2
+                : 1
+              : 0;
+        if (clientRank > targetClientRank) {
+          targetClient = client;
+          targetClientRank = clientRank;
+          if (clientRank === 3) {
+            break;
+          }
+        }
       }
-      return self.clients.openWindow(targetUrl);
+
+      if (!targetClient) {
+        return self.clients.openWindow(targetUrl.href);
+      }
+
+      // Always navigate explicit targets; old or uncontrolled workers can
+      // reject navigation, so preserve the validated open-window fallback.
+      return targetClient
+        .navigate(targetUrl.href)
+        .then((navigatedClient) => (navigatedClient ?? targetClient).focus())
+        .catch(() => self.clients.openWindow(targetUrl.href));
     }),
   );
 });

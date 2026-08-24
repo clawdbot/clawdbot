@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./worktrees-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type WorktreesPageTestElement = HTMLElement & {
   context: ApplicationContext;
@@ -16,9 +21,6 @@ type WorktreesPageTestElement = HTMLElement & {
   createName: string;
   createBaseRef: string;
   createBranches: string[];
-  cleanupLoaded: boolean;
-  cleanupMaxCount: number;
-  cleanupMaxSizeGb: number;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
   load: (options?: { preserveError?: boolean }) => Promise<void>;
@@ -26,8 +28,6 @@ type WorktreesPageTestElement = HTMLElement & {
   createWorktree: () => Promise<void>;
   removeWorktree: (record: WorktreeRecord) => Promise<void>;
   restore: (record: WorktreeRecord) => Promise<void>;
-  setCleanupLimit: (key: "maxCount" | "maxTotalSizeGb", value: number) => void;
-  commitCleanupLimits: () => Promise<void>;
   gc: () => Promise<void>;
 };
 
@@ -59,8 +59,9 @@ function worktree(id = "worktree-1"): WorktreeRecord {
 function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boolean) {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -93,8 +94,17 @@ function mutableGateway(client: GatewayBrowserClient) {
   } as unknown as ApplicationContext["gateway"];
   return {
     emit(connected: boolean) {
-      (snapshot as ApplicationGatewaySnapshot).connected = connected;
+      (snapshot as ApplicationGatewaySnapshot).phase = connected ? "connected" : "stopped";
       listener?.(snapshot as ApplicationGatewaySnapshot);
+    },
+    setScopes(scopes: string[]) {
+      snapshot.hello = {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes },
+        features: { methods: ["worktrees.list", "worktrees.create"] },
+      } as ApplicationGatewaySnapshot["hello"];
+      listener?.(snapshot);
     },
     gateway,
   };
@@ -109,48 +119,131 @@ function contextWithGateway(gateway: ApplicationContext["gateway"]): Application
   } as unknown as ApplicationContext;
 }
 
-function runtimeConfigStub(cleanup?: { maxCount?: number; maxTotalSizeGb?: number }) {
-  const state = {
-    configSnapshot: { sourceConfig: cleanup ? { worktrees: { cleanup } } : {} },
-    lastError: null as string | null,
-  };
-  const listeners = new Set<(next: typeof state) => void>();
-  return {
-    state,
-    ensureLoaded: vi.fn(async () => undefined),
-    refresh: vi.fn(async () => undefined),
-    patch: vi.fn(async () => true),
-    subscribe: (listener: (next: typeof state) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    emit() {
-      for (const listener of listeners) {
-        listener(state);
-      }
-    },
-  };
-}
-
-function contextWithConfig(
-  gateway: ApplicationContext["gateway"],
-  runtimeConfig: ReturnType<typeof runtimeConfigStub>,
-): ApplicationContext {
-  return {
-    basePath: "",
-    gateway,
-    navigate: vi.fn(),
-    preload: vi.fn(async () => undefined),
-    runtimeConfig,
-  } as unknown as ApplicationContext;
-}
-
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("keeps read-only viewers in browsing mode without branch or mutation RPCs", async () => {
+    const record = worktree();
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list" ? { worktrees: [record] } : {},
+    );
+    const gateway = gatewayWithClient({ request } as unknown as GatewayBrowserClient);
+    gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: {
+        methods: ["worktrees.list", "worktrees.branches", "worktrees.remove", "worktrees.gc"],
+      },
+    } as ApplicationGatewaySnapshot["hello"];
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(gateway);
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+
+    await waitForFast(() => expect(page.records).toEqual([record]));
+    await page.updateComplete;
+    expect(page.querySelector(".callout.info")?.textContent).toContain(
+      "Worktree changes require operator.admin access.",
+    );
+    const mutationButtons = [...page.querySelectorAll<HTMLButtonElement>("button")].filter(
+      (button) =>
+        ["New worktree", "Clean up now", "Delete"].includes(button.textContent?.trim() ?? ""),
+    );
+    expect(mutationButtons).toHaveLength(3);
+    expect(mutationButtons.every((button) => button.disabled)).toBe(true);
+
+    page.loadCreateBranches();
+    await page.removeWorktree(record);
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.branches");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.remove");
+    expect(showConfirmDialog).not.toHaveBeenCalled();
+  });
+
+  it("closes an open create draft when admin access is lost", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list" ? { worktrees: [] } : {},
+    );
+    const source = mutableGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await waitForFast(() => expect(page.loading).toBe(false));
+    const newWorktreeButton = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "New worktree",
+    );
+    newWorktreeButton?.click();
+    await page.updateComplete;
+    expect(page.querySelectorAll('input.settings-input[type="text"]')).toHaveLength(3);
+
+    source.setScopes(["operator.read"]);
+    await page.updateComplete;
+
+    expect(page.createOpen).toBe(false);
+    expect(page.querySelectorAll('input.settings-input[type="text"]')).toHaveLength(0);
+    expect(newWorktreeButton?.disabled).toBe(true);
+    newWorktreeButton?.click();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.create");
+  });
+
+  it("navigates a session-owned worktree with the face-preference marker", async () => {
+    // The owner key comes from a worktree record, not the cached session page, so its
+    // face is a guess: the in-app click must carry the marker while href stays clean.
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list"
+        ? {
+            worktrees: [
+              {
+                ...worktree(),
+                ownerKind: "session" as const,
+                ownerId: "agent:main:thread:12345678-90ab-cdef-1234-567890abcdef",
+              },
+            ],
+          }
+        : {},
+    );
+    const context = {
+      ...contextWithGateway(gatewayWithClient({ request } as unknown as GatewayBrowserClient)),
+      // No cached sessions: the owner key is only known to the worktree record.
+      sessions: { state: { result: undefined } },
+      agents: { state: { agentsList: { mainKey: "main" } } },
+      agentSelection: { state: { selectedId: "main" } },
+    } as unknown as ApplicationContext;
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = context;
+    document.body.append(page);
+    await waitForFast(() => expect(page.records.length).toBe(1));
+    await page.updateComplete;
+
+    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(docsLink?.textContent?.trim()).toBe("Learn more");
+    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/managed-worktrees");
+
+    const link = [...page.querySelectorAll("a")].find((anchor) =>
+      anchor.getAttribute("href")?.includes("12345678"),
+    );
+    expect(link?.getAttribute("href")).toBe("/chat/main/12345678");
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/12345678",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+    });
+  });
+
   it("serializes list refreshes and row mutations", async () => {
     const record = worktree();
     const removedRecord = {
@@ -177,25 +270,25 @@ describe("WorktreesPage lifecycle", () => {
       gatewayWithClient({ request } as unknown as GatewayBrowserClient),
     );
     document.body.append(page);
-    await vi.waitFor(() => expect(page.records).toEqual([record]));
-    await vi.waitFor(() => expect(page.loading).toBe(false));
+    await waitForFast(() => expect(page.records).toEqual([record]));
+    await waitForFast(() => expect(page.loading).toBe(false));
 
     const refreshing = page.load();
-    await vi.waitFor(() => expect(listRequests).toBe(2));
+    await waitForFast(() => expect(listRequests).toBe(2));
     await page.updateComplete;
 
     const deleteButton = page.querySelector<HTMLButtonElement>("button.danger");
     expect(deleteButton?.disabled).toBe(true);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
     await page.removeWorktree(record);
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalledWith("worktrees.remove", { id: record.id });
 
     pendingList.resolve({ worktrees: [record] });
     await refreshing;
 
     await page.removeWorktree(record);
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: record.id });
     expect(listRequests).toBe(3);
     expect(page.records).toEqual([removedRecord]);
@@ -244,7 +337,7 @@ describe("WorktreesPage lifecycle", () => {
     );
 
     document.body.append(page);
-    await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(firstRequest).toHaveBeenCalledOnce());
     expect(page.loading).toBe(true);
 
     page.remove();
@@ -253,8 +346,8 @@ describe("WorktreesPage lifecycle", () => {
     );
     document.body.append(page);
 
-    await vi.waitFor(() => expect(secondRequest).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(page.loading).toBe(false));
+    await waitForFast(() => expect(secondRequest).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(page.loading).toBe(false));
 
     resolveFirst({ worktrees: [] });
     await Promise.resolve();
@@ -274,12 +367,18 @@ describe("WorktreesPage lifecycle", () => {
     page.context = contextWithGateway(
       gatewayWithClient({ request: firstRequest } as unknown as GatewayBrowserClient),
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
     document.body.append(page);
-    await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledWith("worktrees.list", {}));
+    await waitForFast(() =>
+      expect(firstRequest).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
 
     const removing = page.removeWorktree(worktree());
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(firstRequest).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" }),
     );
 
@@ -291,7 +390,7 @@ describe("WorktreesPage lifecycle", () => {
     pendingRemove.reject(new Error("snapshot failed: stale gateway"));
     await removing;
 
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
     expect(secondRequest).not.toHaveBeenCalledWith("worktrees.remove", {
       id: "worktree-1",
       force: true,
@@ -300,11 +399,87 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.busyId).toBeNull();
   });
 
-  it("offers force removal when the gateway reports a snapshot failure", async () => {
+  it("does not remove through a replacement gateway after confirmation", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const firstRequest = vi.fn(async () => ({ worktrees: [] }));
+    const secondRequest = vi.fn(async () => ({ worktrees: [] }));
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request: firstRequest } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await waitForFast(() => expect(firstRequest).toHaveBeenCalledOnce());
+
+    const removing = page.removeWorktree(worktree());
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    page.context = contextWithGateway(
+      gatewayWithClient({ request: secondRequest } as unknown as GatewayBrowserClient),
+    );
+    page.requestUpdate();
+    await page.updateComplete;
+    confirmation.resolve(true);
+    await removing;
+
+    expect(firstRequest).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
+    expect(secondRequest).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
+  });
+
+  it("does not remove after admin access is lost during confirmation", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const request = vi.fn(async (method: string) =>
+      method === "worktrees.list" ? { worktrees: [] } : {},
+    );
+    const source = mutableGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    const removing = page.removeWorktree(worktree());
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    source.setScopes(["operator.read"]);
+    confirmation.resolve(true);
+    await removing;
+
+    expect(request).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
+  });
+
+  it("does not force-remove after admin access is lost during confirmation", async () => {
+    const forceConfirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog)
+      .mockResolvedValueOnce(true)
+      .mockReturnValueOnce(forceConfirmation.promise);
+    const request = vi.fn((method: string, params?: Record<string, unknown>) => {
+      if (method === "worktrees.remove" && !params?.force) {
+        return Promise.resolve({ removed: false, snapshotError: "nested gitlink" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const source = mutableGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    const removing = page.removeWorktree(worktree());
+    await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledTimes(2));
+    source.setScopes(["operator.read"]);
+    forceConfirmation.resolve(true);
+    await removing;
+
+    expect(request).not.toHaveBeenCalledWith("worktrees.remove", {
+      id: "worktree-1",
+      force: true,
+    });
+  });
+
+  it("surfaces the snapshot failure after a forced removal", async () => {
     const request = vi.fn((method: string, params?: Record<string, unknown>) => {
       if (method === "worktrees.remove") {
         return params?.force
-          ? Promise.resolve({ removed: true })
+          ? Promise.resolve({ removed: true, snapshotError: "nested gitlink" })
           : Promise.resolve({ removed: false, snapshotError: "nested gitlink" });
       }
       return Promise.resolve({ worktrees: [] });
@@ -313,16 +488,24 @@ describe("WorktreesPage lifecycle", () => {
     page.context = contextWithGateway(
       gatewayWithClient({ request } as unknown as GatewayBrowserClient),
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
     document.body.append(page);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
 
     await page.removeWorktree(worktree());
 
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1", force: true });
-    expect(confirm).toHaveBeenCalledTimes(2);
-    expect(page.error).toBeNull();
+    expect(showConfirmDialog).toHaveBeenCalledTimes(2);
+    expect(page.error).toBe("nested gitlink");
+    await page.updateComplete;
+    expect(page.querySelector(".callout.danger")?.textContent).toContain("nested gitlink");
   });
 
   it("discards a restore error across a same-client reconnect", async () => {
@@ -338,10 +521,16 @@ describe("WorktreesPage lifecycle", () => {
     const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
     page.context = contextWithGateway(source.gateway);
     document.body.append(page);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
 
     const restoring = page.restore(worktree());
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("worktrees.restore", { id: "worktree-1" }),
     );
     source.emit(false);
@@ -362,7 +551,7 @@ describe("WorktreesPage lifecycle", () => {
         return Promise.resolve({ worktrees: [record] });
       }
       if (method === "worktrees.restore") {
-        return Promise.reject(new Error("restore failed"));
+        return Promise.reject(new Error("restore failed: OPENAI_API_KEY=sk-1234567890abcdef"));
       }
       return Promise.resolve({});
     });
@@ -371,13 +560,13 @@ describe("WorktreesPage lifecycle", () => {
       gatewayWithClient({ request } as unknown as GatewayBrowserClient),
     );
     document.body.append(page);
-    await vi.waitFor(() => expect(listRequests).toBe(1));
-    await vi.waitFor(() => expect(page.loading).toBe(false));
+    await waitForFast(() => expect(listRequests).toBe(1));
+    await waitForFast(() => expect(page.loading).toBe(false));
 
     await page.restore(record);
 
     expect(listRequests).toBe(2);
-    expect(page.error).toBe("Error: restore failed");
+    expect(page.error).toBe("restore failed: OPENAI_API_KEY=sk-123...cdef");
     expect(page.busyId).toBeNull();
   });
 
@@ -401,14 +590,40 @@ describe("WorktreesPage lifecycle", () => {
       gatewayWithClient({ request } as unknown as GatewayBrowserClient),
     );
     document.body.append(page);
-    await vi.waitFor(() => expect(listRequests).toBe(1));
-    await vi.waitFor(() => expect(page.loading).toBe(false));
+    await waitForFast(() => expect(listRequests).toBe(1));
+    await waitForFast(() => expect(page.loading).toBe(false));
 
     await page.restore(record);
 
     expect(listRequests).toBe(2);
-    expect(page.error).toBe("Error: list failed");
+    expect(page.error).toBe("list failed");
     expect(page.busyId).toBeNull();
+  });
+
+  it("surfaces an operation failure after an earlier list failure", async () => {
+    let listRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.list") {
+        listRequests += 1;
+        return listRequests === 1
+          ? Promise.reject(new Error("stale list failure"))
+          : Promise.resolve({ worktrees: [] });
+      }
+      if (method === "worktrees.restore") {
+        return Promise.reject(new Error("restore failed"));
+      }
+      return Promise.resolve({});
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await waitForFast(() => expect(page.error).toBe("stale list failure"));
+
+    await page.restore(worktree());
+
+    expect(page.error).toBe("restore failed");
   });
 
   it("clears pending create state across a same-client reconnect", async () => {
@@ -425,10 +640,16 @@ describe("WorktreesPage lifecycle", () => {
     page.context = contextWithGateway(source.gateway);
     page.createRepoRoot = "/tmp/repo";
     document.body.append(page);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
 
     const creating = page.createWorktree();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" }),
     );
     expect(page.creating).toBe(true);
@@ -441,6 +662,36 @@ describe("WorktreesPage lifecycle", () => {
     await creating;
     expect(page.creating).toBe(false);
     expect(page.error).toBeNull();
+  });
+
+  it("clears GC loading across a same-client reconnect", async () => {
+    const pendingGc = deferred<unknown>();
+    let listRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.gc") {
+        return pendingGc.promise;
+      }
+      listRequests += 1;
+      return Promise.resolve({ worktrees: [] });
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const source = mutableGateway(client);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(listRequests).toBe(1));
+
+    const collecting = page.gc();
+    await waitForFast(() => expect(request).toHaveBeenCalledWith("worktrees.gc", {}));
+    expect(page.loading).toBe(true);
+    source.emit(false);
+    source.emit(true);
+
+    await waitForFast(() => expect(listRequests).toBe(2));
+    await waitForFast(() => expect(page.loading).toBe(false));
+    pendingGc.resolve({});
+    await collecting;
+    expect(page.loading).toBe(false);
   });
 
   it("locks the create draft and its toggle until create settles", async () => {
@@ -460,8 +711,14 @@ describe("WorktreesPage lifecycle", () => {
     page.createName = "submitted-name";
     page.createBaseRef = "main";
     document.body.append(page);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
-    await vi.waitFor(() => expect(page.loading).toBe(false));
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await waitForFast(() => expect(page.loading).toBe(false));
 
     const toggleButton = Array.from(page.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "New worktree",
@@ -469,7 +726,7 @@ describe("WorktreesPage lifecycle", () => {
     const creating = page.createWorktree();
     toggleButton?.click();
     expect(page.createOpen).toBe(true);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("worktrees.create", {
         baseRef: "main",
         name: "submitted-name",
@@ -478,8 +735,6 @@ describe("WorktreesPage lifecycle", () => {
     );
     await page.updateComplete;
 
-    // type="text" scopes to the create-draft inputs; the cleanup section's
-    // number inputs have their own disabled lifecycle.
     const draftInputs = Array.from(
       page.querySelectorAll<HTMLInputElement>('input.settings-input[type="text"]'),
     );
@@ -509,204 +764,6 @@ describe("WorktreesPage lifecycle", () => {
     expect(freshInputs.every((input) => !input.disabled)).toBe(true);
   });
 
-  it("renders cleanup limits from config and disables controls until config loads", async () => {
-    const request = vi.fn(async () => ({ worktrees: [] }));
-    const withConfig = document.createElement(
-      "openclaw-worktrees-page",
-    ) as WorktreesPageTestElement;
-    withConfig.context = contextWithConfig(
-      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-      runtimeConfigStub({ maxCount: 25, maxTotalSizeGb: 50 }),
-    );
-    document.body.append(withConfig);
-    await vi.waitFor(() => expect(withConfig.cleanupLoaded).toBe(true));
-    await withConfig.updateComplete;
-
-    expect(withConfig.cleanupMaxCount).toBe(25);
-    expect(withConfig.cleanupMaxSizeGb).toBe(50);
-    const inputs = Array.from(
-      withConfig.querySelectorAll<HTMLInputElement>('input.settings-input[type="number"]'),
-    );
-    expect(inputs.map((input) => input.value)).toEqual(["25", "50"]);
-    expect(inputs.every((input) => !input.disabled)).toBe(true);
-
-    // Without a runtimeConfig capability the section stays visible but inert.
-    const withoutConfig = document.createElement(
-      "openclaw-worktrees-page",
-    ) as WorktreesPageTestElement;
-    withoutConfig.context = contextWithGateway(
-      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-    );
-    document.body.append(withoutConfig);
-    await withoutConfig.updateComplete;
-    const inertInputs = Array.from(
-      withoutConfig.querySelectorAll<HTMLInputElement>('input.settings-input[type="number"]'),
-    );
-    expect(inertInputs).toHaveLength(2);
-    expect(inertInputs.every((input) => input.disabled)).toBe(true);
-  });
-
-  it("debounces stepper edits into one minimal config patch", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn(async () => ({ worktrees: [] }));
-      const runtimeConfig = runtimeConfigStub({ maxCount: 25, maxTotalSizeGb: 50 });
-      const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
-      page.context = contextWithConfig(
-        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-        runtimeConfig,
-      );
-      document.body.append(page);
-      await page.updateComplete;
-      expect(page.cleanupLoaded).toBe(true);
-
-      page.setCleanupLimit("maxCount", 26);
-      page.setCleanupLimit("maxCount", 27);
-      page.setCleanupLimit("maxTotalSizeGb", 49);
-      expect(page.cleanupMaxCount).toBe(27);
-      expect(page.cleanupMaxSizeGb).toBe(49);
-      expect(runtimeConfig.patch).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(2_100);
-
-      expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-      expect(runtimeConfig.patch).toHaveBeenCalledWith({
-        raw: { worktrees: { cleanup: { maxCount: 27, maxTotalSizeGb: 49 } } },
-        note: "worktrees: update cleanup limits",
-      });
-      expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("flushes pending cleanup edits before Clean up now", async () => {
-    vi.useFakeTimers();
-    try {
-      const calls: string[] = [];
-      const request = vi.fn(async (method: string) => {
-        calls.push(method);
-        return { worktrees: [] };
-      });
-      const runtimeConfig = runtimeConfigStub({ maxCount: 25 });
-      runtimeConfig.patch = vi.fn(async () => {
-        calls.push("config.patch");
-        return true;
-      });
-      const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
-      page.context = contextWithConfig(
-        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-        runtimeConfig,
-      );
-      document.body.append(page);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(page.loading).toBe(false);
-
-      page.setCleanupLimit("maxCount", 24);
-      await page.gc();
-
-      expect(
-        calls.filter((method) => method === "config.patch" || method === "worktrees.gc"),
-      ).toEqual(["config.patch", "worktrees.gc"]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("aborts Clean up now when the pending limit commit fails", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn(async () => ({ worktrees: [] }));
-      const runtimeConfig = runtimeConfigStub({ maxCount: 25 });
-      runtimeConfig.patch = vi.fn(async () => false);
-      runtimeConfig.state.lastError = "save rejected";
-      const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
-      page.context = contextWithConfig(
-        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-        runtimeConfig,
-      );
-      document.body.append(page);
-      await vi.advanceTimersByTimeAsync(0);
-
-      page.setCleanupLimit("maxCount", 30);
-      // The debounced save fails first; the draft must stay dirty so a later
-      // Clean up now retries the save instead of running with stale limits.
-      await vi.advanceTimersByTimeAsync(2_100);
-      expect(runtimeConfig.patch).toHaveBeenCalledTimes(1);
-
-      await page.gc();
-
-      expect(runtimeConfig.patch).toHaveBeenCalledTimes(2);
-      expect(request).not.toHaveBeenCalledWith("worktrees.gc", {});
-      expect(page.error).toBe("save rejected");
-      expect(page.loading).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("drops a pending edit when the runtime-config source is replaced", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn(async () => ({ worktrees: [] }));
-      const originalConfig = runtimeConfigStub({ maxCount: 25 });
-      const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
-      page.context = contextWithConfig(
-        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-        originalConfig,
-      );
-      document.body.append(page);
-      await vi.advanceTimersByTimeAsync(0);
-
-      page.setCleanupLimit("maxCount", 30);
-      const replacementConfig = runtimeConfigStub({ maxCount: 25 });
-      page.context = contextWithConfig(
-        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-        replacementConfig,
-      );
-      page.requestUpdate();
-      await vi.advanceTimersByTimeAsync(2_100);
-
-      expect(originalConfig.patch).not.toHaveBeenCalled();
-      expect(replacementConfig.patch).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("clamps cleanup edits to non-negative integers and surfaces patch failures", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn(async () => ({ worktrees: [] }));
-      const runtimeConfig = runtimeConfigStub({ maxCount: 1 });
-      runtimeConfig.patch = vi.fn(async () => false);
-      runtimeConfig.state.lastError = "config hash mismatch";
-      const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
-      page.context = contextWithConfig(
-        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-        runtimeConfig,
-      );
-      document.body.append(page);
-      await page.updateComplete;
-
-      page.setCleanupLimit("maxTotalSizeGb", 0.5);
-      expect(page.cleanupMaxSizeGb).toBe(0.5);
-      page.setCleanupLimit("maxCount", 5.7);
-      expect(page.cleanupMaxCount).toBe(5);
-      page.setCleanupLimit("maxCount", -5);
-      expect(page.cleanupMaxCount).toBe(0);
-
-      await vi.advanceTimersByTimeAsync(2_100);
-      expect(runtimeConfig.patch).toHaveBeenCalledWith({
-        raw: { worktrees: { cleanup: { maxCount: 0, maxTotalSizeGb: 0.5 } } },
-        note: "worktrees: update cleanup limits",
-      });
-      expect(page.error).toBe("config hash mismatch");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("uses the current branch when a repository has no remote default", async () => {
     const request = vi.fn((method: string) => {
       if (method === "worktrees.branches") {
@@ -720,11 +777,17 @@ describe("WorktreesPage lifecycle", () => {
     );
     page.createRepoRoot = "/tmp/repo";
     document.body.append(page);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
 
     page.loadCreateBranches();
 
-    await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    await waitForFast(() => expect(page.createBranches).toEqual(["main"]));
     expect(page.createBaseRef).toBe("main");
   });
 
@@ -746,11 +809,17 @@ describe("WorktreesPage lifecycle", () => {
     );
     page.createRepoRoot = "/tmp/repo";
     document.body.append(page);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.list",
+        {},
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
 
     page.loadCreateBranches();
     page.loadCreateBranches();
-    await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    await waitForFast(() => expect(page.createBranches).toEqual(["main"]));
     expect(page.createBaseRef).toBe("main");
 
     firstBranches.reject(new Error("stale branch failure"));

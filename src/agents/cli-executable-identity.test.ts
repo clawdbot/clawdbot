@@ -52,12 +52,47 @@ describe("CLI executable implementation identity", () => {
     });
 
     expect(first?.runtimeArtifact.kind).toBe("package-tree");
+    expect(first?.runtimeArtifact).toMatchObject({ packageVersion: "1.0.0" });
     expect(second?.runtimeArtifact.kind).toBe("package-tree");
     expect(second?.runtimeArtifact).not.toEqual(first?.runtimeArtifact);
     expect(second?.files.find((file) => file.path === fixture.entrypoint)).toEqual(
       first?.files.find((file) => file.path === fixture.entrypoint),
     );
   });
+
+  it.runIf(process.platform === "win32")(
+    "rejects mixed-case relative PATH entries and accepts mixed-case absolute entries",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-path-case-"));
+      tempDirs.push(root);
+      const binDir = path.join(root, "bin");
+      const executable = path.join(binDir, "mixed-identity.exe");
+      fs.mkdirSync(binDir);
+      fs.linkSync(process.execPath, executable);
+      const relativeBinDir = path.relative(process.cwd(), binDir);
+      const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
+        ...commandPackagePolicy,
+        nativeExecutableNames: ["mixed-identity.exe"],
+      };
+
+      expect(path.isAbsolute(relativeBinDir)).toBe(false);
+      await expect(
+        resolveCliExecutableIdentity({
+          command: "mixed-identity",
+          env: { pAtH: relativeBinDir, pAtHeXt: ".EXE" },
+          runtimeArtifact,
+        }),
+      ).resolves.toBeUndefined();
+
+      const identity = await resolveCliExecutableIdentity({
+        command: "mixed-identity",
+        env: { pAtH: binDir, pAtHeXt: ".EXE" },
+        runtimeArtifact,
+      });
+      expect(identity?.resolvedPath).toBe(fs.realpathSync(executable));
+      expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
+    },
+  );
 
   it("does not depend on host locale collation when ordering package files", async () => {
     const fixture = makePackage();
@@ -147,12 +182,12 @@ describe("CLI executable implementation identity", () => {
     expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
 
     if (process.platform !== "win32") {
-      const mixedCaseExecutable = path.join(root, "CLAUDE");
-      fs.copyFileSync(process.execPath, mixedCaseExecutable);
-      fs.chmodSync(mixedCaseExecutable, 0o755);
+      const unlistedExecutable = path.join(root, "other-cli");
+      fs.copyFileSync(process.execPath, unlistedExecutable);
+      fs.chmodSync(unlistedExecutable, 0o755);
       await expect(
         resolveCliExecutableIdentity({
-          command: mixedCaseExecutable,
+          command: unlistedExecutable,
           runtimeArtifact: {
             ...commandPackagePolicy,
             nativeExecutableNames: ["claude"],

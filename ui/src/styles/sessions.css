@@ -1,7 +1,7 @@
 /* ===========================================
    Sessions page
    Structure comes from the settings design language (settings.css). This file
-   keeps the sessions-specific escape hatches: overview grid, roster toolbar,
+   keeps the sessions-specific escape hatches: overview facts, roster toolbar,
    table cells, and the row drawer's flat interior.
    =========================================== */
 
@@ -12,93 +12,55 @@
   line-height: 1.45;
 }
 
-/* --- Overview grid (escape hatch inside one group) --- */
-.sessions-overview {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+/* Sessions is a scan-heavy workspace, so keep its section rhythm tighter than
+   form-heavy settings pages while preserving the shared control sizes. */
+.settings-page:has(.sessions-transcript-search) {
+  gap: var(--space-4);
 }
 
-.sessions-overview__tile {
+.settings-page:has(.sessions-transcript-search) > .settings-section {
+  gap: var(--space-2);
+}
+
+/* --- Compact overview facts stay attached to the Sessions heading. --- */
+.settings-section__heading:has(.sessions-heading-facts) {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 11px;
-  min-width: 0;
+  gap: var(--space-2);
 }
 
-.sessions-overview__icon {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
+.sessions-heading-facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
   color: var(--muted);
-  background: var(--bg-hover);
-  border-radius: var(--radius-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
-.sessions-overview__icon svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sessions-overview__meta {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.sessions-overview__value {
-  overflow: hidden;
+.sessions-heading-fact strong {
   color: var(--text-strong);
   font-family: var(--mono);
-  font-size: 17px;
   font-weight: 700;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.sessions-overview__label {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__icon,
-.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__value {
+.sessions-heading-fact--active,
+.sessions-heading-fact--active strong {
   color: var(--ok);
 }
 
-.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__icon {
-  background: var(--ok-subtle);
-}
-
-.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon,
-.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__value {
-  color: var(--accent-2);
-}
-
-.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon {
-  background: var(--accent-2-subtle);
+.sessions-heading-fact__separator {
+  color: var(--border-strong);
 }
 
 /* --- Transcript search: server-backed message content, separate from roster filters --- */
 .sessions-transcript-search {
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
 .sessions-transcript-search__form {
@@ -169,7 +131,7 @@
   text-align: left;
   background: transparent;
   border: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -215,8 +177,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
@@ -243,15 +205,6 @@
   padding-left: 30px;
 }
 
-.sessions-toolbar__divider {
-  align-self: center;
-  width: 1px;
-  height: 20px;
-  flex: 0 0 auto;
-  background: var(--border);
-}
-
-.session-filter-primary-row,
 .session-filter-toggle-group {
   display: inline-flex;
   flex-wrap: wrap;
@@ -265,16 +218,16 @@
   gap: var(--space-1);
   height: 30px;
   box-sizing: border-box;
-  padding: 0 4px 0 10px;
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding: 0 4px 0 8px;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   transition: border-color var(--duration-fast) ease;
 }
 
 .session-filter-field:focus-within {
   border-color: var(--border-strong);
-  box-shadow: var(--focus-ring);
+  background: var(--bg-hover);
 }
 
 .session-filter-label,
@@ -318,9 +271,9 @@
   gap: var(--space-1);
   height: 30px;
   box-sizing: border-box;
-  padding: 0 11px;
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding: 0 8px;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   user-select: none;
   transition:
@@ -335,7 +288,7 @@
 }
 
 .session-filter-check--active {
-  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
   background: var(--accent-subtle);
 }
 
@@ -382,6 +335,73 @@
   color: var(--text);
 }
 
+.sessions-filter-popover {
+  --max-width: min(280px, calc(100vw - 48px));
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.sessions-filter-popover::part(body) {
+  padding: 0;
+}
+
+.sessions-filter-popover__trigger {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 0;
+}
+
+.sessions-filter-popover__trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sessions-filter-popover__panel {
+  display: grid;
+  width: min(280px, calc(100vw - 48px));
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--overlay-shadow);
+}
+
+.sessions-filter-popover__fields {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.sessions-filter-popover__panel .session-filter-field {
+  width: 100%;
+  justify-content: space-between;
+  background: var(--bg);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.sessions-filter-popover__panel .session-filter-toggle-group,
+.sessions-filter-popover__panel .session-groupby {
+  width: 100%;
+}
+
+.sessions-filter-popover__panel .session-filter-check {
+  flex: 1 1 0;
+  justify-content: center;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.sessions-filter-popover__panel .session-groupby {
+  justify-content: space-between;
+}
+
+.sessions-filter-popover__panel .session-groupby__select {
+  flex: 1 1 auto;
+  background: var(--bg);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
 .session-groupby {
   display: inline-flex;
   flex: 0 0 auto;
@@ -399,8 +419,8 @@
   height: 30px;
   padding: 0 8px;
   color: var(--text);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   font-size: var(--control-ui-text-sm);
 }
@@ -410,17 +430,9 @@
   min-width: 760px;
 }
 
-.sessions-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
+.sessions-table th,
+.sessions-table td {
+  padding-block: var(--space-2);
 }
 
 .sessions-table tbody tr.session-data-row > td {
@@ -430,6 +442,17 @@
 .session-data-row--expandable:focus-visible {
   outline: 1px solid var(--border-strong);
   outline-offset: -2px;
+}
+
+.session-data-row--archived {
+  opacity: 0.62;
+}
+
+.session-data-row--archived:hover,
+.session-data-row--archived:focus-visible,
+.session-data-row--archived.session-data-row--expanded,
+.session-data-row--archived.session-data-row--menu-open {
+  opacity: 0.82;
 }
 
 /* Keep the expanded row visually attached to its drawer. */
@@ -501,7 +524,7 @@
 
 .session-avatar--group {
   color: var(--info);
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--info-subtle);
 }
 
 .session-avatar--global {
@@ -885,8 +908,8 @@
 
 .session-details-panel {
   display: grid;
-  gap: var(--space-4);
-  padding: var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-3);
   border-top: 1px solid var(--border);
 }
 
@@ -931,8 +954,8 @@
 
 .session-details-section {
   display: grid;
-  gap: var(--space-3);
-  padding-top: var(--space-3);
+  gap: var(--space-2);
+  padding-top: var(--space-2);
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
@@ -971,8 +994,8 @@
 .session-details-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
-  gap: var(--space-3);
-  padding-top: var(--space-3);
+  gap: var(--space-2);
+  padding-top: var(--space-2);
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
@@ -1051,12 +1074,7 @@
 }
 
 /* --- Narrow layouts --- */
-@media (max-width: 760px) {
-  .sessions-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-2);
-  }
-
+@media (max-width: 768px) {
   .sessions-toolbar {
     align-items: stretch;
   }
@@ -1077,11 +1095,6 @@
     flex-basis: 100%;
   }
 
-  .sessions-toolbar__divider {
-    display: none;
-  }
-
-  .session-filter-primary-row,
   .session-filter-toggle-group,
   .session-groupby {
     width: 100%;
@@ -1099,5 +1112,11 @@
 
   .session-groupby__select {
     flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .sessions-filter-popover__trigger {
+    margin-left: auto;
   }
 }

@@ -13,6 +13,7 @@ import {
 } from "../skills/discovery/status.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 
 /** Options for rendering the skill list command. */
 export type SkillsListOptions = {
@@ -36,7 +37,8 @@ function appendClawHubHint(output: string, json?: boolean): string {
   if (json) {
     return output;
   }
-  return `${output}\n\nTip: use \`openclaw skills search\`, \`openclaw skills install\`, and \`openclaw skills update\` for ClawHub-backed skills.`;
+  const command = formatCliCommand("openclaw skills");
+  return `${output}\n\nTip: use \`${command} search\`, \`${command} install\`, and \`${command} update\` for ClawHub-backed skills.`;
 }
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
@@ -203,7 +205,10 @@ export function formatSkillInfo(
   if (!skill) {
     if (opts.json) {
       return JSON.stringify(
-        sanitizeJsonValue({ error: "not found", skill: requestedName }),
+        sanitizeJsonValue({
+          ...formatCliJsonFailure(`Skill "${requestedName}" not found.`),
+          skill: requestedName,
+        }),
         null,
         2,
       );
@@ -432,7 +437,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
     if (commandVisible.length > 0) {
       lines.push(
-        `  ${theme.muted("Available as command:")} people, scripts, or cron jobs can call the skill explicitly.`,
+        `  ${theme.muted("Available as command:")} people, scripts, or automations can call the skill explicitly.`,
       );
     }
     if (promptHidden.length > 0) {

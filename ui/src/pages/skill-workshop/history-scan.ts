@@ -1,11 +1,9 @@
 import { html, nothing } from "lit";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { SkillWorkshopHistoryScanResult, SkillWorkshopHistoryScanState } from "./state.ts";
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 type SkillWorkshopHistoryStatusLoadParams = {
   agentId: string;
@@ -38,7 +36,7 @@ export async function loadSkillWorkshopHistoryScanStatus(
   }
   if (
     !client ||
-    !params.gateway.snapshot.connected ||
+    params.gateway.snapshot.phase !== "connected" ||
     params.state.running ||
     (params.state.loaded && !params.force)
   ) {
@@ -57,7 +55,11 @@ export async function loadSkillWorkshopHistoryScanStatus(
         const pendingBeforeRequest = queue.pending;
         queue.pending = null;
         const currentClient = current.gateway.snapshot.client;
-        if (currentClient && current.gateway.snapshot.connected && !current.state.running) {
+        if (
+          currentClient &&
+          current.gateway.snapshot.phase === "connected" &&
+          !current.state.running
+        ) {
           current.state.error = null;
           try {
             current.state.result = await currentClient.request<SkillWorkshopHistoryScanResult>(
@@ -66,7 +68,7 @@ export async function loadSkillWorkshopHistoryScanStatus(
             );
             current.state.loaded = true;
           } catch (error) {
-            current.state.error = getErrorMessage(error);
+            current.state.error = formatUiError(error);
             // Loaded means this scope attempted a read. A scan action can still
             // force a retry because the result remains absent.
             current.state.loaded = true;
@@ -90,12 +92,20 @@ export async function loadSkillWorkshopHistoryScanStatus(
 export async function runSkillWorkshopHistoryScan(params: {
   agentId: string;
   gateway: ApplicationGateway;
+  isCurrent?: () => boolean;
   state: SkillWorkshopHistoryScanState;
 }): Promise<boolean> {
-  let client = params.gateway.snapshot.client;
+  if (
+    !canCallGatewayMethod(params.gateway.snapshot, "skills.proposals.historyScan", "operator.admin")
+  ) {
+    return false;
+  }
+  const client = params.gateway.snapshot.client;
+  const isCurrent = params.isCurrent ?? (() => params.gateway.snapshot.client === client);
   if (
     !client ||
-    !params.gateway.snapshot.connected ||
+    !isCurrent() ||
+    params.gateway.snapshot.phase !== "connected" ||
     params.state.running ||
     params.state.loading
   ) {
@@ -106,8 +116,15 @@ export async function runSkillWorkshopHistoryScan(params: {
     if (!params.state.result) {
       return false;
     }
-    client = params.gateway.snapshot.client;
-    if (!client || !params.gateway.snapshot.connected) {
+    if (
+      !isCurrent() ||
+      params.gateway.snapshot.client !== client ||
+      !canCallGatewayMethod(
+        params.gateway.snapshot,
+        "skills.proposals.historyScan",
+        "operator.admin",
+      )
+    ) {
       return false;
     }
   }
@@ -126,7 +143,7 @@ export async function runSkillWorkshopHistoryScan(params: {
     params.state.loaded = true;
     return true;
   } catch (error) {
-    const scanError = getErrorMessage(error);
+    const scanError = formatUiError(error);
     try {
       params.state.result = await client.request<SkillWorkshopHistoryScanResult>(
         "skills.proposals.historyStatus",
@@ -171,6 +188,7 @@ function actionLabel(state: SkillWorkshopHistoryScanState): string {
 
 export function renderSkillWorkshopHistoryScan(params: {
   state: SkillWorkshopHistoryScanState;
+  canScan: boolean;
   onScan: () => void;
 }) {
   const result = params.state.result;
@@ -213,7 +231,7 @@ export function renderSkillWorkshopHistoryScan(params: {
       <div class="sw-history__action">
         <button
           class="sw-btn sw-btn--primary"
-          ?disabled=${params.state.running || params.state.loading}
+          ?disabled=${!params.canScan || params.state.running || params.state.loading}
           @click=${params.onScan}
         >
           ${params.state.loading ? t("skillWorkshop.history.loading") : actionLabel(params.state)}

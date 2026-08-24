@@ -1,13 +1,7 @@
-// Discord plugin module implements narrow inbound dispatch retry behavior.
-import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
-
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
-const DISCORD_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 1_000, 2_500] as const;
 const DISCORD_SESSION_CONFLICT_FAILURE_TEXT =
   "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.";
 
-type AsyncDispatch<TParams, TResult> = (params: TParams) => Promise<TResult>;
 type TerminalFailureDelivery = (
   payload: { text: string; isError: true },
   info: { kind: "final" },
@@ -19,63 +13,12 @@ function isReplySessionInitConflictError(error: unknown): boolean {
   return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
 }
 
-class DiscordReplySessionConflictExhaustedError extends DiscordRetryableInboundError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "DiscordReplySessionConflictExhaustedError";
-  }
-}
-
-async function dispatchDiscordReplyWithSessionConflictRetry<T>(params: {
-  dispatch: () => Promise<T>;
-  abortSignal?: AbortSignal;
-  onRetry?: (attempt: number, delayMs: number) => void;
-}): Promise<T> {
-  for (let retryIndex = 0; ; retryIndex += 1) {
-    try {
-      return await params.dispatch();
-    } catch (error) {
-      if (!isReplySessionInitConflictError(error)) {
-        throw error;
-      }
-      const delayMs = DISCORD_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS[retryIndex];
-      if (delayMs === undefined) {
-        const message = error instanceof Error ? error.message : String(error);
-        // Let the caller either complete with a visible terminal notice or
-        // reopen replay ownership when that notice cannot land.
-        throw new DiscordReplySessionConflictExhaustedError(
-          `discord: reply session init conflict persisted after shared and channel retries: ${message}`,
-          { cause: error },
-        );
-      }
-      params.onRetry?.(retryIndex + 1, delayMs);
-      await sleepWithAbort(delayMs, params.abortSignal);
-    }
-  }
-}
-
-export function withDiscordSessionRetry<TParams, TResult>(
-  dispatch: AsyncDispatch<TParams, TResult>,
-  abortSignal: AbortSignal | undefined,
-): AsyncDispatch<TParams, TResult> {
-  return (dispatchParams) =>
-    dispatchDiscordReplyWithSessionConflictRetry({
-      dispatch: () => dispatch(dispatchParams),
-      abortSignal,
-      onRetry: (attempt, delayMs) => {
-        logVerbose(
-          `discord: reply session init conflict; retrying dispatch ${attempt} after ${delayMs}ms`,
-        );
-      },
-    });
-}
-
 export async function completeDiscordSessionConflict(
   error: unknown,
   deliver: TerminalFailureDelivery,
   onDeliveryError: DeliveryErrorHandler,
 ): Promise<boolean> {
-  if (!(error instanceof DiscordReplySessionConflictExhaustedError)) {
+  if (!isReplySessionInitConflictError(error)) {
     return false;
   }
   try {
@@ -87,7 +30,10 @@ export async function completeDiscordSessionConflict(
   } catch (deliveryError) {
     // Keep the conflict retryable when its visible terminal notice cannot land.
     onDeliveryError(deliveryError, { kind: "final" });
-    return false;
+    throw new Error(
+      `discord: reply session init conflict exhausted and terminal notice failed: ${String(deliveryError)}`,
+      { cause: deliveryError },
+    );
   }
 }
 

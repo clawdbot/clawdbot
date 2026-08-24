@@ -4,8 +4,12 @@
  */
 
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
 const ZALO_API_URL_ENV = "ZALO_API_URL";
@@ -137,12 +141,11 @@ export async function callZaloApi<T = unknown>(
 ): Promise<ZaloApiResponse<T>> {
   const url = `${resolveZaloApiUrl(options?.apiUrl)}/bot${token}/${method}`;
   const controller = new AbortController();
-  const requestTimeoutMs =
-    options?.timeoutMs === undefined ? undefined : resolveTimerTimeoutMs(options.timeoutMs, 1);
-  const timeoutId =
-    requestTimeoutMs === undefined
-      ? undefined
-      : setTimeout(() => controller.abort(), requestTimeoutMs);
+  const requestTimeoutMs = resolveTimerTimeoutMs(
+    options?.timeoutMs,
+    ZALO_DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+  const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
   const fetcher = options?.fetch ?? fetch;
 
   try {
@@ -155,6 +158,7 @@ export async function callZaloApi<T = unknown>(
       signal: controller.signal,
     });
 
+    await assertOkOrThrowProviderError(response, `zalo.${method}`);
     const data = await readProviderJsonResponse<ZaloApiResponse<T>>(response, `zalo.${method}`);
 
     if (!data.ok) {
@@ -167,9 +171,7 @@ export async function callZaloApi<T = unknown>(
 
     return data;
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
+    clearTimeout(timeoutId);
   }
 }
 
@@ -223,7 +225,12 @@ export async function sendPhoto(
     "sendPhoto",
     token,
     { ...params, photo: parsedPhotoUrl.href },
-    { fetch: fetcher },
+    {
+      // Zalo receives a URL-only JSON body and may resolve that URL before replying.
+      // Wait through the hosted-media lifetime plus normal response-processing grace.
+      timeoutMs: ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS,
+      fetch: fetcher,
+    },
   );
 }
 

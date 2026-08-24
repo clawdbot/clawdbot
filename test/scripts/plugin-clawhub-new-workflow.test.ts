@@ -256,6 +256,8 @@ describe("Plugin ClawHub New workflow", () => {
     expect(binding).toContain("--clawhub-toolchain-integrity");
     expect(binding).toContain("--clawhub-toolchain-sha256");
     expect(binding).toContain("--clawhub-toolchain-version");
+    expect(binding).toContain('--workflow-head-branch "${WORKFLOW_HEAD_BRANCH}"');
+    expect(binding).toContain('--workflow-ref "${WORKFLOW_REF}"');
   });
 
   it("rehashes and validates tgz identity before exposing the token", () => {
@@ -332,6 +334,8 @@ describe("Plugin ClawHub New workflow", () => {
       version: "0.23.1",
     });
     expect(materializerSource).toContain("npm ci");
+    expect(materializerSource).toContain('cd "${destination}"');
+    expect(materializerSource).not.toContain('--prefix "${destination}"');
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
     expect(materializerSource).toContain(

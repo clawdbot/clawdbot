@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 enum OpenClawChatTypography {
@@ -35,6 +37,14 @@ enum OpenClawChatTypography {
     static var body: Font {
         body(size: self.bodySize, weight: .regular, relativeTo: .body)
     }
+
+    #if os(iOS)
+    static var bodyUIFont: UIFont {
+        let base = UIFont(name: self.bodyPostScriptName, size: self.bodySize) ??
+            UIFont.systemFont(ofSize: self.bodySize)
+        return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
+    }
+    #endif
 
     static var footnote: Font {
         body(size: 13, weight: .regular, relativeTo: .footnote)

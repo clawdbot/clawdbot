@@ -70,7 +70,7 @@ describe("Signal approval native runtime", () => {
       accountId: "default",
       baseUrl: "http://127.0.0.1:18080",
       account: "+15550001111",
-      textMode: "plain",
+      textMode: "markdown",
     });
   });
 
@@ -120,7 +120,7 @@ describe("Signal approval native runtime", () => {
       accountId: "default",
       baseUrl: "http://127.0.0.1:18080",
       account: "+15550001111",
-      textMode: "plain",
+      textMode: "markdown",
     });
   });
 
@@ -163,7 +163,7 @@ describe("Signal approval native runtime", () => {
       accountId: "work",
       baseUrl: "http://127.0.0.1:18080",
       account: "+15550001111",
-      textMode: "plain",
+      textMode: "markdown",
     });
   });
 

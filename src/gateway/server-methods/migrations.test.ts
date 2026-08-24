@@ -302,17 +302,15 @@ describe("memory migration gateway handlers", () => {
     expect(mocks.runMigrationApply).not.toHaveBeenCalled();
   });
 
-  it("allows volatile provider diagnostics to change after preview", async () => {
+  it.each([
+    ["metadata", (plan: MigrationPlan) => (plan.metadata = { revision: "new" })],
+    ["warnings", (plan: MigrationPlan) => (plan.warnings = ["updated warning"])],
+    ["item message", (plan: MigrationPlan) => (plan.items[0]!.message = "updated message")],
+  ])("rejects apply when plan %s changes after preview", async (_field, mutatePlan) => {
     const plan = memoryPlan();
     mocks.providers = [provider(plan)];
-    const applied = memoryPlan();
-    applied.items = [applied.items[0]!];
-    applied.summary.total = 1;
-    mocks.runMigrationApply.mockResolvedValue(applied);
     const planFingerprint = await loadPlanFingerprint();
-    plan.warnings = ["updated diagnostic"];
-    plan.nextSteps = ["updated next step"];
-    plan.metadata = { plannedAt: Date.now() };
+    mutatePlan(plan);
     const request = invoke("migrations.memory.apply", {
       agentId: "research",
       providerId: "codex",
@@ -322,8 +320,10 @@ describe("memory migration gateway handlers", () => {
 
     await request.run();
 
-    expect(firstCall(request.respond)[0]).toBe(true);
-    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
+    const [ok, , error] = firstCall(request.respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("plan changed");
+    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
   });
 
   it("rejects stale item ids from a freshly rebuilt apply plan", async () => {

@@ -43,11 +43,19 @@ type MatrixReactionClient = MatrixReactionParams["client"];
 type MatrixReactionCore = MatrixReactionParams["core"];
 type MatrixReactionEvent = MatrixReactionParams["event"];
 
-vi.mock("../../exec-approval-resolver.js", () => ({
-  isApprovalNotFoundError: (err: unknown) =>
-    err instanceof Error && /unknown or expired approval id/i.test(err.message),
-  resolveMatrixApproval: (...args: unknown[]) => resolveMatrixApproval(...args),
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: (...args: unknown[]) => resolveMatrixApproval(...args),
 }));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: (err: unknown) =>
+      err instanceof Error && /unknown or expired approval id/i.test(err.message),
+  };
+});
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: (...args: unknown[]) => editMessageMatrix(...args),
@@ -190,6 +198,8 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -259,6 +269,8 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "deny",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -286,6 +298,8 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -321,6 +335,8 @@ describe("matrix approval reactions", () => {
       approvalId: "plugin:req-123",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();

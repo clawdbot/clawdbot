@@ -1,12 +1,14 @@
 /** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
@@ -31,12 +33,13 @@ import {
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import { resolveExecAutoReviewDecision, type ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
+  isBlockedShellWrapperCommand,
   isShellWrapperInvocation,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
@@ -44,10 +47,14 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
+import {
+  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+  normalizeSystemRunApprovalPlan,
+  revalidateApprovedMutableFileOperand,
+  resolveMutableFileOperandSnapshotSync,
+} from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { NodeHostClient } from "./client.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
@@ -59,8 +66,6 @@ import {
 import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
-  revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
 import type {
@@ -145,13 +150,14 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
 };
 
-const safeBinTrustedDirWarningCache = new Set<string>();
+const safeBinTrustedDirWarningCache = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
-const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
-  "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval state could not be persisted";
 type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
@@ -166,10 +172,9 @@ type EffectiveSystemRunExecPolicy = {
 };
 
 function warnWritableTrustedDirOnce(message: string): void {
-  if (safeBinTrustedDirWarningCache.has(message)) {
+  if (safeBinTrustedDirWarningCache.check(message)) {
     return;
   }
-  safeBinTrustedDirWarningCache.add(message);
   logWarn(message);
 }
 
@@ -194,14 +199,7 @@ function resolveAgentExecConfig(
   if (!agentId) {
     return undefined;
   }
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const entry = cfg.agents?.list?.find(
-    (candidate) =>
-      candidate !== null &&
-      typeof candidate === "object" &&
-      normalizeAgentId(candidate.id) === normalizedAgentId,
-  );
-  return entry?.tools?.exec;
+  return resolveAgentConfig(cfg, agentId)?.tools?.exec;
 }
 
 /** Resolves the effective exec security/ask policy for one system.run request. */
@@ -266,6 +264,7 @@ type HandleSystemRunInvokeOptions = {
   client: NodeHostClient;
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
+  signal?: AbortSignal;
   execHostEnforced: boolean;
   execHostFallbackAllowed: boolean;
   resolveExecSecurity: (value?: string) => ExecSecurity;
@@ -277,6 +276,7 @@ type HandleSystemRunInvokeOptions = {
     cwd: string | undefined,
     env: Record<string, string> | undefined,
     timeoutMs: number | undefined,
+    signal?: AbortSignal,
   ) => Promise<RunResult>;
   runViaMacAppExecHost: (params: {
     approvals: ExecApprovalsResolved;
@@ -697,11 +697,15 @@ async function evaluateSystemRunPolicyPhase(
       parsed.shellPayload !== null || argvArraysMatch(autoReviewSegment?.argv, parsed.argv);
     const autoReviewArgv =
       segments.length === 1 &&
+      autoReviewSegment !== undefined &&
+      autoReviewSegment.resolution?.policyBlocked !== true &&
+      // Check the reviewed inner command so safe node transport remains usable.
+      !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
       directAutoReviewArgvMatchesRequest &&
       (parsed.shellPayload === null ||
-        (autoReviewSegment?.raw !== undefined &&
+        (autoReviewSegment.raw !== undefined &&
           autoReviewSegment.raw.trim() === parsed.shellPayload.trim()))
-        ? autoReviewSegment?.argv
+        ? autoReviewSegment.argv
         : undefined;
     const canAutoReviewApprovalMiss =
       !fallbackRequest &&
@@ -721,7 +725,7 @@ async function evaluateSystemRunPolicyPhase(
         agentExec,
         globalExec,
       });
-      const decision = await reviewer({
+      const decision = await resolveExecAutoReviewDecision(reviewer, {
         command: parsed.commandText,
         argv: autoReviewArgv,
         cwd: parsed.cwd,
@@ -978,6 +982,9 @@ async function executeSystemRunPhase(
       approvals: phase.approvals,
       request: execRequest,
     });
+    if (opts.signal?.aborted) {
+      return;
+    }
     if (!response) {
       if (opts.execHostEnforced || !opts.execHostFallbackAllowed) {
         await sendSystemRunDenied(opts, phase.execution, {
@@ -1066,7 +1073,15 @@ async function executeSystemRunPhase(
     return;
   }
 
-  const result = await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs);
+  if (opts.signal?.aborted) {
+    return;
+  }
+  const result = await (opts.signal
+    ? opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs, opts.signal)
+    : opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs));
+  if (opts.signal?.aborted) {
+    return;
+  }
   applyOutputTruncation(result);
   await sendSystemRunCompleted(
     opts,
@@ -1085,12 +1100,15 @@ async function executeSystemRunPhase(
 
 /** Executes a validated system.run request, emitting lifecycle events and approvals. */
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
+  if (opts.signal?.aborted) {
+    return;
+  }
   const parsed = await parseSystemRunPhase(opts);
-  if (!parsed) {
+  if (!parsed || opts.signal?.aborted) {
     return;
   }
   const policyPhase = await evaluateSystemRunPolicyPhase(opts, parsed);
-  if (!policyPhase) {
+  if (!policyPhase || opts.signal?.aborted) {
     return;
   }
   await executeSystemRunPhase(opts, policyPhase);

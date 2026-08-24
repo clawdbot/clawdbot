@@ -69,6 +69,7 @@ describe("scripts/ci-live-command-retry.sh", () => {
   it.each([
     ["provider HTTP 500", "xAI image edit failed (HTTP 500): Please try again later"],
     ["live test timeout", "Error: Test timed out in 45000ms."],
+    ["live terminal timeout", "Error: terminal timeout after 300000ms"],
   ])("retries a transient %s", (_label, message) => {
     const { commandPath, counterPath } = writeCommand("openclaw-ci-live-transient-", [
       'attempts="$(cat "$OPENCLAW_RETRY_TEST_COUNTER" 2>/dev/null || printf 0)"',

@@ -28,14 +28,19 @@ vi.mock("jiti/static", () => ({
 }));
 
 const tempDirs: string[] = [];
-let preloadedLoadExtensions: typeof import("./loader.js").loadExtensions;
+let preloadedClearExtensionCache: typeof import("./loader.js").clearExtensionCache;
+let preloadedLoadExtensionsCached: typeof import("./loader.js").loadExtensionsCached;
 
 beforeAll(async () => {
-  preloadedLoadExtensions = (await import("./loader.js")).loadExtensions;
+  ({
+    clearExtensionCache: preloadedClearExtensionCache,
+    loadExtensionsCached: preloadedLoadExtensionsCached,
+  } = await import("./loader.js"));
 });
 
 beforeEach(() => {
   vi.resetModules();
+  preloadedClearExtensionCache();
   jitiCalls.imports.length = 0;
   jitiCalls.options.length = 0;
 });
@@ -44,9 +49,9 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
 });
 
-describe("loadExtensions native JavaScript path", () => {
+describe("loadExtensionsCached native JavaScript path", () => {
   it("loads compiled JavaScript extensions without creating a jiti loader", async () => {
-    const loadExtensions = preloadedLoadExtensions;
+    const loadExtensionsCached = preloadedLoadExtensionsCached;
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.mjs");
@@ -62,7 +67,7 @@ export default async function extension(api) {
 `,
     );
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -72,9 +77,9 @@ export default async function extension(api) {
   });
 
   it("reloads native JavaScript extensions when the file changes without stat-key drift", async () => {
-    // Native dynamic imports use a content-aware cache key so same-size,
-    // same-mtime edits still reload the extension module.
-    const { loadExtensions } = await import("./loader.js");
+    // Explicit reload clears the factory cache. Native imports still need a
+    // fresh URL so same-size, same-mtime edits are observed.
+    const { clearExtensionCache, loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.cjs");
@@ -97,12 +102,13 @@ module.exports = async function(api) {
     expect(afterSource).toHaveLength(beforeSource.length);
     await writeFile(extensionPath, beforeSource);
 
-    const before = await loadExtensions([extensionPath], dir);
+    const before = await loadExtensionsCached([extensionPath], dir);
     const beforeStat = await stat(extensionPath);
 
     await writeFile(extensionPath, afterSource);
     await utimes(extensionPath, beforeStat.atime, beforeStat.mtime);
-    const after = await loadExtensions([extensionPath], dir);
+    clearExtensionCache();
+    const after = await loadExtensionsCached([extensionPath], dir);
 
     expect(before.errors).toEqual([]);
     expect(before.extensions[0]?.commands.has("native-reload-one")).toBe(true);
@@ -112,7 +118,7 @@ module.exports = async function(api) {
   });
 
   it("loads transpiled CommonJS default exports through the native path", async () => {
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.cjs");
@@ -128,7 +134,7 @@ exports.default = async function(api) {
 `,
     );
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -137,7 +143,7 @@ exports.default = async function(api) {
   });
 
   it("keeps CommonJS-shaped .js extensions on jiti", async () => {
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     await writeFile(join(dir, "package.json"), '{"type":"module"}\n');
@@ -154,7 +160,7 @@ module.exports = async function(api) {
 `,
     );
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -163,7 +169,7 @@ module.exports = async function(api) {
   });
 
   it("keeps plain ESM .js extensions on jiti", async () => {
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.js");
@@ -179,7 +185,7 @@ export default async function extension(api) {
 `,
     );
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -190,7 +196,7 @@ export default async function extension(api) {
   it("keeps SDK-alias JavaScript extensions on one shared jiti loader", async () => {
     // SDK aliases need jiti's virtual resolution, but one shared loader keeps
     // multi-extension imports consistent and cheap.
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const firstPath = join(dir, "first.js");
@@ -207,7 +213,7 @@ module.exports = async function(api) {
     await writeFile(firstPath, source);
     await writeFile(secondPath, source);
 
-    const result = await loadExtensions([firstPath, secondPath], dir);
+    const result = await loadExtensionsCached([firstPath, secondPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(2);
@@ -216,7 +222,7 @@ module.exports = async function(api) {
   });
 
   it("keeps TypeBox-alias JavaScript extensions on jiti", async () => {
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.js");
@@ -233,7 +239,7 @@ module.exports = async function(api) {
 `,
     );
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -244,7 +250,7 @@ module.exports = async function(api) {
   it("keeps multi-file JavaScript extensions on jiti for graph-wide aliases", async () => {
     // Alias detection walks relative helper files; a clean entrypoint can still
     // need jiti when its dependency graph imports SDK/TypeBox aliases.
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.js");
@@ -262,7 +268,7 @@ module.exports = async function(api) {
     );
     await writeFile(join(dir, "helper.js"), 'require("typebox");\n');
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -271,7 +277,7 @@ module.exports = async function(api) {
   });
 
   it("keeps ESM re-export JavaScript extensions on jiti for graph-wide aliases", async () => {
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     await writeFile(join(dir, "package.json"), '{"type":"module"}\n');
@@ -290,7 +296,7 @@ export default async function extension(api) {
     );
     await writeFile(join(dir, "helper.js"), 'import "typebox"; export const helper = true;\n');
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -299,7 +305,7 @@ export default async function extension(api) {
   });
 
   it("keeps minified ESM relative imports on jiti for graph-wide aliases", async () => {
-    const { loadExtensions } = await import("./loader.js");
+    const { loadExtensionsCached } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.mjs");
@@ -309,7 +315,7 @@ export default async function extension(api) {
     );
     await writeFile(join(dir, "helper.mjs"), 'import "typebox"; export const helper = true;\n');
 
-    const result = await loadExtensions([extensionPath], dir);
+    const result = await loadExtensionsCached([extensionPath], dir);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);

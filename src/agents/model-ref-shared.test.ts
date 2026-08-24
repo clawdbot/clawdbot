@@ -1,20 +1,18 @@
 // Documents provider/model id normalization from built-ins and plugin manifests.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,
 } from "./model-ref-shared.js";
 
 beforeEach(() => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 afterEach(() => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 describe("normalizeStaticProviderModelId", () => {

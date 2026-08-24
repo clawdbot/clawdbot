@@ -18,6 +18,8 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  redactExecApprovals,
+  resolveExecApprovalsFromFile,
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
@@ -26,9 +28,9 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-comma
 import type { NodeSession } from "../node-registry.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
-  respondUnavailableOnNodeInvokeError,
+  respondUnavailableOnNodeInvokeErrorWithProvenance,
   respondUnavailableOnThrow,
-  safeParseJson,
+  parseGatewayPayload,
 } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
@@ -88,22 +90,10 @@ function respondApprovalsChanged(respond: RespondFn): void {
   );
 }
 
-function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
-  const socketPath = file.socket?.path?.trim();
-  // The socket token/defaults are runtime-only; expose only the path needed by
-  // the editor so GET responses cannot leak connection material.
-  return {
-    ...file,
-    socket: socketPath ? { path: socketPath } : undefined,
-  };
-}
-
 function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
   return {
-    path: snapshot.path,
-    exists: snapshot.exists,
-    hash: snapshot.hash,
-    file: redactExecApprovals(snapshot.file),
+    ...redactExecApprovals(snapshot),
+    resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults,
   };
 }
 
@@ -164,12 +154,28 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
     }
   }
   await respondUnavailableOnThrow(params.respond, async () => {
+    let nodeCommandDispatched = false;
     const res = await params.context.nodeRegistry.invoke({
       nodeId,
+      ...(nodeSession
+        ? {
+            expectedConnId: nodeSession.connId,
+            ...(nodeSession.pairingGeneration
+              ? { expectedPairingGeneration: nodeSession.pairingGeneration }
+              : {}),
+          }
+        : {}),
       command: params.command,
       params: params.commandParams(parsedParams, nodeSession),
+      onDispatchReady: () => {
+        nodeCommandDispatched = true;
+      },
     });
-    if (!respondUnavailableOnNodeInvokeError(params.respond, res)) {
+    if (
+      !respondUnavailableOnNodeInvokeErrorWithProvenance(params.respond, res, {
+        nodeCommandDispatched,
+      })
+    ) {
       return;
     }
     const payload = params.readPayload(res);
@@ -243,7 +249,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         isMacAppNode(nodeSession) ? { includeResolvedDefaults: true } : {},
       // Node invocations can return structured payloads or JSON strings
       // depending on the transport; normalize before echoing the RPC response.
-      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
+      readPayload: (res) => (res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload),
       validatePayload: validateExecApprovalsNodeSnapshot,
     });
   },
@@ -261,7 +267,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         "native" in parsedParams
           ? { ...parsedParams.native, baseHash: parsedParams.baseHash }
           : { file: parsedParams.file, baseHash: parsedParams.baseHash },
-      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
+      readPayload: (res) => (res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload),
     });
   },
 };

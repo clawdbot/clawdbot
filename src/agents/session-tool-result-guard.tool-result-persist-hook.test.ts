@@ -508,6 +508,11 @@ describe("tool_result_persist hook", () => {
         fullOutputPath: "/tmp/".concat("output/".repeat(400)),
         spilledChars: 2_000_000,
         spillTruncated: true,
+        spill: {
+          path: "/tmp/web-fetch-output",
+          chars: 2_000_000,
+          truncated: true,
+        },
         aggregated: "x".repeat(120_000),
         tail: "tail ".repeat(800),
         sessions: Array.from({ length: 10 }, (_, i) => ({
@@ -526,6 +531,11 @@ describe("tool_result_persist hook", () => {
     expect(details.status).toMatchObject({ token: "***" });
     expect(details.spilledChars).toBe(2_000_000);
     expect(details.spillTruncated).toBe(true);
+    expect(details.spill).toEqual({
+      path: "/tmp/web-fetch-output",
+      chars: 2_000_000,
+      truncated: true,
+    });
     expect(serialized).not.toContain(tokenValue);
   });
 

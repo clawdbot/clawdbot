@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import {
   migrateSessionEntries,
@@ -41,10 +42,6 @@ interface SessionData {
 
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boolean): boolean {
   return (
@@ -259,7 +256,10 @@ function formatSkippedRows(count: number): string {
 }
 
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
-  const rows = summary.rows.length > 0 ? ` rows ${summary.rows.join(", ")}` : "";
+  const rows =
+    summary.rows.length > 0
+      ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
+      : "";
   const verb = summary.count === 1 ? "was" : "were";
   switch (summary.code) {
     case "invalid-session-json":

@@ -1,5 +1,5 @@
 // Covers runtime group-policy resolution from config and context.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -62,5 +62,42 @@ describe("warnMissingProviderGroupPolicyFallbackOnce", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("channels.runtime-policy-test is missing");
     expect(lines[0]).toContain("room messages blocked");
+  });
+
+  describe("warning dedupe cache bounds", () => {
+    let warnOnceFn: typeof warnMissingProviderGroupPolicyFallbackOnce;
+
+    // Fresh module instance so the module-level cache starts empty for this block.
+    beforeEach(async () => {
+      vi.resetModules();
+      const mod = await import("./runtime-group-policy.js");
+      warnOnceFn = mod.warnMissingProviderGroupPolicyFallbackOnce;
+    });
+
+    it("refreshes recent keys and re-warns evicted keys once the cap overflows", () => {
+      const lines: string[] = [];
+      const warnForAccount = (accountId: string) =>
+        warnOnceFn({
+          providerMissingFallbackApplied: true,
+          providerKey: "runtime-policy-evict-test",
+          accountId,
+          log: (message) => lines.push(message),
+        });
+
+      for (let i = 0; i < 4096; i++) {
+        warnForAccount(`account-${i}`);
+      }
+      expect(lines).toHaveLength(4096);
+
+      // Recent duplicate stays deduped and refreshes its recency.
+      expect(warnForAccount("account-0")).toBe(false);
+      expect(lines).toHaveLength(4096);
+
+      // Overflow evicts the oldest untouched key (account-1), not the refreshed one.
+      expect(warnForAccount("account-overflow")).toBe(true);
+      expect(warnForAccount("account-0")).toBe(false);
+      expect(warnForAccount("account-1")).toBe(true);
+      expect(lines).toHaveLength(4098);
+    });
   });
 });

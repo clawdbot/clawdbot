@@ -100,15 +100,20 @@ describe("resolveUtilityModelRefForAgent", () => {
     );
   });
 
-  it("prefers a caller-resolved primary provider over re-derivation", () => {
+  it("prefers caller-resolved session provider and profile context", () => {
+    const cfg = {
+      agents: { defaults: { model: "anthropic/claude-fable-5@personal" } },
+    } as OpenClawConfig;
+
     expect(
       resolveUtilityModelRefForAgent({
-        cfg: {} as OpenClawConfig,
+        cfg,
         agentId: "main",
         primaryProvider: "OpenAI",
+        primaryModelRef: "openai/gpt-5.5@work",
         metadataSnapshot,
       }),
-    ).toBe("openai/gpt-5.6-luna");
+    ).toBe("openai/gpt-5.6-luna@work");
   });
 
   it("returns undefined for providers without a declared default", () => {

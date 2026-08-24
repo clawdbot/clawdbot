@@ -21,11 +21,11 @@ const hashFile =
 const outputFile =
   process.env.OPENCLAW_A2UI_BUNDLE_OUT ??
   path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
+const outputV09File = process.env.OPENCLAW_A2UI_BUNDLE_OUT
+  ? `${process.env.OPENCLAW_A2UI_BUNDLE_OUT}.v0.9.js`
+  : path.join(pluginDir, "src", "host", "a2ui", "a2ui-v0.9.bundle.js");
 const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
-const repoInputPaths = getBundleHashRepoInputPaths(rootDir);
-const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
-  normalizePath(path.relative(rootDir, inputPath)),
-);
+const GIT_INPUT_DISCOVERY_TIMEOUT_MS = 5_000;
 
 function fail(message) {
   console.error(message);
@@ -107,11 +107,16 @@ async function walkFiles(entryPath, files) {
   }
 }
 
-function listTrackedInputFiles() {
-  const result = spawnSync("git", ["ls-files", "--", ...relativeRepoInputPaths], {
-    cwd: rootDir,
+export function listTrackedInputFiles(runGit, repoRoot = rootDir) {
+  const relativeRepoInputPaths = getBundleHashRepoInputPaths(repoRoot).map((inputPath) =>
+    normalizePath(path.relative(repoRoot, inputPath)),
+  );
+  const result = runGit("git", ["ls-files", "--", ...relativeRepoInputPaths], {
+    cwd: repoRoot,
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: GIT_INPUT_DISCOVERY_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     return null;
@@ -119,14 +124,14 @@ function listTrackedInputFiles() {
   const trackedFiles = result.stdout
     .split("\n")
     .filter(Boolean)
-    .map((filePath) => path.join(rootDir, filePath))
+    .map((filePath) => path.join(repoRoot, filePath))
     .filter((filePath) => existsSync(filePath))
     .filter((filePath) => isBundleHashInputPath(filePath));
   return trackedFiles;
 }
 
 async function computeHash() {
-  let files = listTrackedInputFiles();
+  let files = listTrackedInputFiles(spawnSync);
   if (!files) {
     files = [];
     for (const inputPath of getBundleHashRepoInputPaths(rootDir)) {
@@ -174,6 +179,7 @@ function runPnpm(pnpmArgs) {
 async function main() {
   const hasAppDir = await pathExists(a2uiAppDir);
   const hasOutputFile = await pathExists(outputFile);
+  const hasV09OutputFile = await pathExists(outputV09File);
   let hasA2uiPackage = true;
   try {
     require.resolve("@a2ui/lit");
@@ -198,7 +204,7 @@ async function main() {
   const currentHash = await computeHash();
   if (await pathExists(hashFile)) {
     const previousHash = (await fs.readFile(hashFile, "utf8")).trim();
-    if (previousHash === currentHash && hasOutputFile) {
+    if (previousHash === currentHash && hasOutputFile && hasV09OutputFile) {
       console.log("A2UI bundle up to date; skipping.");
       return;
     }
@@ -214,13 +220,11 @@ async function main() {
   ).find(Boolean);
 
   if (localRolldownCli) {
-    runStep(process.execPath, [
-      localRolldownCli,
-      "-c",
-      path.join(a2uiAppDir, "rolldown.config.mjs"),
-    ]);
+    const configPath = path.join(a2uiAppDir, "rolldown.config.mjs");
+    runStep(process.execPath, [localRolldownCli, "-c", configPath]);
   } else {
-    runPnpm(["-s", "exec", "rolldown", "-c", path.join(a2uiAppDir, "rolldown.config.mjs")]);
+    const configPath = path.join(a2uiAppDir, "rolldown.config.mjs");
+    runPnpm(["-s", "exec", "rolldown", "-c", configPath]);
   }
 
   await fs.writeFile(hashFile, `${currentHash}\n`, "utf8");

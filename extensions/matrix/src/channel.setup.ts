@@ -4,13 +4,13 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { matrixConfigAdapter } from "./config-adapter.js";
 import { MatrixChannelConfigSchema } from "./config-schema.js";
 import { resolveMatrixAccount, type ResolvedMatrixAccount } from "./matrix/accounts.js";
-import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
+import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 
 const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
   matrixSetupWizard: (await import("./setup-surface.js")).matrixSetupWizard,
 }));
 
-export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
+export const matrixPluginBase = {
   id: "matrix",
   meta: {
     id: "matrix",
@@ -23,7 +23,7 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     quickstartAllowFrom: true,
   },
   setupWizard: matrixSetupWizard,
-  setup: matrixSetupAdapter,
+  setupContract: matrixSetupContract,
   capabilities: {
     chatTypes: ["direct", "group", "thread"],
     polls: true,
@@ -44,6 +44,13 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           baseUrl: account.homeserver,
         },
       }),
+  },
+} satisfies ChannelPlugin<ResolvedMatrixAccount>;
+
+export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
+  ...matrixPluginBase,
+  config: {
+    ...matrixPluginBase.config,
     hasConfiguredState: ({ cfg }) => resolveMatrixAccount({ cfg }).configured,
   },
 };

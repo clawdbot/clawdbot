@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { buildSessionUsageDateParams, requestSessionsUsage } from "./usage.ts";
+import { buildSessionUsageDateParams, requestSessionUsage } from "./usage.ts";
 
 describe("buildSessionUsageDateParams", () => {
   afterEach(() => {
@@ -27,7 +27,14 @@ describe("buildSessionUsageDateParams", () => {
   });
 });
 
-describe("requestSessionsUsage", () => {
+describe("requestSessionUsage legacy timeZone retry", () => {
+  const query = {
+    startDate: "2026-07-01",
+    endDate: "2026-07-28",
+    scope: "instance",
+    timeZone: "local",
+  } as const;
+
   it("retries older gateways with the legacy UTC offset", async () => {
     const result = { sessions: [] };
     const request = vi
@@ -39,20 +46,15 @@ describe("requestSessionsUsage", () => {
         }),
       )
       .mockResolvedValueOnce(result);
-    const params = {
-      range: "all",
-      mode: "specific",
-      timeZone: "Europe/Vienna",
-      utcOffset: "UTC+2",
-    };
 
-    await expect(requestSessionsUsage({ request } as never, params)).resolves.toBe(result);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", params);
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.usage", {
-      range: "all",
-      mode: "specific",
-      utcOffset: "UTC+2",
-    });
+    await expect(requestSessionUsage({ request } as never, query)).resolves.toBe(result);
+    expect(request).toHaveBeenCalledTimes(2);
+    const [, firstParams] = request.mock.calls[0] as [string, Record<string, unknown>];
+    const [, retryParams] = request.mock.calls[1] as [string, Record<string, unknown>];
+    expect(typeof firstParams.timeZone).toBe("string");
+    expect(typeof firstParams.utcOffset).toBe("string");
+    const { timeZone: _dropped, ...withoutTimeZone } = firstParams;
+    expect(retryParams).toEqual(withoutTimeZone);
   });
 
   it("does not retry unrelated invalid usage parameters", async () => {
@@ -62,13 +64,7 @@ describe("requestSessionsUsage", () => {
     });
     const request = vi.fn().mockRejectedValue(error);
 
-    await expect(
-      requestSessionsUsage({ request } as never, {
-        mode: "specific",
-        timeZone: "Not/AZone",
-        utcOffset: "UTC+2",
-      }),
-    ).rejects.toBe(error);
+    await expect(requestSessionUsage({ request } as never, query)).rejects.toBe(error);
     expect(request).toHaveBeenCalledOnce();
   });
 });

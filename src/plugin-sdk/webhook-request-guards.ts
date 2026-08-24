@@ -1,16 +1,20 @@
 // Webhook request guards validate incoming HTTP requests before plugin webhook dispatch.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  closeRequestAfterResponse,
   isRequestBodyLimitError,
   readJsonBodyWithLimit,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
-import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
+
+export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
 
 /** Body-read profile for webhook payload limits before or after authentication. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
@@ -32,6 +36,11 @@ export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
   postAuth: {
     maxBytes: 1024 * 1024,
     timeoutMs: 30_000,
+  },
+  postAuthResponseFirst: {
+    maxBytes: 1024 * 1024,
+    timeoutMs: 30_000,
+    destroyOnLimit: false,
   },
 });
 
@@ -76,17 +85,21 @@ function resolveWebhookBodyReadLimits(params: {
 }
 
 function respondWebhookBodyReadError(params: {
+  req: IncomingMessage;
   res: ServerResponse;
   code: string;
   invalidMessage?: string;
+  invalidStatusCode?: number;
 }): { ok: false } {
-  const { res, code, invalidMessage } = params;
+  const { req, res, code, invalidMessage, invalidStatusCode } = params;
   if (code === "PAYLOAD_TOO_LARGE") {
+    closeRequestAfterResponse(req, res);
     res.statusCode = 413;
     res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
     return { ok: false };
   }
   if (code === "REQUEST_BODY_TIMEOUT") {
+    closeRequestAfterResponse(req, res);
     res.statusCode = 408;
     res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
     return { ok: false };
@@ -96,7 +109,7 @@ function respondWebhookBodyReadError(params: {
     res.end(requestBodyErrorToText("CONNECTION_CLOSED"));
     return { ok: false };
   }
-  res.statusCode = 400;
+  res.statusCode = invalidStatusCode ?? 400;
   res.end(invalidMessage ?? "Bad Request");
   return { ok: false };
 }
@@ -108,12 +121,12 @@ export function createWebhookInFlightLimiter(options?: {
   /** Maximum number of keys retained before oldest entries are pruned. */
   maxTrackedKeys?: number;
 }): WebhookInFlightLimiter {
-  const maxInFlightPerKey = resolveWebhookIntegerOption(
+  const maxInFlightPerKey = resolveIntegerOption(
     options?.maxInFlightPerKey,
     WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
     { min: 1 },
   );
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options?.maxTrackedKeys,
     WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     { min: 1 },
@@ -277,6 +290,25 @@ export function beginWebhookRequestPipelineOrReject(params: {
   };
 }
 
+/**
+ * Run post-ack webhook processing on its own admitted gateway work root.
+ *
+ * Ack-first handlers respond before processing events, so the continued work
+ * outlives the HTTP request admission it inherited; once that admission is
+ * released, queue enqueues from the inherited chain are refused as if the
+ * gateway were draining. Call this synchronously from the request handler
+ * (while the request is still admitted): it reserves an independent root that
+ * keeps the detached processing accepted and lets a restart drain wait for it.
+ */
+export function runDetachedWebhookWork<T>(run: () => Promise<T>): Promise<T> {
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
+    // Reserve the root now, but let the request handler write its acknowledgement
+    // before any synchronous prefix in the detached callback can run.
+    await Promise.resolve();
+    return await run();
+  });
+}
+
 /** Read a webhook request body with bounded size/time limits and translate failures into responses. */
 export async function readWebhookBodyOrReject(params: {
   /** Incoming request body stream to read. */
@@ -299,17 +331,22 @@ export async function readWebhookBodyOrReject(params: {
   });
 
   try {
-    const raw = await readRequestBodyWithLimit(params.req, limits);
+    const raw = await readRequestBodyWithLimit(params.req, {
+      ...limits,
+      destroyOnLimit: false,
+    });
     return { ok: true, value: raw };
   } catch (error) {
     if (isRequestBodyLimitError(error)) {
       return respondWebhookBodyReadError({
+        req: params.req,
         res: params.res,
         code: error.code,
         invalidMessage: params.invalidBodyMessage,
       });
     }
     return respondWebhookBodyReadError({
+      req: params.req,
       res: params.res,
       code: "INVALID_BODY",
       invalidMessage: params.invalidBodyMessage ?? formatErrorMessage(error),
@@ -333,6 +370,8 @@ export async function readJsonWebhookBodyOrReject(params: {
   emptyObjectOnEmpty?: boolean;
   /** Response body for malformed JSON. */
   invalidJsonMessage?: string;
+  /** Response status for malformed JSON. */
+  invalidJsonStatusCode?: number;
 }): Promise<{ ok: true; value: unknown } | { ok: false }> {
   const limits = resolveWebhookBodyReadLimits({
     maxBytes: params.maxBytes,
@@ -343,13 +382,16 @@ export async function readJsonWebhookBodyOrReject(params: {
     maxBytes: limits.maxBytes,
     timeoutMs: limits.timeoutMs,
     emptyObjectOnEmpty: params.emptyObjectOnEmpty,
+    destroyOnLimit: false,
   });
   if (body.ok) {
     return { ok: true, value: body.value };
   }
   return respondWebhookBodyReadError({
+    req: params.req,
     res: params.res,
     code: body.code,
     invalidMessage: params.invalidJsonMessage,
+    invalidStatusCode: params.invalidJsonStatusCode,
   });
 }

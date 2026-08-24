@@ -6,7 +6,7 @@ import {
   collectBundledPluginPackageDependencySpecs,
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
-} from "../../scripts/lib/plugin-package-dependencies.mjs";
+} from "../../scripts/lib/plugin-package-dependencies.mts";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs = new Set<string>();
@@ -21,7 +21,7 @@ function writePackageJson(root: string, pluginId: string, packageJson: unknown):
   writeFileSync(join(pluginDir, "package.json"), `${JSON.stringify(packageJson, null, 2)}\n`);
 }
 
-describe("scripts/lib/plugin-package-dependencies.mjs", () => {
+describe("scripts/lib/plugin-package-dependencies.mts", () => {
   it("extracts dependency package names from bare import specifiers", () => {
     expect(packageNameFromSpecifier("@scope/pkg/subpath")).toBe("@scope/pkg");
     expect(packageNameFromSpecifier("plain-pkg/subpath")).toBe("plain-pkg");
@@ -72,6 +72,16 @@ describe("scripts/lib/plugin-package-dependencies.mjs", () => {
     writePackageJson(root, "gamma", {
       dependencies: {
         shared: "^1.1.0",
+      },
+    });
+    writePackageJson(root, "external", {
+      dependencies: {
+        shared: "^9.0.0",
+      },
+      openclaw: {
+        build: {
+          bundledDist: false,
+        },
       },
     });
 

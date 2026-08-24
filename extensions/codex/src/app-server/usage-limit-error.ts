@@ -5,17 +5,13 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
+import { isJsonObject, type CodexServerNotification, type JsonValue } from "./protocol.js";
 import {
   readCodexRateLimitsRevision,
   readRecentCodexRateLimits,
@@ -161,6 +157,7 @@ async function refreshCodexUsageLimitError(params: {
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
+    rateLimitsAuthoritative: true,
   });
   const message = refreshedMessage ?? initialMessage;
   return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
@@ -255,9 +252,4 @@ function readCodexErrorPayload(error: unknown): {
     codexErrorInfo: nestedError.codexErrorInfo,
     rateLimits,
   };
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

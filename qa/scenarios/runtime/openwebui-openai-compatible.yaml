@@ -6,8 +6,8 @@ scenario:
   coverage:
     secondary:
       - gateway.openai-compatible-apis
-      - runtime.hosted-provider-turns
-      - runtime.provider-specific-model-options
+      - agent-runtime.hosted-provider-turns
+      - agent-runtime.provider-specific-model-options
   objective: Verify the OpenWebUI E2E probe exercises OpenClaw through OpenWebUI's OpenAI-compatible model and chat APIs.
   successCriteria:
     - Probe environment limits are parsed strictly and control-plane requests time out quickly.

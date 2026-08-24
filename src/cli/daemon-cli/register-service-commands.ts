@@ -20,6 +20,11 @@ function loadDaemonStatusModule() {
   return daemonStatusModuleLoader.load();
 }
 
+function resolveJsonOption(cmdOpts: { json?: boolean }, command?: Command): boolean {
+  const parentJson = inheritOptionFromParent<boolean>(command, "json", "cli");
+  return Boolean(cmdOpts.json || parentJson);
+}
+
 function resolveInstallOptions(
   cmdOpts: DaemonInstallOptions,
   command?: Command,
@@ -32,6 +37,7 @@ function resolveInstallOptions(
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
+    json: resolveJsonOption(cmdOpts, command),
   };
 }
 
@@ -51,6 +57,16 @@ function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Comman
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
     safe: Boolean(cmdOpts.safe),
+    json: resolveJsonOption(cmdOpts, command),
+  };
+}
+
+function resolveStopOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
+  const parentForce = inheritOptionFromParent<boolean>(command, "force");
+  return {
+    ...cmdOpts,
+    force: Boolean(cmdOpts.force || parentForce),
+    json: resolveJsonOption(cmdOpts, command),
   };
 }
 
@@ -76,7 +92,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         probe: Boolean(cmdOpts.probe),
         requireRpc: Boolean(cmdOpts.requireRpc),
         deep: Boolean(cmdOpts.deep),
-        json: Boolean(cmdOpts.json),
+        json: resolveJsonOption(cmdOpts, command),
       });
     });
 
@@ -98,32 +114,33 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .command("uninstall")
     .description("Uninstall the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonUninstall } = await loadDaemonLifecycleModule();
-      await runDaemonUninstall(cmdOpts);
+      await runDaemonUninstall({ ...cmdOpts, json: resolveJsonOption(cmdOpts, command) });
     });
 
   parent
     .command("start")
     .description("Start the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonStart } = await loadDaemonLifecycleModule();
-      await runDaemonStart(cmdOpts);
+      await runDaemonStart({ ...cmdOpts, json: resolveJsonOption(cmdOpts, command) });
     });
 
   parent
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .option("--force", "Allow stop from a non-interactive shell", false)
     .option("--json", "Output JSON", false)
     .option(
       "--disable",
       "Persistently suppress KeepAlive/RunAtLoad so the gateway does not respawn until next start (launchd only)",
       false,
     )
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonStop } = await loadDaemonLifecycleModule();
-      await runDaemonStop(cmdOpts);
+      await runDaemonStop(resolveStopOptions(cmdOpts, command));
     });
 
   parent
@@ -133,11 +150,14 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option(
       "--safe",
       "Request an OpenClaw-aware restart after active work drains " +
-        "(bounded wait; may force after gateway.reload.deferralTimeoutMs expires; " +
-        "set deferralTimeoutMs=0 for indefinite wait)",
+        "(bounded wait; may force after the timeout expires)",
       false,
     )
-    .option("--skip-deferral", "Bypass the safe-restart deferral gate; requires --safe", false)
+    .option(
+      "--skip-deferral",
+      "Bypass the safe-restart active-work deferral gate; close-stage reply drain still applies; requires --safe",
+      false,
+    )
     .option(
       "--wait <duration>",
       "Wait duration before restart (ms, 10s, 5m; 0 waits indefinitely). " +

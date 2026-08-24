@@ -3,6 +3,7 @@
  *
  * Tracks draft previews and converts them into finalized message receipts when possible.
  */
+import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
 
 /** Mutable draft preview handle used before a live message is finalized or discarded. */
@@ -22,13 +23,13 @@ export type LivePreviewFinalizerResultKind =
   | "preview-retained";
 
 /** Result of a live preview finalization attempt plus the latest live state. */
-export type LivePreviewFinalizerResult<TPayload> = {
+type LivePreviewFinalizerResult<TPayload> = {
   kind: LivePreviewFinalizerResultKind;
   liveState?: LiveMessageState<TPayload>;
 };
 
 /** Adapter contract for channels that can edit a draft preview into the final message. */
-export type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
+type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
   draft?: LivePreviewFinalizerDraft<TId>;
   buildFinalEdit: (payload: TPayload) => TEdit | undefined;
   editFinal: (id: TId, edit: TEdit) => Promise<void>;
@@ -73,7 +74,7 @@ export function createLiveMessageState<TPayload = unknown>(params?: {
 }
 
 /** Marks a live message as finalized and disables further in-place preview edits. */
-export function markLiveMessageFinalized<TPayload>(
+function markLiveMessageFinalized<TPayload>(
   state: LiveMessageState<TPayload>,
   receipt: MessageReceipt,
 ): LiveMessageState<TPayload> {
@@ -198,7 +199,14 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
         await params.onPreviewFinalized?.(finalizedId, receipt, liveState);
         const supplementalPayload = params.buildSupplementalPayload?.(params.payload);
         if (supplementalPayload !== undefined) {
-          await params.deliverSupplemental?.(supplementalPayload);
+          const supplementalDelivered = await params.deliverSupplemental?.(supplementalPayload);
+          if (!params.deliverSupplemental || supplementalDelivered === false) {
+            // A finalized text preview must not silently acknowledge media that never became visible.
+            const fallbackDelivered = await params.deliverNormally(supplementalPayload);
+            if (fallbackDelivered === false) {
+              throw new Error("Live preview supplemental payload was not delivered");
+            }
+          }
         }
         return { kind: "preview-finalized", liveState };
       }
@@ -221,7 +229,12 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
     }
   } finally {
     if (delivered) {
-      await params.draft.clear();
+      const draft = params.draft;
+      await runBestEffortCleanup({
+        cleanup: () => draft.clear(),
+        onError: () =>
+          console.warn("Live preview cleanup failed after delivery; a stale preview may remain"),
+      });
     }
   }
 
@@ -293,7 +306,7 @@ export function markLiveMessagePreviewUpdated<TPayload>(
 }
 
 /** Marks a live message cancelled and prevents later in-place finalization. */
-export function markLiveMessageCancelled<TPayload>(
+function markLiveMessageCancelled<TPayload>(
   state: LiveMessageState<TPayload>,
 ): LiveMessageState<TPayload> {
   return {

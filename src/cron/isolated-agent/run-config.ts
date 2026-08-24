@@ -26,7 +26,7 @@ function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentCon
   const {
     model: overrideModel,
     sandbox: _agentSandboxOverride,
-    memorySearch: _agentMemorySearchOverride,
+    memory: _agentMemoryOverride,
     ...agentOverrideRest
   } = agentConfigOverride ?? {};
   return {
@@ -52,19 +52,27 @@ function mergeCronAgentModelOverride(params: {
   return nextDefaults;
 }
 
-/** Builds the agent defaults snapshot used by isolated cron runs. */
-export function buildCronAgentDefaultsConfig(params: {
-  defaults?: AgentDefaultsConfig;
+/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
+export function resolveCronAgentConfig(params: {
+  config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
+  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );
   // Keep nested configs owned by agent-aware resolvers out of this flattened snapshot.
-  // Copying a partial sandbox or memorySearch object into defaults destroys its global
-  // fields before the resolver can merge the selected agent's override.
-  return mergeCronAgentModelOverride({
-    defaults: Object.assign({}, params.defaults, definedOverrides),
+  // Copying partial sandbox or memory objects into defaults destroys their global fields.
+  const agentDefaults = mergeCronAgentModelOverride({
+    defaults: Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
     overrideModel,
   });
+  return {
+    runtimeConfig,
+    agentDefaults,
+    cfgWithAgentDefaults: {
+      ...runtimeConfig,
+      agents: Object.assign({}, runtimeConfig.agents, { defaults: agentDefaults }),
+    } satisfies OpenClawConfig,
+  };
 }

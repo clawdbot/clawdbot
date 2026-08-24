@@ -31,12 +31,8 @@ function resolveProviderChunkContext(
 }
 
 type ProviderBlockStreamingConfig = {
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { blockStreamingCoalesce?: BlockStreamingCoalesceConfig; streaming?: unknown }
-  >;
+  accounts?: Record<string, { streaming?: unknown }>;
 };
 
 function resolveScopedBlockStreamingCoalesce(
@@ -55,8 +51,7 @@ function resolveProviderBlockStreamingCoalesce(params: {
     return undefined;
   }
   const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
-  const providerCfg =
-    channelsConfig?.[providerKey] ?? (cfg as Record<string, unknown>)[providerKey];
+  const providerCfg = channelsConfig?.[providerKey];
   if (!providerCfg || typeof providerCfg !== "object") {
     return undefined;
   }
@@ -87,7 +82,7 @@ type BlockStreamingChunking = {
   flushOnParagraph?: boolean;
 };
 
-export function clampPositiveInteger(
+function clampPositiveInteger(
   value: unknown,
   fallback: number,
   bounds: { min: number; max: number },

@@ -6,6 +6,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
   resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
@@ -29,19 +30,10 @@ const maybeIt = process.platform === "win32" ? it.skip : it;
 const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-state-"));
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  try {
-    return await test(stateDir);
-  } finally {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "msg-params-state-" },
+    (state) => test(state.stateDir),
+  );
 }
 
 describe("message action media helpers", () => {
@@ -251,6 +243,68 @@ describe("message action media helpers", () => {
       });
 
       expect(attachment.path).toBe(path.join(sandboxRoot, "replies", "photo.png"));
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt.each([
+    "mediaUrl",
+    "media_url",
+    "path",
+    "filePath",
+    "file_path",
+    "fileUrl",
+    "file_url",
+    "url",
+  ])("rejects an out-of-sandbox %s hidden behind valid attachment media", async (shadowKey) => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-sandbox-"));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-host-"));
+    try {
+      await expect(
+        normalizeSandboxMediaParams({
+          args: {
+            attachments: [
+              {
+                media: "/workspace/allowed.png",
+                [shadowKey]: path.join(outsideRoot, "restricted.png"),
+              },
+            ],
+          },
+          mediaPolicy: {
+            mode: "sandbox",
+            sandboxRoot,
+          },
+          structuredAttachments: "all",
+        }),
+      ).rejects.toThrow(/escapes sandbox root/i);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("normalizes every allowed source in one structured attachment", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-multi-source-"));
+    try {
+      const attachment: Record<string, unknown> = {
+        media: "/workspace/allowed.png",
+        file_path: "/workspace/allowed-file.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args: { attachments: [attachment] },
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        structuredAttachments: "all",
+      });
+
+      expect(attachment).toEqual({
+        media: path.join(sandboxRoot, "allowed.png"),
+        file_path: path.join(sandboxRoot, "allowed-file.png"),
+      });
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }

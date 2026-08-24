@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -25,7 +26,10 @@ function runHelper(script: string, ...args: Array<string | Record<string, string
     maybeEnv && typeof maybeEnv === "object"
       ? (args.pop() as unknown as Record<string, string>)
       : {};
-  return spawnSync(process.execPath, [script, ...(args as string[])], {
+  const nodeArgs = script.endsWith(".mts")
+    ? ["--import", "tsx", script, ...(args as string[])]
+    : [script, ...(args as string[])];
+  return spawnSync(process.execPath, nodeArgs, {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
@@ -86,6 +90,26 @@ describe("Docker E2E helper CLIs", () => {
     expect(result.stderr).not.toContain("at file:");
   });
 
+  it("emits prerelease plugin registry planning outputs", () => {
+    const root = tempDirs.make("openclaw-docker-e2e-helper-plan-");
+    const file = path.join(root, "plan.json");
+    writeFileSync(
+      file,
+      `${JSON.stringify({
+        requiredPrepublishPluginPackages: ["@openclaw/discord", "@openclaw/feishu"],
+        needs: { prepublishPluginRegistry: true },
+      })}\n`,
+    );
+
+    const result = runHelper("scripts/docker-e2e.mjs", "github-outputs", file);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("needs_prepublish_plugin_registry=1");
+    expect(result.stdout).toContain(
+      'required_prepublish_plugin_packages=["@openclaw/discord","@openclaw/feishu"]',
+    );
+  });
+
   it("rejects oversized scheduler helper JSON artifacts without a Node stack trace", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-helper-`);
     try {
@@ -107,17 +131,17 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("prints timings help without treating --help as an artifact path", () => {
-    const result = runHelper("scripts/docker-e2e-timings.mjs", "--help");
+    const result = runHelper("scripts/docker-e2e-timings.mts", "--help");
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(
-      "Usage: node scripts/docker-e2e-timings.mjs <summary.json|lane-timings.json>",
+      "Usage: node --import tsx scripts/docker-e2e-timings.mts <summary.json|lane-timings.json>",
     );
   });
 
   it("rejects malformed timings limits without a Node stack trace", () => {
-    const result = runHelper("scripts/docker-e2e-timings.mjs", "summary.json", "--limit=1e3");
+    const result = runHelper("scripts/docker-e2e-timings.mts", "summary.json", "--limit=1e3");
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -127,13 +151,13 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("rejects unknown timings options without treating them as artifact paths", () => {
-    const result = runHelper("scripts/docker-e2e-timings.mjs", "--wat");
+    const result = runHelper("scripts/docker-e2e-timings.mts", "--wat");
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("unknown argument: --wat");
     expect(result.stderr).toContain(
-      "Usage: node scripts/docker-e2e-timings.mjs <summary.json|lane-timings.json>",
+      "Usage: node --import tsx scripts/docker-e2e-timings.mts <summary.json|lane-timings.json>",
     );
     expect(result.stderr).not.toContain("ENOENT");
     expect(result.stderr).not.toContain("Error:");
@@ -146,7 +170,7 @@ describe("Docker E2E helper CLIs", () => {
       const file = path.join(root, "summary.json");
       writeFileSync(file, `${JSON.stringify({ filler: "x".repeat(128) })}\n`, "utf8");
 
-      const result = runHelper("scripts/docker-e2e-timings.mjs", file, {
+      const result = runHelper("scripts/docker-e2e-timings.mts", file, {
         OPENCLAW_DOCKER_E2E_JSON_ARTIFACT_MAX_BYTES: "64",
       });
 
@@ -162,7 +186,7 @@ describe("Docker E2E helper CLIs", () => {
 
   it("rejects missing timings limits without a Node stack trace", () => {
     for (const limit of [undefined, "-h"]) {
-      const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
+      const args = ["scripts/docker-e2e-timings.mts", "summary.json", "--limit"];
       const result = runHelper(args[0]!, ...args.slice(1), ...(limit === undefined ? [] : [limit]));
 
       expect(result.status).toBe(1);
@@ -174,12 +198,12 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("prints rerun help without detecting the GitHub repository", () => {
-    const result = runHelper("scripts/docker-e2e-rerun.mjs", "--help");
+    const result = runHelper("scripts/docker-e2e-rerun.mts", "--help");
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(
-      "node scripts/docker-e2e-rerun.mjs <run-id|summary.json|failures.json>",
+      "node --import tsx scripts/docker-e2e-rerun.mts <run-id|summary.json|failures.json>",
     );
   });
 
@@ -189,7 +213,7 @@ describe("Docker E2E helper CLIs", () => {
       const file = path.join(root, "summary.json");
       writeFileSync(file, `${JSON.stringify({ filler: "x".repeat(128) })}\n`, "utf8");
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", EXACT_TARGET_REF, {
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", EXACT_TARGET_REF, {
         OPENCLAW_DOCKER_E2E_JSON_ARTIFACT_MAX_BYTES: "64",
       });
 
@@ -237,7 +261,7 @@ describe("Docker E2E helper CLIs", () => {
         const file = path.join(root, fileName);
         writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 
-        const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
+        const result = runHelper("scripts/docker-e2e-rerun.mts", file);
 
         expect(result.status).toBe(0);
         expect(result.stderr).toBe("");
@@ -274,7 +298,7 @@ describe("Docker E2E helper CLIs", () => {
         "utf8",
       );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", EXACT_TARGET_REF);
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", EXACT_TARGET_REF);
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
@@ -311,7 +335,7 @@ describe("Docker E2E helper CLIs", () => {
           "utf8",
         );
 
-        const result = runHelper("scripts/docker-e2e-rerun.mjs", file, {
+        const result = runHelper("scripts/docker-e2e-rerun.mts", file, {
           GITHUB_SHA: workflowHead,
         });
 
@@ -343,7 +367,7 @@ describe("Docker E2E helper CLIs", () => {
         "utf8",
       );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", explicitRef);
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", explicitRef);
 
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain(`Ref: ${explicitRef}`);
@@ -369,7 +393,7 @@ describe("Docker E2E helper CLIs", () => {
         "utf8",
       );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file);
 
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
@@ -395,7 +419,7 @@ describe("Docker E2E helper CLIs", () => {
         "utf8",
       );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file);
 
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
@@ -421,7 +445,7 @@ describe("Docker E2E helper CLIs", () => {
           "utf8",
         );
 
-        const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", explicitRef);
+        const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", explicitRef);
 
         expect(result.status).toBe(1);
         expect(result.stdout).toBe("");
@@ -457,7 +481,7 @@ describe("Docker E2E helper CLIs", () => {
         "utf8",
       );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", EXACT_TARGET_REF);
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", EXACT_TARGET_REF);
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
@@ -511,7 +535,7 @@ describe("Docker E2E helper CLIs", () => {
       "utf8",
     );
 
-    const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
+    const result = runHelper("scripts/docker-e2e-rerun.mts", file);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).not.toContain("allow_unreleased_changelog");
@@ -547,7 +571,7 @@ describe("Docker E2E helper CLIs", () => {
         "utf8",
       );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", EXACT_TARGET_REF);
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", EXACT_TARGET_REF);
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
@@ -601,7 +625,7 @@ describe("Docker E2E helper CLIs", () => {
         "utf8",
       );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", EXACT_TARGET_REF);
+      const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", EXACT_TARGET_REF);
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
@@ -665,14 +689,14 @@ describe("Docker E2E helper CLIs", () => {
         PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       };
       const first = runHelper(
-        "scripts/docker-e2e-rerun.mjs",
+        "scripts/docker-e2e-rerun.mts",
         "12345",
         "--repo",
         "openclaw/openclaw",
         env,
       );
       const second = runHelper(
-        "scripts/docker-e2e-rerun.mjs",
+        "scripts/docker-e2e-rerun.mts",
         "12345",
         "--repo",
         "openclaw/openclaw",
@@ -687,8 +711,22 @@ describe("Docker E2E helper CLIs", () => {
       expect(firstDir).not.toBe(secondDir);
       expect(path.basename(firstDir)).toMatch(/^openclaw-docker-e2e-rerun-12345-/u);
       expect(path.basename(secondDir)).toMatch(/^openclaw-docker-e2e-rerun-12345-/u);
-      expect(existsSync(path.join(firstDir, "artifact", "failures.json"))).toBe(true);
-      expect(existsSync(path.join(secondDir, "artifact", "failures.json"))).toBe(true);
+      const firstArtifactDir = readdirSync(firstDir, { withFileTypes: true }).find((entry) =>
+        entry.isDirectory(),
+      );
+      const secondArtifactDir = readdirSync(secondDir, { withFileTypes: true }).find((entry) =>
+        entry.isDirectory(),
+      );
+      expect(firstArtifactDir).toBeDefined();
+      expect(secondArtifactDir).toBeDefined();
+      expect(
+        existsSync(path.join(firstDir, firstArtifactDir?.name ?? "", "artifact", "failures.json")),
+      ).toBe(true);
+      expect(
+        existsSync(
+          path.join(secondDir, secondArtifactDir?.name ?? "", "artifact", "failures.json"),
+        ),
+      ).toBe(true);
       expect(first.stdout).toContain(`-f ref='${"d".repeat(40)}'`);
       expect(first.stdout).not.toContain("-f ref='abc123'");
       expect(second.stdout).toContain(`-f ref='${"d".repeat(40)}'`);
@@ -696,6 +734,81 @@ describe("Docker E2E helper CLIs", () => {
       for (const dir of generatedDirs) {
         rmSync(dir, { force: true, recursive: true });
       }
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("isolates files with the same name across downloaded artifacts", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-collisions-`);
+    try {
+      const binDir = path.join(root, "bin");
+      const outputDir = path.join(root, "artifacts");
+      const ghPath = path.join(binDir, "gh");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        ghPath,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs');",
+          "const path = require('node:path');",
+          "const args = process.argv.slice(2);",
+          "if (args[0] === 'run' && args[1] === 'view') {",
+          "  console.log(JSON.stringify({ headBranch: 'main', headSha: 'f'.repeat(40), url: 'https://example.invalid/run', workflowName: 'Live E2E' }));",
+          "  process.exit(0);",
+          "}",
+          "if (args[0] === 'api') {",
+          "  console.log(JSON.stringify([",
+          "    { expired: false, name: 'docker-e2e-a' },",
+          "    { expired: false, name: 'docker-e2e-b' },",
+          "  ]));",
+          "  process.exit(0);",
+          "}",
+          "if (args[0] === 'run' && args[1] === 'download') {",
+          "  const name = args[args.indexOf('--name') + 1];",
+          "  const dir = args[args.indexOf('--dir') + 1];",
+          "  fs.mkdirSync(dir, { recursive: true });",
+          "  const plan = path.join(dir, 'targeted-plan.json');",
+          "  if (fs.existsSync(plan)) {",
+          "    console.error('targeted-plan.json already exists');",
+          "    process.exit(2);",
+          "  }",
+          "  fs.writeFileSync(plan, '{}');",
+          "  fs.writeFileSync(path.join(dir, 'failures.json'), JSON.stringify({",
+          "    lanes: [{ name: name.endsWith('-a') ? 'gateway-network' : 'install-e2e', status: 1 }],",
+          "    ref: 'd'.repeat(40),",
+          "    status: 'failed',",
+          "  }));",
+          "  process.exit(0);",
+          "}",
+          "console.error(`unexpected gh args: ${args.join(' ')}`);",
+          "process.exit(1);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(ghPath, 0o755);
+
+      const result = runHelper(
+        "scripts/docker-e2e-rerun.mts",
+        "12345",
+        "--repo",
+        "openclaw/openclaw",
+        "--dir",
+        outputDir,
+        { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("gateway-network");
+      expect(result.stdout).toContain("install-e2e");
+      const artifactDirs = readdirSync(outputDir, { withFileTypes: true }).filter((entry) =>
+        entry.isDirectory(),
+      );
+      expect(artifactDirs).toHaveLength(2);
+      for (const entry of artifactDirs) {
+        expect(existsSync(path.join(outputDir, entry.name, "targeted-plan.json"))).toBe(true);
+      }
+    } finally {
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -746,7 +859,7 @@ describe("Docker E2E helper CLIs", () => {
       chmodSync(ghPath, 0o755);
 
       const result = runHelper(
-        "scripts/docker-e2e-rerun.mjs",
+        "scripts/docker-e2e-rerun.mts",
         "12345",
         "--repo",
         "openclaw/openclaw",
@@ -763,7 +876,7 @@ describe("Docker E2E helper CLIs", () => {
 
       const explicitRef = "c".repeat(40);
       const override = runHelper(
-        "scripts/docker-e2e-rerun.mjs",
+        "scripts/docker-e2e-rerun.mts",
         "12345",
         "--repo",
         "openclaw/openclaw",

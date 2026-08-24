@@ -18,6 +18,17 @@ describe("tokenizeHtmlTags", () => {
 });
 
 describe("chunkTextForOutbound", () => {
+  it("keeps non-positive option limits finite", () => {
+    expect(chunkTextForOutbound("abc", 0, { preserveWhitespace: false })).toEqual(["abc"]);
+  });
+
+  it("normalizes positive fractional limits across outbound modes", () => {
+    expect(chunkTextForOutbound("abc", 0.5)).toEqual(["a", "b", "c"]);
+    expect(chunkTextForOutbound("abc", 0.5, { preserveWhitespace: true })).toEqual(["a", "b", "c"]);
+    expect(chunkTextForOutbound("😀😀", 0.5)).toEqual(["😀", "😀"]);
+    expect(chunkTextForOutbound("😀😀", 0.5, { preserveWhitespace: true })).toEqual(["😀", "😀"]);
+  });
+
   it.each([
     {
       name: "returns empty for empty input",
@@ -73,6 +84,24 @@ describe("chunkTextRanges", () => {
     expect(chunkTextRanges("", { limit: 3 })).toEqual([]);
     expect(chunkTextRanges("abc", { limit: 0 })).toEqual([{ start: 0, end: 3 }]);
   });
+
+  it("normalizes positive fractional range limits", () => {
+    expect(chunkTextRanges("abc", { limit: 0.5 })).toEqual([
+      { start: 0, end: 1 },
+      { start: 1, end: 2 },
+      { start: 2, end: 3 },
+    ]);
+  });
+
+  it.each(["hard", "preferred"] as const)(
+    "keeps astral characters whole with fractional limits in %s mode",
+    (mode) => {
+      expect(chunkTextRanges("😀😀", { limit: 0.5, mode })).toEqual([
+        { start: 0, end: 2 },
+        { start: 2, end: 4 },
+      ]);
+    },
+  );
 
   it.each(["hard", "preferred"] as const)("keeps surrogate pairs intact in %s mode", (mode) => {
     expect(chunkTextRanges("a😀b", { limit: 2, mode })).toEqual([

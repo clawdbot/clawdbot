@@ -1,6 +1,7 @@
 /**
  * Browser plugin service factory that lazily starts the control server.
  */
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
@@ -11,10 +12,6 @@ type BrowserControlHandle = LazyPluginServiceHandle | null;
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER = /^(?:data|http|https|node):/i;
 
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
-}
-
 function validateBrowserControlOverrideSpecifier(specifier: string): string {
   const trimmed = specifier.trim();
   if (UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER.test(trimmed)) {
@@ -24,7 +21,9 @@ function validateBrowserControlOverrideSpecifier(specifier: string): string {
 }
 
 /** Creates the Browser plugin service registered by the plugin entrypoint. */
-export function createBrowserPluginService(): OpenClawPluginService {
+export function createBrowserPluginService(params: {
+  stopOnDemand: () => Promise<void>;
+}): OpenClawPluginService {
   let handle: BrowserControlHandle = null;
 
   return {
@@ -58,8 +57,7 @@ export function createBrowserPluginService(): OpenClawPluginService {
         }
         return;
       }
-      const { stopBrowserControlService } = await import("./control-service.js");
-      await stopBrowserControlService();
+      await params.stopOnDemand();
     },
   };
 }

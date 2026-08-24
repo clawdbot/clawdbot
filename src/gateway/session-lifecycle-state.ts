@@ -1,21 +1,31 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
+import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
-  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
+import {
+  isMainSessionRecoveryLifecycleEvent,
+  projectMainSessionRecoveryLifecycle,
+} from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
-import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
   runId?: string;
+  clientRunId?: string;
   lifecycleGeneration?: string;
   data?: {
     phase?: unknown;
@@ -34,21 +44,34 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
-  "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  | "updatedAt"
+  | "status"
+  | "lastRunError"
+  | "lastRunId"
+  | "startedAt"
+  | "endedAt"
+  | "runtimeMs"
+  | "abortedLastRun"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
   | "updatedAt"
   | "status"
+  | "lastRunError"
+  | "lastRunId"
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
   | "abortedLastRun"
   | "restartRecoveryRuns"
+  | "mainRestartRecovery"
+  | "lifecycleRunId"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
+
+const SESSION_RUN_ERROR_MAX_CHARS = 160;
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -59,40 +82,33 @@ function resolveLifecyclePhase(event: Pick<LifecycleEventLike, "data">): Lifecyc
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
 }
 
-function mapAgentRunTerminalOutcomeToSessionStatus(
-  outcome: AgentRunTerminalOutcome,
-): SessionRunStatus {
-  switch (outcome.reason) {
-    case "completed":
-      return "done";
-    case "hard_timeout":
-    case "timed_out":
-      return "timeout";
-    case "cancelled":
-    case "aborted":
-      return "killed";
-    case "blocked":
-    case "abandoned":
-    case "failed":
-      return "failed";
-    default:
-      return outcome.reason satisfies never;
-  }
-}
+const SESSION_STATUS_BY_TERMINAL_CLASSIFICATION = {
+  success: "done",
+  timeout: "timeout",
+  cancellation: "killed",
+  failure: "failed",
+} as const satisfies Record<ReturnType<typeof classifyAgentRunTerminalOutcome>, SessionRunStatus>;
 
-function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
+function resolveTerminalOutcome(event: LifecycleEventLike): AgentRunTerminalOutcome {
   const phase = resolveLifecyclePhase(event);
-  const terminal = buildAgentRunTerminalOutcome({
-    status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
-    error: event.data?.error,
-    stopReason: event.data?.stopReason,
-    livenessState: event.data?.livenessState,
-    timeoutPhase: event.data?.timeoutPhase,
-    providerStarted: event.data?.providerStarted,
-    startedAt: event.data?.startedAt,
+  return buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: phase === "error" ? "error" : "end",
+    data: event.data,
     endedAt: event.data?.endedAt ?? event.ts,
   });
-  return mapAgentRunTerminalOutcomeToSessionStatus(terminal);
+}
+
+function resolveSessionRunError(
+  outcome: AgentRunTerminalOutcome,
+  status: SessionRunStatus,
+): string | undefined {
+  if ((status !== "failed" && status !== "timeout") || !outcome.error) {
+    return undefined;
+  }
+  const sanitized = renderUserFacingText(outcome.error, { errorContext: true })
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized ? truncateUtf16Safe(sanitized, SESSION_RUN_ERROR_MAX_CHARS) : undefined;
 }
 
 function resolveLifecycleStartedAt(
@@ -152,6 +168,7 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     return {
       updatedAt,
       status: "running",
+      lastRunError: undefined,
       startedAt,
       endedAt: undefined,
       runtimeMs: undefined,
@@ -162,7 +179,7 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
-  const status = isAgentLifecycleYieldedWaiting({
+  const yieldedWaiting = isAgentLifecycleYieldedWaiting({
     phase,
     yielded: params.event.data?.yielded,
     livenessState: params.event.data?.livenessState,
@@ -171,12 +188,15 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     status: params.event.data?.status,
     timeoutPhase: params.event.data?.timeoutPhase,
     error: params.event.data?.error,
-  })
-    ? "running"
-    : resolveTerminalStatus(params.event);
+  });
+  const terminal = yieldedWaiting ? undefined : resolveTerminalOutcome(params.event);
+  const status = terminal
+    ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
+    : "running";
   return {
     updatedAt,
     status,
+    lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({
@@ -192,45 +212,47 @@ function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
-  if (isRestartRecoveryLifecycleEvent(params)) {
-    return {};
-  }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
     session: params.entry ?? undefined,
     event: params.event,
   });
-  const patch: Partial<PersistedLifecycleSessionShape> = {
+  const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const restartRecoveryRuns = params.entry?.restartRecoveryRuns;
-  if (
-    resolveLifecyclePhase(params.event) !== "start" &&
-    runId &&
-    lifecycleGeneration &&
-    restartRecoveryRuns?.some(
-      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
-    )
-  ) {
-    const remainingRuns = restartRecoveryRuns.filter(
-      (run) => run.runId !== runId || run.lifecycleGeneration !== lifecycleGeneration,
-    );
-    if (remainingRuns.length > 0) {
-      return { restartRecoveryRuns: remainingRuns };
-    }
-    patch.restartRecoveryRuns = undefined;
+  const projection = projectMainSessionRecoveryLifecycle({
+    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+    entry: params.entry,
+    event: params.event,
+    snapshotPatch,
+  });
+  if (projection.action === "suppress") {
+    return {};
   }
-  return patch;
+  const phase = resolveLifecyclePhase(params.event);
+  const runId = normalizeLifecycleRunId(params.event.runId);
+  const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
+  // Run ownership follows the durable running projection. Terminal settlement
+  // releases it; yielded parents retain it for their continuation lifecycle.
+  return {
+    ...projection.patch,
+    ...(phase === "start"
+      ? { lifecycleRunId: runId, lastRunId: undefined }
+      : projection.patch.status && projection.patch.status !== "running"
+        ? { lifecycleRunId: undefined, lastRunId: clientRunId }
+        : {}),
+  };
 }
 
 export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
-  const { restartRecoveryRuns: _restartRecoveryRuns, ...patch } =
-    derivePersistedSessionLifecyclePatch(params);
+  const {
+    restartRecoveryRuns: _restartRecoveryRuns,
+    lifecycleRunId: _lifecycleRunId,
+    ...patch
+  } = derivePersistedSessionLifecyclePatch(params);
   return patch;
 }
 
@@ -238,36 +260,39 @@ export function isRestartRecoveryLifecycleEvent(params: {
   entry?: Pick<SessionEntry, "restartRecoveryRuns"> | null;
   event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration" | "data">;
 }): boolean {
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const phase = resolveLifecyclePhase(params.event);
-  const interrupted = params.event.data?.stopReason === "restart";
-  const matchesRecoveryRun = Boolean(
-    runId &&
-    lifecycleGeneration &&
-    params.entry?.restartRecoveryRuns?.some(
-      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
-    ),
-  );
-  return (
-    matchesRecoveryRun &&
-    (phase === "start" || ((phase === "end" || phase === "error") && interrupted))
-  );
+  return isMainSessionRecoveryLifecycleEvent(params);
 }
 
 /**
- * A pre-`sessions.reset` run's lifecycle event must not mutate a session row
- * whose sessionId was rotated by the reset. True only when both the owning
- * run's sessionId and the current row's sessionId are known and differ.
+ * Reject pre-reset runs and explicitly older runs sharing one session so late
+ * lifecycle events cannot overwrite a newer run's authoritative state.
  */
 export function isStaleLifecycleEventForSession(params: {
   owningSessionId?: string;
   currentSessionId?: string;
+  eventRunId?: unknown;
+  currentRunId?: unknown;
+  eventStartedAt?: unknown;
+  currentStartedAt?: number;
 }): boolean {
-  return Boolean(
+  if (
     params.owningSessionId &&
     params.currentSessionId &&
-    params.owningSessionId !== params.currentSessionId,
+    params.owningSessionId !== params.currentSessionId
+  ) {
+    return true;
+  }
+  const eventRunId = normalizeLifecycleRunId(params.eventRunId);
+  const currentRunId = normalizeLifecycleRunId(params.currentRunId);
+  // Matching ownership is stronger than producer timestamps. Missing or
+  // different identities retain the legacy timestamp fence.
+  if (eventRunId && currentRunId && eventRunId === currentRunId) {
+    return false;
+  }
+  return (
+    isFiniteTimestamp(params.eventStartedAt) &&
+    isFiniteTimestamp(params.currentStartedAt) &&
+    params.eventStartedAt < params.currentStartedAt
   );
 }
 
@@ -281,6 +306,16 @@ function acceptsCronRunContinuationLifecycleEvent(params: {
   }
   const runId = params.event.runId?.trim();
   return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
+}
+
+// sessions.list cache fence input. The terminal entry write (status/endedAt/
+// runtimeMs) commits asynchronously after the run-index fence already bumped
+// at lifecycle end; without its own fence a list computed in that window
+// caches the pre-terminal row indefinitely.
+let lifecyclePersistenceVersion = 0;
+
+export function readSessionLifecyclePersistenceVersion(): number {
+  return lifecyclePersistenceVersion;
 }
 
 export async function persistGatewaySessionLifecycleEvent(params: {
@@ -311,7 +346,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       storePath: sessionEntry.storePath,
       sessionKey: sessionEntry.canonicalKey,
     },
-    async (entry) => {
+    async (storedEntry) => {
+      const entry = storedEntry as SessionEntry;
       if (
         exactCronRun &&
         !acceptsCronRunContinuationLifecycleEvent({ entry, event: params.event })
@@ -320,10 +356,16 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         // one claimed continuation. Ready or replaced claims reject late events.
         return null;
       }
-      // Reject a pre-reset run's lifecycle event: sessions.reset rotates the row
-      // to a new sessionId under the same sessionKey, so an old in-flight run's
-      // late start/end/error must not overwrite the fresh row's status (#88538).
-      if (isStaleLifecycleEventForSession({ owningSessionId, currentSessionId: entry.sessionId })) {
+      if (
+        isStaleLifecycleEventForSession({
+          owningSessionId,
+          currentSessionId: entry.sessionId,
+          eventRunId: params.event.runId,
+          currentRunId: entry.lifecycleRunId,
+          eventStartedAt: params.event.data?.startedAt,
+          currentStartedAt: entry.startedAt,
+        })
+      ) {
         return null;
       }
       const patch = derivePersistedSessionLifecyclePatch({
@@ -338,4 +380,5 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       requireWriteSuccess: true,
     },
   );
+  lifecyclePersistenceVersion += 1;
 }

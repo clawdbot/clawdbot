@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
@@ -15,6 +16,9 @@ import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 const loadWhatsAppApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
+);
+const loadWhatsAppQuestionReactionsModule = createLazyRuntimeModule(
+  () => import("./question-reactions.js"),
 );
 
 function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
@@ -29,6 +33,13 @@ function normalizeWhatsAppChannelSendText(text: string | undefined): string {
 async function prepareWhatsAppApprovalPayloadForDelivery(
   params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
 ) {
+  const questionPayload = questionGatewayRuntime.prepareReactionPayloadForDelivery({
+    payload: params.payload,
+    presentation: params.presentation,
+  });
+  if (questionPayload) {
+    return questionPayload;
+  }
   return (await loadWhatsAppApprovalReactionsModule()).prepareWhatsAppApprovalPayloadForDelivery({
     payload: params.payload,
     presentation: params.presentation,
@@ -38,6 +49,9 @@ async function prepareWhatsAppApprovalPayloadForDelivery(
 async function registerDeliveredWhatsAppApprovalPayload(
   params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
 ): Promise<void> {
+  (
+    await loadWhatsAppQuestionReactionsModule()
+  ).registerWhatsAppQuestionReactionTargetForDeliveredPayload(params);
   (
     await loadWhatsAppApprovalReactionsModule()
   ).registerWhatsAppApprovalReactionTargetForDeliveredPayload(params);

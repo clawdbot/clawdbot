@@ -1,10 +1,10 @@
 // Private runtime barrel for the bundled Signal extension.
 // Prefer narrower SDK subpaths plus local extension seams over the legacy signal barrel.
 
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 export { buildChannelConfigSchema, SignalConfigSchema } from "../config-api.js";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { RuntimeOpenClawConfig as OpenClawConfig };
 export type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -40,6 +40,7 @@ export {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
+  resolveSignalTransport,
 } from "./accounts.js";
 export { monitorSignalProvider } from "./monitor.js";
 export { installSignalCli } from "./install-signal-cli.js";
@@ -48,5 +49,5 @@ export { resolveSignalReactionLevel } from "./reaction-level.js";
 export { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 export { sendMessageSignal } from "./send.js";
 export { signalMessageActions } from "./message-actions.js";
-export type { ResolvedSignalAccount } from "./accounts.js";
-export type { SignalAccountConfig } from "./account-types.js";
+export type { ResolvedSignalAccount, ResolvedSignalTransport } from "./accounts.js";
+export type { SignalAccountConfig, SignalTransportConfig } from "./account-types.js";

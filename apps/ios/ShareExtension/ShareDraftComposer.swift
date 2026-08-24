@@ -38,6 +38,11 @@ enum ShareDraftComposer {
 }
 
 enum SharePayloadNormalizer {
+    static func distinctProviderText(_ raw: String?, sharedURL: URL?) -> String? {
+        guard let candidate = self.trimmed(raw) else { return nil }
+        return candidate == self.trimmed(sharedURL?.absoluteString) ? nil : candidate
+    }
+
     static func distinctAttributedText(_ raw: String?, sharedText: String?, sharedURL: URL?) -> String? {
         guard let candidate = self.trimmed(raw) else { return nil }
         let duplicates = [self.trimmed(sharedText), self.trimmed(sharedURL?.absoluteString)].compactMap(\.self)

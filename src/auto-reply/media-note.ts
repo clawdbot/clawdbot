@@ -1,8 +1,10 @@
 /** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
-import type { MsgContext } from "./templating.js";
+import type { RuntimeMsgContext as MsgContext } from "./templating.js";
 
 function stripDarwinPrivatePrefix(value: string): string {
   return value.startsWith("/private/var/") ? value.slice("/private".length) : value;
@@ -53,41 +55,25 @@ function formatMediaAttachedLine(params: {
   const typeRaw = sanitizeInlineMediaNoteValue(params.type);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
   const urlRaw = sanitizeInlineMediaNoteValue(params.url);
-  // When the channel mirrors the local path into MediaUrl (Telegram album
+  // When the channel mirrors the local path into the fact URL (Telegram album
   // media is the canonical case), rendering ` | ${url}` adds no information
   // and clutters the prompt with `path | path` duplication (issue #47587).
   const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
   return `${prefix}${pathValue}${typePart}${urlPart}]`;
 }
 
-// Common audio file extensions for transcription detection
-const AUDIO_EXTENSIONS = new Set([
-  ".ogg",
-  ".opus",
-  ".mp3",
-  ".m4a",
-  ".m2a",
-  ".wav",
-  ".webm",
-  ".flac",
-  ".aac",
-  ".wma",
-  ".aiff",
-  ".alac",
-  ".oga",
-]);
+// WebM is ambiguous, while WMA and ALAC do not have canonical extension mappings.
+const AUDIO_EXTENSIONS_WITHOUT_CANONICAL_MIME = [".webm", ".wma", ".alac"] as const;
 
 function isAudioPath(pathLocal: string | undefined): boolean {
   if (!pathLocal) {
     return false;
   }
-  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
-  for (const ext of AUDIO_EXTENSIONS) {
-    if (lower.endsWith(ext)) {
-      return true;
-    }
+  if (isAudioFileName(pathLocal)) {
+    return true;
   }
-  return false;
+  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
+  return AUDIO_EXTENSIONS_WITHOUT_CANONICAL_MIME.some((extension) => lower.endsWith(extension));
 }
 
 function isValidAttachmentIndex(index: number, attachmentCount: number): boolean {
@@ -130,76 +116,90 @@ function collectTranscribedAudioAttachmentIndices(
   return transcribedAudioIndices;
 }
 
-/** Formats a prompt-visible media attachment note, omitting audio already represented by transcript. */
-export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  const paths =
-    pathsFromArray && pathsFromArray.length > 0
-      ? pathsFromArray
-      : ctx.MediaPath?.trim()
-        ? [ctx.MediaPath.trim()]
-        : [];
-  if (paths.length === 0) {
-    return undefined;
+function collectDescribedImageAttachmentIndices(ctx: MsgContext): Set<number> {
+  return new Set(
+    ctx.MediaUnderstanding?.flatMap((output) =>
+      output.kind === "image.description" ? [output.attachmentIndex] : [],
+    ) ?? [],
+  );
+}
+
+type InboundMediaNoteProjection = {
+  text?: string;
+  media: MediaFact[];
+  /** Original ctx.media fact positions aligned with `media`, for index-based identity. */
+  mediaIndexes?: number[];
+};
+
+/** Formats prompt-visible attachment text and retains facts that still need native hydration. */
+export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
+  const facts = normalizeMediaFacts(ctx.media);
+  const entries = facts.flatMap((fact, index) => {
+    const mediaPath = fact.path?.trim() ?? "";
+    return mediaPath || fact.url?.trim()
+      ? [
+          {
+            fact,
+            path: mediaPath,
+            type: fact.contentType ?? fact.kind,
+            url: fact.url,
+            index,
+          },
+        ]
+      : [];
+  });
+  if (entries.length === 0) {
+    return { media: [], mediaIndexes: [] };
   }
 
-  const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, paths.length);
-
-  const urls =
-    Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length === paths.length
-      ? ctx.MediaUrls
-      : undefined;
-  const types =
-    Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length === paths.length
-      ? ctx.MediaTypes
-      : undefined;
+  const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, facts.length);
   const hasTranscript = Boolean(ctx.Transcript?.trim());
   // Transcript alone does not identify an attachment index; only use it as a fallback
   // when there is a single attachment to avoid stripping unrelated audio files.
-  const canStripSingleAttachmentByTranscript = hasTranscript && paths.length === 1;
+  const canStripSingleAttachmentByTranscript = hasTranscript && facts.length === 1;
 
-  const entries = paths
-    .map((entry, index) => ({
-      path: entry ?? "",
-      type: types?.[index] ?? ctx.MediaType,
-      url: urls?.[index] ?? ctx.MediaUrl,
-      index,
-    }))
-    .filter((entry) => {
-      // Strip audio attachments when transcription succeeded - the transcript is already
-      // available in the context, raw audio binary would only waste tokens (issue #4197)
-      // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
-      // which could misclassify non-audio attachments (greptile review feedback)
-      const hasPerEntryType = types !== undefined;
-      const isAudioByMime =
-        hasPerEntryType && normalizeLowercaseStringOrEmpty(entry.type).startsWith("audio/");
-      const isAudioEntry = isAudioPath(entry.path) || isAudioByMime;
-      if (!isAudioEntry) {
-        return true;
-      }
-      if (
-        transcribedAudioIndices.has(entry.index) ||
-        (canStripSingleAttachmentByTranscript && entry.index === 0)
-      ) {
-        return false;
-      }
+  const visibleEntries = entries.filter((entry) => {
+    // Strip audio attachments when transcription succeeded - the transcript is already
+    // available in the context, raw audio binary would only waste tokens (issue #4197)
+    const normalizedType = normalizeLowercaseStringOrEmpty(entry.type);
+    const isAudioByMime = normalizedType === "audio" || normalizedType.startsWith("audio/");
+    const isAudioEntry = entry.fact.kind === "audio" || isAudioPath(entry.path) || isAudioByMime;
+    if (!isAudioEntry) {
       return true;
-    });
-  if (entries.length === 0) {
-    return undefined;
+    }
+    if (
+      entry.fact.transcribed === true ||
+      transcribedAudioIndices.has(entry.index) ||
+      (canStripSingleAttachmentByTranscript && entry.index === 0)
+    ) {
+      return false;
+    }
+    return true;
+  });
+  if (visibleEntries.length === 0) {
+    return { media: [], mediaIndexes: [] };
   }
-  if (entries.length === 1) {
-    return formatMediaAttachedLine({
-      path: entries[0]?.path ?? "",
-      type: entries[0]?.type,
-      url: entries[0]?.url,
-    });
+  const describedImageIndices = collectDescribedImageAttachmentIndices(ctx);
+  const media = visibleEntries.map((entry) => ({
+    ...entry.fact,
+    ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
+  }));
+  const mediaIndexes = visibleEntries.map((entry) => entry.index);
+  if (visibleEntries.length === 1) {
+    return {
+      text: formatMediaAttachedLine({
+        path: visibleEntries[0]?.path ?? "",
+        type: visibleEntries[0]?.type,
+        url: visibleEntries[0]?.url,
+      }),
+      media,
+      mediaIndexes,
+    };
   }
 
-  const count = entries.length;
+  const count = visibleEntries.length;
   const lines: string[] = [`[media attached: ${count} files]`];
-  for (const [idx, entry] of entries.entries()) {
+  for (const [idx, entry] of visibleEntries.entries()) {
     lines.push(
       formatMediaAttachedLine({
         path: entry.path,
@@ -210,5 +210,5 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       }),
     );
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), media, mediaIndexes };
 }

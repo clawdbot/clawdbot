@@ -64,7 +64,7 @@ async function createSignedDevice(params: {
   signedAtMs?: number;
 }) {
   const identity = params.identityPath
-    ? loadOrCreateDeviceIdentity(params.identityPath)
+    ? loadOrCreateDeviceIdentity({ path: params.identityPath })
     : loadOrCreateDeviceIdentity();
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
@@ -169,7 +169,7 @@ async function createSignedBrowserDevice(
     scopes: ["operator.admin"],
     clientId: client.id,
     clientMode: client.mode,
-    identityPath: path.join(os.tmpdir(), `openclaw-${identityName}-device-${randomUUID()}.json`),
+    identityPath: path.join(os.tmpdir(), `openclaw-${identityName}-device-${randomUUID()}.sqlite`),
     nonce: nonce ?? "",
   });
 }

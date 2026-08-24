@@ -1,19 +1,24 @@
 import type {
   SkillWorkshopActionBusy,
   SkillWorkshopActionNotice,
+  SkillWorkshopAppliedDiffMode,
   SkillWorkshopMode,
   SkillWorkshopProposal,
+  SkillWorkshopProposalDecision,
   SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
+import type { SkillWorkshopAccess } from "./access.ts";
 import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
 import type { SkillWorkshopHistoryScanState } from "./state.ts";
 
 export type SkillWorkshopProps = {
+  access: SkillWorkshopAccess;
   loading: boolean;
   error: string | null;
   inspectingKey: string | null;
   proposals: SkillWorkshopProposal[];
   selectedKey: string | null;
+  appliedDiffMode: SkillWorkshopAppliedDiffMode;
   statusFilter: SkillWorkshopStatusFilter;
   query: string;
   filePreviewKey: string | null;
@@ -24,6 +29,7 @@ export type SkillWorkshopProps = {
   actionNotice: SkillWorkshopActionNotice | null;
   revisionKey: string | null;
   revisionDraft: string;
+  revisionRecoveryActive: boolean;
   assistantName: string;
   workshopAgentName: string;
   selfLearning: SkillWorkshopSelfLearning | null;
@@ -36,11 +42,13 @@ export type SkillWorkshopProps = {
   onQueueWidthChange: (width: number) => void;
   onModeChange: (mode: SkillWorkshopMode) => void;
   onSelect: (key: string) => void;
+  onAppliedDiffModeChange: (mode: SkillWorkshopAppliedDiffMode) => void;
   onPrev: () => void;
   onNext: () => void;
-  onApply: (key: string) => void;
+  onApply: (decision: SkillWorkshopProposalDecision) => void;
+  onEvaluate: (key: string) => void;
   onRevise: (key: string) => void;
-  onReject: (key: string) => void;
+  onReject: (decision: SkillWorkshopProposalDecision) => void;
   onRevisionDraftChange: (draft: string) => void;
   onRevisionCancel: () => void;
   onRevisionSubmit: (key: string) => void;

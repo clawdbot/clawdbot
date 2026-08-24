@@ -1,5 +1,6 @@
 // Msteams plugin module implements sent message cache behavior.
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalMSTeamsRuntime } from "./runtime.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -20,15 +21,12 @@ const sentMessages = createPersistentDedupeCache<MSTeamsSentMessageRecord>({
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStore(options),
-    logError: (error) => {
-      try {
-        getOptionalMSTeamsRuntime()
-          ?.logging.getChildLogger({ plugin: "msteams", feature: "sent-message-state" })
-          .warn("Microsoft Teams persistent sent-message state failed", { error: String(error) });
-      } catch {
-        // Best effort only: persistent state must never break Teams routing.
-      }
-    },
+    logError: createPluginStateErrorReporter(
+      getOptionalMSTeamsRuntime,
+      "msteams",
+      "sent-message-state",
+      "Microsoft Teams persistent sent-message state failed",
+    ),
     // Re-prime with the original send time so restored entries keep their TTL window.
     readTimestamp: (record) => record.sentAt,
   },

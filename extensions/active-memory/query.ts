@@ -4,12 +4,12 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
   ACTIVE_MEMORY_OPEN_TAG,
-  ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER,
+  ACTIVE_MEMORY_CONTEXT_HEADER,
   MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS,
   RECALLED_CONTEXT_LINE_PATTERNS,
   type ActiveRecallRecentTurn,
@@ -106,6 +106,9 @@ function normalizeSearchQueryText(text: string): string {
       if (!line) {
         return false;
       }
+      if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
+        return false;
+      }
       if (/^(conversation info|sender|untrusted context)\b/i.test(line)) {
         return false;
       }
@@ -200,7 +203,7 @@ function stripRecalledContextNoise(text: string): string {
     if (!line) {
       continue;
     }
-    if (line === ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER) {
+    if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
       continue;
     }
     if (line === ACTIVE_MEMORY_OPEN_TAG) {
@@ -237,7 +240,7 @@ function stripInjectedActiveMemoryPrefixOnly(text: string): string {
     if (!line) {
       continue;
     }
-    if (line === ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER) {
+    if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
       const nextLine = lines[index + 1]?.trim() ?? "";
       if (nextLine === ACTIVE_MEMORY_OPEN_TAG) {
         let closeIndex = -1;
@@ -291,7 +294,7 @@ function parseModelCandidate(modelRef: string | undefined, defaultProvider = DEF
 }
 
 function getModelRef(
-  api: OpenClawPluginApi,
+  runtimeConfig: OpenClawConfig,
   agentId: string,
   config: ResolvedActiveRecallPluginConfig,
   ctx?: {
@@ -301,8 +304,8 @@ function getModelRef(
 ): { provider: string; model: string } | undefined {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
-  const configuredDefaultModel = resolveAgentEffectiveModelPrimary(api.config, agentId)
-    ? resolveDefaultModelForAgent({ cfg: api.config, agentId })
+  const configuredDefaultModel = resolveAgentEffectiveModelPrimary(runtimeConfig, agentId)
+    ? resolveDefaultModelForAgent({ cfg: runtimeConfig, agentId })
     : undefined;
   const defaultProvider = configuredDefaultModel?.provider ?? DEFAULT_PROVIDER;
   const candidates = [

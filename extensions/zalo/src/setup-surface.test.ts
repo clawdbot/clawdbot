@@ -1,5 +1,6 @@
 // Zalo tests cover setup surface plugin behavior.
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -70,103 +71,18 @@ describe("zalo setup wizard", () => {
     expect(zaloConfig.webhookUrl).toBeUndefined();
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      zaloDmPolicy.getCurrent(
-        {
-          channels: {
-            zalo: {
-              dmPolicy: "disabled",
-              accounts: {
-                work: {
-                  botToken: "12345689:abc-xyz",
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "work",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(zaloDmPolicy.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
-      policyKey: "channels.zalo.accounts.work.dmPolicy",
-      allowFromKey: "channels.zalo.accounts.work.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
-      channels: {
-        zalo: {
-          defaultAccount: "work",
-          dmPolicy: "disabled",
-          allowFrom: ["123456789"],
-          accounts: {
-            work: {
-              botToken: "12345689:abc-xyz",
-              dmPolicy: "allowlist",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(zaloDmPolicy.getCurrent(cfg)).toBe("allowlist");
-    expect(zaloDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.zalo.accounts.work.dmPolicy",
-      allowFromKey: "channels.zalo.accounts.work.allowFrom",
-    });
-
-    const next = zaloDmPolicy.setPolicy(cfg, "open");
-    const zaloConfig = next.channels?.zalo;
-    if (!zaloConfig) {
-      throw new Error("expected Zalo config");
-    }
-    expect(zaloConfig.dmPolicy).toBe("disabled");
-    const workAccount = next.channels?.zalo?.accounts?.work as
-      | { dmPolicy?: string; allowFrom?: Array<string | number> }
-      | undefined;
-    if (!workAccount) {
-      throw new Error("expected Zalo work account");
-    }
-    expect(workAccount.dmPolicy).toBe("open");
-  });
-
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = zaloDmPolicy.setPolicy(
+  installChannelDmPolicyContractSuite({
+    dmPolicy: zaloDmPolicy,
+    cases: [
       {
-        channels: {
-          zalo: {
-            allowFrom: ["123456789"],
-            accounts: {
-              work: {
-                botToken: "12345689:abc-xyz",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "work",
-    );
-
-    const zaloConfig = next.channels?.zalo;
-    if (!zaloConfig) {
-      throw new Error("expected Zalo config");
-    }
-    expect(zaloConfig.dmPolicy).toBeUndefined();
-    const workAccount = next.channels?.zalo?.accounts?.work as
-      | { dmPolicy?: string; allowFrom?: Array<string | number> }
-      | undefined;
-    if (!workAccount) {
-      throw new Error("expected Zalo work account");
-    }
-    expect(workAccount.dmPolicy).toBe("open");
-    expect(workAccount.allowFrom).toEqual(["123456789", "*"]);
+        name: "Zalo named accounts",
+        channel: "zalo",
+        accountId: "work",
+        accountConfig: { botToken: "12345689:abc-xyz" },
+        inheritedAllowFrom: ["123456789"],
+        defaultAccount: { rootAllowFrom: ["123456789"] },
+      },
+    ],
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {

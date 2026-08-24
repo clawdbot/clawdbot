@@ -12,6 +12,7 @@ export const WORKBOARD_STATUSES = [
 ] as const;
 
 export const WORKBOARD_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+/** Built-in launch choices. Persisted execution engines remain an open runtime identifier. */
 export const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude"] as const;
 export const WORKBOARD_EXECUTION_MODES = ["autonomous", "manual"] as const;
 export const WORKBOARD_EXECUTION_STATUSES = [
@@ -70,6 +71,7 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "repeated_failures",
   "missing_proof",
   "orphaned_session",
+  "archived_but_active",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
@@ -81,7 +83,7 @@ export function isValidWorkboardBoardId(value: unknown): value is string {
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
-export type WorkboardExecutionEngine = (typeof WORKBOARD_EXECUTION_ENGINES)[number];
+export type WorkboardExecutionEngine = string;
 export type WorkboardExecutionMode = (typeof WORKBOARD_EXECUTION_MODES)[number];
 export type WorkboardExecutionStatus = (typeof WORKBOARD_EXECUTION_STATUSES)[number];
 export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
@@ -96,10 +98,10 @@ export type WorkboardNotificationKind = (typeof WORKBOARD_NOTIFICATION_KINDS)[nu
 export type WorkboardExecution = {
   id: string;
   kind: "agent-session";
-  engine: WorkboardExecutionEngine;
+  engine?: WorkboardExecutionEngine;
   mode: WorkboardExecutionMode;
   status: WorkboardExecutionStatus;
-  model: string;
+  model?: string;
   sessionKey?: string;
   runId?: string;
   startedAt: number;
@@ -248,6 +250,26 @@ export type WorkboardWorkspaceAccess =
   | { unrestricted: true }
   | { unrestricted: false; roots: string[]; writable: boolean };
 
+type WorkboardLaunchIdentity = {
+  requestedSessionKey: string;
+  provisionalRunId: string;
+  preparedAt: number;
+};
+
+export type WorkboardLaunchState =
+  | (WorkboardLaunchIdentity & { phase: "prepared" })
+  | (WorkboardLaunchIdentity & {
+      phase: "accepted";
+      acceptedAt: number;
+      acceptedSessionKey: string;
+      acceptedRunId?: string;
+    })
+  | (WorkboardLaunchIdentity & {
+      phase: "failed";
+      failedAt: number;
+      reason: string;
+    });
+
 export type WorkboardAutomation = {
   tenant?: string;
   boardId?: string;
@@ -263,6 +285,7 @@ export type WorkboardAutomation = {
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
+  launch?: WorkboardLaunchState;
 };
 
 export type WorkboardBoardMetadata = {
@@ -271,6 +294,7 @@ export type WorkboardBoardMetadata = {
   description?: string;
   icon?: string;
   color?: string;
+  automationJobId?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   createdAt: number;
@@ -284,6 +308,7 @@ export type WorkboardBoardSummary = {
   description?: string;
   icon?: string;
   color?: string;
+  automationJobId?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   total: number;

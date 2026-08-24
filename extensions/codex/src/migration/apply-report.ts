@@ -13,6 +13,7 @@ export function codexPluginActivationReportState(result: CodexPluginActivationRe
     case "auth_required":
       return { installed: true, enabled: false };
     case "disabled":
+    case "install_failed":
     case "marketplace_missing":
     case "plugin_missing":
       return { installed: false, enabled: false };
@@ -31,6 +32,6 @@ export function sanitizeAppsNeedingAuth(apps: readonly v2.AppSummary[]): Array<{
   return apps.map((app) => ({
     id: app.id,
     name: app.name,
-    needsAuth: app.needsAuth,
+    needsAuth: true,
   }));
 }

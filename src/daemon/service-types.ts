@@ -31,6 +31,42 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
   disable?: boolean;
   warn?: (message: string) => void;
+  onMutation?: (mutation: GatewayLifecycleMutation) => void;
+};
+
+export type GatewayLifecycleMutationMode =
+  | "enable"
+  | "bootstrap"
+  | "kickstart"
+  | "bootout"
+  | "disable"
+  | "disable-stop"
+  | "disable-bootout"
+  | "handoff-kickstart"
+  | "handoff-reload"
+  | "systemctl-start"
+  | "systemctl-stop"
+  | "systemctl-restart"
+  | "startup-entry-start"
+  | "startup-entry-stop"
+  | "startup-entry-restart"
+  | "schtasks-start"
+  | "schtasks-stop"
+  | "schtasks-end"
+  | "schtasks-restart"
+  | "sigterm"
+  | "sigusr1"
+  | "rpc"
+  | "launchd-bootstrap"
+  | "service-repair"
+  | "scheduled"
+  | "deferred"
+  | "coalesced"
+  | "reload"
+  | "start-after-exit";
+
+export type GatewayLifecycleMutation = {
+  mode: GatewayLifecycleMutationMode;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
@@ -50,6 +86,11 @@ export type GatewayServiceReadOptions = {
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
 
+export type GatewayServiceLoadState =
+  | { status: "loaded" }
+  | { status: "not-loaded" }
+  | { status: "unknown"; detail: string };
+
 /** Parsed command and env metadata from an installed platform service. */
 export type GatewayServiceCommandConfig = {
   programArguments: string[];
@@ -61,7 +102,7 @@ export type GatewayServiceCommandConfig = {
 
 export type GatewayServiceState = {
   installed: boolean;
-  loaded: boolean;
+  loadState: GatewayServiceLoadState;
   running: boolean;
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig | null;
@@ -69,13 +110,17 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "port-mismatch" | "temporary-program" | "version-mismatch";
+  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 
 export type GatewayServiceStartResult =
+  | {
+      outcome: "already-running";
+      state: GatewayServiceState;
+      issues: GatewayServiceStartRepairIssue[];
+    }
   | { outcome: "started"; state: GatewayServiceState }
-  | { outcome: "scheduled"; state: GatewayServiceState }
   | { outcome: "missing-install"; state: GatewayServiceState }
   | {
       outcome: "repair-required";

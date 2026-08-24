@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -166,8 +167,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return isLoopbackHost(url.hostname);
   } catch {
     return false;
   }

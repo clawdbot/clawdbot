@@ -4,14 +4,13 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.dm
+      - matrix.dm-policy
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 45000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         allowBots: mentions
         configuredBotRoles:

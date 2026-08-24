@@ -137,6 +137,7 @@ describe("security-sensitive guard workflow", () => {
     expect(codeowners).toContain(
       "/scripts/github/security-sensitive-guard.mjs @openclaw/openclaw-secops",
     );
+    expect(codeowners).toContain("/scripts/github/guard-shared.mjs @openclaw/openclaw-secops");
     expect(codeowners).toContain("/.gitignore @openclaw/openclaw-secops");
   });
 });

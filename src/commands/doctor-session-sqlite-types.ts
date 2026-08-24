@@ -7,6 +7,18 @@ export type DoctorSessionSqliteIssue = {
   sessionKey?: string;
 };
 
+const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
+  "entry_invalid",
+  "transcript_archive_failed",
+  "transcript_malformed",
+  "transcript_missing",
+  "unreferenced_jsonl_archive_failed",
+]);
+
+export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
+  return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
+}
+
 export type DoctorSessionSqliteRestoreConflict = {
   archivePath: string;
   reason: string;
@@ -104,6 +116,26 @@ export type DoctorSessionSqliteTargetReport = {
   restore?: DoctorSessionSqliteRestoreReport;
 };
 
+export function createDoctorSessionSqliteTargetReport(
+  values: Pick<DoctorSessionSqliteTargetReport, "agentId" | "sqlitePath" | "storePath"> &
+    Partial<Omit<DoctorSessionSqliteTargetReport, "agentId" | "sqlitePath" | "storePath">>,
+): DoctorSessionSqliteTargetReport {
+  return {
+    archivedTranscriptFiles: [],
+    archivedUnreferencedJsonlFiles: [],
+    importedEntries: 0,
+    importedTranscriptEvents: 0,
+    issues: [],
+    legacyEntries: 0,
+    referencedTranscriptFiles: 0,
+    sqliteEntries: 0,
+    unreferencedJsonlFiles: [],
+    validatedEntries: 0,
+    validatedTranscriptEvents: 0,
+    ...values,
+  };
+}
+
 export type DoctorSessionSqliteReport = {
   migrationRun?: {
     failureReportJsonPath?: string;
@@ -130,3 +162,41 @@ export type DoctorSessionSqliteReport = {
     validatedTranscriptEvents: number;
   };
 };
+
+export function sumDoctorSessionSqliteTargets(
+  targets: DoctorSessionSqliteTargetReport[],
+  value: (target: DoctorSessionSqliteTargetReport) => number,
+): number {
+  return targets.reduce((total, target) => total + value(target), 0);
+}
+
+export function createDoctorSessionSqliteTotals(
+  targets: DoctorSessionSqliteTargetReport[],
+  values: Partial<
+    Omit<DoctorSessionSqliteReport["totals"], "issues" | "sqliteEntries" | "targets">
+  > = {},
+): DoctorSessionSqliteReport["totals"] {
+  const { archivedLegacyStoreFiles, reclaimedBytes } = values;
+  const sqliteEntries = new Map<string, number>();
+  for (const target of targets) {
+    sqliteEntries.set(
+      target.sqlitePath,
+      Math.max(sqliteEntries.get(target.sqlitePath) ?? 0, target.sqliteEntries),
+    );
+  }
+  return {
+    ...(archivedLegacyStoreFiles === undefined ? {} : { archivedLegacyStoreFiles }),
+    archivedTranscriptFiles: values.archivedTranscriptFiles ?? 0,
+    archivedUnreferencedJsonlFiles: values.archivedUnreferencedJsonlFiles ?? 0,
+    importedEntries: values.importedEntries ?? 0,
+    importedTranscriptEvents: values.importedTranscriptEvents ?? 0,
+    issues: sumDoctorSessionSqliteTargets(targets, (target) => target.issues.length),
+    legacyEntries: values.legacyEntries ?? 0,
+    ...(reclaimedBytes === undefined ? {} : { reclaimedBytes }),
+    sqliteEntries: [...sqliteEntries.values()].reduce((total, count) => total + count, 0),
+    targets: targets.length,
+    unreferencedJsonlFiles: values.unreferencedJsonlFiles ?? 0,
+    validatedEntries: values.validatedEntries ?? 0,
+    validatedTranscriptEvents: values.validatedTranscriptEvents ?? 0,
+  };
+}

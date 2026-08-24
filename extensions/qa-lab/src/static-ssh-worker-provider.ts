@@ -70,6 +70,7 @@ function parseStaticSshWorkerSettings(profile: WorkerProfile): WorkerSshEndpoint
 export function createStaticSshWorkerProvider(): WorkerProvider {
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
+    supportedExecutionModes: ["remote-exec"],
     async provision(profile, opId) {
       if (!opId.trim()) {
         throw new Error("static-ssh provision operation id must be non-empty");
@@ -77,13 +78,14 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
       return {
         leaseId: `${STATIC_SSH_LEASE_PREFIX}${opId}`,
         ssh: parseStaticSshWorkerSettings(profile),
+        sharedHost: true,
       };
     },
     async inspect({ leaseId }) {
       const active =
         leaseId.startsWith(STATIC_SSH_LEASE_PREFIX) &&
         leaseId.length > STATIC_SSH_LEASE_PREFIX.length;
-      return { status: active ? "active" : "unknown" };
+      return active ? { status: "active", sharedHost: true } : { status: "unknown" };
     },
     // Development-only: a static worker is a shared host, not an isolation boundary.
     // Destroy releases the logical lease; it does not stop or clean the host.

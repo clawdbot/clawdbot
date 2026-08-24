@@ -3,12 +3,22 @@ import {
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  bindIngressLifecycleToReplyOptions,
+  runPassiveAccountLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-chunking";
+import type { PluginRuntime } from "../runtime-api.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
-import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
+import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
@@ -19,14 +29,17 @@ type NostrGatewayStart = NonNullable<
 >;
 type NostrOutboundAdapter = Pick<
   ChannelOutboundAdapter,
-  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
+  "chunker" | "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
-
 const activeBuses = new Map<string, NostrBusHandle>();
-const metricsSnapshots = new Map<string, MetricsSnapshot>();
 const ACCESS_GROUP_PREFIX = "accessGroup:";
+
+function normalizeRelayLifecycleKey(relay: string): string {
+  return new URL(relay).toString();
+}
 
 function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
   const trimmed = entry.trim();
@@ -77,11 +90,16 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   ctx.setStatus({
     accountId: account.accountId,
     publicKey: account.publicKey,
+    lifecycle: "starting",
   });
   ctx.log?.info?.(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);
 
   if (!account.configured) {
     throw new Error("Nostr private key not configured");
+  }
+  const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+  if (!channelRuntime?.inbound?.buildContext) {
+    throw new Error("Nostr requires its registered channel runtime context builder");
   }
 
   const runtime = getNostrRuntime();
@@ -90,7 +108,11 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     channel: "nostr",
     accountId: account.accountId,
   });
-  const resolveInboundAccess = async (senderPubkey: string, rawBody: string) =>
+  const resolveInboundAccess = async (
+    senderPubkey: string,
+    rawBody: string,
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
     await resolveStableChannelMessageIngress({
       channelId: "nostr",
       accountId: account.accountId,
@@ -102,6 +124,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         kind: "direct",
         id: senderPubkey,
       },
+      contextBinding,
       dmPolicy: account.config.dmPolicy ?? "pairing",
       allowFrom: account.config.allowFrom,
       command: runtime.channel.commands.shouldComputeCommandAuthorized(rawBody, ctx.cfg)
@@ -111,7 +134,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         : undefined,
     });
 
-  let busHandle: NostrBusHandle | null = null;
+  const connectedRelays = new Set<string>();
 
   const authorizeSender = async (input: {
     senderId: string;
@@ -145,7 +168,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     return "block";
   };
 
-  await runStoppablePassiveMonitor({
+  await runPassiveAccountLifecycle({
     abortSignal: ctx.abortSignal,
     start: async () => {
       const bus = await startNostrBus({
@@ -154,7 +177,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         relays: account.relays,
         authorizeSender: async ({ senderPubkey, reply }) =>
           await authorizeSender({ senderId: senderPubkey, reply }),
-        onMessage: async (senderPubkey, text, reply, meta) => {
+        onMessage: async (senderPubkey, text, reply, meta, lifecycle) => {
           const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
           if (resolvedAccess.senderAccess.decision !== "allow") {
             ctx.log?.warn?.(
@@ -163,11 +186,19 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             return;
           }
 
-          const { dispatchInboundDirectDmWithRuntime } =
-            await import("./inbound-direct-dm-runtime.js");
-          await dispatchInboundDirectDmWithRuntime({
+          const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
+          await dispatchInboundDirectDm({
+            channelRuntime,
+            resolveChannelIngress: async (contextBinding) => {
+              const exactAccess = await resolveInboundAccess(senderPubkey, text, contextBinding);
+              if (!exactAccess.senderAccess.allowed) {
+                throw new Error(
+                  `Nostr sender authorization changed before dispatch (${senderPubkey})`,
+                );
+              }
+              return exactAccess;
+            },
             cfg: ctx.cfg,
-            runtime,
             channel: "nostr",
             channelLabel: "Nostr",
             accountId: account.accountId,
@@ -185,12 +216,17 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             commandAuthorized: resolvedAccess.commandAccess.requested
               ? resolvedAccess.commandAccess.authorized
               : undefined,
+            turnAdoptionLifecycle:
+              bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
             deliver: async (payload) => {
               const outboundText =
                 payload && typeof payload === "object" && "text" in payload
                   ? ((payload as { text?: string }).text ?? "")
                   : "";
-              if (!outboundText.trim()) {
+              // Inbound DM replies bypass the outbound adapter; sanitize before
+              // Markdown conversion so private tool traces cannot reach a relay.
+              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              if (!sanitizedText) {
                 return;
               }
               const tableMode = runtime.channel.text.resolveMarkdownTableMode({
@@ -198,7 +234,12 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
                 channel: "nostr",
                 accountId: account.accountId,
               });
-              await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
+              const message = stripMarkdown(
+                runtime.channel.text.convertMarkdownTables(sanitizedText, tableMode),
+              );
+              if (message) {
+                await reply(message);
+              }
             },
             onRecordError: (err) => {
               ctx.log?.error?.(
@@ -216,9 +257,21 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
         },
         onConnect: (relay) => {
+          connectedRelays.add(normalizeRelayLifecycleKey(relay));
+          // Treat >=1 connected relay as ready. This favors partial availability over quorum
+          // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {
+          connectedRelays.delete(normalizeRelayLifecycleKey(relay));
+          if (connectedRelays.size === 0) {
+            ctx.setStatus({
+              accountId: account.accountId,
+              connected: false,
+              lifecycle: "recovering",
+            });
+          }
           ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
         },
         onEose: (relays) => {
@@ -240,36 +293,27 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           } else if (event.name === "relay.error") {
             ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
           }
-          if (busHandle) {
-            metricsSnapshots.set(account.accountId, busHandle.getMetrics());
-          }
         },
       });
-      let stopped = false;
-      busHandle = bus;
       activeBuses.set(account.accountId, bus);
 
       ctx.log?.info?.(
-        `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
+        `[${account.accountId}] Nostr provider started with ${account.relays.length} configured relay(s)`,
       );
 
       return {
-        stop: () => {
-          if (stopped) {
-            return;
-          }
-          stopped = true;
-          bus.close();
-          if (busHandle === bus) {
-            busHandle = null;
-          }
+        stop: async () => {
+          // Retire before fallible async shutdown so new work cannot reacquire this bus.
           if (activeBuses.get(account.accountId) === bus) {
             activeBuses.delete(account.accountId);
           }
-          metricsSnapshots.delete(account.accountId);
+          await bus.close();
           ctx.log?.info?.(`[${account.accountId}] Nostr provider stopped`);
         },
       };
+    },
+    stop: async (monitor) => {
+      await monitor.stop();
     },
   });
 };
@@ -305,6 +349,10 @@ export const nostrPairingTextAdapter = {
 export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  // The outbound planner ignores textChunkLimit unless the adapter also
+  // supplies its chunker, causing oversized encrypted events to be rejected.
+  chunker: chunkTextForOutbound,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -323,12 +371,15 @@ export const nostrOutboundAdapter: NostrOutboundAdapter = {
       channel: "nostr",
       accountId: aid,
     });
-    const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
+    const message = stripMarkdown(core.channel.text.convertMarkdownTables(text ?? "", tableMode));
+    if (!message) {
+      throw new Error("Nostr send requires non-empty text after markdown stripping.");
+    }
     const normalizedTo = normalizePubkey(to);
-    await bus.sendDm(normalizedTo, message);
+    const eventId = await bus.sendDm(normalizedTo, message);
     return attachChannelToResult("nostr", {
       to: normalizedTo,
-      messageId: `nostr-${Date.now()}`,
+      messageId: eventId,
     });
   },
 };

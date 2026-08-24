@@ -5,10 +5,13 @@ import type { CronJob, CronRunStatus } from "../types.js";
 export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
 
 /** Schedule-kind filter accepted by paginated cron listing. */
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
+export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
 
 /** Last-run status filter, including jobs that have not produced a status yet. */
 export type CronJobsLastRunStatusFilter = "all" | CronRunStatus | "unknown";
+
+/** Condition-trigger filter accepted by paginated cron listing. */
+export type CronJobsTriggerFilter = "all" | "conditional" | "unconditional";
 
 /** Stable sort keys supported by paginated cron listing. */
 export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
@@ -25,6 +28,7 @@ export type CronListPageOptions = {
   enabled?: CronJobsEnabledFilter;
   scheduleKind?: CronJobsScheduleKindFilter;
   lastRunStatus?: CronJobsLastRunStatusFilter;
+  trigger?: CronJobsTriggerFilter;
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
   agentId?: string;

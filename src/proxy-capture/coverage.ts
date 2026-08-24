@@ -1,5 +1,4 @@
 // Proxy capture coverage helpers summarize which network calls were captured.
-import process from "node:process";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import type { CaptureProtocol } from "./types.js";
 
@@ -168,7 +167,7 @@ export function buildDebugProxyCoverageReport() {
 
 export function maybeWarnAboutDebugProxyCoverage(
   settings: DebugProxySettings = resolveDebugProxySettings(),
-  warn: (message: string) => void = (message) => process.stderr.write(`${message}\n`),
+  warn: (message: string) => void = (message) => console.warn(message),
 ): void {
   if (!settings.enabled || !settings.required) {
     return;

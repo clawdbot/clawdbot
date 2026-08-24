@@ -290,6 +290,29 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       }),
     ).rejects.toThrow("HTTP URL must target a trusted private/internal host");
   });
+
+  it("rejects malformed URLs without retaining credential-bearing input", async () => {
+    const secretUser = "matrix-user";
+    const secretPass = "matrix-fixture";
+    const malformed = `http://${secretUser}:${secretPass}@${["invalid", "host"].join(" ")}`;
+
+    const error = await assertHttpUrlTargetsPrivateNetwork(malformed, {
+      dangerouslyAllowPrivateNetwork: true,
+    }).then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({ code: "ERR_INVALID_URL", message: "Invalid URL" });
+    expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+
+    const serialized = JSON.stringify(error, Object.getOwnPropertyNames(error));
+    expect(serialized).not.toContain(secretUser);
+    expect(serialized).not.toContain(secretPass);
+  });
 });
 
 describe("normalizeHostnameSuffixAllowlist", () => {
@@ -464,6 +487,7 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
     ["IPv6 loopback", "::1", 6],
     ["IPv4-mapped IPv6 loopback", "::ffff:127.0.0.1", 6],
     ["NAT64-embedded IPv4 loopback", "64:ff9b::127.0.0.1", 6],
+    ["local-use NAT64", "64:ff9b:1:808:808:808:a9fe:a9fe", 6],
     ["ISATAP-embedded IPv4 loopback", "2001:4860:1::5efe:7f00:1", 6],
   ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {
     const baseUrl = "http://lan-llm.corp.internal:11434/v1";

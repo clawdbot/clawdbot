@@ -1,13 +1,17 @@
-import type {
-  DoctorSessionSqliteIssue,
-  DoctorSessionSqliteReport,
-  DoctorSessionSqliteRestoreReport,
-} from "../commands/doctor-session-sqlite.js";
+import fs from "node:fs";
+import { listAgentIds } from "../agents/agent-scope.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteReport,
+  type DoctorSessionSqliteRestoreReport,
+} from "../commands/doctor-session-sqlite-types.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 
 type SessionSqliteStartupImportRunner = (params: {
   allAgents: true;
@@ -26,19 +30,19 @@ type SessionSqliteStartupFailureReportWriter = (
   params: { reason: string },
 ) => { jsonPath: string; markdownPath: string };
 
+type SessionSqliteDatabaseExists = (params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  path?: string;
+}) => boolean;
+
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {
+  reconcileSessionTranscriptIndexes?: typeof import("../config/sessions/session-transcript-reconcile.js").reconcileSessionTranscriptIndexes;
   restoreSessionSqliteMigrationRun?: SessionSqliteStartupRestoreRunner;
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
+  sessionSqliteDatabaseExists?: SessionSqliteDatabaseExists;
   writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
 };
-
-const STARTUP_WARNING_ISSUE_CODES = new Set([
-  "entry_invalid",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "transcript_missing",
-  "unreferenced_jsonl_archive_failed",
-]);
 
 /**
  * Run session migrations at gateway startup before runtime session access.
@@ -52,8 +56,50 @@ export async function runStartupSessionMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
-  await runSessionStartupMigration(params);
-  await runStartupSessionSqliteImport(params);
+  if (await runSessionStartupMigration(params)) {
+    await runStartupSessionSqliteImport(params);
+  }
+  await reconcileStartupSessionTranscriptIndexes(params);
+}
+
+async function reconcileStartupSessionTranscriptIndexes(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  log: SessionStartupMigrationLogger;
+  deps?: SessionMigrationDeps;
+}): Promise<void> {
+  const databaseExists =
+    params.deps?.sessionSqliteDatabaseExists ??
+    ((input: Parameters<SessionSqliteDatabaseExists>[0]) =>
+      fs.existsSync(resolveOpenClawAgentSqlitePath(input)));
+  const agentIds = listAgentIds(params.cfg).filter((agentId) =>
+    databaseExists({
+      agentId,
+      ...(params.env ? { env: params.env } : {}),
+    }),
+  );
+  if (agentIds.length === 0) {
+    // No durable session rows can need projection repair when the agent DB is absent.
+    // Avoid creating and schema-registering one empty DB per configured agent at startup.
+    return;
+  }
+  const reconcile =
+    params.deps?.reconcileSessionTranscriptIndexes ??
+    (await import("../config/sessions/session-transcript-reconcile.js"))
+      .reconcileSessionTranscriptIndexes;
+  let reconciledSessions = 0;
+  for (const agentId of agentIds) {
+    const result = await reconcile({
+      agentId,
+      ...(params.env ? { env: params.env } : {}),
+    });
+    reconciledSessions += result.reconciledSessions;
+  }
+  if (reconciledSessions > 0) {
+    params.log.info(
+      `session: rebuilt ${reconciledSessions} transcript projection(s) before serving history`,
+    );
+  }
 }
 
 async function runStartupSessionSqliteImport(params: {
@@ -166,16 +212,14 @@ function collectStartupBlockingIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
   return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => !STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
+    target.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)),
   );
 }
 
 function collectStartupWarningIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
-  return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
-  );
+  return report.targets.flatMap((target) => target.issues.filter(isSessionSqliteMigrationWarning));
 }
 
 function formatStartupIssueLines(issues: readonly DoctorSessionSqliteIssue[]): readonly string[] {

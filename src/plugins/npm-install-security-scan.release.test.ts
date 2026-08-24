@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, it, test } from "vitest";
+import { resolveNpmJsonEntries } from "../infra/npm-registry-spec.js";
 import { isScannable, scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -23,38 +24,58 @@ type PublishablePluginPackage = {
 };
 
 const execFileAsync = promisify(execFile);
-const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
-  "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
-  "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
-  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts",
-  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts",
-  "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
-  "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
-  "@openclaw/discord:dangerous-exec:src/voice/audio.ts",
-  "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
-  "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
-  "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts",
-  "@openclaw/raft:dangerous-exec:src/gateway.ts",
-  "@openclaw/signal:dangerous-exec:src/daemon.ts",
-  "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
+const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+  ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
+  ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/doctor.ts", 1],
+  ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
+  ["@openclaw/imessage:dangerous-exec:src/client.ts", 1],
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts", 1],
+  ["@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
+  ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
+  ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
+  ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
 ]);
 
-const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS = new Set([
-  "@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs",
-  "@openclaw/acpx:dangerous-exec:dist/service-<hash>.js",
-  "@openclaw/codex:dangerous-exec:dist/client-<hash>.js",
-  "@openclaw/google-meet:dangerous-exec:dist/index.js",
-  "@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js",
-  "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
+const REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
+]);
+const REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts", 1],
+]);
+const REVIEWED_CODEX_SOURCE_LAYOUTS: ReadonlyArray<ReadonlyMap<string, number>> = [
+  REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS,
+  REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS,
+];
+const REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>(
+  REVIEWED_CODEX_SOURCE_LAYOUTS.flatMap((layout) => [...layout]),
+);
+
+// Generated chunks can contain multiple reviewed execution sites. Counts are
+// part of the contract so an added or missing site fails the release scan.
+const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+  ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
+  ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/api.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 2],
+  ["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
+  ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
+  ["@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 1],
+  ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
+  ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
 
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
   const parsed = JSON.parse(raw) as unknown;
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
+  const entries = resolveNpmJsonEntries(parsed);
+  if (entries.length !== 1) {
     throw new Error(`${packageName}: npm pack --dry-run did not return one package result.`);
   }
 
-  const result = parsed[0] as NpmPackResult;
+  const result = entries[0] as NpmPackResult;
   if (!Array.isArray(result.files)) {
     throw new Error(`${packageName}: npm pack --dry-run did not return a files list.`);
   }
@@ -88,7 +109,15 @@ function isScannerWalkedPackedPath(packedPath: string): boolean {
 }
 
 function normalizePackedFindingPath(packedPath: string): string {
-  for (const prefix of ["client", "outbound-payload.test-harness", "runtime-entry", "service"]) {
+  for (const prefix of [
+    "dynamic-tools",
+    "outbound-payload.test-harness",
+    "run-attempt",
+    "runtime-entry",
+    "service",
+    "session-catalog",
+    "transport-stdio",
+  ]) {
     if (packedPath.startsWith(`dist/${prefix}-`) && packedPath.endsWith(".js")) {
       return `dist/${prefix}-<hash>.js`;
     }
@@ -96,13 +125,64 @@ function normalizePackedFindingPath(packedPath: string): string {
   return packedPath;
 }
 
+function expandReviewedFindingCounts(counts: ReadonlyMap<string, number>): string[] {
+  return [...counts].flatMap(([key, count]) => Array.from({ length: count }, () => key));
+}
+
+function resolveReviewedCodexSourceLayout(
+  reviewedCriticalFindings: readonly string[],
+): string[] | undefined {
+  const observedSourceFindings = reviewedCriticalFindings
+    .filter((key) => REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key))
+    .toSorted();
+  return REVIEWED_CODEX_SOURCE_LAYOUTS.map(expandReviewedFindingCounts).find((layout) => {
+    const expectedSourceFindings = layout.toSorted();
+    return (
+      expectedSourceFindings.length === observedSourceFindings.length &&
+      expectedSourceFindings.every((key, index) => key === observedSourceFindings[index])
+    );
+  });
+}
+
+function requiredReviewedFindingsForPackage(
+  packageName: string,
+  reviewedCriticalFindings: readonly string[],
+): string[] {
+  const commonFindings = [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS].flatMap(
+    ([key, count]) =>
+      key.startsWith(`${packageName}:`) ? Array.from({ length: count }, () => key) : [],
+  );
+  if (packageName !== "@openclaw/codex") {
+    return commonFindings;
+  }
+  const sourceLayout = resolveReviewedCodexSourceLayout(reviewedCriticalFindings);
+  if (!sourceLayout) {
+    throw new Error(
+      "@openclaw/codex: reviewed source findings must match exactly one complete known layout.",
+    );
+  }
+  return [...commonFindings, ...sourceLayout];
+}
+
+function isReviewedPublishableCriticalFinding(key: string): boolean {
+  return (
+    REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.has(key) ||
+    REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key) ||
+    OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS.has(key)
+  );
+}
+
 function expectedOptionalReviewedFindingsForPackedPath(
   packageName: string,
   packedPath: string,
 ): string[] {
   const normalizedPath = normalizePackedFindingPath(packedPath);
-  return [...OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS].filter(
-    (key) => key.startsWith(`${packageName}:`) && key.endsWith(`:${normalizedPath}`),
+  const keyPrefix = `${packageName}:`;
+  const keySuffix = `:${normalizedPath}`;
+  return [...OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS].flatMap(([key, count]) =>
+    key.startsWith(keyPrefix) && key.endsWith(keySuffix)
+      ? Array.from({ length: count }, () => key)
+      : [],
   );
 }
 
@@ -240,10 +320,7 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     }
     const packedPath = normalizePackedFindingPath(toRepoPath(relative(stageDir, finding.file)));
     const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
-    if (
-      REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS.has(key) ||
-      OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS.has(key)
-    ) {
+    if (isReviewedPublishableCriticalFinding(key)) {
       reviewedCriticalFindings.push(key);
       continue;
     }
@@ -282,7 +359,7 @@ describe("publishable plugin npm package install security scan", () => {
     );
     const missingPackages = [
       ...new Set(
-        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].map((key) =>
+        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.keys()].map((key) =>
           key.slice(0, key.indexOf(":")),
         ),
       ),
@@ -302,6 +379,98 @@ describe("publishable plugin npm package install security scan", () => {
     });
   });
 
+  it("does not review unknown Codex dist chunk names", () => {
+    const packedPath = "dist/future-exec-unknown.js";
+
+    expect(normalizePackedFindingPath(packedPath)).toBe(packedPath);
+    expect(expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", packedPath)).toEqual(
+      [],
+    );
+  });
+
+  it("requires exact occurrence counts for reviewed Codex dist chunks", () => {
+    const dynamicToolsKey = "@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js";
+
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        "@openclaw/codex",
+        "dist/dynamic-tools-current.js",
+      ),
+    ).toEqual([dynamicToolsKey, dynamicToolsKey]);
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        "@openclaw/codex",
+        "dist/run-attempt-current.js",
+      ),
+    ).toEqual([]);
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        "@openclaw/codex",
+        "dist/session-catalog-current.js",
+      ),
+    ).toEqual(["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js"]);
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", "dist/client-retired.js"),
+    ).toEqual([]);
+  });
+
+  it("accepts either complete reviewed Codex source layout", () => {
+    const legacyLayout = expandReviewedFindingCounts(
+      REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS,
+    );
+    const currentLayout = expandReviewedFindingCounts(
+      REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS,
+    );
+
+    expect(resolveReviewedCodexSourceLayout(legacyLayout)).toEqual(legacyLayout);
+    expect(resolveReviewedCodexSourceLayout(currentLayout)).toEqual(currentLayout);
+  });
+
+  const invalidCodexSourceLayouts: Array<[name: string, findings: string[]]> = [
+    ["absent", []],
+    [
+      "partial legacy",
+      ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts"],
+    ],
+    [
+      "partial current",
+      ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts"],
+    ],
+    [
+      "mixed",
+      [
+        "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts",
+        "@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts",
+      ],
+    ],
+    [
+      "both complete",
+      [
+        ...expandReviewedFindingCounts(REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS),
+        ...expandReviewedFindingCounts(REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS),
+      ],
+    ],
+    [
+      "duplicate occurrence",
+      [
+        ...expandReviewedFindingCounts(REVIEWED_CODEX_CURRENT_SOURCE_CRITICAL_FINDING_COUNTS),
+        "@openclaw/codex:dangerous-exec:src/app-server/transport-process-containment.ts",
+      ],
+    ],
+  ];
+
+  test.each(invalidCodexSourceLayouts)("rejects a %s Codex source layout", (_name, findings) => {
+    expect(resolveReviewedCodexSourceLayout(findings)).toBeUndefined();
+  });
+
+  it("does not review an unknown relocated Codex source finding", () => {
+    const relocatedFinding =
+      "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/relocated.ts";
+
+    expect(isReviewedPublishableCriticalFinding(relocatedFinding)).toBe(false);
+    expect(resolveReviewedCodexSourceLayout([relocatedFinding])).toBeUndefined();
+  });
+
   test.concurrent.each(publishablePluginPackages)(
     "keeps $packageName files clear of unexpected critical hits",
     async (plugin) => {
@@ -309,18 +478,14 @@ describe("publishable plugin npm package install security scan", () => {
       if (!result) {
         throw new Error(`Missing package scan result for ${plugin.packageName}`);
       }
-      const expectedReviewedCriticalFindings = new Set(
-        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].filter((key) =>
-          key.startsWith(`${plugin.packageName}:`),
-        ),
-      );
-      for (const key of result.expectedReviewedCriticalFindings) {
-        expectedReviewedCriticalFindings.add(key);
-      }
-
       expect(result.unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
+      const expectedReviewedCriticalFindings = [
+        ...requiredReviewedFindingsForPackage(plugin.packageName, result.reviewedCriticalFindings),
+        ...result.expectedReviewedCriticalFindings,
+      ];
+
       expect(result.reviewedCriticalFindings.toSorted()).toEqual(
-        [...expectedReviewedCriticalFindings].toSorted(),
+        expectedReviewedCriticalFindings.toSorted(),
       );
     },
   );

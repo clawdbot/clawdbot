@@ -33,7 +33,10 @@ RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/ap
   if [ "${INSTALL_NODE}" = "1" ]; then \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
-    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -; \
+    installer="$(mktemp)"; \
+    curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" || exit 1; \
+    bash "$installer" || exit 1; \
+    rm -f "$installer"; \
     apt-get install -y --no-install-recommends nodejs; \
     node --version; \
     npm --version; \
@@ -42,7 +45,10 @@ RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/ap
 RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm && pnpm --version; fi
 
 RUN if [ "${INSTALL_BUN}" = "1" ]; then \
-  curl -fsSL https://bun.sh/install | bash; \
+  installer="$(mktemp)"; \
+  curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" https://bun.sh/install || exit 1; \
+  bash "$installer" || exit 1; \
+  rm -f "$installer"; \
   ln -sf "${BUN_INSTALL_DIR}/bin/bun" /usr/local/bin/bun; \
 fi
 
@@ -50,7 +56,11 @@ RUN if [ "${INSTALL_BREW}" = "1" ]; then \
   if ! id -u linuxbrew >/dev/null 2>&1; then useradd -m -s /bin/bash linuxbrew; fi; \
   mkdir -p "${BREW_INSTALL_DIR}"; \
   chown -R linuxbrew:linuxbrew "$(dirname "${BREW_INSTALL_DIR}")"; \
-  su - linuxbrew -c "NONINTERACTIVE=1 CI=1 /bin/bash -c '$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)'"; \
+  installer="$(mktemp)"; \
+  curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh || exit 1; \
+  chmod 0644 "$installer"; \
+  su - linuxbrew -c "NONINTERACTIVE=1 CI=1 /bin/bash '$installer'" || exit 1; \
+  rm -f "$installer"; \
   if [ ! -e "${BREW_INSTALL_DIR}/Library" ]; then ln -s "${BREW_INSTALL_DIR}/Homebrew/Library" "${BREW_INSTALL_DIR}/Library"; fi; \
   if [ ! -x "${BREW_INSTALL_DIR}/bin/brew" ]; then echo \"brew install failed\"; exit 1; fi; \
   ln -sf "${BREW_INSTALL_DIR}/bin/brew" /usr/local/bin/brew; \

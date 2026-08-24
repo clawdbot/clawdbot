@@ -3,15 +3,9 @@ import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { startQaGatewayChild } from "../../gateway-child.js";
-import type { QaProviderMode } from "../../run-config.js";
-import type {
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-} from "../shared/credential-lease.runtime.js";
-import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
+export { toQaError as toWhatsAppQaError } from "../../errors.js";
 
 export type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
@@ -21,95 +15,9 @@ export type WhatsAppQaRuntimeEnv = {
   groupJid?: string;
 };
 
-export type WhatsAppQaScenarioId =
-  | "whatsapp-approval-exec-deny-native"
-  | "whatsapp-approval-exec-group-reaction-native"
-  | "whatsapp-approval-exec-reaction-native"
-  | "whatsapp-agent-message-action-react"
-  | "whatsapp-agent-message-action-upload-file"
-  | "whatsapp-audio-preflight"
-  | "whatsapp-broadcast-group-fanout"
-  | "whatsapp-canary"
-  | "whatsapp-group-allowlist-block"
-  | "whatsapp-group-activation-always"
-  | "whatsapp-group-agent-message-action-react"
-  | "whatsapp-group-agent-message-action-upload-file"
-  | "whatsapp-group-audio-gating"
-  | "whatsapp-group-outbound-audio"
-  | "whatsapp-group-outbound-media"
-  | "whatsapp-group-outbound-poll"
-  | "whatsapp-group-pending-history-context"
-  | "whatsapp-group-reply-to-bot-triggers"
-  | "whatsapp-group-reply-to-message"
-  | "whatsapp-inbound-reaction-no-trigger"
-  | "whatsapp-inbound-image-caption"
-  | "whatsapp-inbound-structured-messages"
-  | "whatsapp-message-actions"
-  | "whatsapp-outbound-document-preserves-filename"
-  | "whatsapp-outbound-media-matrix"
-  | "whatsapp-outbound-poll"
-  | "whatsapp-outbound-send-serialization"
-  | "whatsapp-mention-gating"
-  | "whatsapp-reply-delivery-shape"
-  | "whatsapp-reply-context-isolation"
-  | "whatsapp-reply-to-message"
-  | "whatsapp-reply-to-mode-batched"
-  | "whatsapp-stream-final-message-accounting"
-  | "whatsapp-status-reaction-lifecycle"
-  | "whatsapp-status-reactions"
-  | "whatsapp-top-level-reply-shape"
-  | "whatsapp-approval-exec-native"
-  | "whatsapp-approval-plugin-native";
-
-export type WhatsAppQaApprovalKind = "exec" | "plugin";
 export type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
 type WhatsAppQaScenarioPosture = "direct-gateway" | "native-approval" | "user-path";
-
-export function toWhatsAppQaError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
-
-export const WHATSAPP_QA_SCENARIO_POSTURES = {
-  "whatsapp-agent-message-action-react": "user-path",
-  "whatsapp-agent-message-action-upload-file": "user-path",
-  "whatsapp-approval-exec-deny-native": "native-approval",
-  "whatsapp-approval-exec-group-reaction-native": "native-approval",
-  "whatsapp-approval-exec-native": "native-approval",
-  "whatsapp-approval-exec-reaction-native": "native-approval",
-  "whatsapp-approval-plugin-native": "native-approval",
-  "whatsapp-audio-preflight": "user-path",
-  "whatsapp-broadcast-group-fanout": "user-path",
-  "whatsapp-canary": "user-path",
-  "whatsapp-group-activation-always": "user-path",
-  "whatsapp-group-allowlist-block": "user-path",
-  "whatsapp-group-agent-message-action-react": "user-path",
-  "whatsapp-group-agent-message-action-upload-file": "user-path",
-  "whatsapp-group-audio-gating": "user-path",
-  "whatsapp-group-outbound-audio": "direct-gateway",
-  "whatsapp-group-outbound-media": "direct-gateway",
-  "whatsapp-group-outbound-poll": "direct-gateway",
-  "whatsapp-group-pending-history-context": "user-path",
-  "whatsapp-group-reply-to-bot-triggers": "user-path",
-  "whatsapp-group-reply-to-message": "user-path",
-  "whatsapp-inbound-image-caption": "user-path",
-  "whatsapp-inbound-reaction-no-trigger": "user-path",
-  "whatsapp-inbound-structured-messages": "user-path",
-  "whatsapp-mention-gating": "user-path",
-  "whatsapp-message-actions": "direct-gateway",
-  "whatsapp-outbound-document-preserves-filename": "direct-gateway",
-  "whatsapp-outbound-media-matrix": "direct-gateway",
-  "whatsapp-outbound-poll": "direct-gateway",
-  "whatsapp-outbound-send-serialization": "direct-gateway",
-  "whatsapp-reply-context-isolation": "direct-gateway",
-  "whatsapp-reply-delivery-shape": "direct-gateway",
-  "whatsapp-reply-to-message": "user-path",
-  "whatsapp-reply-to-mode-batched": "user-path",
-  "whatsapp-status-reaction-lifecycle": "user-path",
-  "whatsapp-status-reactions": "user-path",
-  "whatsapp-stream-final-message-accounting": "user-path",
-  "whatsapp-top-level-reply-shape": "user-path",
-} satisfies Record<WhatsAppQaScenarioId, WhatsAppQaScenarioPosture>;
 
 type WhatsAppQaMessageSendMode =
   | {
@@ -131,7 +39,7 @@ export type WhatsAppQaGatewayRuntime = Pick<
 export type WhatsAppQaGatewayCallContext = {
   gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
   gatewayTarget: string;
-  scenarioId: WhatsAppQaScenarioId;
+  scenarioId: string;
   sutAccountId: string;
 };
 export type WhatsAppQaObservedMessagesContext = {
@@ -152,7 +60,7 @@ export type WhatsAppQaMessageScenarioContext = {
   gatewayWorkspaceDir: string;
   recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
   requestStartedAt: Date;
-  scenarioId: WhatsAppQaScenarioId;
+  scenarioId: string;
   scenarioTitle: string;
   sent: { messageId?: string };
   sutAccountId: string;
@@ -173,7 +81,7 @@ type WhatsAppQaResolvedScenarioTarget =
 
 export function resolveWhatsAppQaScenarioTarget(params: {
   groupJid?: string;
-  scenarioId: WhatsAppQaScenarioId;
+  scenarioId: string;
   target: "dm" | "group";
 }): WhatsAppQaResolvedScenarioTarget {
   if (params.target === "dm") {
@@ -241,7 +149,7 @@ export type WhatsAppQaMessageScenarioRun = {
 };
 
 export type WhatsAppQaApprovalScenarioRun = {
-  approvalKind: WhatsAppQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: WhatsAppQaApprovalDecision;
   decisionMode?: WhatsAppQaApprovalDecisionMode;
   kind: "approval";
@@ -249,7 +157,7 @@ export type WhatsAppQaApprovalScenarioRun = {
   token: string;
 };
 
-type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
+export type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
 
 export type WhatsAppQaConfigOverrides = {
   actions?: boolean;
@@ -267,21 +175,20 @@ export type WhatsAppQaConfigOverrides = {
   groupPolicy?: "allowlist" | "disabled" | "open";
   inboundDebounceMs?: number;
   replyToMode?: "all" | "batched" | "first" | "off";
-  statusReactions?:
-    | boolean
-    | {
-        removeAckAfterReply?: boolean;
-        timing?: NonNullable<NonNullable<OpenClawConfig["messages"]>["statusReactions"]>["timing"];
-      };
+  statusReactions?: boolean;
 };
 
-export type WhatsAppQaScenarioDefinition = LiveTransportScenarioDefinition<WhatsAppQaScenarioId> & {
+export type WhatsAppQaScenarioImplementation = {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
-  defaultEnabled?: boolean;
-  defaultProviderModes?: readonly QaProviderMode[];
+  posture: WhatsAppQaScenarioPosture;
   requiresGroupJid?: boolean;
-  requiredPluginIds?: readonly string[];
+};
+
+export type WhatsAppQaScenarioMetadata = {
+  id: string;
+  timeoutMs: number;
+  title: string;
 };
 
 export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage {
@@ -290,31 +197,6 @@ export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage
   scenarioId?: string;
   scenarioTitle?: string;
 }
-
-export type WhatsAppObservedMessageArtifact = {
-  approvalState?: "pending" | "resolved";
-  fromPhoneE164?: string | null;
-  hasMedia?: boolean;
-  kind?: WhatsAppQaDriverObservedMessage["kind"];
-  matchedScenario?: boolean;
-  mediaFileName?: string;
-  mediaType?: string;
-  messageId?: string;
-  observedAt: string;
-  poll?: WhatsAppQaDriverObservedMessage["poll"];
-  quoted?: WhatsAppQaDriverObservedMessage["quoted"];
-  reaction?: WhatsAppObservedReactionArtifact;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  text?: string;
-};
-
-export type WhatsAppObservedReactionArtifact = {
-  emoji?: string;
-  fromMe?: boolean;
-  messageId?: string;
-  participant?: string;
-};
 
 export type WhatsAppQaScenarioResult = {
   details: string;
@@ -329,45 +211,17 @@ export type WhatsAppQaScenarioResult = {
     responseObservedAt: string;
     source: "approval-request-to-resolution" | "request-to-observed-message";
   };
-  standardId?: string;
   status: "fail" | "pass" | "skip";
   title: string;
 };
 
-export function buildWhatsAppQaScenarioResultBase(scenario: WhatsAppQaScenarioDefinition) {
+export function buildWhatsAppQaScenarioResultBase(
+  scenario: WhatsAppQaScenarioMetadata,
+  implementation: WhatsAppQaScenarioImplementation,
+) {
   return {
     id: scenario.id,
     title: scenario.title,
-    standardId: scenario.standardId,
-    posture: WHATSAPP_QA_SCENARIO_POSTURES[scenario.id],
+    posture: implementation.posture,
   };
 }
-
-export function toWhatsAppLiveTransportEvidenceChecks(
-  scenarioResults: readonly WhatsAppQaScenarioResult[],
-) {
-  return scenarioResults.map(({ standardId, ...check }) => ({
-    ...check,
-    coverageIds: standardId ? [`channels.whatsapp.${standardId}`] : undefined,
-  }));
-}
-
-export type WhatsAppQaRunResult = {
-  gatewayDebugDirPath?: string;
-  observedMessagesPath: string;
-  outputDir: string;
-  reportPath: string;
-  scenarios: WhatsAppQaScenarioResult[];
-  summaryPath: string;
-};
-
-export type WhatsAppCredentialLease = Awaited<
-  ReturnType<typeof acquireQaCredentialLease<WhatsAppQaRuntimeEnv>>
->;
-export type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
-export type WhatsAppQaPreScenarioPhase =
-  | "auth archive unpack"
-  | "credential heartbeat start"
-  | "credential lease acquisition"
-  | "driver session start"
-  | "scenario execution";

@@ -1,5 +1,6 @@
 // Slack provider module implements model/runtime integration.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -14,8 +15,8 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
 import {
+  warn,
   computeBackoff,
   createNonExitingRuntime,
   sleepWithAbort,
@@ -23,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
+  asNonArrayRecord,
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,8 +35,14 @@ import {
   resolveSlackAccountDmPolicy,
 } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
-import { resolveSlackWebClientOptions } from "../client-options.js";
+import {
+  resolveSlackLookupClientOptions,
+  resolveSlackProxyDispatcher,
+  resolveSlackWebClientOptions,
+} from "../client-options.js";
+import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
+import { registerSlackInstallationState } from "../installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
@@ -52,22 +60,31 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./config.runtime.js";
-import { createSlackMonitorContext } from "./context.js";
+import { createSlackMonitorContext, type SlackMonitorContext } from "./context.js";
 import {
-  assertEnterpriseSlackDmPolicy,
+  assertEnterpriseSlackBindingsAreWorkspaceQualified,
   assertEnterpriseSlackPolicyConfig,
-  assertNoEnterpriseSlackBindings,
+  resolveSlackIdentityHealth,
   resolveSlackInstallationIdentity,
   type SlackAuthTestIdentity,
+  type SlackInstallationIdentity,
 } from "./enterprise-install.js";
-import { registerSlackMonitorEvents } from "./events.js";
+import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
+import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
+import {
+  createSlackPresenceMonitor,
+  hasSlackPresenceEventsEnabled,
+  SLACK_PRESENCE_REQUEST_TIMEOUT_MS,
+} from "./presence-monitor.js";
 import {
   createSlackBoltApp,
   formatSlackChannelResolved,
   formatSlackUserResolved,
   gracefulStopSlackApp,
   publishSlackConnectedStatus,
+  publishSlackBlockedStatus,
   publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
   startSlackSocketAndWaitForDisconnect,
@@ -86,6 +103,17 @@ import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
 
+function withSlackPresenceLifecycleSignal(
+  fetchImpl: FetchFunction,
+  lifecycleSignal: AbortSignal,
+): FetchFunction {
+  return async (input, init) =>
+    await fetchImpl(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
+    });
+}
+
 async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   if (!slackBoltInterop) {
     const slackBoltModule = await import("@slack/bolt");
@@ -101,6 +129,65 @@ const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-sourc
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+
+type SlackRuntimeIdentity = {
+  botUserId: string;
+  botId?: string;
+};
+
+function resolveSlackRuntimeIdentity(params: {
+  identity: "bot" | "user";
+  botUserId?: unknown;
+  botId?: unknown;
+}): SlackRuntimeIdentity | undefined {
+  // User identity has no bot_id; its human id is both the mention target and self-send dedupe
+  // source. Bot identity stays bot_id-gated so token mismatches fail closed.
+  const botUserId = normalizeOptionalString(params.botUserId);
+  const botId = normalizeOptionalString(params.botId);
+  if (!botUserId || (params.identity === "bot" && !botId)) {
+    return undefined;
+  }
+  return {
+    botUserId,
+    ...(botId ? { botId } : {}),
+  };
+}
+
+function applySlackInstallationIdentity(
+  ctx: SlackMonitorContext,
+  identity: SlackInstallationIdentity,
+) {
+  ctx.installationIdentity = identity;
+  ctx.teamId = identity.kind === "workspace" ? identity.teamId : "";
+  ctx.apiAppId = identity.kind === "degraded" ? "" : (identity.apiAppId ?? "");
+}
+
+function adoptSlackIdentity(params: {
+  ctx: SlackMonitorContext;
+  identity: "bot" | "user";
+  installationIdentity: SlackInstallationIdentity;
+  botUserId?: unknown;
+  botId?: unknown;
+}): boolean {
+  if (
+    params.ctx.identityHealth.lifecycle !== "blocked" ||
+    params.installationIdentity.kind === "degraded"
+  ) {
+    return false;
+  }
+  const resolved = resolveSlackRuntimeIdentity(params);
+  if (!resolved) {
+    return false;
+  }
+  applySlackInstallationIdentity(params.ctx, params.installationIdentity);
+  params.ctx.botUserId = resolved.botUserId;
+  params.ctx.botId = resolved.botId;
+  params.ctx.identityHealth = resolveSlackIdentityHealth({
+    installationIdentity: params.installationIdentity,
+    botUserId: resolved.botUserId,
+  });
+  return true;
+}
 
 function resolveStableSlackUserIdEntry(raw: string): string | undefined {
   const trimmed = raw.trim();
@@ -167,10 +254,7 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
   authToken: string;
   gatewayId: string;
 } {
-  const relay =
-    params.relay && typeof params.relay === "object" && !Array.isArray(params.relay)
-      ? (params.relay as Record<string, unknown>)
-      : {};
+  const relay = asNonArrayRecord(params.relay);
   const url = normalizeOptionalString(relay.url);
   const authToken = normalizeResolvedSecretInputString({
     value: relay.authToken,
@@ -224,27 +308,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
-  const enterpriseOrgInstall = account.config.enterpriseOrgInstall === true;
-  if (enterpriseOrgInstall && slackMode === "relay") {
-    throw new Error(
-      `Slack Enterprise Grid org account "${account.accountId}" requires direct socket or HTTP delivery; relay mode is unsupported`,
-    );
-  }
-  if (enterpriseOrgInstall && account.config.execApprovals?.enabled === true) {
-    throw new Error(
-      `Slack Enterprise Grid org account "${account.accountId}" does not support Slack-native exec approvals`,
-    );
-  }
-  if (enterpriseOrgInstall) {
-    assertEnterpriseSlackPolicyConfig({ config: account.config, accountId: account.accountId });
-    assertNoEnterpriseSlackBindings({ cfg, accountId: account.accountId });
-  }
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
   const signingSecret = normalizeResolvedSecretInputString({
     value: account.config.signingSecret,
     path: `channels.slack.accounts.${account.accountId}.signingSecret`,
   });
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
+  const userToken = account.userToken;
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
   const relayConfig =
     slackMode === "relay"
@@ -253,19 +323,40 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           accountId: account.accountId,
         })
       : undefined;
-  if (!botToken || (slackMode === "socket" && !appToken)) {
-    const missing =
-      slackMode === "http"
-        ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
-        : slackMode === "relay"
+  let token: string;
+  if (account.identity === "user") {
+    if (!userToken) {
+      throw new Error(
+        `Slack user token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.userToken or SLACK_USER_TOKEN for default).`,
+      );
+    }
+    if (slackMode === "socket" && !appToken) {
+      throw new Error(
+        `Slack app token missing for user-identity socket mode account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.appToken or SLACK_APP_TOKEN for default).`,
+      );
+    }
+    if (slackMode === "http" && !signingSecret) {
+      throw new Error(
+        `Slack signing secret missing for user-identity HTTP mode account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
+      );
+    }
+    token = userToken;
+  } else {
+    if (!botToken || (slackMode === "socket" && !appToken)) {
+      const missing =
+        slackMode === "http"
           ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
-          : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
-    throw new Error(missing);
-  }
-  if (slackMode === "http" && !signingSecret) {
-    throw new Error(
-      `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
-    );
+          : slackMode === "relay"
+            ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
+            : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
+      throw new Error(missing);
+    }
+    if (slackMode === "http" && !signingSecret) {
+      throw new Error(
+        `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
+      );
+    }
+    token = botToken;
   }
 
   const slackCfg = account.config;
@@ -274,14 +365,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = resolveSlackAccountDmPolicy({ cfg, accountId: account.accountId }) ?? "pairing";
   let allowFrom = resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId });
-  if (enterpriseOrgInstall) {
-    assertEnterpriseSlackDmPolicy({
-      accountId: account.accountId,
-      dmEnabled,
-      dmPolicy,
-      allowFrom,
-    });
-  }
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
@@ -300,13 +383,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
 
   const resolveToken = account.userToken || botToken;
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
   const replyToMode = slackCfg.replyToMode ?? "off";
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
-  const threadRequireExplicitMention = slackCfg.thread?.requireExplicitMention ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const allowNameMatching = isDangerousNameMatchingEnabled(slackCfg);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
@@ -315,17 +397,59 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
-  const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const clientOptions = resolveSlackWebClientOptions();
+  const slackDispatcher = resolveSlackProxyDispatcher();
+  const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
+  const durableIngress = createSlackDurableIngress({
+    accountId: account.accountId,
+    ...(runtime.log ? { onLog: runtime.log } : {}),
+    ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+  });
+  const monitorContextRef: { current?: SlackMonitorContext } = {};
   const { app, receiver, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
-    botToken,
+    token,
     appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
     signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
-    ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
+    dispatcher: slackDispatcher,
+    wrapReceiver: durableIngress.wrapReceiver,
+    onContextIdentity: async (identity) => {
+      const current = monitorContextRef.current;
+      if (!current) {
+        return;
+      }
+      const recovered =
+        current.identityHealth.lifecycle === "blocked" ? await recoverSlackIdentity() : false;
+      const contextTeamId = normalizeOptionalString(identity.teamId);
+      const contextEnterpriseId = normalizeOptionalString(identity.enterpriseId);
+      const contextInstallationIdentity =
+        identity.isEnterpriseInstall === false && contextTeamId
+          ? ({
+              kind: "workspace",
+              teamId: contextTeamId,
+              ...(contextEnterpriseId ? { enterpriseId: contextEnterpriseId } : {}),
+            } satisfies SlackInstallationIdentity)
+          : undefined;
+      const adopted =
+        current.identityHealth.lifecycle === "blocked" &&
+        contextInstallationIdentity !== undefined &&
+        adoptSlackIdentity({
+          ctx: current,
+          identity: account.identity,
+          installationIdentity: contextInstallationIdentity,
+          botUserId: identity.botUserId,
+          botId: identity.botId,
+        });
+      if (adopted && contextInstallationIdentity) {
+        installationState.update(contextInstallationIdentity.kind);
+        await installSlackRuntimeForIdentity(contextInstallationIdentity);
+      }
+      if (recovered || adopted) {
+        publishSlackConnectedStatus(opts.setStatus, current.identityHealth);
+      }
+    },
   });
 
   // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent
@@ -376,44 +500,69 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let botId = "";
   const expectedApiAppIdFromAppToken =
     slackMode === "socket" ? parseApiAppIdFromAppToken(appToken) : undefined;
-  let authTestFailed = false;
   let authTestError: string | undefined;
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
-    const auth = await app.client.auth.test();
+    const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
-    botId = normalizeOptionalString((auth as { bot_id?: string }).bot_id) ?? "";
-    // Slack documents bot_id only for bot-token identities. Never treat the user behind a
-    // user token as the bot mention target; required-mention channels must fail closed instead.
-    botUserId = botId ? authUserId : "";
-    authTestIdentity = auth;
-    authIdentityWarning = formatSlackBotTokenIdentityWarning({
-      auth,
-      accountId: account.accountId,
+    const resolvedIdentity = resolveSlackRuntimeIdentity({
+      identity: account.identity,
+      botUserId: authUserId,
+      botId: (auth as { bot_id?: string }).bot_id,
     });
-    if (!authUserId && !enterpriseOrgInstall) {
-      authTestFailed = true;
+    botUserId = resolvedIdentity?.botUserId ?? "";
+    botId = resolvedIdentity?.botId ?? "";
+    authTestIdentity = auth;
+    if (account.identity === "bot") {
+      authIdentityWarning = formatSlackBotTokenIdentityWarning({
+        auth,
+        accountId: account.accountId,
+      });
+    }
+    if (!authUserId) {
       authTestError = "auth.test returned no user_id";
     }
   } catch (err) {
-    authTestFailed = true;
     authTestError = err instanceof Error ? err.message : String(err);
   }
+  const assertSlackInstallationPolicy = (identity: SlackInstallationIdentity) => {
+    if (identity.kind === "degraded") {
+      if (slackMode === "relay") {
+        throw new Error(
+          `Slack relay account "${account.accountId}" requires a successful auth.test before startup`,
+        );
+      }
+      return;
+    }
+    if (identity.kind !== "enterprise") {
+      return;
+    }
+    if (slackMode === "relay") {
+      throw new Error(
+        `Slack Enterprise Grid org account "${account.accountId}" requires direct socket or HTTP delivery; relay mode is unsupported`,
+      );
+    }
+    assertEnterpriseSlackPolicyConfig({ config: account.config, accountId: account.accountId });
+    assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId: account.accountId });
+  };
   const installationIdentity = resolveSlackInstallationIdentity({
-    enterpriseOrgInstall,
-    auth: authTestFailed ? undefined : authTestIdentity,
-    authError: authTestError,
+    auth: authTestError === undefined ? authTestIdentity : undefined,
     transportApiAppId: expectedApiAppIdFromAppToken,
   });
+  assertSlackInstallationPolicy(installationIdentity);
   const teamId = installationIdentity.kind === "workspace" ? installationIdentity.teamId : "";
   const apiAppId =
     installationIdentity.kind === "degraded" ? "" : (installationIdentity.apiAppId ?? "");
-  if (authTestFailed) {
+  if (authTestError !== undefined) {
+    const identityFailureDetail =
+      account.identity === "user"
+        ? "explicit self-mention detection will be disabled while the user identity is unresolved"
+        : "explicit bot-mention detection will be disabled while the bot identity is unresolved";
     runtime.log?.(
       warn(
-        `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
-          "explicit bot-mention detection will be disabled until restart with a valid bot token; " +
+        `[${account.accountId}] slack auth.test failed at boot (${authTestError}); ` +
+          `${identityFailureDetail}; ` +
           "required-mention channels will fail closed without another trusted activation signal",
       ),
     );
@@ -422,21 +571,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     runtime.log?.(warn(authIdentityWarning));
   }
 
+  const identityHealth = resolveSlackIdentityHealth({
+    installationIdentity,
+    botUserId,
+    authTestError,
+    authIdentityWarning,
+  });
+
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
+    const identityTokenLabel = account.identity === "user" ? "user token" : "bot token";
     runtime.error?.(
-      `slack token mismatch: bot token app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
+      `slack token mismatch: ${identityTokenLabel} app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
     );
   }
 
   const ctx = createSlackMonitorContext({
     cfg,
     accountId: account.accountId,
-    botToken,
+    botToken: token,
     app,
     runtime,
     channelRuntime: opts.channelRuntime,
     botUserId,
     botId,
+    identityHealth,
     teamId,
     apiAppId,
     installationIdentity,
@@ -459,14 +617,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     replyToMode,
     threadHistoryScope,
     threadInheritParent,
-    threadRequireExplicitMention,
     slashCommand,
     textLimit,
     ackReactionScope,
     typingReaction,
     mediaMaxBytes,
-    removeAckAfterReply,
   });
+  monitorContextRef.current = ctx;
 
   // Slack's socket-mode client keeps ping/pong health private and closes on
   // missed pongs. App events are useful status activity, but not transport proof.
@@ -476,14 +633,225 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     : undefined;
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
-  if (
-    installationIdentity.kind !== "enterprise" &&
-    isSlackAnyNativeApprovalClientEnabled({
-      cfg,
+  const presenceEventsEnabled = hasSlackPresenceEventsEnabled({
+    account: slackCfg.presenceEvents,
+    channels: slackCfg.channels,
+  });
+  let presenceRequestAbort: AbortController | undefined;
+  let presenceMonitor: ReturnType<typeof createSlackPresenceMonitor> | undefined;
+  let presenceMonitorStarted = false;
+  let runtimeStarted = false;
+  const startPresenceMonitor = () => {
+    if (!presenceMonitor || presenceMonitorStarted) {
+      return;
+    }
+    presenceMonitor.start();
+    presenceMonitorStarted = true;
+  };
+  const installSlackPresenceRuntime = (identity: SlackInstallationIdentity) => {
+    if (
+      !presenceEventsEnabled ||
+      presenceMonitor ||
+      identity.kind === "degraded" ||
+      opts.abortSignal?.aborted
+    ) {
+      return;
+    }
+    presenceRequestAbort = new AbortController();
+    const options = resolveSlackLookupClientOptions(
+      { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
+      slackDispatcher,
+    );
+    options.fetch = withSlackPresenceLifecycleSignal(
+      options.fetch ?? globalThis.fetch,
+      presenceRequestAbort.signal,
+    );
+    const resolveClient = createSlackWorkspaceClientResolver({
+      appClient: new WebClient(token, options),
+      token,
+      clientOptions: options,
+      installationIdentity: identity,
+    });
+    presenceMonitor = createSlackPresenceMonitor({
       accountId: account.accountId,
-    })
-  ) {
+      accountConfig: slackCfg.presenceEvents,
+      resolveClient: (workspaceTeamId) => resolveClient(workspaceTeamId).users,
+      cooldownStore: openSlackPresenceCooldownStore(),
+      log: runtime.log,
+      error: runtime.error,
+    });
+    if (runtimeStarted) {
+      startPresenceMonitor();
+    }
+  };
+  const handleSlackMessage = createSlackMessageHandler({
+    ctx,
+    account,
+    trackEvent,
+    onPrepared: (prepared) => presenceMonitor?.observe(prepared),
+  });
+  registerSlackCommonEvents({
+    ctx,
+    handleSlackMessage,
+    trackEvent,
+  });
+  const commandRegistration = await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
+  const appHomeSlashCommandName =
+    commandRegistration.mode === "single" ? commandRegistration.name : undefined;
+
+  const resolveSlackWorkspaceConfig = async () => {
+    if (!resolveToken || opts.abortSignal?.aborted) {
+      return;
+    }
+    if (channelsConfig && Object.keys(channelsConfig).length > 0) {
+      try {
+        const entries = Object.keys(channelsConfig).filter((key) => key !== "*");
+        if (entries.length > 0) {
+          const resolved = await resolveSlackChannelAllowlist({ token: resolveToken, entries });
+          const nextChannels = { ...channelsConfig };
+          const mapping: string[] = [];
+          const unresolved: string[] = [];
+          for (const entry of resolved) {
+            const source = channelsConfig?.[entry.input];
+            if (!source) {
+              continue;
+            }
+            if (!entry.resolved || !entry.id) {
+              unresolved.push(entry.input);
+              continue;
+            }
+            const resolvedLabel = formatSlackChannelResolved(entry);
+            if (resolvedLabel) {
+              mapping.push(resolvedLabel);
+            }
+            const existing = nextChannels[entry.id] ?? {};
+            nextChannels[entry.id] = { ...source, ...existing };
+          }
+          channelsConfig = nextChannels;
+          ctx.channelsConfig = nextChannels;
+          summarizeMapping("slack channels", mapping, unresolved, runtime);
+        }
+      } catch (err) {
+        runtime.log?.(
+          `slack channel resolve failed; using config entries. ${formatUnknownError(err)}`,
+        );
+      }
+    }
+
+    const allowEntries = normalizeStringEntries(allowFrom).filter((entry) => entry !== "*");
+    if (allowEntries.length > 0) {
+      const stableResolvedUsers = resolveStableSlackUserAllowlistEntries(allowEntries);
+      if (stableResolvedUsers.length > 0) {
+        const { mapping, additions } = buildAllowlistResolutionSummary(stableResolvedUsers, {
+          formatResolved: formatSlackUserResolved,
+        });
+        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+        ctx.allowFrom = normalizeAllowList(allowFrom);
+        summarizeMapping("slack users", mapping, [], runtime);
+      }
+
+      if (allowNameMatching) {
+        try {
+          const resolvedUsers = await resolveSlackUserAllowlist({
+            token: resolveToken,
+            entries: allowEntries,
+          });
+          const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
+            resolvedUsers,
+            { formatResolved: formatSlackUserResolved },
+          );
+          allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+          ctx.allowFrom = normalizeAllowList(allowFrom);
+          summarizeMapping("slack users", mapping, unresolved, runtime);
+        } catch (err) {
+          runtime.log?.(
+            `slack user resolve failed; using config entries. ${formatUnknownError(err)}`,
+          );
+        }
+      }
+    }
+
+    if (channelsConfig && Object.keys(channelsConfig).length > 0) {
+      const userEntries = new Set<string>();
+      for (const channel of Object.values(channelsConfig)) {
+        addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
+      }
+      if (userEntries.size > 0) {
+        const stableResolvedUsers = resolveStableSlackUserAllowlistEntries(Array.from(userEntries));
+        if (stableResolvedUsers.length > 0) {
+          const { resolvedMap, mapping } = buildAllowlistResolutionSummary(stableResolvedUsers, {
+            formatResolved: formatSlackUserResolved,
+          });
+          const nextChannels = patchAllowlistUsersInConfigEntries({
+            entries: channelsConfig,
+            resolvedMap,
+          });
+          channelsConfig = nextChannels;
+          ctx.channelsConfig = nextChannels;
+          summarizeMapping("slack channel users", mapping, [], runtime);
+        }
+
+        if (allowNameMatching) {
+          try {
+            const resolvedUsers = await resolveSlackUserAllowlist({
+              token: resolveToken,
+              entries: Array.from(userEntries),
+            });
+            const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(
+              resolvedUsers,
+              { formatResolved: formatSlackUserResolved },
+            );
+            const nextChannels = patchAllowlistUsersInConfigEntries({
+              entries: channelsConfig,
+              resolvedMap,
+            });
+            channelsConfig = nextChannels;
+            ctx.channelsConfig = nextChannels;
+            summarizeMapping("slack channel users", mapping, unresolved, runtime);
+          } catch (err) {
+            runtime.log?.(
+              `slack channel user resolve failed; using config entries. ${formatUnknownError(err)}`,
+            );
+          }
+        }
+      }
+    }
+  };
+
+  let workspaceRuntimePromise: Promise<void> | undefined;
+  const installSlackWorkspaceRuntime = async () => {
+    if (workspaceRuntimePromise) {
+      return await workspaceRuntimePromise;
+    }
+    workspaceRuntimePromise = (async () => {
+      registerSlackWorkspaceEvents({
+        ctx,
+        appHomeSlashCommandName,
+        trackEvent,
+      });
+      void resolveSlackWorkspaceConfig();
+      if (runtimeStarted) {
+        startPresenceMonitor();
+      }
+    })();
+    return await workspaceRuntimePromise;
+  };
+
+  let approvalRuntimeInstalled = false;
+  function installSlackApprovalRuntime(identity: SlackInstallationIdentity) {
+    if (
+      approvalRuntimeInstalled ||
+      identity.kind === "degraded" ||
+      !isSlackAnyNativeApprovalClientEnabled({ cfg, accountId: account.accountId })
+    ) {
+      return;
+    }
+    const resolveClient = createSlackWorkspaceClientResolver({
+      appClient: app.client,
+      token,
+      clientOptions,
+      installationIdentity: identity,
+    });
     registerChannelRuntimeContext({
       channelRuntime: opts.channelRuntime,
       channelId: "slack",
@@ -492,165 +860,74 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       context: {
         app,
         config: slackCfg.execApprovals ?? {},
+        resolveClient,
+        ...(identity.kind === "enterprise"
+          ? {
+              enterprise: {
+                apiAppId: identity.apiAppId,
+                enterpriseId: identity.enterpriseId,
+              },
+            }
+          : {}),
       },
       abortSignal: opts.abortSignal,
     });
+    approvalRuntimeInstalled = true;
   }
 
-  // Resolve command registration first so App Home never advertises an inactive single command.
-  const commandRegistration =
-    installationIdentity.kind === "enterprise"
-      ? ({ mode: "disabled" } as const)
-      : await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
-  const appHomeSlashCommandName =
-    commandRegistration.mode === "single" ? commandRegistration.name : undefined;
-  registerSlackMonitorEvents({
-    ctx,
-    account,
-    handleSlackMessage,
-    appHomeSlashCommandName,
-    trackEvent,
-  });
-  if (slackMode === "http" && slackHttpHandler) {
-    unregisterHttpHandler = registerSlackHttpHandler({
-      path: slackWebhookPath,
-      handler: slackHttpHandler,
-      log: runtime.log,
-      accountId: account.accountId,
-    });
+  async function installSlackRuntimeForIdentity(identity: SlackInstallationIdentity) {
+    installSlackApprovalRuntime(identity);
+    installSlackPresenceRuntime(identity);
+    if (identity.kind === "workspace") {
+      await installSlackWorkspaceRuntime();
+    }
   }
 
-  if (resolveToken && installationIdentity.kind !== "enterprise") {
-    void (async () => {
-      if (opts.abortSignal?.aborted) {
-        return;
-      }
-
-      if (channelsConfig && Object.keys(channelsConfig).length > 0) {
-        try {
-          const entries = Object.keys(channelsConfig).filter((key) => key !== "*");
-          if (entries.length > 0) {
-            const resolved = await resolveSlackChannelAllowlist({
-              token: resolveToken,
-              entries,
-            });
-            const nextChannels = { ...channelsConfig };
-            const mapping: string[] = [];
-            const unresolved: string[] = [];
-            for (const entry of resolved) {
-              const source = channelsConfig?.[entry.input];
-              if (!source) {
-                continue;
-              }
-              if (!entry.resolved || !entry.id) {
-                unresolved.push(entry.input);
-                continue;
-              }
-              const resolvedLabel = formatSlackChannelResolved(entry);
-              if (resolvedLabel) {
-                mapping.push(resolvedLabel);
-              }
-              const existing = nextChannels[entry.id] ?? {};
-              nextChannels[entry.id] = { ...source, ...existing };
-            }
-            channelsConfig = nextChannels;
-            ctx.channelsConfig = nextChannels;
-            summarizeMapping("slack channels", mapping, unresolved, runtime);
-          }
-        } catch (err) {
-          runtime.log?.(
-            `slack channel resolve failed; using config entries. ${formatUnknownError(err)}`,
-          );
+  let identityRecoveryPromise: Promise<boolean> | undefined;
+  async function recoverSlackIdentity() {
+    if (ctx.identityHealth.lifecycle !== "blocked") {
+      return false;
+    }
+    if (identityRecoveryPromise) {
+      return await identityRecoveryPromise;
+    }
+    const recovery = (async () => {
+      try {
+        const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
+        const recoveredInstallationIdentity = resolveSlackInstallationIdentity({
+          auth,
+          transportApiAppId: expectedApiAppIdFromAppToken,
+        });
+        assertSlackInstallationPolicy(recoveredInstallationIdentity);
+        const adopted = adoptSlackIdentity({
+          ctx,
+          identity: account.identity,
+          installationIdentity: recoveredInstallationIdentity,
+          botUserId: auth.user_id,
+          botId: (auth as { bot_id?: string }).bot_id,
+        });
+        if (!adopted) {
+          return false;
         }
-      }
-
-      const allowEntries = normalizeStringEntries(allowFrom).filter((entry) => entry !== "*");
-      if (allowEntries.length > 0) {
-        const stableResolvedUsers = resolveStableSlackUserAllowlistEntries(allowEntries);
-        if (stableResolvedUsers.length > 0) {
-          const { mapping, additions } = buildAllowlistResolutionSummary(stableResolvedUsers, {
-            formatResolved: formatSlackUserResolved,
-          });
-          allowFrom = mergeAllowlist({ existing: allowFrom, additions });
-          ctx.allowFrom = normalizeAllowList(allowFrom);
-          summarizeMapping("slack users", mapping, [], runtime);
-        }
-
-        if (allowNameMatching) {
-          try {
-            const resolvedUsers = await resolveSlackUserAllowlist({
-              token: resolveToken,
-              entries: allowEntries,
-            });
-            const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
-              resolvedUsers,
-              {
-                formatResolved: formatSlackUserResolved,
-              },
-            );
-            allowFrom = mergeAllowlist({ existing: allowFrom, additions });
-            ctx.allowFrom = normalizeAllowList(allowFrom);
-            summarizeMapping("slack users", mapping, unresolved, runtime);
-          } catch (err) {
-            runtime.log?.(
-              `slack user resolve failed; using config entries. ${formatUnknownError(err)}`,
-            );
-          }
-        }
-      }
-
-      if (channelsConfig && Object.keys(channelsConfig).length > 0) {
-        const userEntries = new Set<string>();
-        for (const channel of Object.values(channelsConfig)) {
-          addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
-        }
-
-        if (userEntries.size > 0) {
-          const stableResolvedUsers = resolveStableSlackUserAllowlistEntries(
-            Array.from(userEntries),
-          );
-          if (stableResolvedUsers.length > 0) {
-            const { resolvedMap, mapping } = buildAllowlistResolutionSummary(stableResolvedUsers, {
-              formatResolved: formatSlackUserResolved,
-            });
-            const nextChannels = patchAllowlistUsersInConfigEntries({
-              entries: channelsConfig,
-              resolvedMap,
-            });
-            channelsConfig = nextChannels;
-            ctx.channelsConfig = nextChannels;
-            summarizeMapping("slack channel users", mapping, [], runtime);
-          }
-
-          if (allowNameMatching) {
-            try {
-              const resolvedUsers = await resolveSlackUserAllowlist({
-                token: resolveToken,
-                entries: Array.from(userEntries),
-              });
-              const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(
-                resolvedUsers,
-                {
-                  formatResolved: formatSlackUserResolved,
-                },
-              );
-
-              const nextChannels = patchAllowlistUsersInConfigEntries({
-                entries: channelsConfig,
-                resolvedMap,
-              });
-              channelsConfig = nextChannels;
-              ctx.channelsConfig = nextChannels;
-              summarizeMapping("slack channel users", mapping, unresolved, runtime);
-            } catch (err) {
-              runtime.log?.(
-                `slack channel user resolve failed; using config entries. ${formatUnknownError(err)}`,
-              );
-            }
-          }
-        }
+        installationState.update(recoveredInstallationIdentity.kind);
+        await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
+        return true;
+      } catch (err) {
+        ctx.identityHealth = {
+          lifecycle: "blocked",
+          lastError: formatUnknownError(err),
+        };
+        return false;
       }
     })();
+    identityRecoveryPromise = recovery;
+    try {
+      return await recovery;
+    } finally {
+      if (identityRecoveryPromise === recovery) {
+        identityRecoveryPromise = undefined;
+      }
+    }
   }
 
   const stopOnAbort = () => {
@@ -659,8 +936,26 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+  const installationState = registerSlackInstallationState(
+    account.accountId,
+    installationIdentity.kind,
+  );
 
   try {
+    await installSlackRuntimeForIdentity(installationIdentity);
+    durableIngress.start();
+    runtimeStarted = true;
+    startPresenceMonitor();
+    if (slackMode === "http" && slackHttpHandler) {
+      unregisterHttpHandler = registerSlackHttpHandler({
+        path: slackWebhookPath,
+        handler: slackHttpHandler,
+        log: runtime.log,
+        accountId: account.accountId,
+      });
+      publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
+    }
+
     if (slackMode === "socket") {
       let reconnectAttempts = 0;
       let hasLoggedSocketConnected = false;
@@ -669,12 +964,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           const disconnect = await startSlackSocketAndWaitForDisconnect({
             app,
             abortSignal: opts.abortSignal,
-            onStarted: () => {
+            onStarted: async () => {
               reconnectAttempts = 0;
-              publishSlackConnectedStatus(opts.setStatus);
+              await recoverSlackIdentity();
+              publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
-                runtime.log?.("slack socket mode connected");
+                runtime.log?.(
+                  ctx.identityHealth.lifecycle === "blocked"
+                    ? "slack socket mode connected (degraded identity)"
+                    : "slack socket mode connected",
+                );
               }
             },
           });
@@ -688,6 +988,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
           // Permanent account and credential failures need operator action.
           if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
+            publishSlackBlockedStatus(opts.setStatus, disconnect.error);
             runtime.error?.(
               `slack socket mode disconnected due to non-recoverable auth error — skipping channel (${formatUnknownError(disconnect.error)})`,
             );
@@ -716,11 +1017,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
         } catch (err) {
           if (isNonRecoverableSlackAuthError(err)) {
+            publishSlackBlockedStatus(opts.setStatus, err);
             runtime.error?.(
               `slack socket mode failed to start due to non-recoverable auth error — skipping channel (${formatUnknownError(err)})`,
             );
             throw err;
           }
+          publishSlackDisconnectedStatus(opts.setStatus, err);
           reconnectAttempts += 1;
           const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.error?.(
@@ -743,13 +1046,26 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       runtime.log?.(
         `slack relay mode connecting to ${relayConfig.url} gateway_id:${relayConfig.gatewayId}`,
       );
+      // Send identity flows through the account default (relay hello ->
+      // setIdentity); resolveSlackSendIdentity falls back to it, so claimed
+      // relay events replayed after a restart dispatch with correct identity
+      // once the relay reattaches.
+      durableIngress.attachRelayDispatch(async (message, turnAdoptionLifecycle) => {
+        await handleSlackMessage(message as Parameters<typeof handleSlackMessage>[0], {
+          source: "message",
+          wasMentioned: true,
+          awaitDispatch: true,
+          turnAdoptionLifecycle,
+        });
+      });
       await (
         await loadSlackRelaySource()
       ).monitorSlackRelaySource({
         config: relayConfig,
-        handleSlackMessage,
+        acceptRelayEvent: durableIngress.acceptRelayEvent,
         runtime,
         abortSignal: opts.abortSignal,
+        identityHealth: ctx.identityHealth,
         setStatus: opts.setStatus,
         setIdentity: (identity) => setSlackDefaultSendIdentity(account.accountId, identity),
       });
@@ -764,14 +1080,48 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    installationState.release();
+    runtimeStarted = false;
+    presenceRequestAbort?.abort();
+    await presenceMonitor?.stop();
     if (slackMode === "relay") {
       setSlackDefaultSendIdentity(account.accountId, undefined);
     }
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterSocketModeConnectionDiagnostics();
     unregisterHttpHandler?.();
+    await durableIngress.stop();
     await gracefulStop();
+    await slackDispatcher?.close();
   }
+}
+
+function createSlackWorkspaceClientResolver(params: {
+  appClient: WebClient;
+  token: string;
+  clientOptions: WebClientOptions;
+  installationIdentity: SlackInstallationIdentity;
+}): (teamId?: string) => WebClient {
+  if (params.installationIdentity.kind !== "enterprise") {
+    return () => params.appClient;
+  }
+  const clients = new Map<string, WebClient>();
+  return (rawTeamId?: string) => {
+    const teamId = rawTeamId;
+    if (!teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
+      throw new Error("Slack Enterprise Grid workspace client requires a valid teamId");
+    }
+    const cached = clients.get(teamId);
+    if (cached) {
+      return cached;
+    }
+    const client = createSlackWebClient(params.token, {
+      ...params.clientOptions,
+      teamId,
+    });
+    clients.set(teamId, client);
+    return client;
+  };
 }
 
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

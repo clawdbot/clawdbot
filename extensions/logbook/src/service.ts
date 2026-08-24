@@ -326,7 +326,7 @@ export class LogbookService {
     if (media?.image?.enabled === false) {
       return { source: "missing" };
     }
-    const entries = [...(media?.image?.models ?? []), ...(media?.models ?? [])];
+    const entries = media?.models ?? [];
     for (const entry of entries) {
       const usable =
         entry.type !== "cli" &&

@@ -59,12 +59,16 @@ Maintainers can manage rows without using the Convex dashboard:
 
 ```bash
 pnpm openclaw qa credentials add \
-  --kind telegram \
-  --payload-file qa/telegram-credential.json
+  --kind buzz \
+  --payload-file qa/buzz-credential.json
 
 pnpm openclaw qa credentials add \
   --kind discord \
   --payload-file qa/discord-credential.json
+
+pnpm openclaw qa credentials add \
+  --kind telegram \
+  --payload-file qa/telegram-credential.json
 
 pnpm openclaw qa credentials list --kind telegram
 
@@ -145,6 +149,18 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 - `groupId` as a numeric chat id string
 - non-empty `driverToken`
 - non-empty `sutToken`
+
+For `kind: "buzz"`, broker `admin/add` validates that payload includes:
+
+- `relayUrl` as a `wss://` URL, or `ws://` only for a loopback relay
+- `roomId` as a channel UUID
+- valid, distinct `driverPrivateKey` and `sutPrivateKey` values in nsec or
+  64-character hex form
+- optional `driverAuthTag` and `sutAuthTag` values matching the four-string
+  Buzz authorization tag JSON shape
+
+Use dedicated QA identities only. Never add a human owner or admin private key
+to the shared pool.
 
 For `kind: "telegram-user"`, broker `admin/add` validates one exclusive real-user
 credential for both the TDLib CLI driver and the Telegram Desktop visual witness:

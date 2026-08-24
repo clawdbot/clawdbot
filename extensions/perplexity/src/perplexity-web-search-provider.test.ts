@@ -1,7 +1,17 @@
 // Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+
+const withTrustedWebSearchEndpointMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
+  return {
+    ...actual,
+    withTrustedWebSearchEndpoint: withTrustedWebSearchEndpointMock,
+  };
+});
+
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
 import { testing } from "./perplexity-web-search-provider.runtime.js";
 
@@ -10,6 +20,33 @@ const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+
+function mockPerplexityResponseOnce(body: unknown): void {
+  withTrustedWebSearchEndpointMock.mockImplementationOnce(
+    async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
+      await run(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+  );
+}
+
+function createConfiguredPerplexityTool(structured: boolean) {
+  const webSearch = {
+    apiKey: directPerplexityApiKey,
+    ...(structured ? {} : { baseUrl: "https://api.perplexity.ai" }),
+  };
+  const tool = createPerplexityWebSearchProvider().createTool({
+    config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
+    searchConfig: {},
+  });
+  if (!tool) {
+    throw new Error("Expected tool definition");
+  }
+  return tool;
+}
 
 describe("perplexity web search provider", () => {
   it("points missing-key users to fetch/browser alternatives", async () => {
@@ -25,11 +62,149 @@ describe("perplexity web search provider", () => {
         await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toEqual({
           error: "missing_perplexity_api_key",
           message:
-            "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+            "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure plugins.entries.perplexity.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       },
     );
+  });
+
+  it.each([
+    { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
+    {
+      name: "chat completions",
+      webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
+    },
+  ])("does not start an already canceled $name request", async ({ webSearch }) => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockResolvedValue({ results: [] });
+    const tool = createPerplexityWebSearchProvider().createTool({
+      config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort(new Error("Perplexity caller canceled"));
+
+    await expect(
+      tool.execute({ query: "perplexity pre-canceled" }, { signal: controller.signal }),
+    ).rejects.toThrow("Perplexity caller canceled");
+    expect(withTrustedWebSearchEndpointMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "missing choices", response: {} },
+    { name: "whitespace content", response: { choices: [{ message: { content: " \n " } }] } },
+  ])("rejects and does not cache chat-completions $name", async ({ name, response }) => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    mockPerplexityResponseOnce(response);
+    mockPerplexityResponseOnce({
+      choices: [{ message: { content: "  Recovered grounded answer  " } }],
+      citations: ["https://example.test/recovered"],
+    });
+
+    const tool = createConfiguredPerplexityTool(false);
+    const args = { query: `perplexity empty answer ${name}` };
+    await expect(tool.execute(args)).rejects.toThrow(
+      "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+    );
+
+    const recovered = await tool.execute(args);
+    expect(recovered.content).toContain("  Recovered grounded answer  ");
+    expect(recovered.citations).toEqual(["https://example.test/recovered"]);
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { name: "chat completions", structured: false, expectedRequests: 1 },
+    { name: "native Search API", structured: true, expectedRequests: 2 },
+  ])(
+    "uses count as a cache dimension only when $name sends it upstream",
+    async ({ name, structured, expectedRequests }) => {
+      withTrustedWebSearchEndpointMock.mockReset();
+      const response = structured
+        ? { results: [] }
+        : {
+            choices: [
+              {
+                message: {
+                  content: "Grounded answer",
+                  annotations: [
+                    {
+                      type: "url_citation",
+                      url_citation: { url: "https://example.test/citation" },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+      mockPerplexityResponseOnce(response);
+      if (structured) {
+        mockPerplexityResponseOnce(response);
+      }
+
+      const tool = createConfiguredPerplexityTool(structured);
+      const query = `perplexity cache count ${name}`;
+      const first = await tool.execute({ query, count: 1 });
+      const second = await tool.execute({ query, count: 7 });
+      const third = await tool.execute({ query, count: 1 });
+
+      expect(first.cached).toBeUndefined();
+      expect(second.cached).toBe(structured ? undefined : true);
+      expect(third.cached).toBe(true);
+      expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(expectedRequests);
+      if (structured) {
+        expect(first.results).toEqual([]);
+        expect(first.count).toBe(0);
+      } else {
+        expect(first.content).toContain("Grounded answer");
+        expect(first.citations).toEqual(["https://example.test/citation"]);
+      }
+    },
+  );
+
+  it.each([
+    { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
+    {
+      name: "chat completions",
+      webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
+    },
+  ])("cancels an in-flight $name request", async ({ name, webSearch }) => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockImplementation(
+      async (params: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          if (!params.signal) {
+            reject(new Error("Perplexity request lost caller cancellation"));
+            return;
+          }
+          params.signal.addEventListener("abort", () => reject(params.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const tool = createPerplexityWebSearchProvider().createTool({
+      config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    const result = tool.execute(
+      { query: `perplexity in-flight cancellation ${name}` },
+      { signal: controller.signal },
+    );
+
+    await vi.waitFor(() => expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce());
+    controller.abort(new Error("Perplexity request canceled in flight"));
+
+    await expect(result).rejects.toThrow("Perplexity request canceled in flight");
+    expect(withTrustedWebSearchEndpointMock.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    withTrustedWebSearchEndpointMock.mockReset();
   });
 
   it("infers provider routing from api key prefixes", () => {
@@ -139,6 +314,36 @@ describe("perplexity web search provider", () => {
     });
   });
 
+  it("sends official date filter fields in the Search API request body", async () => {
+    mockPerplexityResponseOnce({ results: [] });
+
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await tool.execute({
+          query: "OpenClaw releases",
+          date_after: "2024-01-01",
+          date_before: "2024-06-30",
+        });
+      },
+    );
+
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
+    expect(JSON.parse(request.init.body as string)).toEqual({
+      query: "OpenClaw releases",
+      max_results: 5,
+      search_after_date_filter: "1/1/2024",
+      search_before_date_filter: "6/30/2024",
+    });
+  });
+
   it.each([
     ["max_tokens", 0, "max_tokens must be a positive integer."],
     ["max_tokens", 1.5, "max_tokens must be a positive integer."],
@@ -159,35 +364,5 @@ describe("perplexity web search provider", () => {
         );
       },
     );
-  });
-
-  it("reports malformed Search API JSON with a stable provider error", async () => {
-    await expect(
-      testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity Search"),
-    ).rejects.toThrow("Perplexity Search: malformed JSON response");
-  });
-
-  it("reports malformed chat completion JSON with a stable provider error", async () => {
-    await expect(
-      testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
-    ).rejects.toThrow("Perplexity: malformed JSON response");
-  });
-
-  it("bounds successful Perplexity JSON bodies before parsing", async () => {
-    const streamed = createStreamingResponse({
-      chunkCount: 32,
-      chunkSize: 1024 * 1024,
-      text: "x",
-      headers: { "content-type": "application/json" },
-    });
-    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
-
-    await expect(
-      testing.readPerplexityJsonResponse(streamed.response, "Perplexity Search"),
-    ).rejects.toThrow("Perplexity Search: JSON response exceeds 16777216 bytes");
-
-    expect(streamed.getReadCount()).toBeLessThan(32);
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });

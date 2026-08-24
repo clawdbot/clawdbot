@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
 function createExecHostDefaultsConfig(
   agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
@@ -20,8 +21,7 @@ function createExecHostDefaultsConfig(
     tools: {
       exec: {
         host: "auto",
-        security: "full",
-        ask: "off",
+        mode: "full",
       },
     },
     agents: {
@@ -49,6 +49,11 @@ function requireExecTool(tools: ReturnType<typeof createOpenClawCodingTools>) {
   return execTool;
 }
 
+function schemaPropertyNames(tool: ReturnType<typeof requireExecTool>): string[] {
+  const schema = tool.parameters as { properties?: Record<string, unknown> };
+  return Object.keys(schema.properties ?? {});
+}
+
 const tempDirs = createTempDirTracker();
 
 function createTempAgentDirs(prefix: string) {
@@ -69,14 +74,57 @@ describe("Agent-specific exec tool defaults", () => {
     tempDirs.cleanup();
   });
 
+  it.each([0, 3_000])(
+    "inherits the global exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      expect(
+        resolveExecToolConfig({
+          cfg: {
+            tools: {
+              exec: {
+                approvalRunningNoticeMs,
+              },
+            },
+          },
+          agentId: "main",
+        }).approvalRunningNoticeMs,
+      ).toBe(approvalRunningNoticeMs);
+    },
+  );
+
+  it("lets a per-agent exec approval running notice disable the inherited global delay", () => {
+    expect(
+      resolveExecToolConfig({
+        cfg: {
+          tools: {
+            exec: {
+              approvalRunningNoticeMs: 3_000,
+            },
+          },
+          agents: {
+            entries: {
+              main: {
+                tools: {
+                  exec: {
+                    approvalRunningNoticeMs: 0,
+                  },
+                },
+              },
+            },
+          },
+        },
+        agentId: "main",
+      }).approvalRunningNoticeMs,
+    ).toBe(0);
+  });
+
   it("should run exec synchronously when process is denied", async () => {
     const cfg: OpenClawConfig = {
       tools: {
         deny: ["process"],
         exec: {
           host: "gateway",
-          security: "full",
-          ask: "off",
+          mode: "full",
         },
       },
     };
@@ -97,13 +145,47 @@ describe("Agent-specific exec tool defaults", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
+  it("makes exec completion-only when the final runtime allowlist removes process", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            host: "gateway",
+            mode: "full",
+          },
+        },
+      },
+      runtimeToolAllowlist: ["exec"],
+      inheritRuntimeToolAllowlist: true,
+      sessionKey: "agent:main:main",
+      ...createTempAgentDirs("test-main-runtime-exec-only"),
+    });
+    const execTool = requireExecTool(tools);
+
+    expect.soft(tools.map((tool) => tool.name)).not.toContain("process");
+    expect.soft(execTool.description).not.toMatch(/background|yieldMs|process/);
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("background");
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("yieldMs");
+
+    const result = await execTool.execute("call-runtime-exec-only", {
+      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 250)"`,
+      background: true,
+      yieldMs: 10,
+      timeoutSeconds: 0.05,
+    });
+
+    expect.soft(result.details).toMatchObject({ status: "failed", timedOut: true });
+    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
+    expect.soft(text).toContain("Verify the resulting state before retrying");
+    expect.soft(text).not.toMatch(/process|background|yieldMs|poll|trailing &/i);
+  });
+
   it("routes implicit auto exec to gateway without a sandbox runtime", async () => {
     const tools = createOpenClawCodingTools({
       config: {
         tools: {
           exec: {
-            security: "full",
-            ask: "off",
+            mode: "full",
           },
         },
       },
@@ -177,7 +259,7 @@ describe("Agent-specific exec tool defaults", () => {
               id: "main",
               tools: {
                 exec: {
-                  ask: "off",
+                  mode: "allowlist",
                 },
               },
             },

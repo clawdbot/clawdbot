@@ -78,6 +78,10 @@ describe("status-json-payload", () => {
         memory: null,
         memoryPlugin: { enabled: true },
         agents: [{ id: "main" }],
+        configDiagnostics: {
+          path: "/tmp/openclaw.json",
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        },
         secretDiagnostics: ["diag"],
         securityAudit: { summary: { critical: 1 } },
         health: { ok: true },
@@ -86,8 +90,8 @@ describe("status-json-payload", () => {
         pluginCompatibility: [
           {
             pluginId: "legacy",
-            code: "legacy-before-agent-start",
-            severity: "warn",
+            code: "hook-only",
+            severity: "info",
             message: "warn",
           },
         ],
@@ -119,6 +123,10 @@ describe("status-json-payload", () => {
       gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
       nodeService: { label: "node", installed: true, loadedText: "loaded" },
       agents: [{ id: "main" }],
+      configDiagnostics: {
+        path: "/tmp/openclaw.json",
+        issues: [{ path: "gateway.port", message: "invalid" }],
+      },
       secretDiagnostics: ["diag"],
       securityAudit: { summary: { critical: 1 } },
       health: { ok: true },
@@ -129,48 +137,15 @@ describe("status-json-payload", () => {
         warnings: [
           {
             pluginId: "legacy",
-            code: "legacy-before-agent-start",
-            severity: "warn",
+            code: "hook-only",
+            severity: "info",
             message: "warn",
           },
         ],
       },
     });
   });
-
   it("omits optional sections when they are absent", () => {
-    expect(
-      buildStatusJsonPayload({
-        summary: { ok: true },
-        surface: {
-          cfg: { gateway: {} },
-          update: {
-            root: "/tmp/openclaw",
-            installKind: "package",
-            packageManager: "npm",
-          } as never,
-          tailscaleMode: "off",
-          gatewayMode: "local",
-          remoteUrlMissing: false,
-          gatewayConnection: { url: "ws://127.0.0.1:18789" },
-          gatewayReachable: false,
-          gatewayProbe: null,
-          gatewayProbeAuth: null,
-          gatewaySelf: null,
-          gatewayProbeAuthWarning: null,
-          gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
-          nodeService: { label: "node", installed: false, loadedText: "not installed" },
-        },
-        osSummary: { platform: "linux" },
-        memory: null,
-        memoryPlugin: null,
-        agents: [],
-        secretDiagnostics: [],
-      }),
-    ).not.toHaveProperty("securityAudit");
-  });
-
-  it("includes model-pricing health from the gateway probe", () => {
     const payload = buildStatusJsonPayload({
       summary: { ok: true },
       surface: {
@@ -184,19 +159,8 @@ describe("status-json-payload", () => {
         gatewayMode: "local",
         remoteUrlMissing: false,
         gatewayConnection: { url: "ws://127.0.0.1:18789" },
-        gatewayReachable: true,
-        gatewayProbe: {
-          connectLatencyMs: 42,
-          error: null,
-          health: {
-            ok: true,
-            modelPricing: {
-              state: "degraded",
-              detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-              sources: [{ source: "openrouter", state: "degraded" }],
-            },
-          },
-        },
+        gatewayReachable: false,
+        gatewayProbe: null,
         gatewayProbeAuth: null,
         gatewaySelf: null,
         gatewayProbeAuthWarning: null,
@@ -207,13 +171,11 @@ describe("status-json-payload", () => {
       memory: null,
       memoryPlugin: null,
       agents: [],
+      configDiagnostics: null,
       secretDiagnostics: [],
     });
 
-    const modelPricing = payload.gateway.modelPricing as
-      | { state?: string; detail?: string }
-      | undefined;
-    expect(modelPricing?.state).toBe("degraded");
-    expect(modelPricing?.detail).toBe("OpenRouter pricing fetch failed: TypeError: fetch failed");
+    expect(payload).not.toHaveProperty("configDiagnostics");
+    expect(payload).not.toHaveProperty("securityAudit");
   });
 });

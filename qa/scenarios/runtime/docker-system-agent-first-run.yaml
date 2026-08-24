@@ -2,12 +2,12 @@ title: Docker packaged OpenClaw inference gate
 
 scenario:
   id: docker-system-agent-first-run
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.container-setup
+  surface: containers
+  category: containers.container-setup
   coverage:
     secondary:
-      - docker.first-run-onboarding
-      - raspberry-pi.first-run-verification
+      - containers.first-run-onboarding
+      - small-linux.first-run-verification
   objective: Verify a fresh package-installed Docker state gates OpenClaw on a tested inference route, then supports planner-backed and typed setup operations without leaking secrets.
   successCriteria:
     - The bare-command routing policy selects onboarding, and the packaged OpenClaw CLI exits with onboarding guidance while inference is unavailable.

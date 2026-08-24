@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
  * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
@@ -6,6 +7,8 @@ import type {
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -33,6 +36,12 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "CLAUDE_CONFIG_DIR",
   // Re-injected per run from OpenClaw's canonical context budget.
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  // Re-injected only for 200K runs. Claude's user settings `env` block has
+  // higher precedence than the spawned process environment by design.
+  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+  "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+  // Re-injected per run from OpenClaw's effective thinking level.
+  "MAX_THINKING_TOKENS",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -67,6 +76,11 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
+const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG =
+  "--exclude-dynamic-system-prompt-sections";
+// Claude Code 2.1.98 added this print-mode cache-control flag. Keep older
+// installations on their established argv when the startup probe cannot prove it.
+const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION = "2.1.98";
 const CLAUDE_SETTINGS_ARG = "--settings";
 const CLAUDE_EFFORT_ARG = "--effort";
 const CLAUDE_BARE_ARG = "--bare";
@@ -93,8 +107,8 @@ const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const CLAUDE_SYSTEM_AGENT_MCP_TOOL = "mcp__openclaw__openclaw";
-const CLAUDE_SYSTEM_AGENT_SETTINGS =
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -130,18 +144,85 @@ export function resolveClaudeCliAutoCompactEnv(
   };
 }
 
+/**
+ * Map OpenClaw's fixed thinking levels to Claude Code's per-process budget.
+ *
+ * Claude Code 2.x reads MAX_THINKING_TOKENS for print-mode runs and a positive
+ * integer requests that fixed token budget. Mandatory-adaptive models ignore
+ * that projection, so they retain adaptive thinking and use --effort instead.
+ * These fixed budgets match OpenClaw's canonical provider defaults in
+ * packages/ai/src/providers/simple-options.ts.
+ */
+export function resolveClaudeCliThinkingEnv(
+  thinkingLevel: CliBackendResolveExecutionArgsContext["thinkingLevel"],
+  modelId?: string,
+): Record<string, string> | undefined {
+  if (requiresClaudeMandatoryAdaptiveThinking({ id: modelId })) {
+    return undefined;
+  }
+  switch (thinkingLevel) {
+    case "off":
+      return { MAX_THINKING_TOKENS: "0" };
+    case "minimal":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "1024" };
+    case "low":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "2048" };
+    case "medium":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "8192" };
+    case "high":
+    case "xhigh":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "16384" };
+    case "max":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "32768" };
+    case "adaptive":
+    case undefined:
+      return undefined;
+    default:
+      return thinkingLevel satisfies never;
+  }
+}
+
+/** Return whether the startup-probed Claude Code build supports the cache-control flag. */
+export function supportsClaudeDynamicSystemPromptSections(
+  versionOutput: string | undefined,
+): boolean {
+  // Only stable version tokens prove flag support. A prerelease suffix could
+  // predate the stable release and turn every local invocation into an argv error.
+  const match = versionOutput?.match(/(?:^|\D)(\d+)\.(\d+)\.(\d+)(?=$|\s)/u);
+  if (!match) {
+    return false;
+  }
+  const version = match.slice(1).map(Number);
+  const minimum =
+    CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION.split(".").map(Number);
+  for (const [index, component] of version.entries()) {
+    const minimumComponent = minimum[index];
+    if (component === undefined || minimumComponent === undefined) {
+      return false;
+    }
+    if (component !== minimumComponent) {
+      return component > minimumComponent;
+    }
+  }
+  return true;
+}
+
 function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
   const agentExec = context?.agentId
-    ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
+    ? resolveAgentConfig(context.config ?? {}, context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const ask = exec?.ask ?? "off";
-  return security === "full" && ask === "off";
+  return (
+    resolveExecModePolicy({
+      mode: exec?.mode,
+      security: exec?.security ?? "full",
+      ask: exec?.ask ?? "off",
+    }).mode === "full"
+  );
 }
 
 /** Resolve Claude permission mode from OpenClaw exec security settings. */
-export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
+function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
   mode?: string;
   overrideExisting: boolean;
 } {
@@ -151,7 +232,7 @@ export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigC
 }
 
 /** Normalize Claude permission arguments, removing legacy skip-permissions flags. */
-export function normalizeClaudePermissionArgs(
+function normalizeClaudePermissionArgs(
   args?: string[],
   options?: { mode?: string; overrideExisting?: boolean },
 ): string[] | undefined {
@@ -204,7 +285,7 @@ export function normalizeClaudePermissionArgs(
 }
 
 /** Ensure Claude CLI setting sources stay restricted to user settings. */
-export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
+function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
   if (!args) {
     return args;
   }
@@ -243,8 +324,15 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
 }
 
 /** Resolve whether a run preserves, removes, or sets a Claude CLI effort override. */
-function resolveClaudeCliEffortArgAction(thinkingLevel?: string | null): ClaudeCliEffortArgAction {
+function resolveClaudeCliEffortArgAction(
+  thinkingLevel?: string | null,
+  modelId?: string,
+): ClaudeCliEffortArgAction {
   switch (normalizeOptionalLowercaseString(thinkingLevel)) {
+    case "off":
+      return requiresClaudeMandatoryAdaptiveThinking({ id: modelId })
+        ? { mode: "set", effort: "low" }
+        : { mode: "preserve" };
     case "minimal":
     case "low":
       return { mode: "set", effort: "low" };
@@ -304,13 +392,13 @@ const CLAUDE_TOOL_AVAILABILITY_ARGS = new Set([
   "--disallowed-tools",
 ]);
 
-const CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS = new Set([
+const CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS = new Set([
   ...CLAUDE_TOOL_AVAILABILITY_ARGS,
   "--add-dir",
   "--file",
 ]);
 
-const CLAUDE_SYSTEM_AGENT_VALUE_ARGS = new Set([
+const CLAUDE_RESTRICTED_VALUE_ARGS = new Set([
   CLAUDE_PERMISSION_MODE_ARG,
   CLAUDE_SETTING_SOURCES_ARG,
   CLAUDE_SETTINGS_ARG,
@@ -326,7 +414,7 @@ const CLAUDE_SYSTEM_AGENT_VALUE_ARGS = new Set([
   "--append-system-prompt-file",
 ]);
 
-const CLAUDE_SYSTEM_AGENT_BARE_ARGS = new Set([
+const CLAUDE_RESTRICTED_BARE_ARGS = new Set([
   CLAUDE_BARE_ARG,
   CLAUDE_SAFE_MODE_ARG,
   CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
@@ -420,33 +508,14 @@ function resolveClaudeCliSideQuestionExecutionArgs(baseArgs: readonly string[]):
   ];
 }
 
-function resolveClaudeCliToolAvailabilityArgs(
+function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): string[] {
   const normalized = stripClaudeArgs(baseArgs, {
-    variadicValue: CLAUDE_TOOL_AVAILABILITY_ARGS,
-  });
-  normalized.push(CLAUDE_TOOLS_ARG, availability.native.join(","));
-  if (availability.mcp.length > 0) {
-    normalized.push(CLAUDE_ALLOWED_TOOLS_ARG, availability.mcp.join(","));
-  } else {
-    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
-  }
-  return normalized;
-}
-
-function isSystemAgentToolAvailability(
-  availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
-): boolean {
-  return availability.mcp.length === 1 && availability.mcp[0] === CLAUDE_SYSTEM_AGENT_MCP_TOOL;
-}
-
-function resolveClaudeCliSystemAgentExecutionArgs(baseArgs: readonly string[]): string[] {
-  const normalized = stripClaudeArgs(baseArgs, {
-    bare: CLAUDE_SYSTEM_AGENT_BARE_ARGS,
-    variadicValue: CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS,
-    value: CLAUDE_SYSTEM_AGENT_VALUE_ARGS,
+    bare: CLAUDE_RESTRICTED_BARE_ARGS,
+    variadicValue: CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS,
+    value: CLAUDE_RESTRICTED_VALUE_ARGS,
   });
   // Safe mode also suppresses explicit MCP, while bare mode drops OAuth. Empty
   // setting sources plus restrictive flag settings isolate user customizations;
@@ -455,27 +524,34 @@ function resolveClaudeCliSystemAgentExecutionArgs(baseArgs: readonly string[]): 
     CLAUDE_SETTING_SOURCES_ARG,
     "",
     CLAUDE_SETTINGS_ARG,
-    CLAUDE_SYSTEM_AGENT_SETTINGS,
+    CLAUDE_RESTRICTED_SETTINGS,
     CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
-    CLAUDE_NO_TOOLS_VALUE,
-    CLAUDE_ALLOWED_TOOLS_ARG,
-    CLAUDE_SYSTEM_AGENT_MCP_TOOL,
+    availability.native.join(","),
   );
+  if (availability.openClaw.length > 0) {
+    normalized.push(
+      CLAUDE_ALLOWED_TOOLS_ARG,
+      availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
+    );
+  } else {
+    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
+  }
   return normalized;
 }
 
 /** Resolve final Claude CLI execution args for one backend invocation. */
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
+  options: { excludeDynamicSystemPromptSections?: boolean } = {},
 ): string[] {
   const executionArgs = (() => {
     if (context.executionMode === "side-question") {
       return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
     }
-    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel);
+    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel, context.modelId);
     switch (action.mode) {
       case "preserve":
         return [...context.baseArgs];
@@ -487,12 +563,12 @@ export function resolveClaudeCliExecutionArgs(
         return action satisfies never;
     }
   })();
-  if (!context.toolAvailability) {
-    return executionArgs;
-  }
-  return isSystemAgentToolAvailability(context.toolAvailability)
-    ? resolveClaudeCliSystemAgentExecutionArgs(executionArgs)
-    : resolveClaudeCliToolAvailabilityArgs(executionArgs, context.toolAvailability);
+  const resolvedArgs = context.toolAvailability
+    ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
+    : executionArgs;
+  return options.excludeDynamicSystemPromptSections && context.executionMode !== "side-question"
+    ? [...resolvedArgs, CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG]
+    : resolvedArgs;
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */

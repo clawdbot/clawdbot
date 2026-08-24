@@ -1,7 +1,7 @@
 // Imessage tests cover inbound processing plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
@@ -11,68 +11,60 @@ let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageReactionContext: InboundProcessingModule["resolveIMessageReactionContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
+const cfg = {} as OpenClawConfig;
+type InboundDecisionParams = Parameters<
+  InboundProcessingModule["resolveIMessageInboundDecision"]
+>[0];
 
-beforeEach(async () => {
+beforeAll(async () => {
   ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
   ({ buildIMessageInboundContext, resolveIMessageReactionContext, resolveIMessageInboundDecision } =
     await import("./inbound-processing.js"));
 });
 
+function createInboundDecisionParams(
+  overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
+    message?: Partial<InboundDecisionParams["message"]>;
+  } = {},
+): InboundDecisionParams {
+  const { message: messageOverrides, ...restOverrides } = overrides;
+  const message = {
+    id: 42,
+    sender: "+15555550123",
+    text: "ok",
+    is_from_me: false,
+    is_group: false,
+    ...messageOverrides,
+  };
+  const messageText = restOverrides.messageText ?? message.text ?? "";
+  const bodyText = restOverrides.bodyText ?? messageText;
+  return {
+    cfg,
+    accountId: "default",
+    opts: undefined,
+    allowFrom: ["*"],
+    groupAllowFrom: [],
+    groupPolicy: "open",
+    dmPolicy: "open",
+    storeAllowFrom: [],
+    historyLimit: 0,
+    groupHistories: new Map(),
+    echoCache: undefined,
+    selfChatCache: undefined,
+    isKnownFromMeMessageId: () => false,
+    logVerbose: undefined,
+    ...restOverrides,
+    message,
+    messageText,
+    bodyText,
+  };
+}
+
+function resolveDecision(overrides: Parameters<typeof createInboundDecisionParams>[0] = {}) {
+  return resolveIMessageInboundDecision(createInboundDecisionParams(overrides));
+}
+
 describe("resolveIMessageInboundDecision echo detection", () => {
-  const cfg = {} as OpenClawConfig;
-  type InboundDecisionParams = Parameters<
-    InboundProcessingModule["resolveIMessageInboundDecision"]
-  >[0];
-
-  function createInboundDecisionParams(
-    overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
-      message?: Partial<InboundDecisionParams["message"]>;
-    } = {},
-  ): InboundDecisionParams {
-    const { message: messageOverrides, ...restOverrides } = overrides;
-    const message = {
-      id: 42,
-      sender: "+15555550123",
-      text: "ok",
-      is_from_me: false,
-      is_group: false,
-      ...messageOverrides,
-    };
-    const messageText = restOverrides.messageText ?? message.text ?? "";
-    const bodyText = restOverrides.bodyText ?? messageText;
-    const baseParams: Omit<InboundDecisionParams, "message" | "messageText" | "bodyText"> = {
-      cfg,
-      accountId: "default",
-      opts: undefined,
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
-      selfChatCache: undefined,
-      isKnownFromMeMessageId: () => false,
-      logVerbose: undefined,
-    };
-    return {
-      ...baseParams,
-      ...restOverrides,
-      message,
-      messageText,
-      bodyText,
-    };
-  }
-
-  function resolveDecision(
-    overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
-      message?: Partial<InboundDecisionParams["message"]>;
-    } = {},
-  ) {
-    return resolveIMessageInboundDecision(createInboundDecisionParams(overrides));
-  }
-
   it("drops inbound messages when outbound message id matches echo cache", async () => {
     const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "42";
@@ -98,10 +90,15 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("id=42"));
   });
 
-  it("matches attachment-only echoes by bodyText placeholder", async () => {
-    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
-      return lookup.text === "<media:image>" && lookup.messageId === "42";
-    });
+  it("matches attachment-only echoes by structured media fact", async () => {
+    const echoHas = vi.fn(
+      (
+        _scope: string,
+        lookup: { text?: string; media?: { kind?: string | null }; messageId?: string },
+      ) => {
+        return lookup.media?.kind === "image" && lookup.messageId === "42";
+      },
+    );
 
     const decision = await resolveDecision({
       message: {
@@ -109,7 +106,8 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         text: "",
       },
       messageText: "",
-      bodyText: "<media:image>",
+      bodyText: "",
+      mediaFacts: [{ contentType: "image/png", kind: "image" }],
       echoCache: { has: echoHas },
     });
 
@@ -121,7 +119,8 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       2,
       "default:imessage:+15555550123",
       {
-        text: "<media:image>",
+        text: undefined,
+        media: { contentType: "image/png", kind: "image" },
         messageId: "42",
       },
       {
@@ -734,31 +733,15 @@ describe("resolveIMessageReactionContext", () => {
 
 describe("buildIMessageInboundContext", () => {
   it("keeps numeric row id and provider GUID separately for action tooling", async () => {
-    const decision = await resolveIMessageInboundDecision({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      message: {
-        id: 12345,
-        guid: "p:0/GUID-current",
-        sender: "+15555550123",
-        text: "Hello",
-        is_from_me: false,
-        is_group: false,
-      },
-      opts: undefined,
-      messageText: "Hello",
-      bodyText: "Hello",
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
-      selfChatCache: undefined,
-      logVerbose: undefined,
-    });
+    const message = {
+      id: 12345,
+      guid: "p:0/GUID-current",
+      sender: "+15555550123",
+      text: "Hello",
+      is_from_me: false,
+      is_group: false,
+    };
+    const decision = await resolveDecision({ message });
     expect(decision.kind).toBe("dispatch");
     if (decision.kind !== "dispatch") {
       return;
@@ -766,15 +749,9 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
-      message: {
-        id: 12345,
-        guid: "p:0/GUID-current",
-        sender: "+15555550123",
-        text: "Hello",
-        is_from_me: false,
-        is_group: false,
-      },
+      message,
       historyLimit: 0,
       groupHistories: new Map(),
     });
@@ -785,31 +762,15 @@ describe("buildIMessageInboundContext", () => {
   });
 
   it("keeps generated media notices out of command input", async () => {
-    const decision = await resolveIMessageInboundDecision({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      message: {
-        id: 12347,
-        guid: "p:0/GUID-media-failure",
-        sender: "+15555550123",
-        text: "/reset",
-        is_from_me: false,
-        is_group: false,
-      },
-      opts: undefined,
-      messageText: "/reset",
-      bodyText: "/reset",
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
-      selfChatCache: undefined,
-      logVerbose: undefined,
-    });
+    const message = {
+      id: 12347,
+      guid: "p:0/GUID-media-failure",
+      sender: "+15555550123",
+      text: "/reset",
+      is_from_me: false,
+      is_group: false,
+    };
+    const decision = await resolveDecision({ message });
     expect(decision.kind).toBe("dispatch");
     if (decision.kind !== "dispatch") {
       return;
@@ -817,18 +778,12 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: {
         ...decision,
         agentBodyText: "/reset\n\n[imessage attachment unavailable]",
       },
-      message: {
-        id: 12347,
-        guid: "p:0/GUID-media-failure",
-        sender: "+15555550123",
-        text: "/reset",
-        is_from_me: false,
-        is_group: false,
-      },
+      message,
       historyLimit: 0,
       groupHistories: new Map(),
     });
@@ -840,31 +795,15 @@ describe("buildIMessageInboundContext", () => {
   });
 
   it("prepends direct-message history when supplied", async () => {
-    const decision = await resolveIMessageInboundDecision({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-      message: {
-        id: 12346,
-        guid: "p:0/GUID-current-history",
-        sender: "+15555550123",
-        text: "current",
-        is_from_me: false,
-        is_group: false,
-      },
-      opts: undefined,
-      messageText: "current",
-      bodyText: "current",
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
-      selfChatCache: undefined,
-      logVerbose: undefined,
-    });
+    const message = {
+      id: 12346,
+      guid: "p:0/GUID-current-history",
+      sender: "+15555550123",
+      text: "current",
+      is_from_me: false,
+      is_group: false,
+    };
+    const decision = await resolveDecision({ message });
     expect(decision.kind).toBe("dispatch");
     if (decision.kind !== "dispatch") {
       return;
@@ -872,15 +811,9 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload, inboundHistory } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
-      message: {
-        id: 12346,
-        guid: "p:0/GUID-current-history",
-        sender: "+15555550123",
-        text: "current",
-        is_from_me: false,
-        is_group: false,
-      },
+      message,
       historyLimit: 0,
       groupHistories: new Map(),
       dmHistory: {
@@ -894,10 +827,44 @@ describe("buildIMessageInboundContext", () => {
     expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
     expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
   });
+
+  it("uses the monitor's prepared account service without re-reading channel config", async () => {
+    const message = {
+      id: 12348,
+      sender: "+15555550123",
+      text: "current",
+      is_from_me: false,
+      is_group: false,
+    };
+    const decision = await resolveDecision({ message });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    let channelConfigReads = 0;
+    const projectionCfg = Object.defineProperty({}, "channels", {
+      enumerable: true,
+      get: () => {
+        channelConfigReads += 1;
+        return { imessage: { service: "imessage" } };
+      },
+    }) as OpenClawConfig;
+    const { imessageTo } = await buildIMessageInboundContext({
+      cfg: projectionCfg,
+      accountService: "sms",
+      decision,
+      message,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(imessageTo).toBe("sms:+15555550123");
+    expect(channelConfigReads).toBe(0);
+  });
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {
-  const cfg = {} as OpenClawConfig;
   const resolveDmCommandDecision = (params: {
     messageId: number;
     storeAllowFrom: string[];
@@ -905,9 +872,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     allowFrom?: string[];
     text?: string;
   }) =>
-    resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
+    resolveDecision({
       message: {
         id: params.messageId,
         sender: "+15555550123",
@@ -915,18 +880,9 @@ describe("resolveIMessageInboundDecision command auth", () => {
         is_from_me: false,
         is_group: false,
       },
-      opts: undefined,
-      messageText: params.text ?? "/status",
-      bodyText: params.text ?? "/status",
       allowFrom: params.allowFrom ?? [],
-      groupAllowFrom: [],
-      groupPolicy: "open",
       dmPolicy: params.dmPolicy ?? "open",
       storeAllowFrom: params.storeAllowFrom,
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
-      logVerbose: undefined,
     });
 
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
@@ -968,6 +924,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
+      accountService: undefined,
       decision,
       message: {
         id: 102,
@@ -982,6 +939,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     });
 
     expect(ctxPayload.CommandAuthorized).toBe(true);
+    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
     expect(ctxPayload.CommandSource).toBe("text");
     expect(ctxPayload.CommandTurn).toMatchObject({
       kind: "text-slash",
@@ -1008,6 +966,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
+      accountService: undefined,
       decision,
       message: {
         id: 103,
@@ -1036,6 +995,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     const decision = {
       kind: "dispatch" as const,
       route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
+      bindingResolution: null,
       isGroup: false,
       sender: "+15555550123",
       senderId: "+15555550123",
@@ -1051,6 +1011,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     };
     return {
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: decision as unknown as Parameters<
         typeof buildIMessageInboundContext
       >[0]["decision"],

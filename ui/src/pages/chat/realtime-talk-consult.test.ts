@@ -16,9 +16,11 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
 
 describe("RealtimeTalkSession consult handoff", () => {
   it("submits realtime consults through the Gateway tool-call endpoint", async () => {
+    const order: string[] = [];
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string, _params: unknown) => {
       if (method === "talk.client.toolCall") {
+        order.push("tool-call");
         setImmediate(() => {
           listener?.({
             event: "chat",
@@ -40,11 +42,16 @@ describe("RealtimeTalkSession consult handoff", () => {
       };
     });
     const submit = vi.fn();
+    const flushTranscriptWrites = vi.fn(async () => {
+      order.push("flush");
+    });
 
     await submitRealtimeTalkConsult({
       ctx: {
         client: { request, addEventListener },
         sessionKey: "agent:main:main",
+        voiceSessionId: "voice-1",
+        flushTranscriptWrites,
         callbacks: {},
       } as never,
       callId: "call-1",
@@ -53,13 +60,100 @@ describe("RealtimeTalkSession consult handoff", () => {
     });
 
     const toolCall = requireFirstMockCall(request.mock.calls, "Gateway request") as
-      | [string, { sessionKey?: string; name?: string; args?: { question?: string } }]
+      | [
+          string,
+          {
+            sessionKey?: string;
+            voiceSessionId?: string;
+            name?: string;
+            args?: { question?: string };
+          },
+        ]
       | undefined;
     expect(toolCall?.[0]).toBe("talk.client.toolCall");
     expect(toolCall?.[1]?.sessionKey).toBe("agent:main:main");
+    expect(toolCall?.[1]).toMatchObject({ voiceSessionId: "voice-1" });
     expect(toolCall?.[1]?.name).toBe("openclaw_agent_consult");
     expect(toolCall?.[1]?.args).toEqual({ question: "Are the basement lights off?" });
     expect(submit).toHaveBeenCalledWith("call-1", { result: "Basement lights are off." });
+    expect(order).toEqual(["flush", "tool-call"]);
+  });
+
+  it("does not start a consult after aborting during the transcript flush", async () => {
+    let releaseFlush!: () => void;
+    const flushPending = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const flushTranscriptWrites = vi.fn(async () => await flushPending);
+    const request = vi.fn();
+    const submit = vi.fn();
+    const controller = new AbortController();
+
+    const consult = submitRealtimeTalkConsult({
+      ctx: {
+        client: { request },
+        sessionKey: "agent:main:main",
+        voiceSessionId: "voice-1",
+        flushTranscriptWrites,
+        callbacks: {},
+      } as never,
+      callId: "call-1",
+      args: { question: "Check status" },
+      submit,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(flushTranscriptWrites).toHaveBeenCalledOnce());
+
+    controller.abort();
+    releaseFlush();
+    await consult;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the consult acknowledgement alive and aborts the returned run after cancellation", async () => {
+    let acknowledge!: (value: { runId: string }) => void;
+    const pendingAcknowledgement = new Promise<{ runId: string }>((resolve) => {
+      acknowledge = resolve;
+    });
+    const request = vi.fn(
+      async (method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "talk.client.toolCall") {
+          expect(options).toBeUndefined();
+          return await pendingAcknowledgement;
+        }
+        if (method === "chat.abort") {
+          return { ok: true, aborted: true };
+        }
+        throw new Error(`unexpected request: ${method}`);
+      },
+    );
+    const submit = vi.fn();
+    const controller = new AbortController();
+
+    const consult = submitRealtimeTalkConsult({
+      ctx: {
+        client: { request },
+        sessionKey: "agent:main:main",
+        callbacks: {},
+      } as never,
+      callId: "call-1",
+      args: { question: "Check status" },
+      submit,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    controller.abort();
+    acknowledge({ runId: "run-1" });
+    await consult;
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "agent:main:main",
+      runId: "run-1",
+    });
+    expect(submit).toHaveBeenCalledOnce();
   });
 
   it("prefers source-reply final text over an earlier empty Talk consult final", async () => {

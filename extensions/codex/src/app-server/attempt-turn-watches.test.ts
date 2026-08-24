@@ -23,6 +23,7 @@ describe("Codex app-server attempt turn watches", () => {
     let completed = false;
     let terminalQueued = false;
     let activeRequests = 0;
+    let activeRequestsWithoutTimeout = 0;
     let activeItems = 0;
     let activeCompletionBlockers = 0;
     let activeFinalizationHooks = 0;
@@ -39,6 +40,7 @@ describe("Codex app-server attempt turn watches", () => {
       isCompleted: () => completed,
       isTerminalTurnNotificationQueued: () => terminalQueued,
       getActiveAppServerTurnRequests: () => activeRequests,
+      getActiveAppServerTurnRequestsWithoutTimeout: () => activeRequestsWithoutTimeout,
       getActiveTurnItemCount: () => activeItems,
       getActiveCompletionBlockerItemCount: () => activeCompletionBlockers,
       getActiveFinalizationHookCount: () => activeFinalizationHooks,
@@ -48,14 +50,15 @@ describe("Codex app-server attempt turn watches", () => {
       turnAttemptIdleTimeoutMs: 10,
       turnTerminalIdleTimeoutMs: 10,
       interruptTimeoutMs: 5,
-      onInterruptTurn: (input) => interrupts.push(input),
+      onInterruptTurn: async (input) => {
+        interrupts.push(input);
+        return true;
+      },
       onTimeout: (timeout) => timeouts.push(timeout),
-      onMarkTimedOut: vi.fn(),
       onAbort: (reason) => abortController.abort(reason),
       onCompleted: () => {
         completed = true;
       },
-      onResolveCompletion: vi.fn(),
       onRecordEvent: (name, fields) => events.push({ name, fields }),
       onAttemptProgress: (reason) => progress.push(reason),
       onProgressDiagnostic: (reason) => diagnostics.push(reason),
@@ -72,6 +75,9 @@ describe("Codex app-server attempt turn watches", () => {
       },
       set activeRequests(value: number) {
         activeRequests = value;
+      },
+      set activeRequestsWithoutTimeout(value: number) {
+        activeRequestsWithoutTimeout = value;
       },
       set activeItems(value: number) {
         activeItems = value;
@@ -224,7 +230,7 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.timeouts).toMatchObject([{ kind: "completion" }]);
   });
 
-  it("keeps assistant-completion gated while a request is in flight", () => {
+  it("keeps assistant-completion gated while a request is in flight", async () => {
     const harness = createController();
     harness.activeRequests = 1;
 
@@ -235,7 +241,7 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.abortController.signal.aborted).toBe(false);
 
     harness.activeRequests = 0;
-    vi.advanceTimersByTime(1);
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.completed).toBe(true);
   });
@@ -266,11 +272,77 @@ describe("Codex app-server attempt turn watches", () => {
     ]);
   });
 
-  it("releases a completed assistant item after the assistant idle guard expires", () => {
+  it("does not treat a quiet active native item as stalled attempt progress", () => {
+    const harness = createController();
+    harness.activeCompletionBlockers = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("notification:item/started", { attemptProgress: true });
+    vi.advanceTimersByTime(20);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeCompletionBlockers = 0;
+    harness.controller.touchActivity("notification:item/completed", { attemptProgress: true });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "progress",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "notification:item/completed",
+      },
+    ]);
+  });
+
+  it("defers attempt progress to an independently timed app-server request", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("request:item/tool/call:start", { attemptProgress: true });
+    vi.advanceTimersByTime(20);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeRequests = 0;
+    harness.controller.touchActivity("request:item/tool/call:response", { attemptProgress: true });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([{ kind: "progress" }]);
+  });
+
+  it("keeps attempt progress bounded for an app-server request without its own timeout", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+    harness.activeRequestsWithoutTimeout = 1;
+    harness.activeCompletionBlockers = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    harness.controller.touchActivity("request:mcpServer/elicitation/request:start", {
+      attemptProgress: true,
+    });
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "progress",
+        idleMs: 10,
+        timeoutMs: 10,
+        lastActivityReason: "request:mcpServer/elicitation/request:start",
+      },
+    ]);
+    expect(harness.abortController.signal.reason).toBe("turn_progress_idle_timeout");
+  });
+
+  it("releases a completed assistant item after its interrupted turn completes", async () => {
     const harness = createController();
 
     harness.controller.armAssistantCompletionIdleWatch({ method: "item/completed" });
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(harness.completed).toBe(true);
     expect(harness.interrupts).toEqual([{ threadId: "thread-1", turnId: "turn-1", timeoutMs: 5 }]);
@@ -290,7 +362,7 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.events).toEqual([]);
   });
 
-  it("waits for active turn items before assistant idle release", () => {
+  it("waits for active turn items before assistant idle release", async () => {
     const harness = createController();
     harness.activeItems = 1;
 
@@ -299,24 +371,24 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.completed).toBe(false);
 
     harness.activeItems = 0;
-    vi.advanceTimersByTime(1);
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.completed).toBe(true);
   });
 
-  it("waits for active finalization hooks before assistant idle release", () => {
+  it("waits for active finalization hooks before assistant idle release", async () => {
     const harness = createController();
 
     harness.controller.armAssistantCompletionIdleWatch();
     harness.activeFinalizationHooks = 1;
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(harness.completed).toBe(false);
     expect(harness.interrupts).toEqual([]);
 
     harness.activeFinalizationHooks = 0;
     harness.controller.armAssistantCompletionIdleWatch();
-    vi.advanceTimersByTime(10);
+    await vi.advanceTimersByTimeAsync(10);
 
     expect(harness.completed).toBe(true);
   });

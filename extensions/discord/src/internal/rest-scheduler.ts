@@ -1,6 +1,6 @@
 // Discord plugin module implements rest scheduler behavior.
 import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { RateLimitError, readRetryAfter } from "./rest-errors.js";
+import { RateLimitError, readDiscordRateLimitBucket, readRetryAfter } from "./rest-errors.js";
 import {
   createBucketKey,
   createRouteKey,
@@ -308,7 +308,7 @@ export class RestScheduler<TData> {
     response: Response,
     parsed: unknown,
   ): void {
-    const bucketHeader = response.headers.get("X-RateLimit-Bucket");
+    const bucketHeader = readDiscordRateLimitBucket(response);
     const bucket = bucketHeader
       ? this.bindRouteToBucket(routeKey, createBucketKey(bucketHeader, path))
       : this.getBucket(this.routeBuckets.get(routeKey) ?? routeKey);
@@ -352,7 +352,7 @@ export class RestScheduler<TData> {
     const now = Date.now();
     this.invalidRequestTimestamps.push({ at: now, status: response.status });
     this.pruneInvalidRequests(now);
-    const bucketHeader = response.headers.get("X-RateLimit-Bucket");
+    const bucketHeader = readDiscordRateLimitBucket(response);
     const bucketKey = bucketHeader
       ? createBucketKey(bucketHeader, path)
       : (this.routeBuckets.get(routeKey) ?? routeKey);

@@ -12,12 +12,17 @@ import {
 } from "../../agents/exec-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
 export {
+  expandBundleCommandPromptTemplate,
+  expandExplicitSkillReferences,
+  hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
 } from "./chat-command-invocation.js";
@@ -30,6 +35,8 @@ export function listSkillCommandsForWorkspace(params: {
   sessionEntry?: ExecSessionDefaults;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
+  includeAllowlistHidden?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): SkillCommandSpec[] {
   const nodeSkills = resolveNodeExecEligibility({
     cfg: params.cfg,
@@ -38,16 +45,25 @@ export function listSkillCommandsForWorkspace(params: {
     sessionKey: params.sessionKey,
     execOverrides: params.execOverrides,
   });
+  const eligibility = {
+    nodeSkills,
+    remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
+  };
+  const entries = params.includeAllowlistHidden
+    ? loadWorkspaceSkills(params.workspaceDir, {
+        config: params.cfg,
+        eligibility,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      })
+    : undefined;
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
     agentId: params.agentId,
     skillFilter: params.skillFilter,
-    eligibility: {
-      nodeSkills,
-      remote: getRemoteSkillEligibility({
-        advertiseExecNode: nodeSkills.canExec,
-      }),
-    },
+    includeAllowlistHidden: params.includeAllowlistHidden,
+    eligibility,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    ...(entries ? { entries } : {}),
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }

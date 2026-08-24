@@ -3,6 +3,7 @@ import type {
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
@@ -52,7 +53,7 @@ const cfg: OpenClawConfig = {
       audienceType: "app-url",
       audience: "https://chat-app.example.test/googlechat",
       appPrincipal: "123456789012345678901",
-      dm: { allowFrom: ["users/123"] },
+      allowFrom: ["users/123"],
     },
   },
 };
@@ -106,20 +107,6 @@ function createPendingView(): ExecApprovalPendingView {
     ],
     expiresAtMs: Date.now() + 60_000,
   };
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  reject: (reason?: unknown) => void;
-  resolve: (value: T) => void;
-} {
-  let resolve: (value: T) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((innerResolve, innerReject) => {
-    resolve = innerResolve;
-    reject = innerReject;
-  });
-  return { promise, reject, resolve };
 }
 
 type CardPayloadWithTextWidgets = {
@@ -431,7 +418,7 @@ describe("googleChatApprovalNativeRuntime", () => {
             },
             audienceType: "app-url",
             audience: "https://chat-app.example.test/googlechat",
-            dm: { allowFrom: ["users/123"] },
+            allowFrom: ["users/123"],
           },
         },
       },

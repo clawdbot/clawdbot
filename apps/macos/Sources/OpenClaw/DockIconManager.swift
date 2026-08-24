@@ -28,7 +28,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 return
             }
 
-            let userWantsDockHidden = (UserDefaults.standard.object(forKey: showDockIconKey) as? Bool) == false
+            let userWantsDockHidden = (AppDefaults.standard.object(forKey: showDockIconKey) as? Bool) == false
             let visibleWindows = NSApp?.windows.filter { window in
                 window.isVisible &&
                     window.frame.width > 1 &&
@@ -39,22 +39,34 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             } ?? []
 
             let hasVisibleWindows = !visibleWindows.isEmpty
-            if !userWantsDockHidden || hasVisibleWindows {
-                NSApp?.setActivationPolicy(.regular)
-            } else {
-                NSApp?.setActivationPolicy(.accessory)
-            }
+            let policy = Self.activationPolicy(
+                launchPlan: .current,
+                userWantsDockHidden: userWantsDockHidden,
+                hasVisibleWindows: hasVisibleWindows)
+            guard NSApp.activationPolicy() != policy else { return }
+            NSApp.setActivationPolicy(policy)
         }
     }
 
     func temporarilyShowDock() {
         Task { @MainActor in
+            guard AppLaunchRuntimePlan.current.allowsDockIcon else { return }
             guard NSApp != nil else {
                 self.logger.warning("NSApp not ready, cannot show Dock icon")
                 return
             }
+            guard NSApp.activationPolicy() != .regular else { return }
             NSApp.setActivationPolicy(.regular)
         }
+    }
+
+    static func activationPolicy(
+        launchPlan: AppLaunchRuntimePlan,
+        userWantsDockHidden: Bool,
+        hasVisibleWindows: Bool) -> NSApplication.ActivationPolicy
+    {
+        guard launchPlan.allowsDockIcon else { return .accessory }
+        return !userWantsDockHidden || hasVisibleWindows ? .regular : .accessory
     }
 
     private func setupObservers() {
@@ -106,7 +118,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     @objc
     private func dockPreferenceChanged(_ notification: Notification) {
         guard let userDefaults = notification.object as? UserDefaults,
-              userDefaults == UserDefaults.standard
+              userDefaults == AppDefaults.standard
         else { return }
 
         Task { @MainActor in

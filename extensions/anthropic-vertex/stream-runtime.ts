@@ -3,6 +3,7 @@
  * OpenClaw stream options for the shared Anthropic Messages transport.
  */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
+import { GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   clampThinkingLevel,
@@ -15,13 +16,37 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
+import { copyProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
+import {
+  resolveAnthropicVertexAdcCredentials,
+  resolveAnthropicVertexClientRegion,
+  resolveAnthropicVertexProjectId,
+} from "./region.js";
+
+const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+
+// Proxy settings are process-stable. Reuse one dispatcher so auth requests do
+// not leak sockets while avoiding gaxios's broken node-fetch dynamic import.
+let googleAuthDispatcher: EnvHttpProxyAgent | undefined;
+
+const googleAuthFetch: typeof globalThis.fetch = (input, init) => {
+  googleAuthDispatcher ??= new EnvHttpProxyAgent();
+  const fetchInit = { ...init } as Parameters<typeof undiciFetch>[1] & { agent?: unknown };
+  delete fetchInit.agent;
+  fetchInit.dispatcher = googleAuthDispatcher;
+  return undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    fetchInit,
+  ) as unknown as ReturnType<typeof globalThis.fetch>;
+};
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {
   client?: unknown;
@@ -34,6 +59,7 @@ type AnthropicVertexEffort = NonNullable<AnthropicVertexTransportOptions["effort
 type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
 type AnthropicVertexClientOptions = {
   baseURL?: string;
+  googleAuth: GoogleAuth;
   projectId?: string;
   region: string;
 };
@@ -41,11 +67,13 @@ type AnthropicVertexClientOptions = {
 /** Injectable dependencies for Anthropic Vertex stream tests. */
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
+  GoogleAuth: new (options?: GoogleAuthOptions) => GoogleAuth;
   streamAnthropic: typeof streamDefault;
 };
 
 const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
+  GoogleAuth,
   streamAnthropic: streamDefault,
 };
 
@@ -59,6 +87,10 @@ function isClaudeFable5Model(modelId: string): boolean {
 
 function isClaudeSonnet5Model(modelId: string): boolean {
   return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
+}
+
+function isClaudeOpus5Model(modelId: string): boolean {
+  return resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function isClaudeMythos5Model(modelId: string): boolean {
@@ -134,8 +166,20 @@ export function createAnthropicVertexStreamFn(
   region: string,
   baseURL?: string,
   deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
+  env: NodeJS.ProcessEnv = process.env,
 ): StreamFn {
+  // GoogleAuth carries clientOptions into file-backed ADC clients. Keep the
+  // proxy-aware transport provider-local; a window shim changes detection globally.
+  const adcConfig = resolveAnthropicVertexAdcCredentials(env);
+  const googleAuth = new deps.GoogleAuth({
+    scopes: [GOOGLE_CLOUD_PLATFORM_SCOPE],
+    ...(adcConfig ? { credentials: adcConfig } : {}),
+    clientOptions: {
+      transporterOptions: { fetchImplementation: googleAuthFetch },
+    },
+  });
   const client = new deps.AnthropicVertex({
+    googleAuth,
     region,
     ...(baseURL ? { baseURL } : {}),
     ...(projectId ? { projectId } : {}),
@@ -155,7 +199,9 @@ export function createAnthropicVertexStreamFn(
       requestedMaxTokens: options?.maxTokens,
     });
     const contractModelId = resolveClaudeModelIdentity(model);
-    const sonnet5 = isClaudeSonnet5Model(contractModelId);
+    // Sonnet 5 and Opus 5 default thinking on when the caller omits reasoning.
+    const adaptiveDefaultClaude5 =
+      isClaudeSonnet5Model(contractModelId) || isClaudeOpus5Model(contractModelId);
     const mandatoryAdaptiveThinking = requiresClaudeMandatoryAdaptiveThinking({
       id: contractModelId,
     });
@@ -163,7 +209,8 @@ export function createAnthropicVertexStreamFn(
     const reasoning =
       requestedReasoning === "off" && mandatoryAdaptiveThinking
         ? "low"
-        : (requestedReasoning ?? (mandatoryAdaptiveThinking || sonnet5 ? "high" : undefined));
+        : (requestedReasoning ??
+          (mandatoryAdaptiveThinking || adaptiveDefaultClaude5 ? "high" : undefined));
     const adaptiveThinking =
       mandatoryAdaptiveThinking ||
       Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));
@@ -173,7 +220,7 @@ export function createAnthropicVertexStreamFn(
       isClaudeMythos5Model(contractModelId)
         ? undefined
         : options?.temperature;
-    const opts: AnthropicVertexTransportOptions = {
+    const opts: AnthropicVertexTransportOptions = copyProviderAcceptanceObserver(options, {
       client,
       ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
@@ -185,9 +232,10 @@ export function createAnthropicVertexStreamFn(
       // cache boundary and budgets all cache_control markers; re-applying the
       // payload policy here marked the uncached suffix and breached the 4-marker cap.
       onPayload: options?.onPayload,
+      onResponse: options?.onResponse,
       maxRetryDelayMs: options?.maxRetryDelayMs,
       metadata: options?.metadata,
-    };
+    });
 
     if (reasoning === "off") {
       opts.thinkingEnabled = false;
@@ -260,5 +308,6 @@ export function createAnthropicVertexStreamFnForModel(
     }),
     resolveAnthropicVertexSdkBaseUrl(model.baseUrl),
     deps,
+    env,
   );
 }

@@ -3,10 +3,9 @@
  *
  * Expands user/file URL inputs and resolves read/write paths against the active cwd with macOS filename variants.
  */
-import { accessSync, constants } from "node:fs";
-import * as os from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -15,35 +14,28 @@ function normalizeUnicodeSpaces(str: string): string {
 }
 
 function tryMacOSScreenshotPath(filePath: string): string {
-  return filePath.replace(/ (AM|PM)\./gi, `${NARROW_NO_BREAK_SPACE}$1.`);
-}
-
-function tryNFDVariant(filePath: string): string {
-  // macOS stores filenames in NFD (decomposed) form, try converting user input to NFD
-  return filePath.normalize("NFD");
-}
-
-function tryCurlyQuoteVariant(filePath: string): string {
-  // macOS uses U+2019 (right single quotation mark) in screenshot names like "Capture d'écran"
-  // Users typically type U+0027 (straight apostrophe)
-  return filePath.replace(/'/g, "\u2019");
-}
-
-function fileExists(filePath: string): boolean {
-  try {
-    accessSync(filePath, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
+  return filePath.replace(/ (?=(?:AM|PM)(?:\b|\.))/gi, NARROW_NO_BREAK_SPACE);
 }
 
 function normalizeAtPrefix(filePath: string): string {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
+/** Expand OS-home syntax without treating a POSIX backslash as a separator. */
+export function expandOsHomePrefix(filePath: string): string {
+  const isHomePath =
+    filePath === "~" ||
+    filePath.startsWith("~/") ||
+    (process.platform === "win32" && filePath.startsWith("~\\"));
+  if (!isHomePath) {
+    return filePath;
+  }
+  const home = resolveOsHomeDir();
+  return home ? expandHomePrefix(filePath, { home }) : filePath;
+}
+
 function expandPath(filePath: string): string {
-  const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+  const normalized = normalizeAtPrefix(filePath);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -51,13 +43,7 @@ function expandPath(filePath: string): string {
       return normalized;
     }
   }
-  if (normalized === "~") {
-    return os.homedir();
-  }
-  if (normalized.startsWith("~/")) {
-    return os.homedir() + normalized.slice(1);
-  }
-  return normalized;
+  return expandOsHomePrefix(normalized);
 }
 
 /**
@@ -66,42 +52,25 @@ function expandPath(filePath: string): string {
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
   const expanded = expandPath(filePath);
-  if (isAbsolute(expanded)) {
-    return expanded;
-  }
-  return resolvePath(cwd, expanded);
+  return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
-export function resolveReadPath(filePath: string, cwd: string): string {
-  const resolved = resolveToCwd(filePath, cwd);
-
-  if (fileExists(resolved)) {
-    return resolved;
+/** Equivalent spellings worth probing after an exact read path misses. */
+export function getReadPathVariants(filePath: string): string[] {
+  const variants = new Set<string>();
+  const asciiSpace = normalizeUnicodeSpaces(filePath);
+  for (const spaced of [asciiSpace, tryMacOSScreenshotPath(asciiSpace)]) {
+    const straightQuotes = spaced.replace(/[\u2018\u2019]/g, "'");
+    const curlyQuotes = spaced.replace(/['\u2018]/g, "\u2019");
+    for (const quoted of [straightQuotes, curlyQuotes]) {
+      variants.add(quoted.normalize("NFC"));
+      // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
+      // makes one file look ambiguous. Other platforms can store both distinctly.
+      if (process.platform !== "darwin") {
+        variants.add(quoted.normalize("NFD"));
+      }
+    }
   }
-
-  // Try macOS AM/PM variant (narrow no-break space before AM/PM)
-  const amPmVariant = tryMacOSScreenshotPath(resolved);
-  if (amPmVariant !== resolved && fileExists(amPmVariant)) {
-    return amPmVariant;
-  }
-
-  // Try NFD variant (macOS stores filenames in NFD form)
-  const nfdVariant = tryNFDVariant(resolved);
-  if (nfdVariant !== resolved && fileExists(nfdVariant)) {
-    return nfdVariant;
-  }
-
-  // Try curly quote variant (macOS uses U+2019 in screenshot names)
-  const curlyVariant = tryCurlyQuoteVariant(resolved);
-  if (curlyVariant !== resolved && fileExists(curlyVariant)) {
-    return curlyVariant;
-  }
-
-  // Try combined NFD + curly quote (for French macOS screenshots like "Capture d'écran")
-  const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
-  if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) {
-    return nfdCurlyVariant;
-  }
-
-  return resolved;
+  variants.delete(filePath);
+  return [...variants];
 }

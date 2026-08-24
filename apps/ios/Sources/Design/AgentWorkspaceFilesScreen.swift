@@ -7,20 +7,20 @@ import SwiftUI
 /// `agents.workspace.list` / `agents.workspace.get` gateway RPCs.
 struct AgentWorkspaceFilesScreen: View {
     let agentId: String
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
 
     var body: some View {
         ZStack {
             OpenClawProBackground()
             VStack(alignment: .leading, spacing: 0) {
-                if let headerLeadingAction {
+                if let headerSidebarAction {
                     OpenClawAdaptiveHeaderRow(
                         title: "Files",
                         subtitle: .verbatim(self.agentId),
                         titleFont: OpenClawType.title3SemiBold,
                         subtitleFont: OpenClawType.subheadMedium)
                     {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                     } accessory: {
                         EmptyView()
                     }

@@ -11,8 +11,6 @@ import {
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
 
-export { isResumableClaudeSource } from "./session-catalog-shared.js";
-
 type ClaudeTerminalDependencies = {
   listClaudeSessions: () => Promise<
     Array<{ threadId: string; source?: string; filePath: string; cwd?: string }>
@@ -42,14 +40,11 @@ export function claudeNodeTerminalCapability(node: {
     : {};
 }
 
-export function isLocalClaudeResumable(
-  host: { hostId: string },
-  source: string | undefined,
-): boolean {
+function isLocalClaudeResumable(host: { hostId: string }, source: string | undefined): boolean {
   return host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(source);
 }
 
-export function canOpenClaudeTerminalSession(
+function canOpenClaudeTerminalSession(
   host: { hostId: string; canOpenTerminalClaude?: boolean },
   source: string | undefined,
   localCliAvailable: boolean,
@@ -69,6 +64,34 @@ export function terminalEligibility(
   return {
     localResumable: isLocalClaudeResumable(host, source),
     canOpenTerminal: canOpenClaudeTerminalSession(host, source, localCliAvailable),
+  };
+}
+
+export async function startClaudeCatalogTerminal(params: {
+  cwd: string;
+  initialMessage?: string;
+  nodeId?: string;
+}): Promise<SessionCatalogTerminalPlan> {
+  if (params.nodeId) {
+    throw new ClaudeCatalogParamsError(
+      "Paired-node Claude terminal start is unavailable; omit hostId to start on the gateway host",
+    );
+  }
+  const resolution = resolveClaudeTerminalExecutable();
+  if (!resolution) {
+    throw new ClaudeCatalogParamsError(
+      "Claude CLI is unavailable; install Claude Code or add claude to PATH, then restart the gateway",
+    );
+  }
+  return {
+    kind: "local",
+    argv: [
+      resolution.executable,
+      ...(params.initialMessage !== undefined ? ["--", params.initialMessage] : []),
+    ],
+    cwd: params.cwd,
+    ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
+    title: "claude",
   };
 }
 

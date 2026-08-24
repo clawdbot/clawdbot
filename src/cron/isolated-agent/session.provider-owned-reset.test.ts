@@ -21,7 +21,7 @@ function providerOwnedEntry(): SessionEntry {
 }
 
 describe("resolveCronSession provider-owned daily reset", () => {
-  it("keeps a provider-owned CLI session across the default daily boundary", () => {
+  it("keeps a provider-owned CLI session with the default reset policy", () => {
     const sessionKey = "agent:main:cron:daily-job";
     const entry = providerOwnedEntry();
 
@@ -52,7 +52,7 @@ describe("resolveCronSession provider-owned daily reset", () => {
     };
 
     const result = resolveCronSession({
-      cfg: { session: {} } as OpenClawConfig,
+      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
       sessionKey,
       agentId: "main",
       nowMs: NOW_MS,
@@ -61,7 +61,7 @@ describe("resolveCronSession provider-owned daily reset", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+    expect(result.sessionEntry.sessionId).toBe("old-session-id");
   });
 
   it("still rotates a provider-owned session when reset is explicitly configured", () => {
@@ -78,7 +78,7 @@ describe("resolveCronSession provider-owned daily reset", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+    expect(result.sessionEntry.sessionId).toBe("old-session-id");
     expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toBeUndefined();
   });
 });

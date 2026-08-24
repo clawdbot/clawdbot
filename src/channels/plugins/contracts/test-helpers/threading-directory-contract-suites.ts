@@ -8,11 +8,17 @@ import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
 import type {
   ChannelDirectoryEntry,
-  ChannelFocusedBindingContext,
-  ChannelReplyTransport,
+  ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.js";
+
+type ChannelReplyTransport = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
+>;
+type ChannelFocusedBindingContext = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveFocusedBinding"]>>
+>;
 
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {

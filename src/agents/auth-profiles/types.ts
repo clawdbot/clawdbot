@@ -94,6 +94,9 @@ export type AuthProfileFailureReason =
   | "unclassified"
   | "unknown";
 
+/** Optional host diagnostic attached to a canonical cooldown reason. */
+export type AuthProfileCooldownClassification = "wham_token_expired" | "wham_account_dead";
+
 /** Profile-wide blocked reason reported by provider usage probes. */
 export type AuthProfileBlockedReason = "subscription_limit";
 /** Source that marked a profile as blocked. */
@@ -109,12 +112,14 @@ export type ProfileUsageStats = {
   blockedScope?: "model";
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
+  cooldownClassification?: AuthProfileCooldownClassification;
   cooldownModel?: string;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  lastProbeAt?: number;
 };
 
 /** Durable, non-secret auth profile selection state. */
@@ -154,6 +159,8 @@ export type AuthProfileStore = AuthProfileSecretsStore &
 
 /** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
 export type RuntimeAuthProfileStore = AuthProfileStore & {
+  /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
+  runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
   runtimeInheritsMainState?: boolean;
 };

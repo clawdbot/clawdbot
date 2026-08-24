@@ -1,596 +1,81 @@
 // Checks config help text quality and coverage.
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { FIELD_HELP } from "./schema.help.js";
+import {
+  CHANNELS_AGENTS_TARGET_KEYS,
+  ENUM_EXPECTATIONS,
+  FINAL_BACKLOG_TARGET_KEYS,
+  ROOT_SECTIONS,
+  TARGET_KEYS,
+  TOOLS_HOOKS_TARGET_KEYS,
+} from "./schema.help.quality.test-fixtures.js";
+import { buildBaseHints } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
-const ROOT_SECTIONS = [
-  "meta",
-  "env",
-  "wizard",
-  "diagnostics",
-  "logging",
-  "cli",
-  "update",
-  "commitments",
-  "browser",
-  "ui",
-  "tui",
-  "auth",
-  "models",
-  "nodeHost",
-  "agents",
-  "tools",
-  "bindings",
-  "broadcast",
-  "audio",
-  "media",
-  "messages",
-  "commands",
-  "approvals",
-  "session",
-  "cron",
-  "transcripts",
-  "hooks",
-  "web",
-  "channels",
-  "discovery",
-  "talk",
-  "gateway",
-  "cloudWorkers",
-  "memory",
-  "plugins",
-] as const;
-
-const TARGET_KEYS = [
-  "memory.citations",
-  "memory.backend",
-  "memory.qmd.searchMode",
-  "memory.qmd.rerank",
-  "memory.qmd.searchTool",
-  "memory.qmd.scope",
-  "memory.qmd.includeDefaultMemory",
-  "memory.qmd.mcporter.enabled",
-  "memory.qmd.mcporter.serverName",
-  "memory.qmd.command",
-  "memory.qmd.mcporter",
-  "memory.qmd.mcporter.startDaemon",
-  "memory.qmd.paths",
-  "memory.qmd.paths.path",
-  "memory.qmd.paths.pattern",
-  "memory.qmd.paths.name",
-  "memory.qmd.sessions.enabled",
-  "memory.qmd.sessions.exportDir",
-  "memory.qmd.sessions.retentionDays",
-  "memory.qmd.update.interval",
-  "memory.qmd.update.debounceMs",
-  "memory.qmd.update.onBoot",
-  "memory.qmd.update.startup",
-  "memory.qmd.update.startupDelayMs",
-  "memory.qmd.update.waitForBootSync",
-  "memory.qmd.update.embedInterval",
-  "memory.qmd.update.commandTimeoutMs",
-  "memory.qmd.update.updateTimeoutMs",
-  "memory.qmd.update.embedTimeoutMs",
-  "memory.qmd.limits.maxResults",
-  "memory.qmd.limits.maxSnippetChars",
-  "memory.qmd.limits.maxInjectedChars",
-  "memory.qmd.limits.timeoutMs",
-  "agents.defaults.memorySearch.provider",
-  "agents.defaults.memorySearch.fallback",
-  "agents.defaults.memorySearch.sources",
-  "agents.defaults.memorySearch.extraPaths",
-  "agents.defaults.memorySearch.qmd",
-  "agents.defaults.memorySearch.qmd.extraCollections",
-  "agents.defaults.memorySearch.qmd.extraCollections.path",
-  "agents.defaults.memorySearch.qmd.extraCollections.name",
-  "agents.defaults.memorySearch.qmd.extraCollections.pattern",
-  "agents.defaults.memorySearch.multimodal",
-  "agents.defaults.memorySearch.multimodal.enabled",
-  "agents.defaults.memorySearch.multimodal.modalities",
-  "agents.defaults.memorySearch.multimodal.maxFileBytes",
-  "agents.defaults.memorySearch.experimental.sessionMemory",
-  "agents.defaults.memorySearch.remote.baseUrl",
-  "agents.defaults.memorySearch.remote.apiKey",
-  "agents.defaults.memorySearch.remote.headers",
-  "agents.defaults.memorySearch.remote.nonBatchConcurrency",
-  "agents.defaults.memorySearch.remote.batch.enabled",
-  "agents.defaults.memorySearch.remote.batch.wait",
-  "agents.defaults.memorySearch.remote.batch.concurrency",
-  "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
-  "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
-  "agents.defaults.memorySearch.local.modelPath",
-  "agents.defaults.memorySearch.inputType",
-  "agents.defaults.memorySearch.queryInputType",
-  "agents.defaults.memorySearch.documentInputType",
-  "agents.defaults.memorySearch.outputDimensionality",
-  "agents.defaults.memorySearch.store.vector.enabled",
-  "agents.defaults.memorySearch.store.vector.extensionPath",
-  "agents.defaults.memorySearch.query.hybrid.enabled",
-  "agents.defaults.memorySearch.query.hybrid.vectorWeight",
-  "agents.defaults.memorySearch.query.hybrid.textWeight",
-  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier",
-  "agents.defaults.memorySearch.query.hybrid.mmr.enabled",
-  "agents.defaults.memorySearch.query.hybrid.mmr.lambda",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays",
-  "agents.defaults.memorySearch.cache.enabled",
-  "agents.defaults.memorySearch.cache.maxEntries",
-  "agents.defaults.memorySearch.sync.onSearch",
-  "agents.defaults.memorySearch.sync.watch",
-  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds",
-  "agents.defaults.memorySearch.sync.sessions.deltaBytes",
-  "agents.defaults.memorySearch.sync.sessions.deltaMessages",
-  "models.mode",
-  "models.providers.*.auth",
-  "models.providers.*.authHeader",
-  "models.providers.*.request",
-  "gateway.reload.mode",
-  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
-  "gateway.controlUi.allowInsecureAuth",
-  "gateway.controlUi.dangerouslyDisableDeviceAuth",
-  "gateway.controlUi.embedSandbox",
-  "cron",
-  "cron.enabled",
-  "cron.store",
-  "cron.maxConcurrentRuns",
-  "cron.retry",
-  "cron.retry.maxAttempts",
-  "cron.retry.backoffMs",
-  "cron.retry.retryOn",
-  "cron.webhook",
-  "cron.webhookToken",
-  "cron.sessionRetention",
-  "session",
-  "session.scope",
-  "session.dmScope",
-  "session.identityLinks",
-  "session.resetTriggers",
-  "session.idleMinutes",
-  "session.reset",
-  "session.reset.mode",
-  "session.reset.atHour",
-  "session.reset.idleMinutes",
-  "session.resetByType",
-  "session.resetByType.direct",
-  "session.resetByType.dm",
-  "session.resetByType.group",
-  "session.resetByType.thread",
-  "session.resetByChannel",
-  "session.store",
-  "session.typingIntervalSeconds",
-  "session.typingMode",
-  "session.mainKey",
-  "session.sendPolicy",
-  "session.sendPolicy.default",
-  "session.sendPolicy.rules",
-  "session.sendPolicy.rules[].action",
-  "session.sendPolicy.rules[].match",
-  "session.sendPolicy.rules[].match.channel",
-  "session.sendPolicy.rules[].match.chatType",
-  "session.sendPolicy.rules[].match.keyPrefix",
-  "session.sendPolicy.rules[].match.rawKeyPrefix",
-  "session.agentToAgent",
-  "session.agentToAgent.maxPingPongTurns",
-  "session.threadBindings",
-  "session.threadBindings.enabled",
-  "session.threadBindings.idleHours",
-  "session.threadBindings.maxAgeHours",
-  "session.threadBindings.spawnSessions",
-  "session.threadBindings.defaultSpawnContext",
-  "session.maintenance",
-  "session.maintenance.mode",
-  "session.maintenance.pruneAfter",
-  "session.maintenance.pruneDays",
-  "session.maintenance.maxEntries",
-  "session.maintenance.resetArchiveRetention",
-  "session.maintenance.maxDiskBytes",
-  "session.maintenance.highWaterBytes",
-  "approvals",
-  "approvals.exec",
-  "approvals.exec.enabled",
-  "approvals.exec.mode",
-  "approvals.exec.agentFilter",
-  "approvals.exec.sessionFilter",
-  "approvals.exec.targets",
-  "approvals.exec.targets[].channel",
-  "approvals.exec.targets[].to",
-  "approvals.exec.targets[].accountId",
-  "approvals.exec.targets[].threadId",
-  "nodeHost",
-  "nodeHost.agentRuns",
-  "nodeHost.agentRuns.claude",
-  "nodeHost.agentRuns.claude.enabled",
-  "nodeHost.browserProxy",
-  "nodeHost.browserProxy.enabled",
-  "nodeHost.browserProxy.allowProfiles",
-  "nodeHost.mcp",
-  "nodeHost.mcp.servers",
-  "nodeHost.skills",
-  "nodeHost.skills.enabled",
-  "media",
-  "media.preserveFilenames",
-  "audio",
-  "audio.transcription",
-  "audio.transcription.command",
-  "audio.transcription.timeoutSeconds",
-  "bindings",
-  "bindings[].agentId",
-  "bindings[].match",
-  "bindings[].match.channel",
-  "bindings[].match.accountId",
-  "bindings[].match.peer",
-  "bindings[].match.peer.kind",
-  "bindings[].match.peer.id",
-  "bindings[].match.guildId",
-  "bindings[].match.teamId",
-  "bindings[].match.roles",
-  "broadcast",
-  "broadcast.strategy",
-  "broadcast.*",
-  "commands",
-  "commands.allowFrom",
-  "hooks",
-  "hooks.enabled",
-  "hooks.path",
-  "hooks.token",
-  "hooks.defaultSessionKey",
-  "hooks.allowRequestSessionKey",
-  "hooks.allowedSessionKeyPrefixes",
-  "hooks.allowedAgentIds",
-  "hooks.maxBodyBytes",
-  "hooks.transformsDir",
-  "hooks.mappings",
-  "hooks.mappings[].action",
-  "hooks.mappings[].wakeMode",
-  "hooks.mappings[].channel",
-  "hooks.mappings[].transform.module",
-  "hooks.gmail",
-  "hooks.gmail.pushToken",
-  "hooks.gmail.tailscale.mode",
-  "hooks.gmail.thinking",
-  "hooks.internal",
-  "hooks.internal.load.extraDirs",
-  "messages",
-  "messages.messagePrefix",
-  "messages.visibleReplies",
-  "messages.responsePrefix",
-  "messages.groupChat",
-  "messages.groupChat.mentionPatterns",
-  "messages.groupChat.historyLimit",
-  "messages.groupChat.unmentionedInbound",
-  "messages.groupChat.visibleReplies",
-  "messages.queue",
-  "messages.queue.mode",
-  "messages.queue.byChannel",
-  "messages.queue.debounceMs",
-  "messages.queue.debounceMsByChannel",
-  "messages.queue.cap",
-  "messages.queue.drop",
-  "messages.inbound",
-  "messages.inbound.byChannel",
-  "messages.removeAckAfterReply",
-  "messages.tts",
-  "channels",
-  "channels.defaults",
-  "channels.defaults.groupPolicy",
-  "channels.defaults.contextVisibility",
-  "channels.defaults.heartbeat",
-  "channels.defaults.heartbeat.showOk",
-  "channels.defaults.heartbeat.showAlerts",
-  "channels.defaults.heartbeat.useIndicator",
-  "channels.defaults.botLoopProtection",
-  "channels.defaults.botLoopProtection.enabled",
-  "channels.defaults.botLoopProtection.maxEventsPerWindow",
-  "channels.defaults.botLoopProtection.windowSeconds",
-  "channels.defaults.botLoopProtection.cooldownSeconds",
-  "gateway",
-  "gateway.mode",
-  "gateway.bind",
-  "gateway.auth.mode",
-  "gateway.tailscale.mode",
-  "gateway.tools.allow",
-  "gateway.tools.deny",
-  "gateway.tls.enabled",
-  "gateway.tls.autoGenerate",
-  "gateway.http",
-  "gateway.http.endpoints",
-  "browser",
-  "browser.enabled",
-  "browser.cdpUrl",
-  "browser.headless",
-  "browser.noSandbox",
-  "browser.profiles",
-  "browser.profiles.*.userDataDir",
-  "browser.profiles.*.driver",
-  "browser.profiles.*.attachOnly",
-  "tools",
-  "tools.allow",
-  "tools.deny",
-  "tools.exec",
-  "tools.exec.host",
-  "tools.exec.mode",
-  "tools.exec.security",
-  "tools.exec.ask",
-  "tools.exec.node",
-  "tools.agentToAgent.enabled",
-  "tools.elevated.enabled",
-  "tools.elevated.allowFrom",
-  "tools.subagents.tools",
-  "tools.sandbox.tools",
-  "web",
-  "web.enabled",
-  "web.heartbeatSeconds",
-  "web.reconnect",
-  "web.reconnect.initialMs",
-  "web.reconnect.maxMs",
-  "web.reconnect.factor",
-  "web.reconnect.jitter",
-  "web.reconnect.maxAttempts",
-  "web.whatsapp",
-  "web.whatsapp.keepAliveIntervalMs",
-  "web.whatsapp.connectTimeoutMs",
-  "web.whatsapp.defaultQueryTimeoutMs",
-  "discovery",
-  "discovery.wideArea.domain",
-  "discovery.wideArea.enabled",
-  "discovery.mdns",
-  "discovery.mdns.mode",
-  "gateway.controlUi.embedSandbox",
-  "talk",
-  "talk.consultFastMode",
-  "talk.interruptOnSpeech",
-  "talk.silenceTimeoutMs",
-  "talk.consultThinkingLevel",
-  "meta",
-  "env",
-  "env.shellEnv",
-  "env.shellEnv.enabled",
-  "env.shellEnv.timeoutMs",
-  "env.vars",
-  "wizard",
-  "wizard.lastRunAt",
-  "wizard.lastRunVersion",
-  "wizard.lastRunCommit",
-  "wizard.lastRunCommand",
-  "wizard.lastRunMode",
-  "diagnostics",
-  "diagnostics.otel",
-  "diagnostics.cacheTrace",
-  "logging",
-  "logging.level",
-  "logging.file",
-  "logging.consoleLevel",
-  "logging.consoleStyle",
-  "logging.redactSensitive",
-  "logging.redactPatterns",
-  "update",
-  "ui",
-  "ui.assistant",
-  "plugins",
-  "plugins.enabled",
-  "plugins.allow",
-  "plugins.deny",
-  "plugins.load",
-  "plugins.load.paths",
-  "plugins.slots",
-  "plugins.entries",
-  "plugins.entries.*.enabled",
-  "plugins.entries.*.hooks",
-  "plugins.entries.*.hooks.allowPromptInjection",
-  "plugins.entries.*.hooks.allowConversationAccess",
-  "plugins.entries.*.hooks.timeoutMs",
-  "plugins.entries.*.hooks.timeouts",
-  "plugins.entries.*.subagent",
-  "plugins.entries.*.subagent.allowModelOverride",
-  "plugins.entries.*.subagent.allowedModels",
-  "plugins.entries.*.llm",
-  "plugins.entries.*.llm.allowModelOverride",
-  "plugins.entries.*.llm.allowedModels",
-  "plugins.entries.*.llm.allowAgentIdOverride",
-  "plugins.entries.*.apiKey",
-  "plugins.entries.*.env",
-  "plugins.entries.*.config",
-  "auth",
-  "auth.cooldowns",
-  "models",
-  "models.providers",
-  "models.providers.*.baseUrl",
-  "models.providers.*.apiKey",
-  "models.providers.*.api",
-  "models.providers.*.contextWindow",
-  "models.providers.*.contextTokens",
-  "models.providers.*.maxTokens",
-  "models.providers.*.region",
-  "models.providers.*.headers",
-  "models.providers.*.models",
-  "agents",
-  "agents.defaults",
-  "agents.list",
-  "agents.defaults.compaction",
-  "agents.defaults.compaction.mode",
-  "agents.defaults.compaction.provider",
-  "agents.defaults.compaction.reserveTokens",
-  "agents.defaults.compaction.keepRecentTokens",
-  "agents.defaults.compaction.reserveTokensFloor",
-  "agents.defaults.compaction.maxHistoryShare",
-  "agents.defaults.compaction.identifierPolicy",
-  "agents.defaults.compaction.identifierInstructions",
-  "agents.defaults.compaction.recentTurnsPreserve",
-  "agents.defaults.compaction.qualityGuard",
-  "agents.defaults.compaction.qualityGuard.enabled",
-  "agents.defaults.compaction.qualityGuard.maxRetries",
-  "agents.defaults.compaction.midTurnPrecheck",
-  "agents.defaults.compaction.midTurnPrecheck.enabled",
-  "agents.defaults.compaction.postCompactionSections",
-  "agents.defaults.compaction.timeoutSeconds",
-  "agents.defaults.compaction.model",
-  "agents.defaults.compaction.truncateAfterCompaction",
-  "agents.defaults.compaction.maxActiveTranscriptBytes",
-  "agents.defaults.compaction.memoryFlush",
-  "agents.defaults.compaction.memoryFlush.enabled",
-  "agents.defaults.compaction.memoryFlush.model",
-  "agents.defaults.compaction.memoryFlush.softThresholdTokens",
-  "agents.defaults.compaction.memoryFlush.prompt",
-  "agents.defaults.compaction.memoryFlush.systemPrompt",
-] as const;
-
-const ENUM_EXPECTATIONS: Record<string, string[]> = {
-  "memory.citations": ['"auto"', '"on"', '"off"'],
-  "memory.backend": ['"builtin"', '"qmd"'],
-  "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],
-  "models.mode": ['"merge"', '"replace"'],
-  "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"'],
-  "gateway.reload.mode": ['"off"', '"restart"', '"hot"', '"hybrid"'],
-  "approvals.exec.mode": ['"session"', '"targets"', '"both"'],
-  "bindings[].match.peer.kind": ['"direct"', '"group"', '"channel"', '"dm"'],
-  "broadcast.strategy": ['"parallel"', '"sequential"'],
-  "hooks.mappings[].action": ['"wake"', '"agent"'],
-  "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
-  "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
-  "messages.queue.mode": ['"steer"', '"followup"', '"collect"', '"interrupt"'],
-  "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
-  "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
-  "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
-  "gateway.mode": ['"local"', '"remote"'],
-  "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
-  "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
-  "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"existing-session"'],
-  "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
-  "wizard.lastRunMode": ['"local"', '"remote"'],
-  "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
-  "diagnostics.otel.logsExporter": ['"otlp"', '"stdout"', '"both"'],
-  "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
-  "logging.consoleLevel": [
-    '"silent"',
-    '"fatal"',
-    '"error"',
-    '"warn"',
-    '"info"',
-    '"debug"',
-    '"trace"',
-  ],
-  "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
-  "logging.redactSensitive": ['"off"', '"tools"'],
-  "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
-  "update.channel": ['"stable"', '"extended-stable"', '"beta"', '"dev"'],
-  "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
-  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
+type JsonSchemaNode = {
+  properties?: Record<string, JsonSchemaNode>;
+  additionalProperties?: JsonSchemaNode | boolean;
+  items?: JsonSchemaNode | JsonSchemaNode[];
+  anyOf?: JsonSchemaNode[];
+  oneOf?: JsonSchemaNode[];
+  allOf?: JsonSchemaNode[];
 };
 
-const TOOLS_HOOKS_TARGET_KEYS = [
-  "hooks.gmail.account",
-  "hooks.gmail.allowUnsafeExternalContent",
-  "hooks.gmail.hookUrl",
-  "hooks.gmail.includeBody",
-  "hooks.gmail.label",
-  "hooks.gmail.model",
-  "hooks.gmail.serve",
-  "hooks.gmail.subscription",
-  "hooks.gmail.tailscale",
-  "hooks.gmail.topic",
-  "hooks.internal.entries",
-  "hooks.internal.installs",
-  "hooks.internal.load",
-  "hooks.mappings[].allowUnsafeExternalContent",
-  "hooks.mappings[].deliver",
-  "hooks.mappings[].id",
-  "hooks.mappings[].match",
-  "hooks.mappings[].messageTemplate",
-  "hooks.mappings[].model",
-  "hooks.mappings[].name",
-  "hooks.mappings[].textTemplate",
-  "hooks.mappings[].thinking",
-  "hooks.mappings[].transform",
-  "tools.alsoAllow",
-  "tools.byProvider",
-  "tools.exec.approvalRunningNoticeMs",
-  "tools.exec.strictInlineEval",
-  "tools.exec.commandHighlighting",
-  "tools.links.enabled",
-  "tools.links.maxLinks",
-  "tools.links.models",
-  "tools.links.scope",
-  "tools.links.timeoutSeconds",
-  ...Object.keys(MEDIA_AUDIO_FIELD_HELP),
-  "tools.media.concurrency",
-  "tools.media.image.attachments",
-  "tools.media.image.enabled",
-  "tools.media.image.maxBytes",
-  "tools.media.image.maxChars",
-  "tools.media.image.models",
-  "tools.media.image.prompt",
-  "tools.media.image.scope",
-  "tools.media.image.timeoutSeconds",
-  "tools.media.models",
-  "tools.media.video.attachments",
-  "tools.media.video.enabled",
-  "tools.media.video.maxBytes",
-  "tools.media.video.maxChars",
-  "tools.media.video.models",
-  "tools.media.video.prompt",
-  "tools.media.video.scope",
-  "tools.media.video.timeoutSeconds",
-  "tools.profile",
-] as const;
+function collectSchemaLeafPaths(
+  schema: JsonSchemaNode,
+  path = "",
+  leaves = new Set<string>(),
+  visited = new WeakMap<object, Set<string>>(),
+): Set<string> {
+  const priorPaths = visited.get(schema);
+  if (priorPaths?.has(path)) {
+    return leaves;
+  }
+  if (priorPaths) {
+    priorPaths.add(path);
+  } else {
+    visited.set(schema, new Set([path]));
+  }
 
-const CHANNELS_AGENTS_TARGET_KEYS = [
-  "agents.defaults.memorySearch.chunking.overlap",
-  "agents.defaults.memorySearch.chunking.tokens",
-  "agents.defaults.memorySearch.enabled",
-  "agents.defaults.memorySearch.model",
-  "agents.defaults.memorySearch.query.maxResults",
-  "agents.defaults.memorySearch.query.minScore",
-  "agents.defaults.memorySearch.sync.onSessionStart",
-  "agents.defaults.memorySearch.sync.watchDebounceMs",
-  "agents.defaults.workspace",
-  "agents.list[].tools.alsoAllow",
-  "agents.list[].tools.byProvider",
-  "agents.list[].tools.message.crossContext.allowAcrossProviders",
-  "agents.list[].tools.message.crossContext.allowWithinProvider",
-  "agents.list[].tools.profile",
-  "channels.mattermost",
-] as const;
+  let hasChildren = false;
+  for (const [key, child] of Object.entries(schema.properties ?? {})) {
+    hasChildren = true;
+    collectSchemaLeafPaths(child, path ? `${path}.${key}` : key, leaves, visited);
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    hasChildren = true;
+    collectSchemaLeafPaths(schema.additionalProperties, path ? `${path}.*` : "*", leaves, visited);
+  }
+  const items = Array.isArray(schema.items) ? schema.items : schema.items ? [schema.items] : [];
+  for (const item of items) {
+    hasChildren = true;
+    collectSchemaLeafPaths(item, path ? `${path}.*` : "*", leaves, visited);
+  }
+  for (const branches of [schema.anyOf, schema.oneOf, schema.allOf]) {
+    for (const branch of branches ?? []) {
+      hasChildren = true;
+      collectSchemaLeafPaths(branch, path, leaves, visited);
+    }
+  }
+  if (path && !hasChildren) {
+    leaves.add(path);
+  }
+  return leaves;
+}
 
-const FINAL_BACKLOG_TARGET_KEYS = [
-  "browser.evaluateEnabled",
-  "browser.remoteCdpHandshakeTimeoutMs",
-  "browser.remoteCdpTimeoutMs",
-  "browser.snapshotDefaults",
-  "browser.snapshotDefaults.mode",
-  "browser.ssrfPolicy",
-  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
-  "browser.ssrfPolicy.allowedHostnames",
-  "browser.ssrfPolicy.hostnameAllowlist",
-  "diagnostics.enabled",
-  "diagnostics.otel.enabled",
-  "diagnostics.otel.endpoint",
-  "diagnostics.otel.flushIntervalMs",
-  "diagnostics.otel.headers",
-  "diagnostics.otel.logsEndpoint",
-  "diagnostics.otel.logs",
-  "diagnostics.otel.logsExporter",
-  "diagnostics.otel.metricsEndpoint",
-  "diagnostics.otel.metrics",
-  "diagnostics.otel.sampleRate",
-  "diagnostics.otel.serviceName",
-  "diagnostics.otel.tracesEndpoint",
-  "diagnostics.otel.traces",
-  "gateway.remote.password",
-  "gateway.remote.token",
-  "skills.load.allowSymlinkTargets",
-  "skills.load.extraDirs",
-  "skills.load.watch",
-  "skills.load.watchDebounceMs",
-  "skills.workshop.allowSymlinkTargetWrites",
-  "ui.assistant.avatar",
-  "ui.assistant.name",
-  "ui.seamColor",
-] as const;
+function formatMissingTierFailure(paths: readonly string[]): string {
+  const stubs = paths.map((path) => `  ${JSON.stringify(path)}: { advanced: true },`).join("\n");
+  return [
+    `${paths.length} config path(s) have no tier declaration.`,
+    "Add common/advanced boundaries in src/config/schema.tiers.ts:",
+    "",
+    stubs,
+    "",
+    "New leaves inherit their nearest declared ancestor; use a leaf hint for exceptions.",
+  ].join("\n");
+}
 
 function titleCaseLabelSegment(segment: string): string {
   return segment
@@ -665,6 +150,12 @@ describe("config help copy quality", () => {
     }
   }
 
+  it("describes auto-mode collection mutation", () => {
+    const help = requireHelp("skills.workshop.autonomous.mode");
+    expect(help).toContain("daily");
+    expect(help).toContain("rewrite or drop");
+  });
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(requireLabel(key)).not.toHaveLength(0);
@@ -727,382 +218,157 @@ describe("config help copy quality", () => {
     }
   });
 
-  it("explains memory citations mode semantics", () => {
-    const help = expectDefined(
-      FIELD_HELP["memory.citations"],
-      'FIELD_HELP["memory.citations"] test invariant',
-    );
-    expect(help.includes('"auto"')).toBe(true);
-    expect(help.includes('"on"')).toBe(true);
-    expect(help.includes('"off"')).toBe(true);
-    expect(/always|always shows/i.test(help)).toBe(true);
-    expect(/hides|hide/i.test(help)).toBe(true);
+  it.each([
+    {
+      name: "explains memory citations mode semantics",
+      fields: [
+        ["memory.citations", ['"auto"', '"on"', '"off"', /always|always shows/i, /hides|hide/i]],
+      ],
+    },
+    {
+      name: "documents cron retention formats",
+      fields: [
+        ["cron.sessionRetention", ["24h", "7d", "1h30m", /false/i]],
+        ["cron.webhookToken", [/token|bearer/i, /secret|env|rotate/i]],
+      ],
+    },
+    {
+      name: "documents session send-policy examples and prefix semantics",
+      fields: [
+        ["session.sendPolicy.rules", ["{ action:", '"deny"', '"discord"']],
+        ["session.sendPolicy.rules[].match.keyPrefix", [/normalized/i]],
+        ["session.sendPolicy.rules[].match.rawKeyPrefix", [/raw|unnormalized/i]],
+      ],
+    },
+    {
+      name: "documents session maintenance duration/size examples and deprecations",
+      fields: [
+        ["session.maintenance.pruneAfter", ["30d", "12h"]],
+        ["session.maintenance.archiveDashboardAfter", ["7d", /false/i, "0"]],
+        ["session.maintenance.preserveRecent", ["7d", /false/i]],
+        ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],
+        ["session.maintenance.maxDiskBytes", ["500mb"]],
+        ["session.maintenance.highWaterBytes", ["80%"]],
+      ],
+    },
+    {
+      name: "documents approvals filters and target semantics",
+      fields: [
+        ["approvals.exec.sessionFilter", [/substring|regex/i, "discord:", "^agent:ops:"]],
+        ["approvals.exec.agentFilter", ["primary", "ops-agent"]],
+        [
+          "approvals.exec.targets[].to",
+          [/channel ID|user ID|thread root/i, /differs|per provider/i],
+        ],
+      ],
+    },
+    {
+      name: "documents broadcast command examples",
+      fields: [["broadcast.*", [/source peer ID/i, /destination peer IDs/i]]],
+    },
+    {
+      name: "documents hook transform safety and queue behavior options",
+      fields: [
+        ["hooks.mappings[].transform.module", [/relative/i, /path traversal|reviewed|controlled/i]],
+        ["messages.queue.mode", ['"interrupt"', '"steer"']],
+      ],
+    },
+    {
+      name: "documents gateway bind modes",
+      fields: [["gateway.bind", ['"loopback"', '"tailnet"']]],
+    },
+    {
+      name: "documents admin semantics for logging and plugins",
+      fields: [
+        ["logging.consoleStyle", ['"pretty"', '"json"']],
+        ["plugins.entries.*.apiKey", [/secret|env|credential/i]],
+        ["plugins.entries.*.env", [/scope|plugin|environment/i]],
+        ["plugins.entries.*.hooks.allowPromptInjection", ["before_prompt_build"]],
+        [
+          "plugins.entries.*.hooks.allowConversationAccess",
+          ["llm_input", "llm_output", "before_agent_finalize", "agent_end"],
+        ],
+        ["plugins.entries.*.hooks.timeoutMs", ["typed hooks", "hooks.timeouts"]],
+        ["plugins.entries.*.hooks.timeouts", ["before_prompt_build", "agent_end"]],
+      ],
+    },
+    {
+      name: "documents auth/model root semantics and provider secret handling",
+      fields: [
+        ["models.providers.*.apiKey", [/secret|env|credential/i]],
+        ["models.mode", ["SecretRef-managed", "preserve"]],
+      ],
+    },
+    {
+      name: "documents agent compaction safeguards and memory flush behavior",
+      fields: [
+        ["agents.defaults.compaction.mode", ['"default"', '"safeguard"']],
+        [
+          "agents.defaults.compaction.thinkingLevel",
+          [/session level|inherit/i, /Codex app-server|no per-operation thinking override/i],
+        ],
+        ["agents.defaults.compaction.identifierPolicy", ['"strict"', '"off"']],
+        [
+          "agents.defaults.compaction.recentTurnsPreserve",
+          [/recent.*turn|verbatim/i, /default:\s*3/i],
+        ],
+        [
+          "agents.defaults.compaction.midTurnPrecheck.enabled",
+          [/mid-turn|tool loop|default:\s*false/i],
+        ],
+        [
+          "agents.defaults.compaction.model",
+          [/provider\/model|different model|primary agent model/i, /alias/i],
+        ],
+        [
+          "agents.defaults.compaction.maxActiveTranscriptBytes",
+          [/transcript|bytes|compaction/i, /Codex app-server|native rollout|restart fresh/i],
+        ],
+        ["agents.defaults.compaction.memoryFlush.enabled", [/pre-compaction|memory flush|token/i]],
+      ],
+    },
+    {
+      name: "documents agent startup-context preload controls",
+      fields: [
+        ["agents.defaults.startupContext", [/first-turn|\/new|\/reset|daily memory/i]],
+        ["agents.defaults.startupContext.applyOn", ['"new"', '"reset"']],
+        ["agents.defaults.startupContext.dailyMemoryDays", [/today \+ yesterday|default:\s*2/i]],
+      ],
+    },
+  ] satisfies Array<{ name: string; fields: Array<[string, Array<string | RegExp>]> }>)(
+    "$name",
+    ({ fields }) => {
+      for (const [key, patterns] of fields) {
+        const help = requireHelp(key);
+        for (const pattern of patterns) {
+          const matches = typeof pattern === "string" ? help.includes(pattern) : pattern.test(help);
+          expect(matches, `missing ${String(pattern)} in ${key}`).toBe(true);
+        }
+      }
+    },
+  );
+});
+
+describe("config tier coverage", () => {
+  const response = computeBaseConfigSchemaResponse({ generatedAt: "tier-quality-test" });
+  const schema = response.schema as JsonSchemaNode;
+  const leaves = [...collectSchemaLeafPaths(schema)].toSorted();
+
+  it("requires every root section to declare a tier boundary", () => {
+    const authoredHints = buildBaseHints();
+    const missing = Object.keys(schema.properties ?? {})
+      .filter((path) => typeof authoredHints[path]?.advanced !== "boolean")
+      .toSorted();
+    expect(missing, formatMissingTierFailure(missing)).toEqual([]);
   });
 
-  it("includes concrete examples on path and interval fields", () => {
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.paths.pattern"],
-        'FIELD_HELP["memory.qmd.paths.pattern"] test invariant',
-      ).includes("**/*.md"),
-    ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.interval"],
-        'FIELD_HELP["memory.qmd.update.interval"] test invariant',
-      ).includes("5m"),
-    ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.embedInterval"],
-        'FIELD_HELP["memory.qmd.update.embedInterval"] test invariant',
-      ).includes("60m"),
-    ).toBe(true);
+  it("materializes a deterministic tier on every baseline leaf", () => {
+    const missing = leaves.filter((path) => typeof response.uiHints[path]?.advanced !== "boolean");
+    expect(missing, formatMissingTierFailure(missing)).toEqual([]);
   });
 
-  it("documents cron deprecation, migration, and retention formats", () => {
-    const legacy = expectDefined(
-      FIELD_HELP["cron.webhook"],
-      'FIELD_HELP["cron.webhook"] test invariant',
-    );
-    expect(/deprecated|legacy/i.test(legacy)).toBe(true);
-    expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
-    expect(legacy.includes("delivery.to")).toBe(true);
-
-    const retention = expectDefined(
-      FIELD_HELP["cron.sessionRetention"],
-      'FIELD_HELP["cron.sessionRetention"] test invariant',
-    );
-    expect(retention.includes("24h")).toBe(true);
-    expect(retention.includes("7d")).toBe(true);
-    expect(retention.includes("1h30m")).toBe(true);
-    expect(/false/i.test(retention)).toBe(true);
-
-    const token = expectDefined(
-      FIELD_HELP["cron.webhookToken"],
-      'FIELD_HELP["cron.webhookToken"] test invariant',
-    );
-    expect(/token|bearer/i.test(token)).toBe(true);
-    expect(/secret|env|rotate/i.test(token)).toBe(true);
-  });
-
-  it("documents session send-policy examples and prefix semantics", () => {
-    const rules = expectDefined(
-      FIELD_HELP["session.sendPolicy.rules"],
-      'FIELD_HELP["session.sendPolicy.rules"] test invariant',
-    );
-    expect(rules.includes("{ action:")).toBe(true);
-    expect(rules.includes('"deny"')).toBe(true);
-    expect(rules.includes('"discord"')).toBe(true);
-
-    const keyPrefix = expectDefined(
-      FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"],
-      'FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"] test invariant',
-    );
-    expect(/normalized/i.test(keyPrefix)).toBe(true);
-
-    const rawKeyPrefix = expectDefined(
-      FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"],
-      'FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"] test invariant',
-    );
-    expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
-  });
-
-  it("documents session write-lock policy defaults", () => {
-    const acquireTimeout = expectDefined(
-      FIELD_HELP["session.writeLock.acquireTimeoutMs"],
-      'FIELD_HELP["session.writeLock.acquireTimeoutMs"] test invariant',
-    );
-    expect(acquireTimeout.includes("60000")).toBe(true);
-    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
-
-    const stale = expectDefined(
-      FIELD_HELP["session.writeLock.staleMs"],
-      'FIELD_HELP["session.writeLock.staleMs"] test invariant',
-    );
-    expect(stale.includes("1800000")).toBe(true);
-    expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
-
-    const maxHold = expectDefined(
-      FIELD_HELP["session.writeLock.maxHoldMs"],
-      'FIELD_HELP["session.writeLock.maxHoldMs"] test invariant',
-    );
-    expect(maxHold.includes("300000")).toBe(true);
-    expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
-  });
-
-  it("documents session maintenance duration/size examples and deprecations", () => {
-    const pruneAfter = expectDefined(
-      FIELD_HELP["session.maintenance.pruneAfter"],
-      'FIELD_HELP["session.maintenance.pruneAfter"] test invariant',
-    );
-    expect(pruneAfter.includes("30d")).toBe(true);
-    expect(pruneAfter.includes("12h")).toBe(true);
-
-    const deprecated = expectDefined(
-      FIELD_HELP["session.maintenance.pruneDays"],
-      'FIELD_HELP["session.maintenance.pruneDays"] test invariant',
-    );
-    expect(/deprecated/i.test(deprecated)).toBe(true);
-    expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
-
-    const resetRetention = expectDefined(
-      FIELD_HELP["session.maintenance.resetArchiveRetention"],
-      'FIELD_HELP["session.maintenance.resetArchiveRetention"] test invariant',
-    );
-    expect(resetRetention.includes(".reset.")).toBe(true);
-    expect(/false/i.test(resetRetention)).toBe(true);
-
-    const maxDisk = expectDefined(
-      FIELD_HELP["session.maintenance.maxDiskBytes"],
-      'FIELD_HELP["session.maintenance.maxDiskBytes"] test invariant',
-    );
-    expect(maxDisk.includes("500mb")).toBe(true);
-
-    const highWater = expectDefined(
-      FIELD_HELP["session.maintenance.highWaterBytes"],
-      'FIELD_HELP["session.maintenance.highWaterBytes"] test invariant',
-    );
-    expect(highWater.includes("80%")).toBe(true);
-  });
-
-  it("documents approvals filters and target semantics", () => {
-    const sessionFilter = expectDefined(
-      FIELD_HELP["approvals.exec.sessionFilter"],
-      'FIELD_HELP["approvals.exec.sessionFilter"] test invariant',
-    );
-    expect(/substring|regex/i.test(sessionFilter)).toBe(true);
-    expect(sessionFilter.includes("discord:")).toBe(true);
-    expect(sessionFilter.includes("^agent:ops:")).toBe(true);
-
-    const agentFilter = expectDefined(
-      FIELD_HELP["approvals.exec.agentFilter"],
-      'FIELD_HELP["approvals.exec.agentFilter"] test invariant',
-    );
-    expect(agentFilter.includes("primary")).toBe(true);
-    expect(agentFilter.includes("ops-agent")).toBe(true);
-
-    const targetTo = expectDefined(
-      FIELD_HELP["approvals.exec.targets[].to"],
-      'FIELD_HELP["approvals.exec.targets[].to"] test invariant',
-    );
-    expect(/channel ID|user ID|thread root/i.test(targetTo)).toBe(true);
-    expect(/differs|per provider/i.test(targetTo)).toBe(true);
-  });
-
-  it("documents broadcast and audio command examples", () => {
-    const audioCmd = expectDefined(
-      FIELD_HELP["audio.transcription.command"],
-      'FIELD_HELP["audio.transcription.command"] test invariant',
-    );
-    expect(audioCmd.includes("whisper-cli")).toBe(true);
-    expect(audioCmd.includes("{input}")).toBe(true);
-
-    const broadcastMap = expectDefined(
-      FIELD_HELP["broadcast.*"],
-      'FIELD_HELP["broadcast.*"] test invariant',
-    );
-    expect(/source peer ID/i.test(broadcastMap)).toBe(true);
-    expect(/destination peer IDs/i.test(broadcastMap)).toBe(true);
-  });
-
-  it("documents hook transform safety and queue behavior options", () => {
-    const transformModule = expectDefined(
-      FIELD_HELP["hooks.mappings[].transform.module"],
-      'FIELD_HELP["hooks.mappings[].transform.module"] test invariant',
-    );
-    expect(/relative/i.test(transformModule)).toBe(true);
-    expect(/path traversal|reviewed|controlled/i.test(transformModule)).toBe(true);
-
-    const queueMode = expectDefined(
-      FIELD_HELP["messages.queue.mode"],
-      'FIELD_HELP["messages.queue.mode"] test invariant',
-    );
-    expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer"')).toBe(true);
-  });
-
-  it("documents gateway bind modes and web reconnect semantics", () => {
-    const bind = expectDefined(
-      FIELD_HELP["gateway.bind"],
-      'FIELD_HELP["gateway.bind"] test invariant',
-    );
-    expect(bind.includes('"loopback"')).toBe(true);
-    expect(bind.includes('"tailnet"')).toBe(true);
-
-    const reconnect = expectDefined(
-      FIELD_HELP["web.reconnect.maxAttempts"],
-      'FIELD_HELP["web.reconnect.maxAttempts"] test invariant',
-    );
-    expect(/0 means no retries|no retries/i.test(reconnect)).toBe(true);
-    expect(/failure sequence|retry/i.test(reconnect)).toBe(true);
-  });
-
-  it("documents metadata/admin semantics for logging, wizard, and plugins", () => {
-    const wizardMode = expectDefined(
-      FIELD_HELP["wizard.lastRunMode"],
-      'FIELD_HELP["wizard.lastRunMode"] test invariant',
-    );
-    expect(wizardMode.includes('"local"')).toBe(true);
-    expect(wizardMode.includes('"remote"')).toBe(true);
-
-    const consoleStyle = expectDefined(
-      FIELD_HELP["logging.consoleStyle"],
-      'FIELD_HELP["logging.consoleStyle"] test invariant',
-    );
-    expect(consoleStyle.includes('"pretty"')).toBe(true);
-    expect(consoleStyle.includes('"compact"')).toBe(true);
-    expect(consoleStyle.includes('"json"')).toBe(true);
-
-    const pluginApiKey = expectDefined(
-      FIELD_HELP["plugins.entries.*.apiKey"],
-      'FIELD_HELP["plugins.entries.*.apiKey"] test invariant',
-    );
-    expect(/secret|env|credential/i.test(pluginApiKey)).toBe(true);
-
-    const pluginEnv = expectDefined(
-      FIELD_HELP["plugins.entries.*.env"],
-      'FIELD_HELP["plugins.entries.*.env"] test invariant',
-    );
-    expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
-
-    const pluginPromptPolicy = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"],
-      'FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"] test invariant',
-    );
-    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
-    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
-    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
-
-    const pluginConversationPolicy = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"],
-      'FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"] test invariant',
-    );
-    expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
-    expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
-    expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
-
-    const pluginHookTimeout = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.timeoutMs"],
-      'FIELD_HELP["plugins.entries.*.hooks.timeoutMs"] test invariant',
-    );
-    expect(pluginHookTimeout.includes("typed hooks")).toBe(true);
-    expect(pluginHookTimeout.includes("hooks.timeouts")).toBe(true);
-
-    const pluginHookTimeouts = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.timeouts"],
-      'FIELD_HELP["plugins.entries.*.hooks.timeouts"] test invariant',
-    );
-    expect(pluginHookTimeouts.includes("before_prompt_build")).toBe(true);
-    expect(pluginHookTimeouts.includes("agent_end")).toBe(true);
-    expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
-  });
-
-  it("documents auth/model root semantics and provider secret handling", () => {
-    const providerKey = expectDefined(
-      FIELD_HELP["models.providers.*.apiKey"],
-      'FIELD_HELP["models.providers.*.apiKey"] test invariant',
-    );
-    expect(/secret|env|credential/i.test(providerKey)).toBe(true);
-    const modelsMode = expectDefined(
-      FIELD_HELP["models.mode"],
-      'FIELD_HELP["models.mode"] test invariant',
-    );
-    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
-    expect(modelsMode.includes("preserve")).toBe(true);
-
-    const authCooldowns = expectDefined(
-      FIELD_HELP["auth.cooldowns"],
-      'FIELD_HELP["auth.cooldowns"] test invariant',
-    );
-    expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
-  });
-
-  it("documents agent compaction safeguards and memory flush behavior", () => {
-    const mode = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.mode"],
-      'FIELD_HELP["agents.defaults.compaction.mode"] test invariant',
-    );
-    expect(mode.includes('"default"')).toBe(true);
-    expect(mode.includes('"safeguard"')).toBe(true);
-
-    const historyShare = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.maxHistoryShare"],
-      'FIELD_HELP["agents.defaults.compaction.maxHistoryShare"] test invariant',
-    );
-    expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
-
-    const identifierPolicy = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.identifierPolicy"],
-      'FIELD_HELP["agents.defaults.compaction.identifierPolicy"] test invariant',
-    );
-    expect(identifierPolicy.includes('"strict"')).toBe(true);
-    expect(identifierPolicy.includes('"off"')).toBe(true);
-    expect(identifierPolicy.includes('"custom"')).toBe(true);
-
-    const recentTurnsPreserve = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"],
-      'FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"] test invariant',
-    );
-    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
-    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
-
-    const midTurnPrecheck = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"],
-      'FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"] test invariant',
-    );
-    expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
-
-    const postCompactionSections = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.postCompactionSections"],
-      'FIELD_HELP["agents.defaults.compaction.postCompactionSections"] test invariant',
-    );
-    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
-    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
-    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
-    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
-    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
-
-    const compactionModel = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.model"],
-      'FIELD_HELP["agents.defaults.compaction.model"] test invariant',
-    );
-    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
-    expect(/alias/i.test(compactionModel)).toBe(true);
-
-    const transcriptBytes = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"],
-      'FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"] test invariant',
-    );
-    expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
-    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
-
-    const flush = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"],
-      'FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"] test invariant',
-    );
-    expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
-  });
-
-  it("documents agent startup-context preload controls", () => {
-    const startupContext = expectDefined(
-      FIELD_HELP["agents.defaults.startupContext"],
-      'FIELD_HELP["agents.defaults.startupContext"] test invariant',
-    );
-    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
-
-    const applyOn = expectDefined(
-      FIELD_HELP["agents.defaults.startupContext.applyOn"],
-      'FIELD_HELP["agents.defaults.startupContext.applyOn"] test invariant',
-    );
-    expect(applyOn.includes('"new"')).toBe(true);
-    expect(applyOn.includes('"reset"')).toBe(true);
-
-    const dailyMemoryDays = expectDefined(
-      FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"],
-      'FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"] test invariant',
-    );
-    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
+  it("keeps the curated common leaf set reviewable", () => {
+    const common = leaves.filter((path) => response.uiHints[path]?.advanced === false);
+    expect(common).toMatchSnapshot();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

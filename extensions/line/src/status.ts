@@ -32,6 +32,9 @@ export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["
       configured: hasLineCredentials(account),
       extra: {
         tokenSource: account.tokenSource,
+        signingSecretSource: account.signingSecretSource,
+        tokenStatus: account.tokenStatus,
+        signingSecretStatus: account.signingSecretStatus,
         mode: "webhook",
       },
     }),

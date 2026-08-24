@@ -1,7 +1,6 @@
 // Msteams plugin module implements feedback invoke behavior.
-import path from "node:path";
+import { recordChannelFeedbackEvent } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
@@ -131,19 +130,12 @@ export async function runMSTeamsFeedbackInvokeHandler(
     hasComment: Boolean(userComment),
   });
 
-  // Write feedback event to session transcript
   try {
-    const storePath = core.channel.session.resolveStorePath(deps.cfg.session?.store, {
+    await recordChannelFeedbackEvent({
+      cfg: deps.cfg,
       agentId: route.agentId,
-    });
-    const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
-    await appendRegularFile({
-      filePath: transcriptFile,
-      content: `${JSON.stringify(feedbackEvent)}\n`,
-      rejectSymlinkParents: true,
-    }).catch(() => {
-      // Best effort — transcript dir may not exist yet
+      sessionKey: route.sessionKey,
+      event: feedbackEvent,
     });
   } catch {
     // Best effort
@@ -181,12 +173,11 @@ export async function runMSTeamsFeedbackInvokeHandler(
     runFeedbackReflection({
       cfg: deps.cfg,
       app: deps.app,
-      appId: deps.appId,
       conversationRef,
       sessionKey: route.sessionKey,
       agentId: route.agentId,
       conversationId,
-      feedbackMessageId: messageId,
+      conversationKind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       userComment,
       log: deps.log,
     }).catch((err: unknown) => {

@@ -13,6 +13,7 @@ export {
   isBlockedShellWrapperCommand,
   isShellWrapperExecutable,
   isShellWrapperInvocation,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   POSIX_SHELL_WRAPPERS,
   POWERSHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,

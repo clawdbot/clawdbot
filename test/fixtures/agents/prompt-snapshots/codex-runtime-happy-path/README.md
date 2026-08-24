@@ -14,6 +14,16 @@ The workspace bootstrap simulation includes dummy workspace contents so prompt r
 
 The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.
 
+The Telegram JSON is the complete shared tool catalog. Discord and heartbeat JSON fixtures contain readable, complete replacements for their changed top-level tools or namespaces; their `base` field points to the Telegram catalog.
+
+Materialize the complete, formatted tool catalog for a scenario with:
+
+```sh
+node --import tsx scripts/generate-prompt-snapshots.ts --materialize discord-group
+```
+
+Replace `discord-group` with `heartbeat-turn` to inspect the complete heartbeat catalog.
+
 The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:
 
 ```sh

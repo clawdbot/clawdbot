@@ -137,9 +137,7 @@ export function evaluateGatewayAuthSurfaceStates(params: {
       return "gateway.auth is not configured.";
     }
     if (plan.authMode === "token") {
-      return plan.envToken
-        ? "gateway token env var is configured."
-        : 'gateway.auth.mode is "token".';
+      return 'gateway.auth.mode is "token".';
     }
     if (
       plan.authMode === "password" ||

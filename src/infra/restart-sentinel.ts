@@ -1,85 +1,43 @@
 // Persists restart sentinel state that coordinates deferred restarts.
-import { readFile, rm } from "node:fs/promises";
-import path from "node:path";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { formatErrorMessage } from "./errors.js";
+import { resolveCommitHash } from "./git-commit.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+  deleteRestartSentinelRowSync,
+  readRestartSentinelRowSync,
+  readUpdateInstallReceiptRowSync,
+  writeRestartSentinelRowIfRevisionSync,
+  writeRestartSentinelRowSync,
+  writeUpdateInstallReceiptRowSync,
+  type RestartSentinel,
+  type RestartSentinelContinuation,
+  type RestartSentinelPayload,
+} from "./restart-sentinel-store.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 
-type RestartSentinelLog = {
-  stdoutTail?: string | null;
-  stderrTail?: string | null;
-  exitCode?: number | null;
+export type {
+  RestartSentinelContinuation,
+  RestartSentinelPayload,
+} from "./restart-sentinel-store.js";
+
+export type VerifiedGitUpdateReceipt = {
+  root: string;
+  sha: string;
+  upstreamRef?: string;
+  installedAtMs: number;
 };
 
-type RestartSentinelStep = {
-  name: string;
-  command: string;
-  cwd?: string | null;
-  durationMs?: number | null;
-  log?: RestartSentinelLog | null;
-};
-
-type RestartSentinelStats = {
-  mode?: string;
-  root?: string;
-  requiresRestart?: boolean;
-  handoffId?: string;
-  before?: Record<string, unknown> | null;
-  after?: Record<string, unknown> | null;
-  steps?: RestartSentinelStep[];
-  reason?: string | null;
-  durationMs?: number | null;
-};
-
-export type RestartSentinelContinuation =
-  | {
-      kind: "systemEvent";
-      text: string;
-    }
-  | {
-      kind: "agentTurn";
-      message: string;
-    };
-
-export type RestartSentinelPayload = {
-  kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
-  status: "ok" | "error" | "skipped";
-  ts: number;
-  sessionKey?: string;
-  /** Delivery context captured at restart time to ensure channel routing survives restart. */
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-  };
-  /** Thread ID for reply threading (e.g., Slack thread_ts). */
-  threadId?: string;
-  message?: string | null;
-  continuation?: RestartSentinelContinuation | null;
-  doctorHint?: string | null;
-  stats?: RestartSentinelStats | null;
-};
-
-type RestartSentinel = {
-  version: 1;
-  payload: RestartSentinelPayload;
-};
-
-const RESTART_SENTINEL_KEY = "current";
-const LEGACY_RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
-type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+const sentinelLog = createSubsystemLogger("restart-sentinel");
 
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -93,57 +51,12 @@ export function formatDoctorNonInteractiveHint(
 export async function writeRestartSentinel(
   payload: RestartSentinelPayload,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-  const updatedAtMs = Date.now();
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        stateDb
-          .insertInto("gateway_restart_sentinel")
-          .values({
-            sentinel_key: RESTART_SENTINEL_KEY,
-            version: 1,
-            kind: payload.kind,
-            status: payload.status,
-            ts: payload.ts,
-            session_key: payload.sessionKey ?? null,
-            thread_id: payload.threadId ?? null,
-            delivery_channel: payload.deliveryContext?.channel ?? null,
-            delivery_to: payload.deliveryContext?.to ?? null,
-            delivery_account_id: payload.deliveryContext?.accountId ?? null,
-            message: payload.message ?? null,
-            continuation_json: payload.continuation ? JSON.stringify(payload.continuation) : null,
-            doctor_hint: payload.doctorHint ?? null,
-            stats_json: payload.stats ? JSON.stringify(payload.stats) : null,
-            payload_json: JSON.stringify(payload),
-            updated_at_ms: updatedAtMs,
-          })
-          .onConflict((conflict) =>
-            conflict.column("sentinel_key").doUpdateSet({
-              version: (eb) => eb.ref("excluded.version"),
-              kind: (eb) => eb.ref("excluded.kind"),
-              status: (eb) => eb.ref("excluded.status"),
-              ts: (eb) => eb.ref("excluded.ts"),
-              session_key: (eb) => eb.ref("excluded.session_key"),
-              thread_id: (eb) => eb.ref("excluded.thread_id"),
-              delivery_channel: (eb) => eb.ref("excluded.delivery_channel"),
-              delivery_to: (eb) => eb.ref("excluded.delivery_to"),
-              delivery_account_id: (eb) => eb.ref("excluded.delivery_account_id"),
-              message: (eb) => eb.ref("excluded.message"),
-              continuation_json: (eb) => eb.ref("excluded.continuation_json"),
-              doctor_hint: (eb) => eb.ref("excluded.doctor_hint"),
-              stats_json: (eb) => eb.ref("excluded.stats_json"),
-              payload_json: (eb) => eb.ref("excluded.payload_json"),
-              updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
-            }),
-          ),
-      );
-    },
+): Promise<RestartSentinel> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => writeRestartSentinelRowSync(db, payload),
     { env },
+    { operationLabel: "restart-sentinel.write" },
   );
-  await removeLegacyRestartSentinel(env);
 }
 
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
@@ -154,41 +67,126 @@ async function rewriteRestartSentinel(
   rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const current = await readRestartSentinel(env);
-  if (!current) {
-    return null;
-  }
-  const nextPayload = rewrite(cloneRestartSentinelPayload(current.payload));
-  if (!nextPayload) {
-    return null;
-  }
-  await writeRestartSentinel(nextPayload, env);
-  return {
-    version: 1,
-    payload: nextPayload,
-  };
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = readRestartSentinelRowSync(db);
+      if (current.kind !== "valid") {
+        return null;
+      }
+      const nextPayload = rewrite(cloneRestartSentinelPayload(current.sentinel.payload));
+      return nextPayload
+        ? writeRestartSentinelRowIfRevisionSync(db, nextPayload, current.sentinel.revision)
+        : null;
+    },
+    { env },
+    { operationLabel: "restart-sentinel.rewrite-current" },
+  );
+}
+
+function commitsMatch(expected: string, actual: string): boolean {
+  const normalizedExpected = expected.trim().toLowerCase();
+  const normalizedActual = actual.trim().toLowerCase();
+  return (
+    normalizedExpected.length >= 7 &&
+    normalizedActual.length >= 7 &&
+    (normalizedExpected.startsWith(normalizedActual) ||
+      normalizedActual.startsWith(normalizedExpected))
+  );
 }
 
 export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
+  commit = resolveCommitHash({ env, moduleUrl: import.meta.url }),
+  runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
-  return await rewriteRestartSentinel((payload) => {
-    if (payload.kind !== "update") {
-      return null;
-    }
-    const stats = payload.stats ? { ...payload.stats } : {};
-    const after = isPlainRecord(stats.after) ? { ...stats.after } : {};
-    if (after.version === version) {
-      return null;
-    }
-    after.version = version;
-    stats.after = after;
-    return {
-      ...payload,
-      stats,
-    };
-  }, env);
+  const snapshot = await readRestartSentinel(env);
+  if (!snapshot || snapshot.payload.kind !== "update") {
+    return null;
+  }
+  const snapshotRoot = snapshot.payload.stats?.root;
+  const expectedRoot =
+    typeof snapshotRoot === "string" ? resolveUpdateInstallRoot(snapshotRoot) : null;
+  const discoveredRoot = expectedRoot
+    ? (runningRoot ??
+      (await resolveOpenClawPackageRoot({
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+      })))
+    : null;
+  const actualRoot = discoveredRoot ? resolveUpdateInstallRoot(discoveredRoot) : null;
+
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = readRestartSentinelRowSync(db);
+      if (
+        current.kind !== "valid" ||
+        current.sentinel.revision !== snapshot.revision ||
+        current.sentinel.payload.kind !== "update"
+      ) {
+        return null;
+      }
+
+      const payload = cloneRestartSentinelPayload(current.sentinel.payload);
+      const stats = payload.stats ? { ...payload.stats } : {};
+      const after = isPlainRecord(stats.after) ? { ...stats.after } : {};
+      let changed = false;
+      if (after.version !== version) {
+        after.version = version;
+        changed = true;
+      }
+      if (expectedRoot && stats.root !== expectedRoot) {
+        stats.root = expectedRoot;
+        changed = true;
+      }
+
+      const before = isPlainRecord(stats.before) ? stats.before : {};
+      const beforeSha = typeof before.sha === "string" ? before.sha.trim() : "";
+      const expectedSha = typeof after.sha === "string" ? after.sha.trim() : "";
+      const actualSha = commit?.trim() ?? "";
+      const verifiesGitRevision =
+        stats.mode !== "git" || (expectedSha.length > 0 && commitsMatch(expectedSha, actualSha));
+      const verifiesInstallRoot =
+        expectedRoot !== null && actualRoot !== null && expectedRoot === actualRoot;
+      const changedInstall =
+        stats.mode !== "git" ||
+        (beforeSha.length > 0 && expectedSha.length > 0 && !commitsMatch(beforeSha, expectedSha));
+      if (payload.status === "ok" && expectedRoot && !verifiesInstallRoot) {
+        payload.status = "error";
+        stats.reason = actualRoot ? "restart-root-mismatch" : "restart-root-unavailable";
+        delete payload.continuation;
+        changed = true;
+      } else if (
+        payload.status === "ok" &&
+        stats.mode === "git" &&
+        expectedSha &&
+        !verifiesGitRevision
+      ) {
+        payload.status = "error";
+        stats.reason = actualSha ? "restart-revision-mismatch" : "restart-revision-unavailable";
+        delete payload.continuation;
+        changed = true;
+      }
+
+      stats.after = after;
+      payload.stats = stats;
+      const finalized = changed
+        ? writeRestartSentinelRowIfRevisionSync(db, payload, current.sentinel.revision)
+        : current.sentinel;
+      if (!finalized) {
+        return null;
+      }
+      // This receipt records the install fact proven by the running process. Post-install
+      // failures such as managed-service-handoff-failed keep the sentinel in error without
+      // erasing the upstream fallback for campaign-managed detached installs (#121634).
+      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
+        writeUpdateInstallReceiptRowSync(db, payload);
+      }
+      return changed ? finalized : null;
+    },
+    { env },
+    { operationLabel: "restart-sentinel.finalize-running-install" },
+  );
 }
 
 export async function markUpdateRestartSentinelFailure(
@@ -211,52 +209,23 @@ export async function markUpdateRestartSentinelFailure(
   }, env);
 }
 
-export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .deleteFrom("gateway_restart_sentinel")
-            .where("sentinel_key", "=", RESTART_SENTINEL_KEY),
-        );
-      },
-      { env },
-    );
-  } catch {}
-  await removeLegacyRestartSentinel(env);
+export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => deleteRestartSentinelRowSync(db),
+    { env },
+    { operationLabel: "restart-sentinel.clear" },
+  );
 }
 
-function resolveLegacyRestartSentinelPath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveStateDir(env), LEGACY_RESTART_SENTINEL_FILENAME);
-}
-
-async function removeLegacyRestartSentinel(env: NodeJS.ProcessEnv): Promise<void> {
-  try {
-    await rm(resolveLegacyRestartSentinelPath(env), { force: true });
-  } catch {}
-}
-
-async function importLegacyRestartSentinel(
+export async function clearRestartSentinelIfRevision(
+  expectedRevision: number,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<RestartSentinel | null> {
-  const legacyPath = resolveLegacyRestartSentinelPath(env);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(legacyPath, "utf-8")) as unknown;
-  } catch {
-    return null;
-  }
-  if (!isPlainRecord(parsed) || parsed.version !== 1 || !isPlainRecord(parsed.payload)) {
-    await removeLegacyRestartSentinel(env);
-    return null;
-  }
-  const payload = parsed.payload as RestartSentinelPayload;
-  await writeRestartSentinel(payload, env);
-  await removeLegacyRestartSentinel(env);
-  return { version: 1, payload };
+): Promise<boolean> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => deleteRestartSentinelRowSync(db, expectedRevision),
+    { env },
+    { operationLabel: "restart-sentinel.clear-if-revision" },
+  );
 }
 
 export function buildRestartSuccessContinuation(params: {
@@ -275,50 +244,99 @@ export async function readRestartSentinel(
 ): Promise<RestartSentinel | null> {
   try {
     const database = openOpenClawStateDatabase({ env });
-    const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      stateDb
-        .selectFrom("gateway_restart_sentinel")
-        .select(["version", "payload_json"])
-        .where("sentinel_key", "=", RESTART_SENTINEL_KEY),
-    );
-    if (!row) {
-      return await importLegacyRestartSentinel(env);
-    }
-    let payload: RestartSentinelPayload | undefined;
-    try {
-      payload = JSON.parse(row.payload_json) as RestartSentinelPayload | undefined;
-    } catch {
-      await clearRestartSentinel(env);
+    const current = readRestartSentinelRowSync(database.db);
+    if (current.kind === "invalid") {
+      sentinelLog.warn("Ignoring invalid typed restart sentinel row");
       return null;
     }
-    if (row.version !== 1 || !payload) {
-      await clearRestartSentinel(env);
-      return null;
-    }
-    return { version: 1, payload };
-  } catch {
+    return current.kind === "valid" ? current.sentinel : null;
+  } catch (err) {
+    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
     return null;
   }
+}
+
+/** Read the restart sentinel without creating or mutating shared state. */
+export async function readRestartSentinelReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  try {
+    const current = withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => readRestartSentinelRowSync(db),
+      { env },
+    );
+    if (!current || current.kind === "missing") {
+      return null;
+    }
+    if (current.kind === "invalid") {
+      sentinelLog.warn("Ignoring invalid typed restart sentinel row");
+      return null;
+    }
+    return current.sentinel;
+  } catch (err) {
+    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
+    return null;
+  }
+}
+
+async function readUpdateInstallReceiptPayload(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinelPayload | null> {
+  try {
+    const database = openOpenClawStateDatabase({ env });
+    return readUpdateInstallReceiptRowSync(database.db)?.payload ?? null;
+  } catch (err) {
+    sentinelLog.warn(`Failed to read update install receipt: ${formatErrorMessage(err)}`);
+    return null;
+  }
+}
+
+function normalizeVerifiedGitUpdateReceipt(
+  payload: RestartSentinelPayload | null,
+): VerifiedGitUpdateReceipt | null {
+  // Receipt rows are only written after the running install verifies root and revision.
+  // An error status records a post-install failure, not an untrusted install.
+  if (
+    payload?.kind !== "update" ||
+    payload.stats?.mode !== "git" ||
+    !isPlainRecord(payload.stats.after)
+  ) {
+    return null;
+  }
+  const root = typeof payload.stats.root === "string" ? payload.stats.root.trim() : "";
+  const sha = typeof payload.stats.after.sha === "string" ? payload.stats.after.sha.trim() : "";
+  if (!root || !sha) {
+    return null;
+  }
+  const upstreamRef =
+    typeof payload.stats.after.upstreamRef === "string"
+      ? payload.stats.after.upstreamRef.trim()
+      : "";
+  return {
+    root,
+    sha,
+    ...(upstreamRef ? { upstreamRef } : {}),
+    installedAtMs: payload.ts,
+  };
+}
+
+export async function readVerifiedGitUpdateReceipt(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VerifiedGitUpdateReceipt | null> {
+  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   try {
     const database = openOpenClawStateDatabase({ env });
-    const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      stateDb
-        .selectFrom("gateway_restart_sentinel")
-        .select("sentinel_key")
-        .where("sentinel_key", "=", RESTART_SENTINEL_KEY),
-    );
-    if (row) {
-      return true;
+    const current = readRestartSentinelRowSync(database.db);
+    if (current.kind === "invalid") {
+      sentinelLog.warn("Ignoring invalid typed restart sentinel row");
+      return false;
     }
-    return Boolean(await importLegacyRestartSentinel(env));
-  } catch {
+    return current.kind === "valid";
+  } catch (err) {
+    sentinelLog.warn(`Failed to check restart sentinel: ${formatErrorMessage(err)}`);
     return false;
   }
 }

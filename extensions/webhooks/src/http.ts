@@ -9,8 +9,7 @@ import {
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
   resolveRequestClientIp,
-  resolveConfiguredSecretInputString,
-  resolveWebhookTargetWithAuthOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -156,7 +155,6 @@ export type TaskFlowWebhookTarget = {
   routeId: string;
   path: string;
   secretInput: WebhookSecretInput;
-  secretConfigPath: string;
   defaultControllerId: string;
   taskFlow: BoundTaskFlowRuntime;
 };
@@ -703,21 +701,6 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
-  const resolveTargetSecret = async (
-    target: TaskFlowWebhookTarget,
-  ): Promise<string | undefined> => {
-    if (typeof target.secretInput === "string") {
-      return target.secretInput;
-    }
-    const resolved = await resolveConfiguredSecretInputString({
-      config: params.cfg,
-      env: process.env,
-      value: target.secretInput,
-      path: target.secretConfigPath,
-    });
-    return resolved.value;
-  };
-
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     return await withResolvedWebhookRequestPipeline({
       req,
@@ -740,15 +723,17 @@ export function createTaskFlowWebhookRequestHandler(params: {
       inFlightLimiter,
       handle: async ({ targets }) => {
         const presentedSecret = extractSharedSecret(req);
-        const target = await resolveWebhookTargetWithAuthOrReject({
+        const target = resolveWebhookTargetWithAuthOrRejectSync({
           targets,
           res,
-          isMatch: async (candidate) => {
+          isMatch: (candidate) => {
             if (presentedSecret.length === 0) {
               return false;
             }
-            const resolvedSecret = await resolveTargetSecret(candidate);
-            return Boolean(resolvedSecret && safeEqualSecret(resolvedSecret, presentedSecret));
+            return (
+              typeof candidate.secretInput === "string" &&
+              safeEqualSecret(candidate.secretInput, presentedSecret)
+            );
           },
         });
         if (!target) {

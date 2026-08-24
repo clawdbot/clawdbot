@@ -5,6 +5,7 @@ import {
   isWebchatClient,
 } from "../../../utils/message-channel.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js";
 
 /**
  * Human-readable WebSocket auth failure messages for CLI, UI, and webchat clients.
@@ -17,25 +18,37 @@ export function formatGatewayAuthFailureMessage(params: {
   authProvided: AuthProvidedKind;
   reason?: string;
   client?: { id?: string | null; mode?: string | null };
+  isLocalClient?: boolean;
 }): string {
-  const { authMode, authProvided, reason, client } = params;
+  const { authMode, authProvided, reason, client, isLocalClient } = params;
   const isCli = isGatewayCliClient(client);
   const isControlUi = isOperatorUiClient(client);
   const isWebchat = isWebchatClient(client);
+  if (client?.mode === "node" && reason?.startsWith("trusted_proxy_missing_header_")) {
+    return "gateway rejected this node: trusted-proxy identity-header authentication is required and no usable machine credential was accepted; run `openclaw doctor` on the Gateway";
+  }
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";
+  const missingUiTokenHint =
+    "paste in Control UI settings or openclaw doctor --generate-gateway-token; restart";
+  // Local CLI clients share this gateway's config and have no gateway.remote
+  // block; pointing them at gateway.remote.* would be a dead end.
   const tokenHint = isCli
-    ? "set gateway.remote.token to match gateway.auth.token"
+    ? isLocalClient
+      ? "use this gateway's gateway.auth.token or pair the device"
+      : "set gateway.remote.token to match gateway.auth.token"
     : isControlUi || isWebchat
       ? uiHint
       : "provide gateway auth token";
   const passwordHint = isCli
-    ? "set gateway.remote.password to match gateway.auth.password"
+    ? isLocalClient
+      ? "use this gateway's gateway.auth.password"
+      : "set gateway.remote.password to match gateway.auth.password"
     : isControlUi || isWebchat
       ? "enter the password in Control UI settings"
       : "provide gateway auth password";
   switch (reason) {
     case "token_missing":
-      return `unauthorized: gateway token missing (${tokenHint})`;
+      return `unauthorized: gateway token missing (${isControlUi || isWebchat ? missingUiTokenHint : tokenHint})`;
     case "token_mismatch":
       return `unauthorized: gateway token mismatch (${tokenHint})`;
     case "token_missing_config":
@@ -58,6 +71,8 @@ export function formatGatewayAuthFailureMessage(params: {
       return "unauthorized: tailscale identity mismatch (use Tailscale Serve auth or gateway token/password)";
     case "rate_limited":
       return "unauthorized: too many failed authentication attempts (retry later)";
+    case PROXY_ATTRIBUTION_REQUIRED_REASON:
+      return "unauthorized: proxy client attribution is required (configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers)";
     case "device_token_mismatch":
       return "unauthorized: device token mismatch (rotate/reissue device token)";
     case "scope_mismatch":

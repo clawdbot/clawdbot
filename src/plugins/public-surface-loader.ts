@@ -5,8 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
@@ -24,14 +28,20 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const publicSurfaceModuleCache = new Map<string, unknown>();
 const sourceArtifactRequire = createRequire(import.meta.url);
-const publicSurfaceLocationCache = new Map<
-  string,
-  {
-    modulePath: string;
-    boundaryRoot: string;
-  }
->();
+type PublicSurfaceLocation = {
+  modulePath: string;
+  boundaryRoot: string;
+};
+const publicSurfaceLocationCache = new Map<string, PublicSurfaceLocation>();
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const publicSurfaceModuleRoots = new Map<string, string>();
+
+// Replaced plugin artifacts retain executable exports in both loader closures and native require.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  publicSurfaceLocationCache.clear();
+  publicSurfaceModuleCache.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots: publicSurfaceModuleRoots });
+});
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -63,7 +73,7 @@ function createResolutionKey(params: { dirName: string; artifactBasename: string
 function resolvePublicSurfaceLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
-}): { modulePath: string; boundaryRoot: string } | null {
+}): PublicSurfaceLocation | null {
   const bundledPluginsDir = resolveBundledPluginsDir();
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: OPENCLAW_PACKAGE_ROOT,
@@ -86,7 +96,7 @@ function resolvePublicSurfaceLocationUncached(params: {
 function resolvePublicSurfaceLocation(params: {
   dirName: string;
   artifactBasename: string;
-}): { modulePath: string; boundaryRoot: string } | null {
+}): PublicSurfaceLocation | null {
   const key = createResolutionKey(params);
   const cached = publicSurfaceLocationCache.get(key);
   if (cached) {
@@ -122,17 +132,23 @@ function loadValidatedPublicSurfaceModule(params: {
   boundaryRoot: string;
   boundaryLabel: string;
   surfaceLabel: string;
+  origin: "bundled" | "global";
 }): object {
   const cached = publicSurfaceModuleCache.get(params.modulePath);
   if (cached) {
     return cached as object;
   }
 
+  // Official install trust does not make mutable plugin roots immutable;
+  // the shared policy preserves bundled and immutable Nix-store exceptions.
   const opened = openRootFileSync({
     absolutePath: params.modulePath,
     rootPath: params.boundaryRoot,
     boundaryLabel: params.boundaryLabel,
-    rejectHardlinks: false,
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: params.boundaryRoot,
+    }),
   });
   if (!opened.ok) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
@@ -151,6 +167,7 @@ function loadValidatedPublicSurfaceModule(params: {
   publicSurfaceModuleCache.set(validatedPath, sentinel);
   try {
     const loaded = loadPublicSurfaceModule(validatedPath) as object;
+    publicSurfaceModuleRoots.set(validatedPath, params.boundaryRoot);
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
@@ -160,6 +177,23 @@ function loadValidatedPublicSurfaceModule(params: {
   }
 }
 
+function loadBundledPublicSurfaceAtLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+  location: PublicSurfaceLocation;
+}): object {
+  return loadValidatedPublicSurfaceModule({
+    modulePath: params.location.modulePath,
+    boundaryRoot: params.location.boundaryRoot,
+    boundaryLabel:
+      params.location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
+        ? "OpenClaw package root"
+        : "plugin root",
+    surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
+    origin: "bundled",
+  });
+}
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
@@ -167,17 +201,11 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
 }): T {
   const location = resolvePublicSurfaceLocation(params);
   if (!location) {
-    throw new Error(
+    throw new MissingPublicSurfaceError(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  return loadValidatedPublicSurfaceModule({
-    modulePath: location.modulePath,
-    boundaryRoot: location.boundaryRoot,
-    boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
-    surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-  }) as T;
+  return loadBundledPublicSurfaceAtLocation({ ...params, location }) as T;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -187,7 +215,7 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
 }): T {
   const modulePath = resolvePluginRootPublicSurfacePath(params);
   if (!modulePath) {
-    throw new Error(
+    throw new MissingPublicSurfaceError(
       `Unable to resolve plugin public surface ${params.pluginRoot}/${params.artifactBasename}`,
     );
   }
@@ -196,6 +224,7 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
     boundaryRoot: path.resolve(params.pluginRoot),
     boundaryLabel: "plugin root",
     surfaceLabel: `plugin public surface ${params.artifactBasename}`,
+    origin: "global",
   }) as T;
 }
 
@@ -206,19 +235,16 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
   artifactCandidates: readonly string[];
 }): T | null {
   for (const artifactBasename of params.artifactCandidates) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<T>({
+    const location = resolvePublicSurfaceLocation({
+      dirName: params.dirName,
+      artifactBasename,
+    });
+    if (location) {
+      return loadBundledPublicSurfaceAtLocation({
         dirName: params.dirName,
         artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
+        location,
+      }) as T;
     }
   }
   return null;

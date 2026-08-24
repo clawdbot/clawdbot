@@ -6,6 +6,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  missingScopeErrorShape,
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
@@ -14,14 +15,17 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
@@ -44,18 +48,18 @@ function validatePluginSessionActionJsonFields(
 /** Gateway handlers for plugin-declared Control UI descriptors and session actions. */
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": ({ params, respond }) => {
-    if (!validatePluginsUiDescriptorsParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid plugins.uiDescriptors params: ${formatValidationErrors(validatePluginsUiDescriptorsParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validatePluginsUiDescriptorsParams,
+        "plugins.uiDescriptors",
+        respond,
+      )
+    ) {
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) => {
+    const registry = getActivePluginSessionExtensionRegistry();
+    const descriptors = (registry?.controlUiDescriptors ?? []).map((entry) => {
       const descriptor: Record<string, unknown> = {
         id: entry.descriptor.id,
         pluginId: entry.pluginId,
@@ -94,21 +98,39 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "plugins.sessionAction": async ({ params, client, respond }) => {
-    if (!validatePluginsSessionActionParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid plugins.sessionAction params: ${formatValidationErrors(validatePluginsSessionActionParams.errors)}`,
-        ),
-      );
+  "plugins.sessionAction": async ({ params, client, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validatePluginsSessionActionParams,
+        "plugins.sessionAction",
+        respond,
+      )
+    ) {
       return;
     }
     const pluginId = normalizeOptionalString(params.pluginId);
     const actionId = normalizeOptionalString(params.actionId);
-    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const rawSessionKey = normalizeOptionalString(params.sessionKey);
+    const sessionOwner = rawSessionKey
+      ? resolveRequestedSessionAgentId(
+          context.getRuntimeConfig(),
+          rawSessionKey,
+          normalizeOptionalString(params.agentId),
+        )
+      : undefined;
+    if (sessionOwner && !sessionOwner.ok) {
+      respond(false, undefined, sessionOwner.error);
+      return;
+    }
+    const sessionKey =
+      rawSessionKey && sessionOwner?.ok
+        ? resolveStoredSessionKeyForAgentStore({
+            cfg: context.getRuntimeConfig(),
+            agentId: sessionOwner.agentId,
+            sessionKey: rawSessionKey,
+          })
+        : undefined;
     if (!pluginId || !actionId) {
       respond(
         false,
@@ -120,7 +142,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const registry = getActivePluginRegistry();
+    const registry = getActivePluginSessionExtensionRegistry();
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
@@ -153,11 +175,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
     );
     if (missingScope) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${missingScope}`),
-      );
+      respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
       return;
     }
     try {
@@ -210,6 +228,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         pluginId,
         actionId,
         ...(sessionKey ? { sessionKey } : {}),
+        ...(sessionOwner?.ok ? { agentId: sessionOwner.agentId } : {}),
         ...(params.payload !== undefined ? { payload: params.payload } : {}),
         client: {
           ...(client?.connId ? { connId: client.connId } : {}),

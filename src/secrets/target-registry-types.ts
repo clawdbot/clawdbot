@@ -1,11 +1,11 @@
 /** Config document that owns a registered secret-bearing target. */
-export type SecretTargetConfigFile = "openclaw.json" | "auth-profiles.json"; // pragma: allowlist secret
+export type SecretTargetConfigFile = "openclaw.json" | "auth-profile-store"; // pragma: allowlist secret
 /** Storage shape used by a target: inline SecretInput or a sibling `*Ref` field. */
 export type SecretTargetShape = "secret_input" | "sibling_ref"; // pragma: allowlist secret
 /** Resolved value shape accepted by runtime and apply validation. */
 export type SecretTargetExpected = "string" | "string-or-object"; // pragma: allowlist secret
 /** Auth profile families that have separate secret target coverage. */
-export type AuthProfileType = "api_key" | "token";
+type AuthProfileType = "api_key" | "token";
 
 /**
  * Registry metadata for one configurable secret-bearing value.

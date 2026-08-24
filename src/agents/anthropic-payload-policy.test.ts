@@ -1,16 +1,18 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import "./ai-transport-runtime-host.js";
+import {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+} from "@openclaw/ai/transports";
 /**
  * Tests Anthropic payload policy mutation.
  * Covers service tier, cache-control retention, prompt cache boundaries, and
  * deprecated marker compatibility.
  */
 import { describe, expect, it } from "vitest";
-import {
-  applyAnthropicPayloadPolicyToParams,
-  resolveAnthropicPayloadPolicy,
-} from "./anthropic-payload-policy.js";
 
 type TestPayload = {
+  context_management?: unknown;
   messages: Array<{ role: string; content: unknown }>;
   service_tier?: string;
   system?: unknown;
@@ -53,6 +55,81 @@ function expectShortEphemeralTextPayload(payload: TestPayload) {
 }
 
 describe("anthropic payload policy", () => {
+  it.each([
+    {
+      name: "uses 70 percent of the context window by default",
+      contextWindow: 200_000,
+      extraParams: { anthropicServerCompaction: true },
+      expectedThreshold: 140_000,
+    },
+    {
+      name: "uses an explicit threshold",
+      contextWindow: 200_000,
+      extraParams: {
+        anthropicServerCompaction: true,
+        anthropicCompactThreshold: 120_000,
+      },
+      expectedThreshold: 120_000,
+    },
+    {
+      name: "clamps an explicit threshold to the API minimum",
+      contextWindow: 200_000,
+      extraParams: {
+        anthropicServerCompaction: true,
+        anthropicCompactThreshold: 42_000,
+      },
+      expectedThreshold: 50_000,
+    },
+    {
+      name: "uses the API minimum for a small context window",
+      contextWindow: 32_000,
+      extraParams: { anthropicServerCompaction: true },
+      expectedThreshold: 50_000,
+    },
+  ])("$name", ({ contextWindow, extraParams, expectedThreshold }) => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      contextWindow,
+      enableServerCompaction: true,
+      extraParams,
+    });
+    const payload = simpleTextPayload();
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+
+    expect(payload.context_management).toEqual({
+      edits: [
+        {
+          type: "compact_20260112",
+          trigger: { type: "input_tokens", value: expectedThreshold },
+        },
+      ],
+    });
+  });
+
+  it("keeps compaction opt-in and preserves authored context management", () => {
+    const disabledPolicy = resolveAnthropicPayloadPolicy({
+      contextWindow: 200_000,
+      enableServerCompaction: true,
+      extraParams: {},
+    });
+    const disabledPayload = simpleTextPayload();
+    applyAnthropicPayloadPolicyToParams(disabledPayload, disabledPolicy, new Set());
+    expect(disabledPayload).not.toHaveProperty("context_management");
+
+    const configuredPolicy = resolveAnthropicPayloadPolicy({
+      contextWindow: 200_000,
+      enableServerCompaction: true,
+      extraParams: { anthropicServerCompaction: true },
+    });
+    const existing = { edits: [{ type: "clear_tool_uses_20250919" }] };
+    const configuredPayload = { ...simpleTextPayload(), context_management: existing };
+    applyAnthropicPayloadPolicyToParams(configuredPayload, configuredPolicy, new Set());
+    expect(configuredPayload.context_management).toBe(existing);
+  });
+
   it("applies native Anthropic service tier and cache markers without widening cache scope", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",

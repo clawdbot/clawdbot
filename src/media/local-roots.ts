@@ -7,7 +7,7 @@ import {
   resolveEffectiveToolFsRootExpansionAllowed,
   resolveEffectiveToolFsWorkspaceOnly,
 } from "../agents/tool-fs-policy.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveDeliveryQueueMediaDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../utils.js";
@@ -29,7 +29,7 @@ function resolveCachedPreferredTmpDir(): string {
 }
 
 /** Builds the baseline local media root allowlist from state/config directories. */
-export function buildMediaLocalRoots(
+function buildMediaLocalRoots(
   stateDir: string,
   configDir: string,
   options: BuildMediaLocalRootsOptions = {},
@@ -42,6 +42,10 @@ export function buildMediaLocalRoots(
       preferredTmpDir,
       path.join(resolvedConfigDir, "media"),
       path.join(resolvedStateDir, "media"),
+      // Queue-owned copies of undelivered attachments. Recovery replays in a
+      // process that never saw the original source, so it must be able to read
+      // this root; only the spool dir is granted, never the state dir at large.
+      resolveDeliveryQueueMediaDir(resolvedStateDir),
       path.join(resolvedStateDir, "canvas"),
       path.join(resolvedStateDir, "workspace"),
       path.join(resolvedStateDir, "sandboxes"),

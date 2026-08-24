@@ -37,7 +37,7 @@ vi.mock("../runtime.js", () => ({
 
 function firstConfigReadyCall() {
   return ensureConfigReadyMock.mock.calls[0]?.[0] as
-    | { runtime?: unknown; commandPath?: unknown }
+    | { runtime?: unknown; commandPath?: unknown; suppressDoctorStdout?: boolean }
     | undefined;
 }
 
@@ -92,32 +92,62 @@ describe("tryRouteCli", () => {
     }
   });
 
-  it("keeps config guard for routed status --json commands", async () => {
+  it("skips config guard for routed status --json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    expect(firstConfigReadyCall()?.commandPath).toEqual(["status"]);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("keeps config guard for the parent tasks JSON list alias", async () => {
+  it("skips config guard for the parent tasks JSON list alias", async () => {
     await expect(tryRouteCli(["node", "openclaw", "tasks", "--json"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    expect(firstConfigReadyCall()?.commandPath).toEqual(["tasks"]);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
+  it("skips config guard but still loads requested plugins for routed text commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    const configReadyCall = firstConfigReadyCall();
-    expect(typeof configReadyCall?.runtime).toBe("object");
-    expect(configReadyCall?.commandPath).toEqual(["status"]);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });
+  });
+
+  it("suppresses config get machine output without running an observing startup guard", async () => {
+    const captured: boolean[] = [];
+    runRouteMock.mockImplementationOnce(async () => {
+      captured.push(loggingState.forceConsoleToStderr);
+      return true;
+    });
+
+    await expect(
+      tryRouteCli(["node", "openclaw", "config", "get", "gateway.port"], {
+        machineOutput: true,
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(captured).toEqual([true]);
+  });
+
+  it("lets routed gateway health own its config read", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "gateway", "health", "--json"])).resolves.toBe(
+      true,
+    );
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps config guard for routed config mutations", async () => {
+    await expect(
+      tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"]),
+    ).resolves.toBe(true);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    expect(firstConfigReadyCall()?.commandPath).toEqual(["config", "unset"]);
   });
 
   it("keeps logs routed to stderr for routed --json commands", async () => {
@@ -175,8 +205,9 @@ describe("tryRouteCli", () => {
 
   it("routes status when root options precede the command", async () => {
     const capturedLogLevels: Array<string | undefined> = [];
-    ensureConfigReadyMock.mockImplementationOnce(async () => {
+    runRouteMock.mockImplementationOnce(async () => {
       capturedLogLevels.push(process.env.OPENCLAW_LOG_LEVEL);
+      return true;
     });
 
     await expect(tryRouteCli(["node", "openclaw", "--log-level", "debug", "status"])).resolves.toBe(
@@ -187,10 +218,7 @@ describe("tryRouteCli", () => {
       ["status"],
       ["node", "openclaw", "--log-level", "debug", "status"],
     );
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    const configReadyCall = firstConfigReadyCall();
-    expect(typeof configReadyCall?.runtime).toBe("object");
-    expect(configReadyCall?.commandPath).toEqual(["status"]);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });
@@ -200,15 +228,16 @@ describe("tryRouteCli", () => {
 
   it("applies routed log level options after the command", async () => {
     const capturedLogLevels: Array<string | undefined> = [];
-    ensureConfigReadyMock.mockImplementationOnce(async () => {
+    runRouteMock.mockImplementationOnce(async () => {
       capturedLogLevels.push(process.env.OPENCLAW_LOG_LEVEL);
+      return true;
     });
 
     await expect(tryRouteCli(["node", "openclaw", "status", "--log-level=trace"])).resolves.toBe(
       true,
     );
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(runRouteMock).toHaveBeenCalledTimes(1);
     expect(capturedLogLevels).toEqual(["trace"]);
     expect(process.env.OPENCLAW_LOG_LEVEL).toBe("trace");
@@ -219,7 +248,7 @@ describe("tryRouteCli", () => {
       tryRouteCli(["node", "openclaw", "--log-level", "debug", "status", "--log-level=trace"]),
     ).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(runRouteMock).toHaveBeenCalledTimes(1);
     expect(process.env.OPENCLAW_LOG_LEVEL).toBe("trace");
   });

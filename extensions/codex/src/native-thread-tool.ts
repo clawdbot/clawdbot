@@ -12,6 +12,11 @@ import {
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  asBoolean,
+  asOptionalRecord,
+  asSafeIntegerInRange,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -110,22 +115,6 @@ type CodexThreadsToolOptions = {
   getPluginConfig: () => unknown;
   request?: typeof codexControlRequest;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function readBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function readLimit(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100
-    ? value
-    : undefined;
-}
 
 function resolveToolSession(
   context: OpenClawPluginToolContext,
@@ -276,10 +265,10 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
     name: "codex_threads",
     label: "Codex Threads",
     description:
-      "List and inspect native Codex threads. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
+      "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
-      const params = asRecord(rawParams);
+      const params = asOptionalRecord(rawParams) ?? {};
       const action = readStringParam(params, "action", { required: true, label: "action" });
       const pluginConfig = options.getPluginConfig();
       const plugin = readCodexPluginConfig(pluginConfig);
@@ -299,8 +288,8 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           pluginConfig,
           CODEX_CONTROL_METHODS.listThreads,
           {
-            archived: readBoolean(params.archived),
-            limit: readLimit(params.limit) ?? 20,
+            archived: asBoolean(params.archived) ?? false,
+            limit: asSafeIntegerInRange(params.limit, { min: 1, max: 100 }) ?? 20,
             modelProviders: [],
             sortKey: "recency_at",
             sortDirection: "desc",
@@ -315,7 +304,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
 
       const threadId = readThreadId(params);
       if (action === "read") {
-        const includeTurns = readBoolean(params.include_turns);
+        const includeTurns = asBoolean(params.include_turns) ?? false;
         if (includeTurns && !mayReadRawTranscripts) {
           throw new Error(
             "Codex raw transcript reads are disabled for this codex plugin supervision config.",
@@ -429,7 +418,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         throw new Error(`unsupported codex_threads action: ${action}`);
       }
 
-      const attach = readBoolean(params.attach, true);
+      const attach = asBoolean(params.attach) ?? true;
       if (attach && !session) {
         throw new Error("cannot attach a Codex fork without an active OpenClaw session");
       }

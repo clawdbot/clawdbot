@@ -1,7 +1,7 @@
 ---
-summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/canvas/screen/location/notify)"
+summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/screen/location/notify and the macOS widget panel)"
 read_when:
-  - You're managing paired nodes (cameras, screen, canvas)
+  - You're managing paired nodes (cameras, screen, or the macOS widget panel)
   - You need to approve requests or invoke node commands
 title: "Nodes"
 ---
@@ -24,7 +24,7 @@ openclaw nodes list
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (e.g. `24h`, `7d`; only nodes that connected within the duration). `list` shows pending and paired nodes in separate tables, with paired rows including the most recent connect age (Last Connect); `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only while Accessibility permission is granted, and the freshest row is marked `active`; see [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
+`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (e.g. `24h`, `7d`; only nodes that connected within the duration). `list` shows pending and paired nodes in separate tables, with paired rows including the most recent connect age (Last Connect); `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only after the user enables **Active computer detection** and grants Accessibility; the freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
 
 ## Pairing
 
@@ -45,7 +45,8 @@ These commands drive the gateway-owned `node.pair.*` store, separate from device
 - `approve` scope requirements follow the pending request's declared commands:
   - commandless request: `operator.pairing`
   - ordinary node commands: `operator.pairing` + `operator.write`
-  - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
+  - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
+- These requirements classify node commands relayed through `node.invoke`. The top-level Gateway `fs.listDir` RPC needs `operator.write` for workspace-contained host browsing and `operator.admin` when `nodeId` is present.
 - `remove` scope: `operator.pairing` can remove non-operator node rows; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 
 ## Invoke
@@ -56,7 +57,7 @@ openclaw nodes invoke --node <id> --command system.which --params '{"bins":["una
 
 Flags:
 
-- `--command <command>` (required): e.g. `canvas.eval`.
+- `--command <command>` (required): e.g. `device.info`.
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
 - `--idempotency-key <key>`: optional idempotency key.
@@ -73,11 +74,12 @@ openclaw nodes screen record --node <id> --duration 10s --fps 10 --out ./clip.mp
 ```
 
 - `notify` sends a local notification on a node that declares `system.notify`, including macOS, iOS, Android, and direct watchOS nodes. Direct watchOS delivery requires OpenClaw to be active. Requires `--title` or `--body`. Options: `--sound <name>`, `--priority <passive|active|timeSensitive>`, `--delivery <system|overlay|auto>` (default `system`), `--invoke-timeout <ms>` (default `15000`).
-- `push` sends an APNs test push to an iOS node. Options: `--title <text>` (default `OpenClaw`), `--body <text>`, `--environment <sandbox|production>` to override the detected APNs environment.
+- `push` sends an APNs test push to an iOS node. Options: `--title <text>` (default `OpenClaw`), `--body <text>`, `--environment <sandbox|production>` to override the detected APNs environment. Accepted delivery exits `0`; a typed APNs rejection preserves the complete text or JSON diagnostic and exits non-zero.
 - `location get` fetches the node's current location. Options: `--max-age <ms>` (reuse a cached fix), `--accuracy <coarse|balanced|precise>`, `--location-timeout <ms>` (default `10000`), `--invoke-timeout <ms>` (default `20000`).
 - `screen record` captures a short clip and prints the saved path (or writes JSON with `--json`). Options: `--screen <index>` (default `0`), `--duration <ms|10s>` (default `10000`), `--fps <fps>` (default `10`), `--no-audio`, `--out <path>`, `--invoke-timeout <ms>` (default `120000`).
+- Explicit screen output paths are staged beside the destination and replace it only after a complete write; a failed write leaves an existing file unchanged.
 
-Camera and Canvas commands have their own docs: [Camera nodes](/nodes/camera), [Canvas](/platforms/mac/canvas). Canvas is implemented by the bundled experimental Canvas plugin; core keeps `openclaw nodes canvas` as a compatibility mount point.
+Camera and macOS widget-panel commands have their own docs: [Camera nodes](/nodes/camera), [Widget panel](/platforms/mac/canvas). The bundled experimental Canvas plugin registers `openclaw nodes canvas` with the surviving `present`, `hide`, and `navigate` subcommands.
 
 ## Related
 

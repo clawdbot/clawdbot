@@ -10,7 +10,7 @@ import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./embedded-agent-runner/result-fallback-classifier.js";
-import { runWithModelFallback } from "./model-fallback.js";
+import { runWithModelFallback } from "./model-fallback-runner.js";
 
 vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: () => false,
@@ -60,12 +60,11 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     },
   );
 
-  it("advances to the configured fallback after a classified GPT-5 terminal result", async () => {
+  it("advances to the configured fallback after an invisible non-GPT terminal result", async () => {
+    const primaryProvider = "zai";
+    const primaryModel = "glm-5.2";
     const primary = createContractRunResult({
-      meta: {
-        durationMs: 1,
-        agentHarnessResultClassification: "empty",
-      },
+      payloads: [{ isReasoning: true, text: "thinking" }, { text: " " }],
     });
     const fallback = createContractRunResult({
       payloads: [{ text: "fallback ok" }],
@@ -75,8 +74,8 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
 
     const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
       cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      provider: primaryProvider,
+      model: primaryModel,
       fallbacksOverride: contractFallbackOverride,
       run,
       classifyResult: ({ provider, model, result: resultValue }) =>
@@ -97,8 +96,8 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
       { isFinalFallbackAttempt: true },
     ]);
-    expect(result.attempts[0]?.provider).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider);
-    expect(result.attempts[0]?.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
+    expect(result.attempts[0]?.provider).toBe(primaryProvider);
+    expect(result.attempts[0]?.model).toBe(primaryModel);
     expect(result.attempts[0]?.reason).toBe("format");
     expect(result.attempts[0]?.code).toBe("empty_result");
   });

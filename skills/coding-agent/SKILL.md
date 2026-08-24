@@ -40,6 +40,8 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 
 - Always launch with `background:true`.
 - Codex and OpenCode: use `pty:true`.
+- Codex: never inherit ambient `CODEX_HOME` or the default `~/.codex`. Use a
+  separately authenticated coding-agent home and scope it to each Codex command.
 - Claude Code: no PTY; use `claude --permission-mode bypassPermissions --print`.
 - Capture a real notification route before spawning.
 - Worker must send completion/failure via `openclaw message send`.
@@ -120,10 +122,32 @@ printf 'prompt file: %s\n' "$PROMPT"
 
 Use `$PROMPT` when launching from the same shell/session. If using a separate tool call, substitute the printed path. The launch forms below are for trusted checkouts only; untrusted contributor refs require the repository's approved sandbox/review workflow.
 
+Before the first Codex worker on a host, prepare a dedicated auth home in the
+foreground. Do not copy `auth.json` or other credentials from ambient
+`~/.codex`; authorize this home separately. Codex scopes both file and keyring
+credentials by `CODEX_HOME`.
+
+```bash
+CODEX_WORKER_HOME="$HOME/.codex-coding-agent"
+mkdir -p "$CODEX_WORKER_HOME"
+if ! env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY \
+  CODEX_HOME="$CODEX_WORKER_HOME" codex login status >/dev/null 2>&1; then
+  printf 'Codex coding-agent login required for %s\n' "$CODEX_WORKER_HOME"
+  env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY \
+    CODEX_HOME="$CODEX_WORKER_HOME" codex login --device-auth
+fi
+printf 'Codex worker home: %s\n' "$CODEX_WORKER_HOME"
+```
+
+The login is an interactive foreground setup step, not a background worker.
+The launch command repeats the fixed, quoted home and removes ambient Codex and
+OpenAI auth overrides. Never export the worker home into the OpenClaw Gateway
+environment.
+
 Codex:
 
 ```bash
-bash pty:true background:true workdir:/path/isolated-worktree command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:/path/isolated-worktree command:"env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY CODEX_HOME=\"$HOME/.codex-coding-agent\" codex exec - < \"$PROMPT\""
 ```
 
 Claude Code:
@@ -159,7 +183,7 @@ Build X.
 <notification block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
-bash pty:true background:true workdir:$SCRATCH command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:$SCRATCH command:"env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY CODEX_HOME=\"$HOME/.codex-coding-agent\" codex exec - < \"$PROMPT\""
 ```
 
 ## Process actions

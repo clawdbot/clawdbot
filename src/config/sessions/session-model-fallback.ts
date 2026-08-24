@@ -4,11 +4,13 @@ export type AgentPatchedSessionModelFallback = {
   prevModelOverride?: string;
   prevProviderOverride?: string;
   prevModelOverrideSource?: "auto" | "user";
+  prevModelOverrideRouteResolution?: "resolved";
   prevModelOverrideFallbackOriginProvider?: string;
   prevModelOverrideFallbackOriginModel?: string;
   prevAuthProfileOverride?: string;
   prevAuthProfileOverrideSource?: "auto" | "user";
   prevAuthProfileOverrideCompactionCount?: number;
+  prevContextWindow?: string;
   prevThinkingLevel?: string;
   lastValidatedPatchTs?: number;
   ts: number;
@@ -22,11 +24,13 @@ export function createAgentPatchedSessionModelFallback(params: {
     modelOverride?: string;
     providerOverride?: string;
     modelOverrideSource?: "auto" | "user";
+    modelOverrideRouteResolution?: "resolved";
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
     authProfileOverride?: string;
     authProfileOverrideSource?: "auto" | "user";
     authProfileOverrideCompactionCount?: number;
+    contextWindow?: string;
     thinkingLevel?: string;
   };
   ts: number;
@@ -38,6 +42,9 @@ export function createAgentPatchedSessionModelFallback(params: {
     ...(entry.modelOverride ? { prevModelOverride: entry.modelOverride } : {}),
     ...(entry.providerOverride ? { prevProviderOverride: entry.providerOverride } : {}),
     ...(entry.modelOverrideSource ? { prevModelOverrideSource: entry.modelOverrideSource } : {}),
+    ...(entry.modelOverrideRouteResolution
+      ? { prevModelOverrideRouteResolution: entry.modelOverrideRouteResolution }
+      : {}),
     ...(entry.modelOverrideFallbackOriginProvider
       ? { prevModelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider }
       : {}),
@@ -51,6 +58,7 @@ export function createAgentPatchedSessionModelFallback(params: {
     ...(entry.authProfileOverrideCompactionCount !== undefined
       ? { prevAuthProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount }
       : {}),
+    ...(entry.contextWindow ? { prevContextWindow: entry.contextWindow } : {}),
     ...(entry.thinkingLevel ? { prevThinkingLevel: entry.thinkingLevel } : {}),
     ts: params.ts,
     source: "agent-patch",

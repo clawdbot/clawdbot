@@ -75,8 +75,15 @@ describe("SSH sandbox stream errors", () => {
         localDir,
         remoteDir: "/remote/workspace",
       });
-      const rejection = expect(result).rejects.toThrow(expected);
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2));
+      const rejection = result.then(
+        () => {
+          throw new Error(`expected rejection: ${expected}`);
+        },
+        (error: unknown) => {
+          expect(error).toEqual(expect.objectContaining({ message: expected }));
+        },
+      );
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2), { timeout: 10_000 });
       const [childName, streamName] = stream.split(".") as ["tar" | "ssh", keyof MockChildProcess];
       const failedStream = { tar, ssh }[childName][streamName] as PassThrough;
 

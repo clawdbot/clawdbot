@@ -271,9 +271,7 @@ async function main() {
     "setup did not update default workspace",
   );
   assert(
-    updatedConfig.agents?.list?.some(
-      (agent) => agent.id === "work" && agent.workspace === "/tmp/openclaw-work",
-    ),
+    updatedConfig.agents?.entries?.work?.workspace === "/tmp/openclaw-work",
     "agent config was not updated",
   );
 

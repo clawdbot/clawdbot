@@ -1,7 +1,9 @@
 // Hermes-native auth discovery and reauthentication planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
+import { parseDateStringTimestampMs as readTimestamp } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, readString, readText } from "./helpers.js";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readText } from "./helpers.js";
 import type { HermesSource } from "./source.js";
 
 const HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID = "openai-codex";
@@ -21,21 +23,15 @@ export type HermesCodexAuthCandidate = {
 const HERMES_REAUTH_PROVIDER_MAPPINGS = [
   { sourceProvider: "anthropic", targetProvider: "anthropic" },
   { sourceProvider: "nous", targetProvider: "nous" },
-  { sourceProvider: "qwen-oauth", targetProvider: "qwen-oauth" },
+  { sourceProvider: "qwen-oauth", targetProvider: "qwen" },
+  { sourceProvider: "qwen-cli", targetProvider: "qwen" },
+  { sourceProvider: "qwen-portal", targetProvider: "qwen" },
   { sourceProvider: "minimax-oauth", targetProvider: "minimax-portal" },
   { sourceProvider: "xai-oauth", targetProvider: "xai" },
 ] as const;
 const HERMES_REAUTH_SOURCE_PROVIDERS = new Set<string>(
   HERMES_REAUTH_PROVIDER_MAPPINGS.map((entry) => entry.sourceProvider),
 );
-
-function readTimestamp(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 function readHermesProviderCandidate(
   auth: Record<string, unknown>,
@@ -46,8 +42,8 @@ function readHermesProviderCandidate(
     ? providers[HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID]
     : undefined;
   const tokens = isRecord(provider?.tokens) ? provider.tokens : undefined;
-  const access = readString(tokens?.access_token);
-  const refresh = readString(tokens?.refresh_token);
+  const access = normalizeOptionalString(tokens?.access_token);
+  const refresh = normalizeOptionalString(tokens?.refresh_token);
   if (!access || !refresh) {
     return undefined;
   }
@@ -74,8 +70,8 @@ function readHermesPoolCandidates(
     if (!isRecord(entry)) {
       return [];
     }
-    const access = readString(entry.access_token);
-    const refresh = readString(entry.refresh_token);
+    const access = normalizeOptionalString(entry.access_token);
+    const refresh = normalizeOptionalString(entry.refresh_token);
     if (!access || !refresh) {
       return [];
     }
@@ -85,7 +81,7 @@ function readHermesPoolCandidates(
         refresh,
         sourceKind: "hermes-auth-json" as const,
         sourceSlot: "pool" as const,
-        sourceLabel: readString(entry.label) ?? "Hermes OpenAI Codex credential pool",
+        sourceLabel: normalizeOptionalString(entry.label) ?? "Hermes OpenAI Codex credential pool",
         sourcePath,
         updatedAt: readTimestamp(entry.last_refresh) ?? readTimestamp(entry.last_status_at),
       },
@@ -140,7 +136,9 @@ async function readHermesOAuthProviderIds(authPath: string | undefined): Promise
       ? Object.entries(parsed.credential_pool).flatMap(([provider, entries]) =>
           Array.isArray(entries) &&
           entries.some(
-            (entry) => isRecord(entry) && readString(entry.auth_type)?.toLowerCase() === "oauth",
+            (entry) =>
+              isRecord(entry) &&
+              normalizeOptionalString(entry.auth_type)?.toLowerCase() === "oauth",
           )
             ? [provider]
             : [],
@@ -155,7 +153,7 @@ async function readHermesOAuthProviderIds(authPath: string | undefined): Promise
 export async function buildReauthenticationItems(source: HermesSource): Promise<MigrationItem[]> {
   const profileProviders = await readHermesOAuthProviderIds(source.authPath);
   const globalProviders = await readHermesOAuthProviderIds(source.globalAuthPath);
-  return HERMES_REAUTH_PROVIDER_MAPPINGS.flatMap(({ sourceProvider, targetProvider }) => {
+  const items = HERMES_REAUTH_PROVIDER_MAPPINGS.flatMap(({ sourceProvider, targetProvider }) => {
     const sourcePath = profileProviders.has(sourceProvider)
       ? source.authPath
       : globalProviders.has(sourceProvider)
@@ -169,8 +167,12 @@ export async function buildReauthenticationItems(source: HermesSource): Promise<
         id: `manual:auth-reauthenticate:${targetProvider}`,
         source: sourcePath,
         message: `Hermes ${sourceProvider} credentials cannot be reused safely by OpenClaw.`,
-        recommendation: `Authenticate ${targetProvider} in OpenClaw after migration.`,
+        recommendation:
+          targetProvider === "qwen"
+            ? "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key."
+            : `Authenticate ${targetProvider} in OpenClaw after migration.`,
       }),
     ];
   });
+  return [...new Map(items.map((item) => [item.id, item])).values()];
 }

@@ -23,6 +23,7 @@ describe("mantis Telegram desktop builder runtime", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     await fs.rm(repoRoot, { force: true, recursive: true });
   });
@@ -108,7 +109,20 @@ describe("mantis Telegram desktop builder runtime", () => {
     expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_GROUP_ID).toBe("-1001234567890");
     expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-token");
     const remoteScript = runCommand?.args.at(-1);
-    expect(remoteScript).toContain("https://telegram.org/dl/desktop/linux");
+    expect(remoteScript).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x -o "$out/nodesource-setup.sh"',
+    );
+    expect(remoteScript).toContain(
+      'sudo -E bash "$out/nodesource-setup.sh" >>"$out/node-apt.log" 2>&1',
+    );
+    expect(remoteScript).not.toContain("setup_22.x | sudo");
+    expect(remoteScript).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 600 --retry 2 --retry-delay 2 https://telegram.org/dl/desktop/linux -o "$out/telegram-desktop.tar.xz"',
+    );
+    expect(remoteScript?.match(/--connect-timeout 10/gu)?.length).toBe(2);
+    expect(remoteScript?.match(/--max-time 120/gu)?.length).toBe(1);
+    expect(remoteScript?.match(/--max-time 600/gu)?.length).toBe(1);
+    expect(remoteScript?.match(/--retry 2 --retry-delay 2/gu)?.length).toBe(1);
     expect(remoteScript).toContain('-workdir "$telegram_profile_dir"');
     expect(remoteScript).toContain("OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_TGZ_B64");
     expect(remoteScript).toContain(
@@ -149,108 +163,126 @@ describe("mantis Telegram desktop builder runtime", () => {
     expect(summary.telegramDesktop.profileDir).toBe("/home/crabbox/.local/share/TelegramDesktop");
   });
 
-  it("leases Convex Telegram credentials and maps them into the VM env", async () => {
-    const commands: { args: readonly string[]; command: string; env?: NodeJS.ProcessEnv }[] = [];
-    const events: string[] = [];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = describeFetchInput(input);
-      if (url.endsWith("/acquire")) {
-        events.push("acquire");
-        return new Response(
-          JSON.stringify({
-            credentialId: "cred-telegram",
-            heartbeatIntervalMs: 600_000,
-            leaseToken: "lease-telegram",
-            leaseTtlMs: 900_000,
-            payload: {
-              driverToken: "driver-leased",
-              groupId: "-100222333444",
-              sutToken: "sut-leased",
-            },
-            status: "ok",
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.endsWith("/release")) {
-        events.push("release");
-        return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
-      }
-      if (url.endsWith("/heartbeat")) {
-        events.push("heartbeat");
-        return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const runner = vi.fn(
-      async (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
-        commands.push({ command, args, env: options.env });
-        if (command === "/tmp/crabbox" && args[0] === "warmup") {
-          return { stdout: "ready lease cbx_c0ffee\n", stderr: "" };
-        }
-        if (command === "/tmp/crabbox" && args[0] === "inspect") {
-          return {
-            stdout: `${JSON.stringify({
-              host: "203.0.113.20",
-              id: "cbx_c0ffee",
-              provider: "hetzner",
-              sshKey: "/tmp/key",
-              sshPort: "2222",
-              sshUser: "crabbox",
-              state: "active",
-            })}\n`,
-            stderr: "",
-          };
-        }
-        if (command === "rsync") {
-          const outputDir = args.at(-1);
-          await fs.mkdir(outputDir as string, { recursive: true });
-          await fs.writeFile(path.join(outputDir as string, "telegram-desktop-builder.png"), "png");
-          await fs.writeFile(
-            path.join(outputDir as string, "remote-metadata.json"),
-            `${JSON.stringify({ gatewayAlive: true, qaExitCode: 0 })}\n`,
+  it.each([
+    { expectedError: "Crabbox stop failed", failure: "Crabbox stop" },
+    { expectedError: "EISDIR", failure: "report write" },
+  ])(
+    "releases Convex Telegram credentials when $failure fails",
+    async ({ expectedError, failure }) => {
+      vi.useFakeTimers();
+      const commands: { args: readonly string[]; command: string; env?: NodeJS.ProcessEnv }[] = [];
+      const events: string[] = [];
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = describeFetchInput(input);
+        if (url.endsWith("/acquire")) {
+          events.push("acquire");
+          return new Response(
+            JSON.stringify({
+              credentialId: "cred-telegram",
+              heartbeatIntervalMs: 600_000,
+              leaseToken: "lease-telegram",
+              leaseTtlMs: 900_000,
+              payload: {
+                driverToken: "driver-leased",
+                groupId: "-100222333444",
+                sutToken: "sut-leased",
+              },
+              status: "ok",
+            }),
+            { status: 200 },
           );
         }
-        return { stdout: "", stderr: "" };
-      },
-    );
+        if (url.endsWith("/release")) {
+          events.push("release");
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        }
+        if (url.endsWith("/heartbeat")) {
+          events.push("heartbeat");
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
 
-    const result = await runMantisTelegramDesktopBuilder({
-      commandRunner: runner,
-      crabboxBin: "/tmp/crabbox",
-      credentialRole: "ci",
-      credentialSource: "convex",
-      env: {
-        CI: "1",
-        OPENCLAW_QA_CONVEX_SECRET_CI: "convex-secret",
-        OPENCLAW_QA_CONVEX_SITE_URL: "https://example.convex.site",
-        PATH: process.env.PATH,
-      },
-      keepLease: false,
-      now: () => new Date("2026-05-05T12:30:00.000Z"),
-      outputDir: ".artifacts/qa-e2e/mantis/telegram-desktop-convex",
-      repoRoot,
-    });
+      const runner = vi.fn(
+        async (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+          commands.push({ command, args, env: options.env });
+          if (command === "/tmp/crabbox" && args[0] === "warmup") {
+            return { stdout: "ready lease cbx_c0ffee\n", stderr: "" };
+          }
+          if (command === "/tmp/crabbox" && args[0] === "inspect") {
+            return {
+              stdout: `${JSON.stringify({
+                host: "203.0.113.20",
+                id: "cbx_c0ffee",
+                provider: "hetzner",
+                sshKey: "/tmp/key",
+                sshPort: "2222",
+                sshUser: "crabbox",
+                state: "active",
+              })}\n`,
+              stderr: "",
+            };
+          }
+          if (failure === "Crabbox stop" && command === "/tmp/crabbox" && args[0] === "stop") {
+            throw new Error("Crabbox stop failed");
+          }
+          if (command === "rsync") {
+            const outputDir = args.at(-1);
+            await fs.mkdir(outputDir as string, { recursive: true });
+            await fs.writeFile(
+              path.join(outputDir as string, "telegram-desktop-builder.png"),
+              "png",
+            );
+            await fs.writeFile(
+              path.join(outputDir as string, "remote-metadata.json"),
+              `${JSON.stringify({ gatewayAlive: true, qaExitCode: 0 })}\n`,
+            );
+            if (failure === "report write") {
+              await fs.mkdir(
+                path.join(outputDir as string, "mantis-telegram-desktop-builder-report.md"),
+              );
+            }
+          }
+          return { stdout: "", stderr: "" };
+        },
+      );
 
-    expect(result.status).toBe("pass");
-    expect(events).toEqual(["acquire", "release"]);
-    const runCommand = commands.find(
-      (entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run",
-    );
-    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN).toBe("driver-leased");
-    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_GROUP_ID).toBe("-100222333444");
-    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-leased");
-    expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBe("driver-leased");
-    expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBe("-100222333444");
-    expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-leased");
-    expect(
-      commands.some((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "stop"),
-    ).toBe(true);
-    expect(fetchMock.mock.calls.map(([url]) => describeFetchInput(url))).toEqual([
-      "https://example.convex.site/qa-credentials/v1/acquire",
-      "https://example.convex.site/qa-credentials/v1/release",
-    ]);
-  });
+      await expect(
+        runMantisTelegramDesktopBuilder({
+          commandRunner: runner,
+          crabboxBin: "/tmp/crabbox",
+          credentialRole: "ci",
+          credentialSource: "convex",
+          env: {
+            CI: "1",
+            OPENCLAW_QA_CONVEX_SECRET_CI: "convex-secret",
+            OPENCLAW_QA_CONVEX_SITE_URL: "https://example.convex.site",
+            PATH: process.env.PATH,
+          },
+          keepLease: false,
+          now: () => new Date("2026-05-05T12:30:00.000Z"),
+          outputDir: ".artifacts/qa-e2e/mantis/telegram-desktop-convex",
+          repoRoot,
+        }),
+      ).rejects.toThrow(expectedError);
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(events).toEqual(["acquire", "release"]);
+      const runCommand = commands.find(
+        (entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run",
+      );
+      expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN).toBe("driver-leased");
+      expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_GROUP_ID).toBe("-100222333444");
+      expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-leased");
+      expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBe("driver-leased");
+      expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBe("-100222333444");
+      expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-leased");
+      expect(commands.map((entry) => entry.args[0])).toContain("stop");
+      expect(fetchMock.mock.calls.map(([url]) => describeFetchInput(url))).toEqual([
+        "https://example.convex.site/qa-credentials/v1/acquire",
+        "https://example.convex.site/qa-credentials/v1/release",
+      ]);
+    },
+  );
 });

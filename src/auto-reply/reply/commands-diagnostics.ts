@@ -7,9 +7,16 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import type { InteractiveReply, MessagePresentationAction } from "../../interactive/payload.js";
+import type {
+  LegacyInteractiveReply,
+  MessagePresentationAction,
+} from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
 import {
@@ -235,6 +242,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "diagnostics-private-route",
     request: {
       command: buildGatewayDiagnosticsExportJsonCommand(),
@@ -268,7 +276,7 @@ async function requestGatewayDiagnosticsExportApproval(
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
   codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
 ): Promise<GatewayDiagnosticsApprovalResult> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({
@@ -306,7 +314,7 @@ async function requestGatewayDiagnosticsExportApproval(
       security: "allowlist",
       ask: "always",
       background: true,
-      timeout: timeoutSec,
+      timeoutSeconds: timeoutSec,
     });
     if (result.details?.status === "approval-pending") {
       return { status: "pending" };
@@ -437,12 +445,13 @@ async function executeCodexDiagnosticsAddon(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry?.sessionFile,
+    sessionFile: targetSessionEntry ? params.sessionKey : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
     from: params.command.from,
     to: params.command.to,
+    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
       typeof params.ctx.MessageThreadId === "string" ||
@@ -477,23 +486,21 @@ function buildCodexDiagnosticsSessions(
     }
   }
   return Array.from(sessions.entries())
-    .filter(([, entry]) => Boolean(entry.sessionFile))
+    .filter(([, entry]) => Boolean(entry.sessionId?.trim()))
     .map(([sessionKey, entry]) => ({
       sessionKey,
       sessionId: entry.sessionId,
-      sessionFile: entry.sessionFile,
+      sessionFile: sessionKey,
       agentHarnessId: entry.agentHarnessId,
       channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
       channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
       accountId:
-        normalizeOptionalString(entry.deliveryContext?.accountId) ??
-        normalizeOptionalString(entry.origin?.accountId) ??
-        normalizeOptionalString(entry.lastAccountId) ??
+        normalizeOptionalString(deliveryContextFromSession(entry)?.accountId) ??
+        normalizeOptionalString(sessionDeliveryOrigin(entry)?.accountId) ??
         (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
       messageThreadId:
-        entry.deliveryContext?.threadId ??
-        entry.origin?.threadId ??
-        entry.lastThreadId ??
+        deliveryContextFromSession(entry)?.threadId ??
+        sessionDeliveryOrigin(entry)?.threadId ??
         (sessionKey === params.sessionKey &&
         (typeof params.ctx.MessageThreadId === "string" ||
           typeof params.ctx.MessageThreadId === "number")
@@ -512,10 +519,8 @@ function resolveDiagnosticsSessionChannel(
   sessionKey: string,
 ): string | undefined {
   return (
-    normalizeOptionalString(entry.deliveryContext?.channel) ??
-    normalizeOptionalString(entry.origin?.provider) ??
-    normalizeOptionalString(entry.channel) ??
-    normalizeOptionalString(entry.lastChannel) ??
+    normalizeOptionalString(deliveryContextFromSession(entry)?.channel) ??
+    normalizeOptionalString(sessionDeliveryOrigin(entry)?.provider) ??
     (sessionKey === params.sessionKey ? params.command.channel : undefined)
   );
 }
@@ -526,7 +531,7 @@ function resolveDiagnosticsSessionChannelId(
   sessionKey: string,
 ) {
   return (
-    normalizeOptionalString(entry.origin?.nativeChannelId) ??
+    normalizeOptionalString(sessionDeliveryOrigin(entry)?.nativeChannelId) ??
     (sessionKey === params.sessionKey ? params.command.channelId : undefined)
   );
 }
@@ -579,7 +584,7 @@ function rewriteCodexDiagnosticsResult(result: PluginCommandResult): PluginComma
   };
 }
 
-function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
+function rewriteInteractive(interactive: LegacyInteractiveReply): LegacyInteractiveReply {
   return {
     blocks: interactive.blocks.map((block) => {
       if (block.type === "buttons") {
@@ -624,17 +629,15 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
 }
 
 function rewriteSelectPresentationAction(
-  action: Extract<MessagePresentationAction, { type: "command" | "callback" }>,
-): Extract<MessagePresentationAction, { type: "command" | "callback" }> {
-  return action.type === "command"
-    ? {
-        type: "command",
-        command: rewriteCodexDiagnosticsCommandPrefix(action.command),
-      }
-    : {
-        type: "callback",
-        value: rewriteCodexDiagnosticsCommandPrefix(action.value),
-      };
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }> {
+  if (action.type === "command") {
+    return { type: "command", command: rewriteCodexDiagnosticsCommandPrefix(action.command) };
+  }
+  if (action.type === "callback") {
+    return { type: "callback", value: rewriteCodexDiagnosticsCommandPrefix(action.value) };
+  }
+  return action;
 }
 
 function rewriteCodexDiagnosticsCommandPrefix(value: string): string {

@@ -8,7 +8,7 @@ export function isMissingEmbeddingApiKeyError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("No API key found for provider");
 }
 
-/** Return stable cache headers after removing provider-specific secret headers. */
+/** Return stable cache headers after removing adapter-declared secret headers. */
 export function sanitizeEmbeddingCacheHeaders(
   headers: Record<string, string>,
   excludedHeaderNames: string[],

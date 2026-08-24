@@ -1,12 +1,13 @@
 // Auth-choice plugin provider tests cover loaded provider setup, plugin install, and credential routing.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   applyAuthChoiceLoadedPluginProvider,
+  prepareAuthChoiceLoadedPluginProvider,
   runProviderPluginAuthMethod,
 } from "../plugins/provider-auth-choice.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ProviderPlugin, ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 type ResolveProviderInstallCatalogEntry =
@@ -42,10 +43,9 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));
 
-const upsertAuthProfile = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
+const persistAuthProfileBatch = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/auth-profiles.js", () => ({
-  upsertAuthProfile,
-  upsertAuthProfileWithLock: upsertAuthProfile,
+  persistAuthProfileBatch,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
@@ -108,6 +108,15 @@ const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
 const LOCAL_API_KEY = "local-provider-key";
 const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;
 const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0";
+
+function expectPersistedProfile(profileId: string, credential: AuthProfileCredential): void {
+  expect(persistAuthProfileBatch).toHaveBeenCalledWith(
+    expect.objectContaining({
+      profiles: [{ profileId, credential }],
+      agentDir: "/tmp/agent",
+    }),
+  );
+}
 
 function buildProvider(): ProviderPlugin {
   return {
@@ -233,6 +242,48 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     }));
   });
 
+  it("stages provider profiles until the caller commits them", async () => {
+    const provider = buildProvider();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
+    });
+
+    const prepared = await prepareAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(prepared?.authProfiles).toEqual([
+      {
+        profileId: LOCAL_PROFILE_ID,
+        credential: {
+          type: "api_key",
+          provider: LOCAL_PROVIDER_ID,
+          key: LOCAL_API_KEY,
+        },
+      },
+    ]);
+    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+
+    await prepared?.persistAuthProfiles([
+      {
+        profileId: LOCAL_PROFILE_ID,
+        credential: {
+          type: "api_key",
+          provider: LOCAL_PROVIDER_ID,
+          key: "test-key",
+        },
+      },
+    ]);
+    await prepared?.persistAuthProfiles();
+
+    expect(persistAuthProfileBatch).toHaveBeenCalledOnce();
+    expectPersistedProfile(LOCAL_PROFILE_ID, {
+      type: "api_key",
+      provider: LOCAL_PROVIDER_ID,
+      key: "test-key",
+    });
+  });
+
   it("returns an agent model override when default model application is deferred", async () => {
     const provider = buildProvider();
     resolvePluginProviders.mockReturnValue([provider]);
@@ -329,14 +380,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result?.config.models?.providers?.["remote-alpha"]?.models?.[0]?.input).toContain(
       "image",
     );
-    expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "remote-alpha:default",
-      credential: {
-        type: "api_key",
-        provider: "remote-alpha",
-        key: "sk-remote-alpha-test",
-      },
-      agentDir: "/tmp/agent",
+    expectPersistedProfile("remote-alpha:default", {
+      type: "api_key",
+      provider: "remote-alpha",
+      key: "sk-remote-alpha-test",
     });
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
   });
@@ -354,14 +401,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: LOCAL_DEFAULT_MODEL,
     });
-    expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: LOCAL_PROFILE_ID,
-      credential: {
-        type: "api_key",
-        provider: LOCAL_PROVIDER_ID,
-        key: LOCAL_API_KEY,
-      },
-      agentDir: "/tmp/agent",
+    expectPersistedProfile(LOCAL_PROFILE_ID, {
+      type: "api_key",
+      provider: LOCAL_PROVIDER_ID,
+      key: LOCAL_API_KEY,
     });
     expect(runProviderModelSelectedHook).toHaveBeenCalledOnce();
     const [hookParams] = runProviderModelSelectedHook.mock
@@ -531,7 +574,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
     })) as never);
 
-    const note = vi.fn(async () => {});
+    const events: string[] = [];
+    const note = vi.fn(async () => {
+      events.push("note");
+    });
     const method: ProviderAuthMethod = {
       id: "local",
       label: "Local",
@@ -571,11 +617,15 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
           },
         },
       },
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
       runtime: {} as ApplyAuthChoiceParams["runtime"],
       prompter: {
         note,
       } as unknown as ApplyAuthChoiceParams["prompter"],
       method,
+      beforePersistentEffect: () => {
+        events.push("lock");
+      },
     });
 
     expect(result.defaultModel).toBe(LOCAL_DEFAULT_MODEL);
@@ -592,6 +642,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
     );
+    expect(persistAuthProfileBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ stateDir: "/tmp/openclaw-state" }),
+    );
+    expect(events).toEqual(["note", "lock"]);
   });
 
   it("normalizes retired Google Gemini default models returned by auth methods", async () => {

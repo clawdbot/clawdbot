@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";
-import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 
 type Rule = {
   label: string;
@@ -10,6 +10,20 @@ type Rule = {
 };
 
 const RULES: Rule[] = [
+  {
+    label: "deprecated channel runtime",
+    pattern:
+      /\.channel\.(?:reply\.(?:createReplyDispatcherWithTyping|resolveHumanDelayConfig|dispatchReplyFromConfig|finalizeInboundContext|formatInboundEnvelope)|session\.(?:resolveStorePath|recordInboundSession)|inbound\.(?:runPreparedReply|dispatchReply)|media\.fetchRemoteMedia)\b/u,
+  },
+  {
+    label: "caller-owned prepared channel dispatch",
+    pattern: /\b(?:runDispatch|onPreDispatchFailure)\b/u,
+  },
+  {
+    label: "caller-owned reply dispatcher lifecycle",
+    pattern:
+      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|settleReplyDispatcher)\s*\(/u,
+  },
   {
     label: "deprecated channel ingress resolver aliases",
     pattern:
@@ -85,7 +99,7 @@ function main() {
 
   if (offenders.length > 0) {
     console.error(
-      "Bundled plugin production code must use modern channel access results, not deprecated compatibility seams.",
+      "Bundled plugin production code must use modern channel runtime and access seams.",
     );
     for (const offender of offenders) {
       console.error(`- ${offender.file}:${offender.line}: ${offender.label}: ${offender.text}`);
@@ -93,7 +107,9 @@ function main() {
     process.exit(1);
   }
 
-  console.log("OK: bundled plugin production code avoids deprecated channel access seams.");
+  console.log(
+    "OK: bundled plugin production code avoids deprecated channel runtime and access seams.",
+  );
 }
 
 main();

@@ -20,7 +20,7 @@ const RAW_TASK_MUTATORS = [
 
 const RAW_TASK_MUTATOR_ALLOWED_CALLERS = new Set([
   "tasks/task-executor.ts",
-  "tasks/task-registry.ts",
+  "tasks/task-registry-record-api.ts",
   "tasks/task-registry.maintenance.ts",
 ]);
 

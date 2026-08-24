@@ -4,14 +4,13 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.reconnect
+      - matrix.legacy-state
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 150000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         encryption: true
         startupVerification: off

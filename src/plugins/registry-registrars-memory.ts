@@ -1,15 +1,3 @@
-import {
-  getRegisteredMemoryEmbeddingProvider,
-  registerMemoryEmbeddingProvider as registerGlobalMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
-import {
-  registerMemoryCapability as registerGlobalMemoryCapability,
-  registerMemoryCorpusSupplement as registerGlobalMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolverForPlugin,
-  registerMemoryPromptSupplement as registerGlobalMemoryPromptSupplement,
-  registerMemoryPromptSectionForPlugin,
-  registerMemoryRuntimeForPlugin,
-} from "./memory-state.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { hasKind } from "./slots.js";
@@ -39,16 +27,7 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     capability: Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0],
   ) => {
     if (requireMemorySlot(record, "capability")) {
-      registerGlobalMemoryCapability(record.id, capability);
-    }
-  };
-
-  const registerMemoryPromptSection = (
-    record: PluginRecord,
-    builder: Parameters<OpenClawPluginApi["registerMemoryPromptSection"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "prompt section")) {
-      registerMemoryPromptSectionForPlugin(record.id, builder);
+      registry.memoryCapabilities.push({ pluginId: record.id, capability });
     }
   };
 
@@ -65,79 +44,45 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    registerGlobalMemoryPromptSupplement(record.id, builder);
+    registry.memoryPromptSupplements = registry.memoryPromptSupplements.filter(
+      (entry) => entry.pluginId !== record.id,
+    );
+    registry.memoryPromptSupplements.push({ pluginId: record.id, builder });
+  };
+
+  const registerMemoryPromptPreparation = (
+    record: PluginRecord,
+    prepare: Parameters<OpenClawPluginApi["registerMemoryPromptPreparation"]>[0],
+  ) => {
+    if (typeof prepare !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "memory prompt preparation registration missing prepare function",
+      });
+      return;
+    }
+    registry.memoryPromptPreparations = registry.memoryPromptPreparations.filter(
+      (entry) => entry.pluginId !== record.id,
+    );
+    registry.memoryPromptPreparations.push({ pluginId: record.id, prepare });
   };
 
   const registerMemoryCorpusSupplement = (
     record: PluginRecord,
     supplement: Parameters<OpenClawPluginApi["registerMemoryCorpusSupplement"]>[0],
   ) => {
-    registerGlobalMemoryCorpusSupplement(record.id, supplement);
-  };
-
-  const registerMemoryFlushPlan = (
-    record: PluginRecord,
-    resolver: Parameters<OpenClawPluginApi["registerMemoryFlushPlan"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "flush plan")) {
-      registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
-    }
-  };
-
-  const registerMemoryRuntime = (
-    record: PluginRecord,
-    runtime: Parameters<OpenClawPluginApi["registerMemoryRuntime"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "runtime")) {
-      registerMemoryRuntimeForPlugin(record.id, runtime);
-    }
-  };
-
-  const registerMemoryEmbeddingProvider = (
-    record: PluginRecord,
-    adapter: Parameters<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>[0],
-  ) => {
-    if (hasKind(record.kind, "memory")) {
-      if (!requireMemorySlot(record, "embedding provider")) {
-        return;
-      }
-    } else if (!(record.contracts?.memoryEmbeddingProviders ?? []).includes(adapter.id)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: ${adapter.id}`,
-      });
-      return;
-    }
-    const existing = getRegisteredMemoryEmbeddingProvider(adapter.id);
-    if (existing) {
-      const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `memory embedding provider already registered: ${adapter.id}${ownerDetail}`,
-      });
-      return;
-    }
-    registerGlobalMemoryEmbeddingProvider(adapter, { ownerPluginId: record.id });
-    registry.memoryEmbeddingProviders.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: adapter,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.memoryCorpusSupplements = registry.memoryCorpusSupplements.filter(
+      (entry) => entry.pluginId !== record.id,
+    );
+    registry.memoryCorpusSupplements.push({ pluginId: record.id, supplement });
   };
 
   return {
     registerMemoryCapability,
-    registerMemoryPromptSection,
     registerMemoryPromptSupplement,
+    registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryFlushPlan,
-    registerMemoryRuntime,
-    registerMemoryEmbeddingProvider,
   };
 }

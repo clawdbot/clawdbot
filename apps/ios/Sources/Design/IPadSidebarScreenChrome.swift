@@ -4,7 +4,7 @@ struct IPadSidebarScreenChrome<Content: View>: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     let title: String
     let subtitle: String
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
     @ViewBuilder var content: Content
@@ -12,14 +12,14 @@ struct IPadSidebarScreenChrome<Content: View>: View {
     init(
         title: String,
         subtitle: String,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         gatewayAction: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content)
     {
         self.title = title
         self.subtitle = subtitle
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
         self.content = content()
@@ -37,8 +37,8 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                             titleFont: self.isCompactHeight ? OpenClawType.headline : OpenClawType.title2SemiBold,
                             subtitleLineLimit: self.isCompactHeight ? 1 : 2)
                         {
-                            if let headerLeadingAction {
-                                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                            if let headerSidebarAction {
+                                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                             }
                         } accessory: {
                             self.gatewayPill
@@ -63,6 +63,11 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                     }
                     .accessibilityLabel("Gateway settings")
                 }
+            }
+            if self.usesNativeNavigationChrome, let headerSidebarAction {
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }

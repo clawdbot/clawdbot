@@ -17,12 +17,12 @@ export function buildNodeCommandRejectionHint(
     if (command.startsWith("talk.")) {
       return `node command not allowed: "${command}" requires a trusted Talk-capable node`;
     }
-    const denyCommands = cfg.gateway?.nodes?.denyCommands ?? [];
+    const denyCommands = cfg.gateway?.nodes?.commands?.deny ?? [];
     if (denyCommands.some((entry) => entry.trim() === command)) {
-      return `node command not allowed: "${command}" is blocked by gateway.nodes.denyCommands`;
+      return `node command not allowed: "${command}" is blocked by gateway.nodes.commands.deny`;
     }
     if (DEFAULT_DANGEROUS_NODE_COMMANDS.includes(command)) {
-      return `node command not allowed: "${command}" requires explicit gateway.nodes.allowCommands opt-in`;
+      return `node command not allowed: "${command}" requires explicit gateway.nodes.commands.allow opt-in`;
     }
     return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
   }

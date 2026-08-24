@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { clearInternalHooks, registerInternalHook } from "../../hooks/internal-hooks.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -13,7 +14,14 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import { initSessionState } from "./session.js";
+import { finalizeInboundContext } from "./inbound-context.js";
+import { initSessionState as initSessionStateRaw } from "./session.js";
+
+const initSessionState = (
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+    ctx: Record<string, unknown>;
+  },
+) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -46,27 +54,6 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: sessionCleanupMocks.closeTrackedBrowserTabsForSessions,
 }));
-
-vi.mock("../../agents/session-write-lock.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
-    "../../agents/session-write-lock.js",
-  );
-  return {
-    ...actual,
-    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(
-      ({
-        timeoutMs,
-        graceMs = 2 * 60 * 1000,
-        minMs = 5 * 60 * 1000,
-      }: {
-        timeoutMs: number;
-        graceMs?: number;
-        minMs?: number;
-      }) => Math.max(minMs, timeoutMs + graceMs),
-    ),
-  };
-});
 
 const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-session-hooks-" });
 
@@ -204,6 +191,7 @@ describe("session hook context wiring", () => {
   });
 
   afterEach(() => {
+    clearInternalHooks();
     resetGatewayWorkAdmission();
     vi.restoreAllMocks();
   });
@@ -247,17 +235,16 @@ describe("session hook context wiring", () => {
     expectFields(event, {
       sessionKey,
       reason: "new",
-      transcriptArchived: true,
     });
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-    expect(event?.sessionFile).toContain(".jsonl.reset.");
 
     const [startEvent, startContext] = requireHookCall(
       hookRunnerMocks.runSessionStart,
       "session_start",
     );
     expectFields(startEvent, { resumedFrom: "old-session" });
-    expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+    expect(event?.nextSessionId).toBe("old-session");
+    expect(startEvent?.sessionId).toBe("old-session");
     expectFields(startContext, { sessionId: startEvent?.sessionId });
   });
 
@@ -396,16 +383,16 @@ describe("session hook context wiring", () => {
         sessionId: "daily-session",
         text: "daily",
         updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        reset: { mode: "daily" },
       });
 
       const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
       const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
       expectFields(event, {
         reason: "daily",
-        transcriptArchived: true,
       });
-      expect(event?.sessionFile).toContain(".jsonl.reset.");
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+      expect(startEvent?.sessionId).toBe("daily-session");
     } finally {
       vi.useRealTimers();
     }
@@ -430,6 +417,47 @@ describe("session hook context wiring", () => {
 
       const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
       expectFields(event, { reason: "idle" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      reason: "daily",
+      reset: { mode: "daily", atHour: 4 } as SessionResetConfig,
+    },
+    {
+      reason: "idle",
+      reset: { mode: "idle", idleMinutes: 30 } as SessionResetConfig,
+    },
+  ])("emits one session:auto-reset event for $reason rollover", async ({ reason, reset }) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const listener = vi.fn();
+      registerInternalHook("session:auto-reset", listener);
+      const sessionKey = `agent:main:telegram:direct:auto-${reason}`;
+      await initStoredSessionState({
+        prefix: `openclaw-session-auto-${reason}`,
+        sessionKey,
+        sessionId: `auto-${reason}-session`,
+        text: reason,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        reset,
+      });
+
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+      const [event] = listener.mock.calls[0] ?? [];
+      expectFields(event, {
+        type: "session",
+        action: "auto-reset",
+        sessionKey,
+      });
+      expectFields((event as { context?: Record<string, unknown> }).context, {
+        reason,
+        nextSessionKey: sessionKey,
+      });
     } finally {
       vi.useRealTimers();
     }

@@ -40,6 +40,7 @@ async function safeFetch(params: SafeFetchParams) {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
     },
+    resolveFn: request.resolveFn ?? publicResolve,
   });
 }
 
@@ -533,6 +534,11 @@ describe("Graph shared-link helpers", () => {
     ["https://graph.microsoft.com/v1.0/me", false],
     ["https://smba.trafficmanager.net/amer/v3", false],
     ["https://example.com/file.pdf", false],
+    ["https://notonedrive.com/x", false],
+    ["https://evil1drv.ms/x", false],
+    ["https://fakeonedrive.live.com/x", false],
+    ["https://evilsharepoint.com/x", false],
+    ["http://onedrive.com/x", false],
     ["not-a-url", false],
   ])("isGraphSharedLinkUrl(%s) === %s", (url, expected) => {
     expect(isGraphSharedLinkUrl(url)).toBe(expected);
@@ -599,7 +605,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("accepts inline data images within limit", () => {
@@ -626,7 +632,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("enforces cumulative inline size limit across attachments", () => {
@@ -644,8 +650,9 @@ describe("msteams inline image limits", () => {
       maxInlineBytes: 10,
       maxInlineTotalBytes: 6,
     });
-    expect(out.length).toBe(1);
+    expect(out.length).toBe(2);
     expect(out[0]?.kind).toBe("data");
+    expect(out[1]).toStrictEqual({ kind: "unavailable" });
   });
 });
 

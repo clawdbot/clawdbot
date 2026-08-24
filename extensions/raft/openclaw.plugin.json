@@ -34,9 +34,6 @@
       }
     }
   },
-  "channelEnvVars": {
-    "raft": ["RAFT_PROFILE"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

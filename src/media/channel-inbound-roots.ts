@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 
 type ChannelMediaContractApi = {
@@ -17,6 +18,10 @@ type ChannelMediaContractApi = {
 type ChannelMediaRootResolver = keyof ChannelMediaContractApi;
 
 const mediaContractApiByChannel = new Map<string, ChannelMediaContractApi | null>();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  mediaContractApiByChannel.clear();
+});
 
 function loadChannelMediaContractApi(
   channelId: string,

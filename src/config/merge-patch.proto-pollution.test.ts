@@ -30,6 +30,42 @@ describe("applyMergePatch prototype pollution guard", () => {
     expect(Object.hasOwn(result, "prototype")).toBe(false);
   });
 
+  it("preserves accessor method names as schema-owned auth profile ids", () => {
+    const profileIds = [
+      "__defineGetter__",
+      "__defineSetter__",
+      "__lookupGetter__",
+      "__lookupSetter__",
+    ] as const;
+    const profile = {
+      provider: "openai",
+      mode: "api_key",
+      constructor: { polluted: true },
+      prototype: { polluted: true },
+    };
+    const result = applyMergePatch(
+      { auth: { profiles: {} } },
+      {
+        auth: {
+          profiles: Object.fromEntries(profileIds.map((profileId) => [profileId, profile])),
+        },
+      },
+    ) as { auth?: { profiles?: Record<string, Record<string, unknown>> } };
+
+    const profiles = result.auth?.profiles ?? {};
+    for (const profileId of profileIds) {
+      expect(profiles[profileId]?.provider).toBe("openai");
+      expect(profiles[profileId]?.mode).toBe("api_key");
+      expect(Object.hasOwn(profiles[profileId] ?? {}, "constructor")).toBe(false);
+      expect(Object.hasOwn(profiles[profileId] ?? {}, "prototype")).toBe(false);
+    }
+    const removed = applyMergePatch(result, {
+      auth: { profiles: Object.fromEntries(profileIds.map((profileId) => [profileId, null])) },
+    }) as { auth?: { profiles?: Record<string, unknown> } };
+    expect(Object.keys(removed.auth?.profiles ?? {})).toEqual([]);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("ignores __proto__ in nested patches", () => {
     const base = { nested: { x: 1 } };
     const patch = JSON.parse('{"nested": {"__proto__": {"polluted": true}, "y": 2}}');

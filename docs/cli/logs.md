@@ -36,6 +36,8 @@ Passing `--url` skips auto-applied config credentials; include `--token` explici
 ```bash
 openclaw logs
 openclaw logs --follow
+openclaw --dev logs --follow
+openclaw --profile work logs --follow
 openclaw logs --follow --interval 2000
 openclaw logs --limit 500 --max-bytes 500000
 openclaw logs --json
@@ -45,6 +47,11 @@ openclaw logs --utc
 openclaw logs --follow --local-time
 openclaw logs --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
+
+The selected root profile matches the Gateway's rolling file: the default
+profile uses `openclaw-YYYY-MM-DD.log`, while named profiles use
+`openclaw-<profile>-YYYY-MM-DD.log` (for example,
+`openclaw-dev-YYYY-MM-DD.log`).
 
 ## Fallback and recovery behavior
 

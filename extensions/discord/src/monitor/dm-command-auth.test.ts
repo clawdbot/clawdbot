@@ -38,8 +38,8 @@ describe("resolveDiscordTextCommandAccess", () => {
       allowTextCommands: true,
       hasControlCommand: true,
     });
-    expect(result.authorized).toBe(true);
-    expect(result.shouldBlockControlCommand).toBe(false);
+    expect(result.commandAccess.authorized).toBe(true);
+    expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
   });
 
   it("authorizes guild text commands from member access facts", async () => {
@@ -53,8 +53,8 @@ describe("resolveDiscordTextCommandAccess", () => {
       allowTextCommands: true,
       hasControlCommand: true,
     });
-    expect(result.authorized).toBe(true);
-    expect(result.shouldBlockControlCommand).toBe(false);
+    expect(result.commandAccess.authorized).toBe(true);
+    expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
   });
 
   it("blocks unauthorized guild text control commands", async () => {
@@ -68,24 +68,8 @@ describe("resolveDiscordTextCommandAccess", () => {
       allowTextCommands: true,
       hasControlCommand: true,
     });
-    expect(result.authorized).toBe(false);
-    expect(result.shouldBlockControlCommand).toBe(true);
-  });
-
-  it("preserves configured mode when access groups are disabled", async () => {
-    const result = await resolveDiscordTextCommandAccess({
-      accountId: "default",
-      sender,
-      ownerAllowFrom: [],
-      memberAccessConfigured: false,
-      memberAllowed: false,
-      allowNameMatching: false,
-      cfg: { commands: { useAccessGroups: false } },
-      allowTextCommands: true,
-      hasControlCommand: true,
-    });
-    expect(result.authorized).toBe(true);
-    expect(result.shouldBlockControlCommand).toBe(false);
+    expect(result.commandAccess.authorized).toBe(false);
+    expect(result.commandAccess.shouldBlockControlCommand).toBe(true);
   });
 });
 
@@ -283,7 +267,7 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: [],
       sender,
       allowNameMatching: false,
-      cfg: { commands: { useAccessGroups: false } },
+      cfg: {},
       readStoreAllowFrom: async () => [],
     });
 

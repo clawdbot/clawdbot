@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { shortenHomePath } from "../utils.js";
@@ -16,7 +17,7 @@ export function requireValidSystemAgentSetupSnapshot(snapshot: ConfigFileSnapsho
   }
   const sourceConfig = snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const runtimeConfig = snapshot.exists ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-  const reservedAgent = runtimeConfig.agents?.list?.find((entry) =>
+  const reservedAgent = listAgentEntries(runtimeConfig).find((entry) =>
     isReservedSystemAgentId(entry.id),
   );
   if (reservedAgent) {

@@ -82,7 +82,7 @@ describe("gateway client handshake timeouts", () => {
     ).toBe(15_000);
   });
 
-  it("caps connect challenge timeout env and explicit values to the safe timer range", () => {
+  it("caps gateway connect challenge env and explicit timeouts to the safe timer range", () => {
     expect(
       getConnectChallengeTimeoutMsFromEnv({
         OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000",

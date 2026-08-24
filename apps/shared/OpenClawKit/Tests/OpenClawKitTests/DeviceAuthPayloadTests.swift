@@ -46,9 +46,12 @@ struct DeviceAuthPayloadTests {
     func `signed device dictionary preserves 64-bit timestamp`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let identityURL = tempDir.appendingPathComponent("device.json", isDirectory: false)
+        let databaseURL = tempDir.appendingPathComponent("openclaw.sqlite", isDirectory: false)
         defer { try? FileManager.default.removeItem(at: tempDir) }
-        let identity = DeviceIdentityStore.loadOrCreate(fileURL: identityURL)
+        let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
+            databaseURL: databaseURL,
+            destinationStateDirURL: tempDir,
+            profile: .primary)
         let signedAtMs: Int64 = 1_800_000_000_000
         let payload = GatewayDeviceAuthPayload.buildV3(
             fields: .init(

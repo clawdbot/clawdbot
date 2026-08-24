@@ -11,9 +11,12 @@ const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 function runApprovalScript(
   run: Record<string, unknown>,
   env: {
+    ALLOW_COMPLETED_SUCCESSFUL_PARENT?: string;
     CHILD_WORKFLOW_SHA?: string;
     DIRECT_RELEASE_RECOVERY?: string;
     EXPECTED_WORKFLOW_BRANCH?: string;
+    EXPECTED_WORKFLOW_FULL_REF?: string;
+    EXPECTED_WORKFLOW_SHA?: string;
     EXPECTED_RUN_ATTEMPT?: string;
     APPROVAL_PATH?: string;
     GITHUB_REPOSITORY?: string;
@@ -29,9 +32,12 @@ function runApprovalScript(
     encoding: "utf8",
     env: {
       ...process.env,
+      ALLOW_COMPLETED_SUCCESSFUL_PARENT: env.ALLOW_COMPLETED_SUCCESSFUL_PARENT ?? "false",
       CHILD_WORKFLOW_SHA: env.CHILD_WORKFLOW_SHA ?? "b".repeat(40),
       DIRECT_RELEASE_RECOVERY: env.DIRECT_RELEASE_RECOVERY ?? "false",
       EXPECTED_WORKFLOW_BRANCH: env.EXPECTED_WORKFLOW_BRANCH ?? "release/2026.6.21",
+      EXPECTED_WORKFLOW_FULL_REF: env.EXPECTED_WORKFLOW_FULL_REF ?? "",
+      EXPECTED_WORKFLOW_SHA: env.EXPECTED_WORKFLOW_SHA ?? "",
       EXPECTED_RUN_ATTEMPT: env.EXPECTED_RUN_ATTEMPT ?? "",
       APPROVAL_PATH: env.APPROVAL_PATH ?? "",
       GITHUB_REPOSITORY: env.GITHUB_REPOSITORY ?? "openclaw/openclaw",
@@ -69,6 +75,7 @@ function approvalRun(overrides: Record<string, unknown> = {}) {
     conclusion: null,
     event: "workflow_dispatch",
     headBranch: "release/2026.6.21",
+    repository: "openclaw/openclaw",
     status: "in_progress",
     url: "https://github.com/openclaw/openclaw/actions/runs/123",
     workflowName: "OpenClaw Release Publish",
@@ -121,6 +128,27 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.stdout).toBe("");
   });
 
+  it("binds the parent repository, workflow path, full ref, SHA, and attempt", () => {
+    const workflowSha = "d".repeat(40);
+    const fullRef = "refs/tags/release-publish/aaaaaaaaaaaa-111";
+    const result = runApprovalScript(
+      approvalRun({
+        headBranch: "release-publish/aaaaaaaaaaaa-111",
+        headSha: workflowSha,
+        path: `.github/workflows/openclaw-release-publish.yml@${fullRef}`,
+        runAttempt: 7,
+      }),
+      {
+        EXPECTED_RUN_ATTEMPT: "7",
+        EXPECTED_WORKFLOW_BRANCH: "release-publish/aaaaaaaaaaaa-111",
+        EXPECTED_WORKFLOW_FULL_REF: fullRef,
+        EXPECTED_WORKFLOW_SHA: workflowSha,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("rejects completed runs for normal approval handoff", () => {
     const result = runApprovalScript(approvalRun({ conclusion: "success", status: "completed" }));
 
@@ -129,6 +157,29 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       "Referenced release publish run 123 must still be in_progress, got completed.",
     );
     expect(result.stdout).toBe("");
+  });
+
+  it("accepts a successful completed parent for detached publication", () => {
+    const result = runApprovalScript(approvalRun({ conclusion: "success", status: "completed" }), {
+      ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Using successful completed release publish run 123: https://github.com/openclaw/openclaw/actions/runs/123",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects a failed completed parent for detached publication", () => {
+    const result = runApprovalScript(approvalRun({ conclusion: "failure", status: "completed" }), {
+      ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Referenced release publish run 123 must still be in_progress, got completed.",
+    );
   });
 
   it("accepts an exact attested Android release approval", () => {

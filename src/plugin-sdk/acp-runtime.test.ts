@@ -1,6 +1,7 @@
 // ACP runtime tests cover plugin-facing ACP runtime setup and gateway dispatch behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 
 const { bypassMock, dispatchMock } = vi.hoisted(() => ({
   bypassMock: vi.fn(),
@@ -12,7 +13,12 @@ vi.mock("../auto-reply/reply/dispatch-acp.runtime.js", () => ({
   tryDispatchAcpReply: dispatchMock,
 }));
 
-import { tryDispatchAcpReplyHook } from "./acp-runtime.js";
+import {
+  registerAcpRuntimeBackend,
+  resolveAcpSessionAvailability,
+  testing,
+  tryDispatchAcpReplyHook,
+} from "./acp-runtime.js";
 
 const event = {
   ctx: buildTestCtx({
@@ -31,6 +37,7 @@ const event = {
   originatingChannel: undefined,
   originatingTo: undefined,
   shouldSendToolSummaries: true,
+  shouldSendFullToolDetails: false,
   sendPolicy: "allow" as const,
 };
 
@@ -169,6 +176,76 @@ describe("tryDispatchAcpReplyHook", () => {
     });
   });
 
+  it("normalizes plugin-constructed finalized contexts at the runtime boundary", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    const legacyCtx = {
+      Body: "/status",
+      BodyForAgent: "/status",
+      CommandBody: "/status",
+      CommandAuthorized: true,
+      SessionKey: "agent:test:session",
+    } as FinalizedMsgContext;
+
+    await tryDispatchAcpReplyHook({ ...event, ctx: legacyCtx }, ctx);
+
+    expect(legacyCtx).toMatchObject({
+      commandText: "/status",
+      agentText: "/status",
+      rawText: "/status",
+    });
+    expectDispatchPayloadFields({ ctx: legacyCtx });
+  });
+
+  it("preserves authoritative empty canonical text over stale plugin aliases", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    const canonicalCtx = buildTestCtx({
+      Body: "/reset",
+      CommandBody: "/reset",
+      BodyForCommands: "/reset",
+    });
+    canonicalCtx.commandText = "";
+
+    await tryDispatchAcpReplyHook({ ...event, ctx: canonicalCtx }, ctx);
+
+    expect(canonicalCtx.commandText).toBe("");
+    expect(bypassMock).toHaveBeenCalledWith(canonicalCtx, ctx.cfg);
+  });
+
+  it("normalizes plugin-supplied canonical fields without finalization provenance", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    const pluginCtx = {
+      Body: "hello\r\nworld",
+      commandText: "[System Message] /reset",
+      agentText: "[Assistant] hello",
+      rawText: "System: injected",
+      CommandAuthorized: false,
+      SessionKey: "agent:test:session",
+    } as FinalizedMsgContext;
+
+    await tryDispatchAcpReplyHook({ ...event, ctx: pluginCtx }, ctx);
+
+    // Finalization normalizes newlines only; bracketed tags and a line-leading
+    // `System:` pass through unchanged.
+    expect(pluginCtx).toMatchObject({
+      Body: "hello\nworld",
+      commandText: "[System Message] /reset",
+      agentText: "[Assistant] hello",
+      rawText: "System: injected",
+    });
+  });
+
   it("passes a live tool-summary predicate through to ACP runtime", async () => {
     bypassMock.mockResolvedValue(false);
     dispatchMock.mockResolvedValue({
@@ -187,6 +264,7 @@ describe("tryDispatchAcpReplyHook", () => {
 
     expectDispatchPayloadFields({
       shouldSendToolSummaries: true,
+      shouldSendFullToolDetails: false,
     });
     const [payload] = dispatchMock.mock.calls[0] ?? [];
     const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
@@ -309,5 +387,45 @@ describe("tryDispatchAcpReplyHook", () => {
     expectDispatchPayloadFields({
       bypassForCommand: true,
     });
+  });
+});
+
+describe("resolveAcpSessionAvailability", () => {
+  beforeEach(() => testing.resetAcpRuntimeBackendsForTests());
+  afterEach(() => testing.resetAcpRuntimeBackendsForTests());
+
+  it("requires an allowed agent and a healthy registered backend", () => {
+    expect(
+      resolveAcpSessionAvailability({ config: {}, backendId: "acpx", agentId: "opencode" }),
+    ).toMatchObject({ available: false });
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime: {
+        ensureSession: vi.fn(),
+        async *runTurn() {},
+        cancel: vi.fn(),
+        close: vi.fn(),
+      },
+    });
+    expect(
+      resolveAcpSessionAvailability({ config: {}, backendId: "acpx", agentId: "opencode" }),
+    ).toEqual({ available: true });
+    expect(
+      resolveAcpSessionAvailability({
+        config: { acp: { allowedAgents: ["pi"] } },
+        backendId: "acpx",
+        agentId: "opencode",
+      }),
+    ).toMatchObject({ available: false, message: expect.stringContaining("not allowed") });
+  });
+
+  it("honors the canonical ACP dispatch policy", () => {
+    expect(
+      resolveAcpSessionAvailability({
+        config: { acp: { dispatch: { enabled: false } } },
+        backendId: "acpx",
+        agentId: "pi",
+      }),
+    ).toMatchObject({ available: false, message: expect.stringContaining("dispatch is disabled") });
   });
 });

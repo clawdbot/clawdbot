@@ -13,7 +13,7 @@ async function publishTestProfile(profile: NostrProfile, lastPublishedAt?: numbe
   const pool = {
     publish: vi.fn((_relays: string[], event: Event) => {
       publishedEvent = event;
-      return [Promise.resolve()];
+      return [Promise.resolve("saved")];
     }),
   } as unknown as SimplePool;
 
@@ -299,7 +299,7 @@ describe("publishProfile", () => {
   it("clears the per-relay timeout timer after a successful publish", async () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const profile: NostrProfile = { name: "test" };
-    const pool = createFakePool(Promise.resolve());
+    const pool = createFakePool(Promise.resolve("saved"));
 
     const result = await publishProfile(
       pool,
@@ -310,6 +310,23 @@ describe("publishProfile", () => {
 
     expect(result.successes).toEqual(["wss://relay.example"]);
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports relay connection failures instead of successful publishes", async () => {
+    const profile: NostrProfile = { name: "test" };
+    const pool = {
+      publish: vi.fn(() => [Promise.resolve("connection failure: connection failed")]),
+    } as unknown as SimplePool;
+
+    const result = await publishProfile(
+      pool,
+      TEST_HEX_PRIVATE_KEY_BYTES,
+      ["wss://relay.example"],
+      profile,
+    );
+
+    expect(result.successes).toEqual([]);
+    expect(result.failures).toEqual([{ relay: "wss://relay.example", error: "connection failed" }]);
   });
 
   it("clears the per-relay timeout timer after a publish timeout", async () => {
@@ -335,7 +352,7 @@ describe("publishProfile", () => {
     vi.spyOn(globalThis, "setTimeout").mockClear();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const profile: NostrProfile = { name: "test" };
-    const pool = createFakePool(Promise.resolve());
+    const pool = createFakePool(Promise.resolve("saved"));
 
     await publishProfile(
       pool,

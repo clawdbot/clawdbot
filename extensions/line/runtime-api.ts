@@ -42,7 +42,6 @@ export {
   sendMessageLine,
 } from "./src/send.js";
 export { monitorLineProvider } from "./src/monitor.js";
-export { hasLineDirectives, parseLineDirectives } from "./src/reply-payload-transform.js";
 export {
   listLineAccountIds,
   normalizeAccountId,
@@ -65,13 +64,8 @@ export {
 export {
   type CodeBlock,
   convertCodeBlockToFlexBubble,
-  convertLinksToFlexBubble,
   convertTableToFlexBubble,
-  extractCodeBlocks,
-  extractLinks,
-  extractMarkdownTables,
   hasMarkdownToConvert,
-  type MarkdownLink,
   type MarkdownTable,
   type ProcessedLineMessage,
   processLineMessage,
@@ -96,18 +90,10 @@ export {
   type CarouselColumn,
   type CarouselTemplate,
   type ConfirmTemplate,
-  createButtonMenu,
   createButtonTemplate,
   createCarouselColumn,
   createConfirmTemplate,
-  createImageCarousel,
-  createImageCarouselColumn,
-  createLinkMenu,
-  createProductCarousel,
   createTemplateCarousel,
-  createYesNoConfirm,
-  type ImageCarouselColumn,
-  type ImageCarouselTemplate,
   type TemplateMessage,
 } from "./src/template-messages.js";
 export type {
@@ -130,14 +116,12 @@ export {
   createActionCard,
   createAgendaCard,
   createAppleTvRemoteCard,
-  createCarousel,
   createDeviceControlCard,
   createEventCard,
   createImageCard,
   createInfoCard,
   createListCard,
   createMediaPlayerCard,
-  createNotificationBubble,
   createReceiptCard,
   toFlexMessage,
 } from "./src/flex-templates.js";
@@ -146,7 +130,6 @@ export type {
   FlexBox,
   FlexBubble,
   FlexButton,
-  FlexCarousel,
   FlexComponent,
   FlexContainer,
   FlexImage,

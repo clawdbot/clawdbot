@@ -50,9 +50,9 @@ const loadGetChannelPlugin = createLazyRuntimeModule(() =>
 type ResolvedAttachmentDelivery = {
   parseMode?: "HTML";
   escapePlainHtmlCaption?: boolean;
-  disableNotification?: boolean;
+  silent?: boolean;
   forceDocumentMime?: string;
-  threadTs?: string;
+  threadId?: string | number;
 };
 
 function captionFormatToParseMode(
@@ -66,6 +66,13 @@ function captionFormatToParseMode(
 
 function escapeHtmlText(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function normalizeOptionalThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return normalizeOptionalString(value);
 }
 
 async function readMimeSniffBuffer(
@@ -88,7 +95,7 @@ async function readMimeSniffBuffer(
   }
 }
 
-/** Resolves channel-specific attachment delivery options from caption format and hints. */
+/** Resolves portable attachment delivery options while honoring shipped channel-specific hints. */
 function resolveAttachmentDelivery(params: {
   channel: string;
   captionFormat?: PluginSessionAttachmentCaptionFormat;
@@ -96,33 +103,28 @@ function resolveAttachmentDelivery(params: {
 }): ResolvedAttachmentDelivery {
   const fallbackParseMode = captionFormatToParseMode(params.captionFormat);
   const channel = params.channel.trim().toLowerCase();
-  if (channel === "telegram") {
-    const hint = params.channelHints?.telegram;
-    const parseMode =
-      hint?.parseMode ?? (params.captionFormat === "plain" ? "HTML" : fallbackParseMode);
-    const escapePlainHtmlCaption = params.captionFormat === "plain" && parseMode === "HTML";
-    const forceDocumentMime = normalizeMimeType(hint?.forceDocumentMime);
-    return {
-      ...(parseMode ? { parseMode } : {}),
-      ...(escapePlainHtmlCaption ? { escapePlainHtmlCaption: true } : {}),
-      ...(hint?.disableNotification !== undefined
-        ? { disableNotification: hint.disableNotification }
-        : {}),
-      ...(forceDocumentMime ? { forceDocumentMime } : {}),
-    };
-  }
-  if (channel === "discord") {
-    return fallbackParseMode ? { parseMode: fallbackParseMode } : {};
-  }
-  if (channel === "slack") {
-    const hint = params.channelHints?.slack;
-    const threadTs = normalizeOptionalString(hint?.threadTs);
-    return {
-      ...(fallbackParseMode ? { parseMode: fallbackParseMode } : {}),
-      ...(threadTs ? { threadTs } : {}),
-    };
-  }
-  return fallbackParseMode ? { parseMode: fallbackParseMode } : {};
+  const hints = params.channelHints;
+  // These nested fields shipped before attachment hints became transport-neutral.
+  const legacyTelegram = channel === "telegram" ? hints?.telegram : undefined;
+  const legacySlack = channel === "slack" ? hints?.slack : undefined;
+  const parseMode =
+    hints?.parseMode ??
+    legacyTelegram?.parseMode ??
+    (channel === "telegram" && params.captionFormat === "plain" ? "HTML" : fallbackParseMode);
+  const escapePlainHtmlCaption = params.captionFormat === "plain" && parseMode === "HTML";
+  const silent = hints?.silent ?? legacyTelegram?.disableNotification;
+  const forceDocumentMime = normalizeMimeType(
+    hints?.forceDocumentMime ?? legacyTelegram?.forceDocumentMime,
+  );
+  const threadId =
+    normalizeOptionalThreadId(hints?.threadId) ?? normalizeOptionalString(legacySlack?.threadTs);
+  return {
+    ...(parseMode ? { parseMode } : {}),
+    ...(escapePlainHtmlCaption ? { escapePlainHtmlCaption: true } : {}),
+    ...(silent !== undefined ? { silent } : {}),
+    ...(forceDocumentMime ? { forceDocumentMime } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
 }
 
 async function validateAttachmentFiles(
@@ -205,22 +207,15 @@ function resolveAttachmentFilePath(params: {
   return resolvePathFromInput(params.filePath, resolveWorkspaceRoot(workspaceDir));
 }
 
-function normalizeOptionalThreadId(value: unknown): string | number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return normalizeOptionalString(value);
-}
-
 /** Resolves the thread id used when delivering a plugin session attachment. */
 function resolveSessionAttachmentThreadId(params: {
   deliveryThreadId?: unknown;
   explicitThreadId?: unknown;
   fallbackThreadId?: unknown;
-  hintThreadTs?: string;
+  hintThreadId?: unknown;
 }): string | number | undefined {
   return (
-    params.hintThreadTs ??
+    normalizeOptionalThreadId(params.hintThreadId) ??
     normalizeOptionalThreadId(params.explicitThreadId) ??
     normalizeOptionalThreadId(params.fallbackThreadId) ??
     normalizeOptionalThreadId(params.deliveryThreadId)
@@ -289,7 +284,7 @@ export async function sendPluginSessionAttachment(
     deliveryThreadId: deliveryContext.threadId,
     explicitThreadId: params.threadId,
     fallbackThreadId: threadId,
-    hintThreadTs: resolvedDelivery.threadTs,
+    hintThreadId: resolvedDelivery.threadId,
   });
   let result: Awaited<ReturnType<SendMessage>>;
   try {
@@ -306,9 +301,7 @@ export async function sendPluginSessionAttachment(
       bestEffort: false,
       cfg: params.config,
       ...(resolvedDelivery.parseMode ? { parseMode: resolvedDelivery.parseMode } : {}),
-      ...(resolvedDelivery.disableNotification !== undefined
-        ? { silent: resolvedDelivery.disableNotification }
-        : {}),
+      ...(resolvedDelivery.silent !== undefined ? { silent: resolvedDelivery.silent } : {}),
     });
   } catch (error) {
     return { ok: false, error: `attachment delivery failed: ${formatErrorMessage(error)}` };

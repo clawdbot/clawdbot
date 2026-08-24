@@ -27,6 +27,7 @@ const { buildThreadingToolContext, buildEmbeddedRunExecutionParams, resolveModel
 const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
 const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
   await import("./agent-runner-run-params.js");
+const { setChannelSourceTurnId } = await import("./source-turn-id.js");
 
 function buildEmbeddedRunBaseParams(
   params: Omit<Parameters<typeof buildEmbeddedRunBaseParamsCore>[0], "isReasoningTagProvider">,
@@ -44,6 +45,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     config: { models: { providers: {} } },
     provider: "openai",
     model: "gpt-4.1",
+    requestedRouteResolution: "resolved",
     agentDir: "/tmp/agent",
     sessionKey: "agent:test:session",
     sessionFile: "/tmp/session.json",
@@ -87,6 +89,7 @@ describe("agent-runner-utils", () => {
       cfg: run.config,
       provider: run.provider,
       model: run.model,
+      requestedRouteResolution: "resolved",
       agentDir: run.agentDir,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
@@ -145,6 +148,20 @@ describe("agent-runner-utils", () => {
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
       taskSuggestionDeliveryMode: "gateway",
+      terminalReplyExpectation: "optional",
+      trustedInternalHandoff: {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:child",
+        targetSessionKey: "agent:parent",
+        targetSessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_complete"],
+      },
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -169,6 +186,9 @@ describe("agent-runner-utils", () => {
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
     expect(resolved.ownerNumbers).toBe(run.ownerNumbers);
+    expect(resolved.trustedInternalHandoff).toBe(run.trustedInternalHandoff);
+    expect(resolved.scheduledToolPolicy).toBe(run.scheduledToolPolicy);
+    expect(resolved.runtimePluginToolGrant).toBe(run.runtimePluginToolGrant);
     expect(resolved.enforceFinalTag).toBe(true);
     expect(resolved.provider).toBe("openai");
     expect(resolved.model).toBe("gpt-4.1-mini");
@@ -183,6 +203,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
     expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
+    expect(resolved.terminalReplyExpectation).toBe("optional");
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {
@@ -200,6 +221,24 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.runBaseParams.runId).toBe("run-1");
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
+  });
+
+  it("uses the queued conversation policy snapshot", () => {
+    const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "telegram",
+        ConversationToolPolicy: { deny: ["write"] },
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.runBaseParams.conversationToolPolicy).toEqual({ deny: ["exec"] });
   });
 
   it("uses session chat type over stale queued metadata for embedded execution params", () => {
@@ -408,6 +447,39 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
+  it("carries a prepared direct-message reply mode into generic message tools", () => {
+    const run = makeRun();
+    const replyRoute = {
+      originatingChannel: "reef",
+      originatingTo: "reef:remote-agent",
+      originatingReplyToMode: "all",
+    } satisfies Pick<
+      FollowupRun,
+      "originatingChannel" | "originatingTo" | "originatingReplyToMode"
+    >;
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      replyRoute,
+      sessionCtx: {
+        Provider: "reef",
+        To: "reef:local-agent",
+        MessageSid: "message-1",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext).toMatchObject({
+      currentChannelId: "reef:remote-agent",
+      currentChannelProvider: "reef",
+      currentMessageId: "message-1",
+      replyToMode: "all",
+    });
+  });
+
   it("carries inbound audio context into embedded message tools", () => {
     const run = makeRun();
 
@@ -416,8 +488,8 @@ describe("agent-runner-utils", () => {
       sessionCtx: {
         Provider: "telegram",
         To: "268300329",
-        MediaType: "audio/ogg; codecs=opus",
-        BodyForCommands: "<media:audio>",
+        media: [{ contentType: "audio/ogg; codecs=opus", kind: "audio" }],
+        BodyForCommands: "",
       },
       hasRepliedRef: undefined,
       provider: "openai",
@@ -465,20 +537,23 @@ describe("agent-runner-utils", () => {
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
+    const sessionCtx = {
+      Provider: "discord",
+      To: "slash:1177378744822943744",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:123456789012345678",
+      MessageSid: "msg-9",
+    };
+    setChannelSourceTurnId(sessionCtx, "channel-user:v1:source-9");
     const context = buildThreadingToolContext({
-      sessionCtx: {
-        Provider: "discord",
-        To: "slash:1177378744822943744",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:123456789012345678",
-        MessageSid: "msg-9",
-      },
+      sessionCtx,
       config: {},
       hasRepliedRef: undefined,
     });
 
     expect(context.currentChannelId).toBe("channel:123456789012345678");
     expect(context.currentMessageId).toBe("msg-9");
+    expect(context.currentSourceTurnId).toBe("channel-user:v1:source-9");
   });
 
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {

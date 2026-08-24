@@ -2,10 +2,12 @@
 // real chat composer and verify chat.send receives it without overflowing base64 handling.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -28,12 +30,7 @@ type RecordedPage = {
   rawVideoDir: string;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string" || !value) {
@@ -136,7 +133,7 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
       viewport,
     });
     page = await context.newPage();
-    page.setDefaultTimeout(10_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     return { browser, context, page, rawVideoDir };
   } catch (error) {
     await page?.close().catch(() => {});
@@ -179,7 +176,7 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
     await server?.close();
   });
 
-  it("pastes and sends a roughly 2 MB PNG through the chat composer", async () => {
+  it("sends a roughly 2 MB PNG without overlapping transcript rows", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
     const pngBytes = createLargePngBytes(1_901_669);
@@ -194,7 +191,20 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
       const gateway = await installMockGateway(recorded.page, {
         historyMessages: [
           {
-            content: [{ text: "Ready for #99213 large screenshot paste proof.", type: "text" }],
+            content: [
+              {
+                text: [
+                  "The existing assistant reply is taller than the virtualizer estimate.",
+                  "",
+                  "- First line of the existing answer.",
+                  "- Second line of the existing answer.",
+                  "- Third line of the existing answer.",
+                  "- Fourth line of the existing answer.",
+                  "- Fifth line of the existing answer.",
+                ].join("\n"),
+                type: "text",
+              },
+            ],
             role: "assistant",
             timestamp: Date.now(),
           },
@@ -203,7 +213,7 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
 
       await recorded.page.goto(`${server.baseUrl}chat`);
       await recorded.page
-        .getByText("Ready for #99213 large screenshot paste proof.")
+        .getByText("The existing assistant reply is taller than the virtualizer estimate.")
         .waitFor({ timeout: 10_000 });
 
       const composer = recorded.page.locator(".agent-chat__composer-combobox textarea");
@@ -231,9 +241,29 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
       expect(attachment.fileName).toBe("pasted-image.png");
       expect(requireString(attachment.content, "attachment content")).toBe(imageBase64);
 
+      const assistantRow = recorded.page
+        .getByText("The existing assistant reply is taller than the virtualizer estimate.")
+        .locator("xpath=ancestor::div[contains(@class, 'chat-virtual-row')]");
+      const userRow = recorded.page
+        .getByText(prompt)
+        .locator("xpath=ancestor::div[contains(@class, 'chat-virtual-row')]");
+      await expect
+        .poll(async () => {
+          const [assistantBounds, userBounds] = await Promise.all([
+            assistantRow.boundingBox(),
+            userRow.boundingBox(),
+          ]);
+          if (!assistantBounds || !userBounds) {
+            return Number.NEGATIVE_INFINITY;
+          }
+          return Math.round(userBounds.y - (assistantBounds.y + assistantBounds.height));
+        })
+        .toBeGreaterThanOrEqual(0);
+
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await gateway.emitChatFinal({ runId, text: "Large screenshot paste proof received." });
       await recorded.page
+        .locator(".chat-thread-inner")
         .getByText("Large screenshot paste proof received.")
         .waitFor({ timeout: 10_000 });
       const sentScreenshot = path.join(artifactDir, "02-sent-large-image.png");

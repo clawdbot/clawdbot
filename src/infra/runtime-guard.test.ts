@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,
-  isAtLeast,
   isSupportedNodeVersion,
   nodeVersionSatisfiesEngine,
   parseSemver,
@@ -14,21 +13,6 @@ describe("runtime-guard", () => {
     expect(parseSemver("1.3.0")).toEqual({ major: 1, minor: 3, patch: 0 });
     expect(parseSemver("22.22.3-beta.1")).toEqual({ major: 22, minor: 22, patch: 3 });
     expect(parseSemver("invalid")).toBeNull();
-  });
-
-  it("compares versions correctly", () => {
-    expect(isAtLeast({ major: 22, minor: 16, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      true,
-    );
-    expect(isAtLeast({ major: 22, minor: 17, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      true,
-    );
-    expect(isAtLeast({ major: 22, minor: 15, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      false,
-    );
-    expect(isAtLeast({ major: 21, minor: 9, patch: 0 }, { major: 22, minor: 16, patch: 0 })).toBe(
-      false,
-    );
   });
 
   it("checks node versions against simple engine ranges", () => {
@@ -61,6 +45,12 @@ describe("runtime-guard", () => {
     ["25.8.1", false],
     ["25.9.0", true],
     ["26.0.0", true],
+    ["24.15.0+local.1", true],
+    ["24.15.0-rc.1", false],
+    ["25.9.1-nightly.20260714", false],
+    ["24.15", false],
+    ["garbage24.15.0suffix", false],
+    ["24.15.0suffix", false],
     [null, false],
   ] as const)("classifies supported Node version %s", (version, expected) => {
     expect(isSupportedNodeVersion(version)).toBe(expected);
@@ -79,6 +69,7 @@ describe("runtime-guard", () => {
       version: "20.0.0",
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
+      hasNodeSqlite: false,
     };
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
     expect(runtime.error).toHaveBeenCalledOnce();
@@ -105,12 +96,31 @@ describe("runtime-guard", () => {
       version: "22.22.3",
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
+      hasNodeSqlite: true,
     };
     expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("rejects Bun because it does not provide node:sqlite", () => {
+  it("accepts Bun when the runtime provides node:sqlite", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const details = {
+      kind: "bun" as const,
+      version: "1.4.0",
+      execPath: "/usr/bin/bun",
+      pathEnv: "/usr/bin",
+      hasNodeSqlite: true,
+    };
+    expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects Bun when it does not provide node:sqlite", () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -123,6 +133,7 @@ describe("runtime-guard", () => {
       version: "1.3.14",
       execPath: "/usr/bin/bun",
       pathEnv: "/usr/bin",
+      hasNodeSqlite: false,
     };
 
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
@@ -150,6 +161,7 @@ describe("runtime-guard", () => {
       version: null,
       execPath: null,
       pathEnv: "(not set)",
+      hasNodeSqlite: false,
     };
 
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");

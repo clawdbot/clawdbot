@@ -31,6 +31,13 @@ vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds: (
     ...args: Parameters<typeof mocks.listPotentialConfiguredChannelIds>
   ) => mocks.listPotentialConfiguredChannelIds(...args),
+  listPotentialConfiguredChannelPresenceSignals: () => [
+    { channelId: "credential-only", source: "persisted-auth" },
+  ],
+}));
+
+vi.mock("./channel-presence-policy.js", () => ({
+  listExplicitConfiguredChannelIdsForConfig: () => [],
 }));
 
 vi.mock("./channel-plugin-ids.js", () => ({
@@ -56,6 +63,7 @@ vi.mock("./manifest-owner-policy.js", () => ({
 }));
 
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
+import { collectConfiguredStartupChannelIds } from "./gateway-startup-plugin-config.js";
 
 function resolve(config: OpenClawConfig): string[] {
   return resolveEffectivePluginIds({
@@ -86,7 +94,6 @@ describe("resolveEffectivePluginIds", () => {
     mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue([]);
     mocks.loadGatewayStartupPluginPlan.mockReturnValue({
       channelPluginIds: [],
-      configuredDeferredChannelPluginIds: [],
       pluginIds: [],
     });
     mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
@@ -94,6 +101,22 @@ describe("resolveEffectivePluginIds", () => {
       plugins: [],
     } as unknown as PluginMetadataSnapshot);
     mocks.passesManifestOwnerBasePolicy.mockReturnValue(true);
+  });
+
+  it("uses persisted auth for migration discovery but never activation", () => {
+    mocks.listExplicitlyDisabledChannelIdsForConfig.mockReturnValue(["credential-only"]);
+    mocks.listPotentialConfiguredChannelIds.mockImplementation((_config, _env, options) =>
+      options?.includePersistedAuthState ? ["credential-only"] : [],
+    );
+    const collect = (includePersistedAuthState = false) =>
+      collectConfiguredStartupChannelIds({
+        config: {},
+        activationSourceConfig: {},
+        env: {},
+        ...(includePersistedAuthState ? { includePersistedAuthState: true } : {}),
+      });
+    expect(collect()).toEqual([]);
+    expect(collect(true)).toEqual(["credential-only"]);
   });
 
   it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {

@@ -16,6 +16,4 @@ export type DoctorOptions = {
   sessionSqliteAllAgents?: boolean;
   sessionSqliteGithubIssue?: boolean;
   json?: boolean;
-  /** Internal capability granted only to direct operator-owned doctor invocations. */
-  crossStateDirImports?: boolean;
 };

@@ -1,21 +1,21 @@
 // Registers plugin-related CLI commands.
 import type { Command } from "commander";
-import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
+import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
-  loadPluginCliDescriptors,
   loadPluginCliRegistrationEntriesWithDefaults,
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
+export { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy";
 
 type RegisterPluginCliOptions = {
   mode?: PluginCliRegistrationMode;
   primary?: string | null;
+  skipPluginValidation?: boolean;
 };
 
 type PluginCliRegistrationEntries = Awaited<
@@ -35,13 +35,6 @@ interface ProgramWithEntriesCache {
 const logger = createPluginCliLogger();
 const loaderOptionIds = new WeakMap<object, number>();
 let nextLoaderOptionId = 1;
-
-const quietDescriptorLogger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-} satisfies PluginLogger;
 
 function stableJsonKey(value: unknown): string {
   if (value === undefined) {
@@ -75,22 +68,17 @@ function loaderOptionsKey(loaderOptions: PluginCliLoaderOptions | undefined): st
   return String(id);
 }
 
-export const loadValidatedConfigForPluginRegistration =
-  async (): Promise<OpenClawConfig | null> => {
-    const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.valid) {
-      return null;
-    }
-    return getRuntimeConfig();
-  };
-
-export async function getPluginCliCommandDescriptors(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: PluginCliLoaderOptions,
-): Promise<OpenClawPluginCliCommandDescriptor[]> {
-  return loadPluginCliDescriptors({ cfg, env, loaderOptions, logger: quietDescriptorLogger });
-}
+export const loadValidatedConfigForPluginRegistration = async (options?: {
+  skipPluginValidation?: boolean;
+}): Promise<OpenClawConfig | null> => {
+  const snapshot = await readConfigFileSnapshot({
+    skipPluginValidation: options?.skipPluginValidation,
+  });
+  if (!snapshot.valid) {
+    return null;
+  }
+  return getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
+};
 
 export async function registerPluginCliCommands(
   program: Command,
@@ -123,7 +111,9 @@ export async function registerPluginCliCommands(
   await registerPluginCliCommandGroups(program, entries, {
     mode,
     primary,
-    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    // Include aliases: alias-only root names (cron|automations, tui|terminal)
+    // are owned commands too; a plugin claiming one would crash registration.
+    existingCommands: new Set(program.commands.flatMap((cmd) => [cmd.name(), ...cmd.aliases()])),
     logger,
   });
 }
@@ -134,7 +124,9 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   loaderOptions?: PluginCliLoaderOptions,
   options?: RegisterPluginCliOptions,
 ): Promise<OpenClawConfig | null> {
-  const config = await loadValidatedConfigForPluginRegistration();
+  const config = await loadValidatedConfigForPluginRegistration({
+    skipPluginValidation: options?.skipPluginValidation,
+  });
   if (!config) {
     return null;
   }

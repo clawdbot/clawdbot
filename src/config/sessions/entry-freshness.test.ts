@@ -1,9 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
-import { upsertSessionEntry } from "./session-accessor.js";
+import { appendTranscriptEvent, upsertSessionEntryCore } from "./session-accessor.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -19,6 +20,8 @@ describe("resolveSessionEntryResetFreshness", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
   });
 
@@ -37,16 +40,42 @@ describe("resolveSessionEntryResetFreshness", () => {
       freshness: undefined,
       resetType: "thread",
       resetPolicy: {
-        mode: "daily",
+        mode: "none",
         atHour: 4,
       },
     });
   });
 
+  it("uses the configured default agent for an unqualified session key", async () => {
+    const sessionKey = "global";
+    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    await upsertSessionEntryCore(
+      { agentId: "ops", defaultAgentId: "ops", sessionKey, storePath },
+      {
+        sessionId: "session-global-ops",
+        updatedAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+      },
+    );
+
+    const result = resolveSessionEntryResetFreshness({
+      defaultAgentId: "ops",
+      sessionKey,
+      storePath,
+      sessionCfg: {},
+      resetType: "direct",
+      now,
+    });
+
+    expect(result.state).toBe("fresh");
+    expect(result.entry?.sessionId).toBe("session-global-ops");
+  });
+
   it("resolves stale daily freshness from lifecycle timestamps instead of activity", async () => {
     const sessionKey = "agent:main:main:thread:100.000";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-stale-thread",
@@ -59,7 +88,7 @@ describe("resolveSessionEntryResetFreshness", () => {
     const result = resolveSessionEntryResetFreshness({
       sessionKey,
       storePath,
-      sessionCfg: {},
+      sessionCfg: { reset: { mode: "daily" } },
       resetType: "thread",
       now,
     });
@@ -76,7 +105,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("keeps provider-owned sessions fresh when reset policy is implicit", async () => {
     const sessionKey = "agent:main:main:thread:provider-owned";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-provider-owned",
@@ -105,7 +134,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("applies configured reset policies to provider-owned sessions", async () => {
     const sessionKey = "agent:main:main:thread:provider-owned-configured";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-provider-owned-configured",
@@ -137,7 +166,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("resolves fresh daily freshness for active lifecycle timestamps", async () => {
     const sessionKey = "agent:main:main";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-fresh",
@@ -164,7 +193,7 @@ describe("resolveSessionEntryResetFreshness", () => {
   it("honors reset overrides when resolving entry freshness", async () => {
     const sessionKey = "agent:main:main:thread:idle";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "session-idle-stale",
@@ -198,7 +227,7 @@ describe("resolveSessionEntryResetFreshness", () => {
     const sessionKey = "agent:main:main:thread:configured-store";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
     const configuredStorePath = path.join(tempDir, "configured-sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath: configuredStorePath },
       {
         sessionId: "session-configured-store",
@@ -227,42 +256,31 @@ describe("resolveSessionEntryResetFreshness", () => {
     });
   });
 
-  it("uses transcript header startedAt when entry lifecycle metadata is missing", async () => {
+  it("uses the SQLite transcript header when lifecycle metadata is missing", async () => {
     const sessionKey = "agent:main:main:thread:header";
+    const sessionId = "session-header-fallback";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
     const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
-    const transcriptPath = path.join(tempDir, "session-header-fallback.jsonl");
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({
-        type: "session",
-        id: "session-header-fallback",
-        timestamp: headerTimestamp,
-      })}\n`,
-      "utf-8",
-    );
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionFile: transcriptPath,
-        sessionId: "session-header-fallback",
-        updatedAt: now,
-      },
-    );
+    const target = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntryCore(target, { sessionId, updatedAt: now });
+    await appendTranscriptEvent(target, {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: headerTimestamp,
+      cwd: tempDir,
+    });
 
     const result = resolveSessionEntryResetFreshness({
       sessionKey,
       storePath,
-      sessionCfg: {},
+      sessionCfg: { reset: { mode: "daily" } },
       resetType: "thread",
       now,
     });
 
     expect(result.state).toBe("stale");
     expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "daily",
-    });
+    expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
   });
 });

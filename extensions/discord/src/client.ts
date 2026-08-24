@@ -14,7 +14,7 @@ import { RequestClient } from "./internal/discord.js";
 import { getGateway } from "./monitor/gateway-registry.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
-import { createDiscordRetryRunner, type DiscordRetryRunner } from "./retry.js";
+import { createDiscordRetryRunner } from "./retry.js";
 import type { DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -139,22 +139,22 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
   return { token, rest, account };
 }
 
-export function createDiscordClient(opts: DiscordClientOpts): {
-  token: string;
-  rest: RequestClient;
-  request: DiscordRetryRunner;
-} {
-  const { token, rest, account } = createDiscordRestClient(opts);
+export function createDiscordClient(opts: DiscordClientOpts) {
+  const { token, rest, account: restAccount } = createDiscordRestClient(opts);
+  const account = normalizeDiscordToken(opts.token, "channels.discord.token")
+    ? resolveDiscordAccount({ cfg: opts.cfg, accountId: opts.accountId })
+    : restAccount;
+  // Explicit-token REST clients retain their normalized gateway identity; outbound
+  // projection consumers use the canonical configured account returned below.
   const request = createDiscordRetryRunner({
     retry: opts.retry,
-    configRetry: account.config.retry,
     verbose: opts.verbose,
     isGatewayDisconnected: () => {
-      const gateway = getGateway(account.accountId);
+      const gateway = getGateway(restAccount.accountId);
       return gateway !== undefined && !gateway.isConnected;
     },
   });
-  return { token, rest, request };
+  return { token, rest, request, account };
 }
 
 export function resolveDiscordRest(opts: DiscordClientOpts) {

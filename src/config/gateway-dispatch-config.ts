@@ -1,6 +1,7 @@
 // Loads gateway dispatch config from runtime state and files.
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { applyConfigEnvVars } from "./config-env-vars.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
@@ -29,15 +30,11 @@ type GatewayDispatchConfigReadOptions = {
   logger?: Pick<Console, "warn" | "error">;
 };
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function cloneConfigValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((entry) => cloneConfigValue(entry));
   }
-  if (!isPlainRecord(value)) {
+  if (!isRecord(value)) {
     return value;
   }
   const out: Record<string, unknown> = {};
@@ -48,7 +45,7 @@ function cloneConfigValue(value: unknown): unknown {
 }
 
 function projectGatewayDispatchConfig(value: unknown): OpenClawConfig {
-  if (!isPlainRecord(value)) {
+  if (!isRecord(value)) {
     return {};
   }
   const projected: Record<string, unknown> = {};
@@ -95,7 +92,7 @@ function resolveIncludesForGatewayDispatch(
 }
 
 function resolveGatewayDispatchEnvVars(config: unknown, env: NodeJS.ProcessEnv): unknown {
-  if (isPlainRecord(config) && Object.hasOwn(config, "env")) {
+  if (isRecord(config) && Object.hasOwn(config, "env")) {
     applyConfigEnvVars(config as OpenClawConfig, env);
   }
   return resolveConfigEnvVars(config, env, { onMissing: () => undefined });

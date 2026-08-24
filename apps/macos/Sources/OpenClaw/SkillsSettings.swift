@@ -10,7 +10,6 @@ struct SkillsSettings: View {
     @State private var section: SkillsSection = .installed
     @State private var searchText = ""
     @State private var filter: SkillsFilter = .all
-    @State private var didScheduleInitialRefresh = false
 
     init(state: AppState = AppStateStore.shared, model: SkillsSettingsModel = SkillsSettingsModel()) {
         self.state = state
@@ -40,10 +39,15 @@ struct SkillsSettings: View {
             .settingsDetailContent()
         }
         .task {
-            guard !self.didScheduleInitialRefresh else { return }
-            self.didScheduleInitialRefresh = true
-            await Task.yield()
-            await self.model.refreshIfNeeded()
+            // Subscribe before the first request so a remote-node invalidation cannot
+            // overtake the response and leave stale eligibility visible.
+            let pushes = await GatewayConnection.shared.subscribe()
+            let initialRefresh = Task { await self.model.refreshIfNeeded() }
+            defer { initialRefresh.cancel() }
+            for await push in pushes {
+                if Task.isCancelled { return }
+                self.model.handleGatewayPush(push)
+            }
         }
         .sheet(item: self.$envEditor) { editor in
             EnvEditorView(editor: editor) { value in
@@ -745,7 +749,23 @@ final class SkillsSettingsModel {
     var error: String?
     var statusMessage: String?
     private var hasLoaded = false
+    private var hasAttemptedLoad = false
     private var busySkills: Set<String> = []
+    private var pendingForcedRefresh = false
+    private var gatewayRefreshTask: Task<Void, Never>?
+    private let loadSkillsStatus: () async throws -> SkillsStatusReport
+
+    init() {
+        self.loadSkillsStatus = Self.defaultLoadSkillsStatus
+    }
+
+    init(loadSkillsStatus: @escaping () async throws -> SkillsStatusReport) {
+        self.loadSkillsStatus = loadSkillsStatus
+    }
+
+    private static func defaultLoadSkillsStatus() async throws -> SkillsStatusReport {
+        try await GatewayConnection.shared.skillsStatus()
+    }
 
     func isBusy(skill: SkillStatus) -> Bool {
         self.busySkills.contains(skill.skillKey)
@@ -756,21 +776,63 @@ final class SkillsSettingsModel {
         await self.refresh()
     }
 
+    func handleGatewayPush(_ push: GatewayPush) {
+        switch push {
+        case let .event(event) where event.event == "skills.changed":
+            break
+        case .seqGap:
+            break
+        default:
+            return
+        }
+        // The view subscribes before launching its initial request. If that request
+        // has not started yet, it will observe this invalidation without a duplicate.
+        guard self.hasAttemptedLoad || self.isLoading else { return }
+        self.pendingForcedRefresh = true
+        self.startPendingGatewayRefreshIfNeeded()
+    }
+
+    private func startPendingGatewayRefreshIfNeeded() {
+        guard self.pendingForcedRefresh, !self.isLoading, self.gatewayRefreshTask == nil else { return }
+        self.gatewayRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            await self.refresh(force: true)
+            self.gatewayRefreshTask = nil
+            // An invalidation can arrive after the drain ends but before this task
+            // releases its lease; start a successor instead of losing that signal.
+            self.startPendingGatewayRefreshIfNeeded()
+        }
+    }
+
     func refresh(force: Bool = false) async {
-        guard !self.isLoading else { return }
+        if self.isLoading {
+            if force {
+                self.pendingForcedRefresh = true
+            }
+            return
+        }
         if self.hasLoaded, !force {
             return
         }
+        self.hasAttemptedLoad = true
         self.isLoading = true
+        defer { self.isLoading = false }
+
+        repeat {
+            self.pendingForcedRefresh = false
+            await self.runRefresh()
+        } while self.pendingForcedRefresh
+    }
+
+    private func runRefresh() async {
         self.error = nil
         do {
-            let report = try await GatewayConnection.shared.skillsStatus()
+            let report = try await self.loadSkillsStatus()
             self.skills = report.skills.sorted { $0.name < $1.name }
             self.hasLoaded = true
         } catch {
             self.error = error.localizedDescription
         }
-        self.isLoading = false
     }
 
     func acceptInstalledSkills(_ skills: [SkillStatus]) {
@@ -845,59 +907,6 @@ struct SkillsSettings_Previews: PreviewProvider {
     static var previews: some View {
         SkillsSettings(state: .preview)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-extension SkillsSettings {
-    static func exerciseForTesting() {
-        let skill = SkillStatus(
-            name: "Test Skill",
-            description: "Test description",
-            source: "openclaw-bundled",
-            filePath: "/tmp/skills/test",
-            baseDir: "/tmp/skills",
-            skillKey: "test",
-            primaryEnv: "API_KEY",
-            emoji: "🧪",
-            homepage: "https://example.com",
-            always: false,
-            disabled: false,
-            eligible: false,
-            requirements: SkillRequirements(bins: ["python3"], env: ["API_KEY"], config: ["skills.test"]),
-            missing: SkillMissing(bins: ["python3"], env: ["API_KEY"], config: ["skills.test"]),
-            configChecks: [
-                SkillStatusConfigCheck(path: "skills.test", value: AnyCodable(false), satisfied: false),
-            ],
-            install: [
-                SkillInstallOption(id: "brew", kind: "brew", label: "brew install python", bins: ["python3"]),
-            ])
-
-        let row = SkillRow(
-            skill: skill,
-            isBusy: false,
-            connectionMode: .remote,
-            showsDivider: false,
-            onToggleEnabled: { _ in },
-            onInstall: { _, _ in },
-            onSetEnv: { _, _ in })
-        _ = row.body
-
-        _ = SkillTag(text: "Bundled").body
-
-        let editor = EnvEditorView(
-            editor: EnvEditorState(
-                skillKey: "test",
-                skillName: "Test Skill",
-                envKey: "API_KEY",
-                isPrimary: true,
-                homepage: "https://example.com"),
-            onSave: { _ in })
-        _ = editor.body
-    }
-
-    mutating func setFilterForTesting(_ rawValue: String) {
-        guard let filter = SkillsFilter(rawValue: rawValue) else { return }
-        self.filter = filter
     }
 }
 #endif

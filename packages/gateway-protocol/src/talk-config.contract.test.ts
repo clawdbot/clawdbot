@@ -1,7 +1,8 @@
 // Gateway Protocol tests cover talk config.contract behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildTalkConfigResponse } from "../../../src/config/talk.js";
+import { buildTalkConfigResponse, normalizeTalkSection } from "../../../src/config/talk.js";
+import type { TalkConfig } from "../../../src/config/types.gateway.js";
 import { validateTalkConfigResult } from "./index.js";
 
 /**
@@ -48,7 +49,8 @@ const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf-8")) as TalkConfig
 describe("talk.config contract fixtures", () => {
   for (const fixture of fixtures.selectionCases) {
     it(fixture.id, () => {
-      const payload = { config: { talk: buildTalkConfigResponse(fixture.talk) } };
+      const normalizedTalk = normalizeTalkSection(fixture.talk as TalkConfig);
+      const payload = { config: { talk: buildTalkConfigResponse(normalizedTalk) } };
       if (fixture.payloadValid) {
         expect(validateTalkConfigResult(payload)).toBe(true);
       } else {
@@ -80,7 +82,8 @@ describe("talk.config contract fixtures", () => {
 
   for (const fixture of fixtures.timeoutCases) {
     it(`timeout:${fixture.id}`, () => {
-      const payload = buildTalkConfigResponse(fixture.talk);
+      const normalizedTalk = normalizeTalkSection(fixture.talk as TalkConfig);
+      const payload = buildTalkConfigResponse(normalizedTalk);
       expect(payload?.silenceTimeoutMs ?? fixture.fallback).toBe(fixture.expectedTimeoutMs);
     });
   }

@@ -11,7 +11,14 @@ import {
   evaluateSkillInstallPolicy,
   type InstallSecurityScanResult,
 } from "../../plugins/install-security-scan.js";
+import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
+import {
+  dispatchCommittedSkillChangeBestEffort,
+  hasCommittedSkillChangeHooks,
+  resolveCommittedSkillChangeSource,
+  snapshotCommittedSkillArtifactBestEffort,
+} from "./skill-change-hook.js";
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
@@ -34,6 +41,7 @@ function hasNonAscii(value: string): boolean {
 
 type SkillArchiveInstallPolicy = {
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   installId?: string;
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
@@ -137,6 +145,7 @@ export async function installExtractedSkillRoot(params: {
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
   rootMarkers?: readonly string[];
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 }): Promise<SkillArchiveInstallResult> {
   try {
     if (
@@ -161,10 +170,28 @@ export async function installExtractedSkillRoot(params: {
         "invalid-request",
       );
     }
+    const changeSource = resolveCommittedSkillChangeSource(params.policy?.origin.type);
+    const sourceVersionValue =
+      params.policy?.origin.version ?? params.policy?.origin.commit ?? undefined;
+    const sourceVersion =
+      typeof sourceVersionValue === "string" || typeof sourceVersionValue === "number"
+        ? String(sourceVersionValue)
+        : undefined;
+    const shouldDispatchChange = hasCommittedSkillChangeHooks();
+    const before =
+      shouldDispatchChange && effectiveMode === "update"
+        ? await snapshotCommittedSkillArtifactBestEffort({
+            skillDir: targetDir,
+            skillKey: params.slug,
+            source: changeSource,
+            logger: params.logger,
+          })
+        : undefined;
 
     if (params.policy) {
       const scanResult = await evaluateSkillInstallPolicy({
         config: params.policy.config,
+        onInstallPolicyWarning: params.policy.onInstallPolicyWarning,
         installId: params.policy.installId ?? "archive",
         logger: params.logger ?? {},
         origin: params.policy.origin,
@@ -182,6 +209,8 @@ export async function installExtractedSkillRoot(params: {
       }
     }
 
+    const onAfterBackup = params.onAfterBackup;
+    let backupBlocked = false;
     const install = await installPackageDir({
       sourceDir: params.extractedRoot,
       targetDir,
@@ -191,9 +220,35 @@ export async function installExtractedSkillRoot(params: {
       copyErrorPrefix: "failed to install skill",
       hasDeps: false,
       depsLogMessage: "",
+      ...(onAfterBackup
+        ? {
+            afterBackup: async (backupDir: string) => {
+              const blocked = await onAfterBackup(backupDir);
+              backupBlocked = Boolean(blocked);
+              return blocked ? { ok: false as const, error: blocked } : { ok: true as const };
+            },
+          }
+        : {}),
     });
     if (!install.ok) {
-      return installFailure(install.error, "unavailable");
+      return installFailure(install.error, backupBlocked ? "invalid-request" : "unavailable");
+    }
+    if (shouldDispatchChange) {
+      const after = await snapshotCommittedSkillArtifactBestEffort({
+        skillDir: targetDir,
+        skillKey: params.slug,
+        source: changeSource,
+        sourceVersion,
+        logger: params.logger,
+      });
+      await dispatchCommittedSkillChangeBestEffort({
+        action: effectiveMode === "update" ? "updated" : "created",
+        source: changeSource,
+        workspaceDir: params.workspaceDir,
+        before,
+        after,
+        logger: params.logger,
+      });
     }
     return { ok: true, targetDir };
   } catch (err) {

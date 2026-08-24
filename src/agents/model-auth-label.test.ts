@@ -251,6 +251,30 @@ describe("resolveModelAuthLabel", () => {
     });
   });
 
+  it("shows claude cli apiKeyHelper auth without calling it oauth", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: "helper-hash",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "claude-cli",
+      cfg: {},
+    });
+
+    expect(label).toBe("api-key-helper (claude-cli)");
+    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+  });
+
   it("can skip external auth profile overlays for status labels", () => {
     mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
       version: 1,

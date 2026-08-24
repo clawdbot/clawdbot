@@ -1,10 +1,14 @@
 // Node version mismatch tests protect local node identity/version checks so the
 // gateway accepts matching node hosts and rejects incompatible local runtimes.
-import fs from "node:fs";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/device-pairing-node.js";
+import { configureNodeHost } from "../node-host/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
@@ -22,15 +26,12 @@ describe("node host version mismatch guard", () => {
   let server: Awaited<ReturnType<typeof startServer>>["server"];
 
   beforeAll(async () => {
-    // Write a node.json so the gateway's resolveLocalNodeId() finds it in the test state dir.
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (stateDir) {
-      fs.mkdirSync(stateDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(stateDir, "node.json"),
-        JSON.stringify({ version: 1, nodeId: TEST_LOCAL_NODE_ID }),
-      );
-    }
+    await configureNodeHost({
+      nodeId: TEST_LOCAL_NODE_ID,
+      displayName: "test-local-node",
+      fallbackDisplayName: "test-local-node",
+      gateway: {},
+    });
     const started = await startServer("secret");
     port = started.port;
     server = started.server;
@@ -42,6 +43,7 @@ describe("node host version mismatch guard", () => {
 
   test("local node with matching released version connects successfully", async () => {
     // Use the actual gateway version so versions match
+    let helloProtocol: number | undefined;
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       token: "secret",
@@ -53,8 +55,12 @@ describe("node host version mismatch guard", () => {
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
       commands: [],
+      onHelloOk: (hello) => {
+        helloProtocol = hello.protocol;
+      },
     });
     expect(client).toBeDefined();
+    expect(helloProtocol).toBe(PROTOCOL_VERSION);
     await client.stopAndWait({ timeoutMs: 2_000 });
   });
 

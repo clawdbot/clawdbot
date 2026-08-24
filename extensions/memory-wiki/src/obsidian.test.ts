@@ -4,7 +4,7 @@ import { resolveMemoryWikiConfig } from "./config.js";
 import { runObsidianDaily, runObsidianSearch } from "./obsidian.js";
 
 describe("runObsidianSearch", () => {
-  it("builds the official obsidian cli argv with the configured vault name", async () => {
+  it("builds the official obsidian cli argv and bounds the request", async () => {
     const config = resolveMemoryWikiConfig(
       {
         obsidian: {
@@ -15,9 +15,13 @@ describe("runObsidianSearch", () => {
       },
       { homedir: "/Users/tester" },
     );
-    const calls: Array<{ command: string; argv: string[] }> = [];
-    const execImpl = async (command: string, argv?: readonly string[] | null) => {
-      calls.push({ command, argv: argv ? [...argv] : [] });
+    const calls: Array<{ command: string; argv: string[]; options: unknown }> = [];
+    const execImpl = async (
+      command: string,
+      argv?: readonly string[] | null,
+      options?: unknown,
+    ) => {
+      calls.push({ command, argv: argv ? [...argv] : [], options });
       return { stdout: "search output\n", stderr: "" };
     };
     const exec = execImpl as unknown as NonNullable<
@@ -37,6 +41,7 @@ describe("runObsidianSearch", () => {
       {
         command: "/usr/local/bin/obsidian",
         argv: ["vault=OpenClaw Wiki", "search", "query=agent memory"],
+        options: { logOutput: false, timeoutMs: 10_000 },
       },
     ]);
     expect(result.stdout).toBe("search output\n");

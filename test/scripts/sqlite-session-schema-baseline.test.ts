@@ -15,9 +15,11 @@ describe("SQLite sessions/transcripts schema baseline", () => {
 
     const rendered = renderSqliteSessionSchemaBaseline(sourceSql);
 
-    expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS sessions");
+    expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS session_nodes");
+    expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS session_windows");
     expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS transcript_events");
     expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS transcript_event_identities");
+    expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS session_transcript_active_events");
     expect(rendered.sql).not.toContain("idx_agent_transcript_events_session");
     expect(rendered.sql).not.toContain("CREATE TABLE IF NOT EXISTS cache_entries");
     expect(rendered.sql).not.toContain("CREATE TABLE IF NOT EXISTS auth_profile_store");
@@ -26,18 +28,18 @@ describe("SQLite sessions/transcripts schema baseline", () => {
 
   it("automatically includes new indexes declared on target tables", () => {
     const rendered = renderSqliteSessionSchemaBaseline(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        session_id TEXT NOT NULL PRIMARY KEY
+      CREATE TABLE IF NOT EXISTS session_nodes (
+        session_key TEXT NOT NULL PRIMARY KEY
       );
 
-      CREATE INDEX IF NOT EXISTS idx_agent_sessions_custom
-        ON sessions(session_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_custom
+        ON session_nodes(session_key);
 
       CREATE INDEX IF NOT EXISTS idx_agent_cache_custom
         ON cache_entries(scope);
     `);
 
-    expect(rendered.sql).toContain("CREATE INDEX IF NOT EXISTS idx_agent_sessions_custom");
+    expect(rendered.sql).toContain("CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_custom");
     expect(rendered.sql).not.toContain("idx_agent_cache_custom");
   });
 
@@ -49,8 +51,8 @@ describe("SQLite sessions/transcripts schema baseline", () => {
     await writeFile(
       schemaPath,
       `
-        CREATE TABLE IF NOT EXISTS sessions (
-          session_id TEXT NOT NULL PRIMARY KEY
+        CREATE TABLE IF NOT EXISTS session_nodes (
+          session_key TEXT NOT NULL PRIMARY KEY
         );
       `,
     );

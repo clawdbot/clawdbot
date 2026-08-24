@@ -9,7 +9,7 @@ import {
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { parseTaglineMode, readCliBannerTaglineMode } from "./banner-config-lite.js";
+import { parseTaglineMode } from "./banner-config-lite.js";
 import { pickCliLobsterArt } from "./lobster-art.js";
 import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
 
@@ -35,7 +35,7 @@ function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
   if (explicit) {
     return explicit;
   }
-  return readCliBannerTaglineMode(options.env);
+  return undefined;
 }
 
 function resolveEmojiOptions(options: BannerOptions): DecorativeEmojiOptions {
@@ -134,9 +134,3 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
 export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }
-
-export const testing = {
-  resetBannerEmittedForTests(): void {
-    bannerEmitted = false;
-  },
-};

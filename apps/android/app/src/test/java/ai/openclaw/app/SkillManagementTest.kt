@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -20,7 +20,7 @@ class SkillManagementTest {
   fun searchResultsKeepOnlyIdentifiedSkills() {
     val results =
       parseClawHubSearchResults(
-        """{"results":[{"slug":" alpha ","displayName":"Alpha","summary":"Useful","version":"1.2.3"},{"slug":"missing-name"},{"displayName":"Missing slug"}]}""",
+        """{"results":[{"slug":" alpha ","installRef":"@alice/alpha","displayName":"Alpha","summary":"Useful","version":"1.2.3"},{"slug":"missing-name"},{"displayName":"Missing slug"}]}""",
         json,
       )
 
@@ -28,6 +28,9 @@ class SkillManagementTest {
       listOf(
         GatewayClawHubSkillSummary(
           slug = "alpha",
+          installRef = "@alice/alpha",
+          installOnly = null,
+          trustState = null,
           displayName = "Alpha",
           summary = "Useful",
           version = "1.2.3",
@@ -38,11 +41,100 @@ class SkillManagementTest {
   }
 
   @Test
+  fun sameSlugResultsKeepSeparatePublisherReferences() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"},{"slug":"email","installRef":"@bob/email","displayName":"Email"},{"slug":"orphan","displayName":"Orphan"}]}""",
+        json,
+      )
+
+    assertEquals(listOf("@alice/email", "@bob/email", "orphan"), results.map { it.reference })
+  }
+
+  @Test
+  fun installOnlyResultsKeepTheirSourceAndExposeNoDetailAction() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"trustState":"not-scanned-by-clawhub","displayName":"Pdf"},{"slug":"pdf","installRef":"@awspace/pdf","displayName":"Pdf"}]}""",
+        json,
+      )
+
+    val external = results.first()
+    val native = results.last()
+    // Rewriting the external reference to @openai/pdf would install a different skill.
+    assertEquals("skills-sh:openai/skills/pdf", external.reference)
+    assertFalse(external.canReadDetails)
+    assertTrue(external.isUnscannedSource)
+    assertTrue(native.canReadDetails)
+
+    // Android installs this exact reference directly; it never creates a release review.
+    assertEquals("skills-sh:openai/skills/pdf", external.reference)
+  }
+
+  @Test
+  fun resultsWithoutTheInstallOnlyFlagKeepTheReviewFlow() {
+    // A Gateway released before the flag existed omits it from every row.
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"}]}""",
+        json,
+      )
+
+    // Treating omission as install-only would bypass the reviewed-version step those Gateways
+    // still expect.
+    assertTrue(results.first().canReadDetails)
+    assertFalse(results.first().isUnscannedSource)
+  }
+
+  @Test
+  fun installOnlyReadbackMatchesTheRecordedReference() {
+    val installed =
+      listOf(
+        GatewaySkillSummary(
+          skillKey = "pdf",
+          name = "pdf",
+          description = null,
+          source = "clawhub",
+          emoji = null,
+          disabled = false,
+          eligible = true,
+          blockedByAllowlist = false,
+          blockedByAgentFilter = false,
+          bundled = false,
+          missingCount = 0,
+          installCount = 0,
+          clawHubSlug = "pdf",
+          clawHubValid = true,
+          clawHubRequestedReference = "skills-sh:openai/skills/pdf",
+        ),
+      )
+
+    // The canonical slug is "pdf", so matching by the sent reference is the only readback that
+    // identifies this install without colliding with a registry skill of the same slug.
+    assertTrue(isClawHubSkillInstalledByReference(installed, "skills-sh:openai/skills/pdf"))
+    assertTrue(
+      isClawHubSkillInstalled(
+        installed,
+        GatewayClawHubSkillSummary(
+          slug = "pdf",
+          installRef = "skills-sh:openai/skills/pdf",
+          installOnly = true,
+          trustState = "not-scanned-by-clawhub",
+          displayName = "Pdf",
+          summary = null,
+          version = null,
+        ),
+      ),
+    )
+    assertFalse(isClawHubSkillInstalledByReference(installed, "skills-sh:other/skills/pdf"))
+  }
+
+  @Test
   fun detailBindsExactVersionAndPublisherIdentity() {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha Skill","summary":"Reviewed metadata"},"latestVersion":{"version":"2.0.0"},"owner":{"displayName":"Alice","handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, null),
         json,
       )
 
@@ -63,7 +155,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"latestVersion":{"version":"2.0.0"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", "Alpha", null, "1.9.0"),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, "1.9.0"),
         json,
       )
 
@@ -75,7 +167,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, null),
         json,
       )
 
@@ -102,7 +194,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "review required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -127,7 +219,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "review required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -152,7 +244,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "download blocked",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,

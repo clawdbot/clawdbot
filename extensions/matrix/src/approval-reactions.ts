@@ -1,6 +1,8 @@
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 // Matrix plugin module implements approval reactions behavior.
 import { createApprovalReactionTargetStore } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/routing";
 import { getOptionalMatrixRuntime } from "./runtime.js";
 
@@ -39,14 +41,14 @@ type MatrixApprovalReactionBinding = {
 
 type MatrixApprovalReactionResolution = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
 
 type MatrixApprovalReactionTarget = {
   accountId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   roomId: string;
   eventId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -68,15 +70,12 @@ type MatrixApprovalReactionTargetRef = {
   eventId: string;
 };
 
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalMatrixRuntime()
-      ?.logging.getChildLogger({ plugin: "matrix", feature: "approval-reaction-state" })
-      .warn("Matrix persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break Matrix reactions.
-  }
-}
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalMatrixRuntime,
+  "matrix",
+  "approval-reaction-state",
+  "Matrix persistent approval reaction state failed",
+);
 
 function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | null {
   const value = target as Partial<MatrixApprovalReactionTarget> | null | undefined;
@@ -200,7 +199,7 @@ export function registerMatrixApprovalReactionTarget(params: {
   roomId: string;
   eventId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): void {
@@ -258,7 +257,7 @@ export function unregisterMatrixApprovalReactionTarget(params: {
 export async function unregisterMatrixApprovalReactionTargetsForApproval(params: {
   accountId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): Promise<MatrixApprovalReactionTargetRef[]> {
   const accountId = normalizeAccountId(params.accountId);
   const approvalId = params.approvalId.trim();

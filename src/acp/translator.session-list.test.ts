@@ -29,6 +29,18 @@ describe("ACP translator session list helpers", () => {
     ).toThrow("Invalid ACP session list cursor offset.");
   });
 
+  it("rejects altered and non-emitted cursor spellings", () => {
+    const canonical = encodeListSessionsCursor({ offset: 25, cwd: "/tmp/work" });
+    const extraField = Buffer.from(
+      JSON.stringify({ v: 1, offset: 25, cwd: "/tmp/work", extra: true }),
+      "utf8",
+    ).toString("base64url");
+
+    for (const cursor of [`${canonical}$`, `${canonical}=`, ` ${canonical} `, extraField]) {
+      expect(() => decodeListSessionsCursor(cursor)).toThrow("Invalid ACP session list cursor.");
+    }
+  });
+
   it("clamps page size metadata to the bridge maximum", () => {
     expect(resolveListSessionsPageSize(null)).toBe(100);
     expect(resolveListSessionsPageSize({ limit: 2.9 })).toBe(2);

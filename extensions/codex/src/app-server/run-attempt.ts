@@ -1,8 +1,6 @@
 // Codex plugin module implements run attempt behavior.
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
@@ -23,7 +21,7 @@ import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
 
 export async function runCodexAppServerAttempt(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
   const connection = await prepareCodexAttemptConnection({ params, options });
@@ -32,6 +30,8 @@ export async function runCodexAppServerAttempt(
   const attemptContext = await prepareCodexAttemptContext(runtime, attemptTools);
   const attemptPrompt = await prepareCodexAttemptPrompt(attemptContext);
   const resources = prepareCodexAttemptResources(attemptPrompt);
+  attemptTools.runtimeYieldCompletionClaim.current = () =>
+    resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
   await startCodexAttemptRuntime(resources);
 
   const turnRuntime = createCodexAttemptTurnState(resources);
@@ -66,8 +66,9 @@ export async function runCodexAppServerAttempt(
     turnStart.turn,
   );
 
+  let finalizedResult: EmbeddedRunAttemptResult;
   try {
-    return await finalizeCodexAttempt(
+    finalizedResult = await finalizeCodexAttempt(
       resources,
       turnRuntime,
       lifecycle,
@@ -78,4 +79,13 @@ export async function runCodexAppServerAttempt(
   } finally {
     await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
   }
+  // Cleanup retires the execution lease; only then can device loss no longer
+  // race the final result captured during asynchronous terminal processing.
+  if (
+    resources.state.executionDisconnectError &&
+    !connection.terminalState.explicitCancellationObserved
+  ) {
+    throw resources.state.executionDisconnectError;
+  }
+  return finalizedResult;
 }

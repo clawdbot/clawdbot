@@ -21,16 +21,16 @@ describe("telegram error policy", () => {
     vi.useRealTimers();
   });
 
-  it("resolves policy and cooldown from the most specific config", () => {
+  it("resolves policy from the most specific config", () => {
     expect(
       resolveTelegramErrorPolicy({
-        accountConfig: { errorPolicy: "once", errorCooldownMs: 1000 },
-        groupConfig: { errorCooldownMs: 2000 },
+        accountConfig: { errorPolicy: "once" },
+        groupConfig: {},
         topicConfig: { errorPolicy: "silent" },
       }),
     ).toEqual({
       policy: "silent",
-      cooldownMs: 2000,
+      cooldownMs: 14_400_000,
     });
   });
 
@@ -38,7 +38,7 @@ describe("telegram error policy", () => {
     const scopeKey = buildTelegramErrorScopeKey({
       accountId,
       chatId: 42,
-      threadId: 7,
+      threadSpec: { id: 7, scope: "forum" },
     });
 
     expect(
@@ -201,7 +201,7 @@ describe("telegram error policy", () => {
     const workTopic = buildTelegramErrorScopeKey({
       accountId,
       chatId: 42,
-      threadId: 9,
+      threadSpec: { id: 9, scope: "forum" },
     });
 
     expect(
@@ -225,5 +225,20 @@ describe("telegram error policy", () => {
         errorMessage: "429",
       }),
     ).toBe(false);
+  });
+
+  it("keeps forum and direct-message topics with the same id in separate scopes", () => {
+    const base = { accountId, chatId: 42 };
+    expect(
+      buildTelegramErrorScopeKey({
+        ...base,
+        threadSpec: { id: 9, scope: "forum" },
+      }),
+    ).not.toBe(
+      buildTelegramErrorScopeKey({
+        ...base,
+        threadSpec: { id: 9, scope: "direct-messages" },
+      }),
+    );
   });
 });

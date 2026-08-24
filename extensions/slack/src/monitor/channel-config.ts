@@ -7,11 +7,11 @@ import {
 import type {
   ChannelBotLoopProtectionConfig,
   ReplyToMode,
+  SlackChannelConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildSlackChannelPolicyScope } from "../group-policy.js";
-import { normalizeSlackSlug } from "./allow-list.js";
+import { buildSlackChannelIdCandidates, buildSlackChannelPolicyScope } from "../group-policy.js";
+import { normalizeSlackSlug, resolveSlackUserAllowListForTeam } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
   allowed: boolean;
@@ -23,6 +23,7 @@ export type SlackChannelConfigResolved = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  presenceEvents?: SlackChannelConfig["presenceEvents"];
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -37,6 +38,7 @@ type SlackChannelConfigEntry = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  presenceEvents?: SlackChannelConfig["presenceEvents"];
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
@@ -61,6 +63,8 @@ export function resolveSlackChannelLabel(params: { channelId?: string; channelNa
 }
 
 export function resolveSlackChannelConfig(params: {
+  teamId?: string;
+  allowUnscoped?: boolean;
   channelId: string;
   channelName?: string;
   channels?: SlackChannelConfigEntries;
@@ -80,22 +84,10 @@ export function resolveSlackChannelConfig(params: {
   const keys = channelKeys ?? Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
   const directName = channelName ? channelName.trim() : "";
-  // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345) but
-  // operators commonly write them in lowercase in their config. Add both
-  // case variants so the lookup is case-insensitive without requiring a full
-  // entry-scan. buildChannelKeyCandidates deduplicates identical keys.
-  const channelIdLower = normalizeLowercaseStringOrEmpty(channelId);
-  const channelIdUpper = channelId.toUpperCase();
-  const channelTarget = `channel:${channelId}`;
-  const channelTargetLower = `channel:${channelIdLower}`;
-  const channelTargetUpper = `channel:${channelIdUpper}`;
   const candidates = buildChannelKeyCandidates(
-    channelId,
-    channelIdLower !== channelId ? channelIdLower : undefined,
-    channelIdUpper !== channelId ? channelIdUpper : undefined,
-    channelTarget,
-    channelTargetLower !== channelTarget ? channelTargetLower : undefined,
-    channelTargetUpper !== channelTarget ? channelTargetUpper : undefined,
+    ...buildSlackChannelIdCandidates(channelId, params.teamId, {
+      allowUnscoped: params.allowUnscoped,
+    }),
     allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,
@@ -127,9 +119,16 @@ export function resolveSlackChannelConfig(params: {
     fallback?.botLoopProtection,
     matched?.botLoopProtection,
   );
-  const users = firstDefined(resolved.users, fallback?.users);
+  const users = resolveSlackUserAllowListForTeam({
+    allowList: firstDefined(resolved.users, fallback?.users),
+    teamId: params.teamId,
+    // Keeping unmatched entries preserves the configured allowlist gate;
+    // ingress treats differently scoped values as non-matching.
+    preserveUnmatchedScopedEntries: true,
+  });
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
+  const presenceEvents = firstDefined(resolved.presenceEvents, fallback?.presenceEvents);
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
@@ -137,9 +136,10 @@ export function resolveSlackChannelConfig(params: {
     replyToMode,
     allowBots,
     botLoopProtection,
-    users,
+    users: users.length > 0 ? users : undefined,
     skills,
     systemPrompt,
+    presenceEvents,
   };
   return applyChannelMatchMeta(result, match);
 }

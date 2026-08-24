@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as processExecution from "../process/exec.js";
 import { runCronCommandJob } from "./command-runner.js";
 import type { CronJob } from "./types.js";
 
@@ -51,6 +52,7 @@ describe("runCronCommandJob", () => {
     });
 
     expect(result.status).toBe("ok");
+    expect(result.errorClassification).toBeUndefined();
     expect(result.summary).toBe("hello from cron");
     expect(result.diagnostics?.entries[0]).toMatchObject({
       ts: 123,
@@ -84,6 +86,8 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command exited with code 7");
+    expect(result.errorClassification).toEqual({ kind: "permanent" });
+    expect(result.failureNotificationDetail).toEqual({ kind: "command-exit", exitCode: 7 });
     expect(result.summary).toBe("bad thing");
     expect(result.diagnostics?.entries[0]).toMatchObject({
       source: "exec",
@@ -129,6 +133,11 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command timed out");
+    expect(result.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
+    expect(result.failureNotificationDetail).toEqual({
+      kind: "command-timeout",
+      mode: "wall-clock",
+    });
     expect(result.diagnostics?.entries[0]).toMatchObject({
       ts: 456,
       source: "exec",
@@ -139,9 +148,8 @@ describe("runCronCommandJob", () => {
   it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    const childScript = "setInterval(() => {}, 1000)";
     const shellCommand = [
-      `${JSON.stringify(process.execPath)} -e ${JSON.stringify(childScript)} &`,
+      "sleep 60 &",
       "child_pid=$!",
       `printf '%s' "$child_pid" > ${JSON.stringify(childPidPath)}`,
       'wait "$child_pid"',
@@ -151,7 +159,7 @@ describe("runCronCommandJob", () => {
       job: makeCommandJob({
         kind: "command",
         argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 1,
+        timeoutSeconds: 0.5,
       }),
     });
 
@@ -176,6 +184,11 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command produced no output before noOutputTimeoutSeconds");
+    expect(result.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
+    expect(result.failureNotificationDetail).toEqual({
+      kind: "command-timeout",
+      mode: "no-output",
+    });
     expect(result.diagnostics?.entries[0]).toMatchObject({
       source: "exec",
       severity: "error",
@@ -197,6 +210,41 @@ describe("runCronCommandJob", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("command stopped");
+    expect(result.errorClassification).toBeUndefined();
     expect(result.summary).toBeUndefined();
+    expect(result.failureNotificationDetail).toBeUndefined();
+  });
+
+  it("keeps command start failures generic", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: ["openclaw-command-that-does-not-exist"],
+        timeoutSeconds: 5,
+      }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.failureNotificationDetail).toBeUndefined();
+    expect(result.errorClassification).toEqual({ kind: "permanent" });
+  });
+
+  it("leaves transient command start errors unclassified", async () => {
+    const spawnError = Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" });
+    const runCommand = vi
+      .spyOn(processExecution, "runCommandWithTimeout")
+      .mockRejectedValueOnce(spawnError);
+
+    try {
+      const result = await runCronCommandJob({
+        job: makeCommandJob({ kind: "command", argv: [process.execPath] }),
+      });
+
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("spawn EAGAIN");
+      expect(result.errorClassification).toBeUndefined();
+    } finally {
+      runCommand.mockRestore();
+    }
   });
 });

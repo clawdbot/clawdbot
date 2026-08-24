@@ -192,4 +192,105 @@ describe("recordPluginInstall", () => {
       installedAt: "2026-05-15T00:00:03.000Z",
     });
   });
+
+  it("replaces local npm-pack provenance on a registry reinstall", () => {
+    const localInstall = recordPluginInstall(
+      {},
+      {
+        pluginId: "diffs",
+        source: "npm",
+        spec: "/tmp/openclaw-diffs.tgz",
+        sourcePath: "/tmp/openclaw-diffs.tgz",
+        installPath: "/tmp/openclaw/plugins/diffs-local",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmTarballName: "openclaw-diffs-1.0.0.tgz",
+        installedAt: "2026-05-14T18:00:03.000Z",
+      },
+    );
+
+    const registryInstall = recordPluginInstall(localInstall, {
+      pluginId: "diffs",
+      source: "npm",
+      spec: "@openclaw/diffs",
+      installPath: "/tmp/openclaw/plugins/diffs",
+      resolvedName: "@openclaw/diffs",
+      resolvedVersion: "1.1.0",
+      resolvedSpec: "@openclaw/diffs@1.1.0",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+
+    expect(registryInstall.plugins?.installs?.diffs).toEqual({
+      source: "npm",
+      spec: "@openclaw/diffs",
+      installPath: "/tmp/openclaw/plugins/diffs",
+      resolvedName: "@openclaw/diffs",
+      resolvedVersion: "1.1.0",
+      resolvedSpec: "@openclaw/diffs@1.1.0",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+  });
+
+  it("moves an exact prior npm load path on same-version reinstall", () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/alpha-v1/node_modules/alpha";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/alpha-v2/node_modules/alpha";
+    const customPath = `${previousInstallPath}/custom-child`;
+    const adjacentPath = "/tmp/openclaw/npm/projects/beta/node_modules/beta";
+    const existing = {
+      plugins: {
+        load: { paths: [customPath, previousInstallPath, adjacentPath] },
+        installs: {
+          alpha: {
+            source: "npm" as const,
+            spec: "alpha@1.0.0",
+            installPath: previousInstallPath,
+          },
+          beta: {
+            source: "npm" as const,
+            spec: "beta@1.0.0",
+            installPath: adjacentPath,
+          },
+        },
+      },
+    };
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "alpha",
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: nextInstallPath,
+    });
+
+    expect(next.plugins?.load?.paths).toEqual([customPath, nextInstallPath, adjacentPath]);
+    expect(next.plugins?.installs?.beta).toBe(existing.plugins.installs.beta);
+  });
+
+  it("preserves an existing replacement path position while removing stale managed paths", () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/alpha-v1/node_modules/alpha";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/alpha-v2/node_modules/alpha";
+    const adjacentPath = "/tmp/openclaw/npm/projects/beta/node_modules/beta";
+    const existing = {
+      plugins: {
+        load: {
+          paths: [nextInstallPath, adjacentPath, previousInstallPath, nextInstallPath],
+        },
+        installs: {
+          alpha: {
+            source: "npm" as const,
+            spec: "alpha@1.0.0",
+            installPath: previousInstallPath,
+          },
+        },
+      },
+    };
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "alpha",
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: nextInstallPath,
+    });
+
+    expect(next.plugins?.load?.paths).toEqual([nextInstallPath, adjacentPath]);
+  });
 });

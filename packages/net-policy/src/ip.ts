@@ -1,23 +1,17 @@
 // Network Policy module implements ip behavior.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import ipaddr from "ipaddr.js";
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 /** Parsed IP address value returned by the net-policy parsing helpers. */
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
-type BlockedIpv6Range = Ipv6Range | "discard";
+// Older co-installed ipaddr.js declarations can merge with 2.4's ambient module and
+// omit newer runtime ranges from ReturnType, so preserve the policy's known labels.
+type BlockedIpv6Range = Ipv6Range | "benchmarking" | "discard" | "orchid2";
 type Ipv6Hextets = readonly [number, number, number, number, number, number, number, number];
 
 // ipaddr.js guarantees 8 hextets; throw loudly on an impossible shape instead of
@@ -247,7 +241,17 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   if (isIpv4Address(normalized)) {
     return PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(normalized.range());
   }
-  return isBlockedSpecialUseIpv6Address(normalized);
+  if (isBlockedSpecialUseIpv6Address(normalized)) {
+    return true;
+  }
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+  return embeddedIpv4 ? PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(embeddedIpv4.range()) : false;
+}
+
+/** True for RFC 8215 local-use NAT64 IPv6 literals (`64:ff9b:1::/48`). */
+export function isRfc8215LocalUseNat64Ipv6Address(raw: string | undefined): boolean {
+  const parsed = parseCanonicalIpAddress(raw);
+  return Boolean(parsed && isIpv6Address(parsed) && isRfc8215Nat64LocalUseAddress(parsed));
 }
 
 /** Applies the SSRF block policy for parsed IPv6 special-use ranges. */
@@ -258,6 +262,12 @@ export function isBlockedSpecialUseIpv6Address(
   // ipaddr.js returns "discard" at runtime for 100::/64, but its published
   // TypeScript IPv6Range union omits that literal.
   const range = address.range() as BlockedIpv6Range;
+  if (isRfc8215Nat64LocalUseAddress(address)) {
+    // RFC8215 local-use NAT64 can carry deployment-specific more-specific
+    // prefixes, so the literal alone cannot prove which IPv4 bits a router
+    // will use. Block the allocation instead of guessing a public decoy.
+    return true;
+  }
   if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
     // Operators running fake-ip proxy stacks (sing-box, Clash, Surge) opt in
     // to fc00::/7 reaching the network — same intent as
@@ -304,14 +314,28 @@ function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
   return ipaddr.IPv4.parse(octets.join("."));
 }
 
-/** Extracts embedded IPv4 addresses from mapped and transition IPv6 prefixes. */
+function isRfc8215Nat64LocalUsePrefix(parts: Ipv6Hextets): boolean {
+  return parts[0] === 0x0064 && parts[1] === 0xff9b && parts[2] === 0x0001;
+}
+
+function isRfc8215Nat64LocalUseAddress(address: ipaddr.IPv6): boolean {
+  return isRfc8215Nat64LocalUsePrefix(expectIpv6Hextets(address.parts));
+}
+
+/** Extracts the embedded IPv4 address from mapped and transition IPv6 prefixes. */
 export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
   const parts = expectIpv6Hextets(address.parts);
   switch (address.range()) {
     case "ipv4Mapped":
       return address.toIPv4Address();
     case "rfc6145":
+      return decodeIpv4FromHextets(parts[6], parts[7]);
     case "rfc6052":
+      if (isRfc8215Nat64LocalUseAddress(address)) {
+        // No single embedded IPv4 exists without the deployment's active NAT64
+        // prefix length. Policy blocks this allocation in the IPv6 check above.
+        return undefined;
+      }
       return decodeIpv4FromHextets(parts[6], parts[7]);
     case "6to4":
       return decodeIpv4FromHextets(parts[1], parts[2]);
@@ -362,10 +386,13 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
   try {
     const [baseAddress, prefixLength] = ipaddr.parseCIDR(candidate);
     const comparableBase = normalizeIpv4MappedAddress(baseAddress);
-    return (
-      comparableIp.kind() === comparableBase.kind() &&
-      comparableIp.match([comparableBase, prefixLength])
-    );
+    if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    return false;
   } catch {
     return false;
   }

@@ -5,11 +5,12 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
+import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../agents/tool-policy.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
@@ -85,14 +86,10 @@ function collectToolPolicySources(policy: unknown, label: string, out: ToolAllow
 function collectToolAllowlistSources(cfg: OpenClawConfig): ToolAllowlistSource[] {
   const sources: ToolAllowlistSource[] = [];
   collectToolPolicySources(cfg.tools, "tools", sources);
-  const agentList = cfg.agents?.list;
-  if (Array.isArray(agentList)) {
-    agentList.forEach((agent, index) => {
-      if (!hasRecord(agent)) {
-        return;
-      }
-      collectToolPolicySources(agent.tools, `agents.list[${index}].tools`, sources);
-    });
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    collectToolPolicySources(agent.tools, `${label}.tools`, sources);
   }
   return sources;
 }
@@ -125,7 +122,7 @@ function collectToolOwners(registry: PluginManifestRegistry): Map<string, string
   for (const plugin of registry.plugins) {
     const pluginId = normalizePluginId(plugin.id);
     for (const toolNameRaw of plugin.contracts?.tools ?? []) {
-      const toolName = normalizeToolName(toolNameRaw);
+      const toolName = normalizeToolPolicyName(toolNameRaw);
       if (!toolName) {
         continue;
       }
@@ -206,7 +203,7 @@ function buildEffectiveSandboxToolPolicy(params: {
   globalPolicy: unknown;
   nonSandboxToolPolicyBlocksMcp: boolean;
 }): ActiveSandboxToolPolicy {
-  const agentLabel = params.agentLabel ?? "agents.list[].tools.sandbox.tools";
+  const agentLabel = params.agentLabel ?? "agents.entries.*.tools.sandbox.tools";
   const allow = pickSandboxToolPolicyField({
     agentPolicy: params.agentPolicy,
     globalPolicy: params.globalPolicy,
@@ -281,35 +278,31 @@ function collectActiveSandboxToolPolicies(
     addGlobalPolicy();
   }
 
-  const agentList = cfg.agents?.list;
-  if (Array.isArray(agentList)) {
-    agentList.forEach((agent, index) => {
-      if (!hasRecord(agent)) {
-        return;
-      }
-      const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
-      const explicitMode = agentSandbox?.mode;
-      const agentSandboxActive =
-        explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
-      if (!agentSandboxActive) {
-        return;
-      }
-      const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
-      const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
-      const agentPolicy = hasRecord(agentToolsSandbox?.tools) ? agentToolsSandbox.tools : undefined;
-      addPolicy(
-        buildEffectiveSandboxToolPolicy({
-          agentPolicy,
-          agentLabel: `agents.list[${index}].tools.sandbox.tools`,
-          globalPolicy,
-          nonSandboxToolPolicyBlocksMcp: nonSandboxToolPoliciesBlockMcp({
-            cfg,
-            serverNames,
-            agent,
-          }),
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
+    const explicitMode = agentSandbox?.mode;
+    const agentSandboxActive =
+      explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
+    if (!agentSandboxActive) {
+      continue;
+    }
+    const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
+    const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
+    const agentPolicy = hasRecord(agentToolsSandbox?.tools) ? agentToolsSandbox.tools : undefined;
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    addPolicy(
+      buildEffectiveSandboxToolPolicy({
+        agentPolicy,
+        agentLabel: `${label}.tools.sandbox.tools`,
+        globalPolicy,
+        nonSandboxToolPolicyBlocksMcp: nonSandboxToolPoliciesBlockMcp({
+          cfg,
+          serverNames,
+          agent,
         }),
-      );
-    });
+      }),
+    );
   }
 
   return [...out.values()];
@@ -326,7 +319,7 @@ function buildMcpToolNamePrefixes(serverNames: readonly string[]): string[] {
   const usedNames = new Set<string>();
   return serverNames
     .map((serverName) =>
-      normalizeToolName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
+      normalizeToolPolicyName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
     )
     .filter(Boolean);
 }
@@ -336,7 +329,7 @@ function entriesMatchMcpTool(
   serverNames: readonly string[],
   mode: "any" | "every",
 ): boolean {
-  const normalizedEntries = entries.map(normalizeToolName).filter(Boolean);
+  const normalizedEntries = entries.map(normalizeToolPolicyName).filter(Boolean);
   if (
     normalizedEntries.some(
       (entry) => entry === "*" || entry === "bundle-mcp" || entry === "group:plugins",
@@ -345,8 +338,11 @@ function entriesMatchMcpTool(
     return true;
   }
   const serverPrefixes = buildMcpToolNamePrefixes(serverNames);
-  const patterns = compileGlobPatterns({ raw: normalizedEntries, normalize: normalizeToolName });
-  const probeNames = buildMcpProbeToolNames(serverNames).map(normalizeToolName);
+  const patterns = compileGlobPatterns({
+    raw: normalizedEntries,
+    normalize: normalizeToolPolicyName,
+  });
+  const probeNames = buildMcpProbeToolNames(serverNames).map(normalizeToolPolicyName);
   const prefixOrPatternMatches = (prefix: string, index: number) =>
     normalizedEntries.some((entry) => entry.length > prefix.length && entry.startsWith(prefix)) ||
     matchesAnyGlobPattern(probeNames[index] ?? "", patterns);
@@ -539,7 +535,7 @@ export function collectPluginToolAllowlistWarnings(params: {
   }
 
   const wildcardSources = sources
-    .filter((source) => source.entries.some((entry) => normalizeToolName(entry) === "*"))
+    .filter((source) => source.entries.some((entry) => normalizeToolPolicyName(entry) === "*"))
     .map((source) => source.label);
   if (wildcardSources.length > 0) {
     warnings.push(
@@ -549,7 +545,7 @@ export function collectPluginToolAllowlistWarnings(params: {
 
   const exactEntries = sources.flatMap((source) =>
     source.entries
-      .map((entry) => ({ source: source.label, entry: normalizeToolName(entry) }))
+      .map((entry) => ({ source: source.label, entry: normalizeToolPolicyName(entry) }))
       .filter(({ entry }) => entry && entry !== "*" && entry !== "group:plugins"),
   );
   if (exactEntries.length === 0) {

@@ -1,6 +1,5 @@
 /** Resolves synthetic and external auth provider refs from active runtime state or persisted manifests. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
@@ -43,24 +42,6 @@ type SyntheticAuthProviderRefParams = LoadPluginRegistryParams & {
   registryDiagnostics?: readonly unknown[];
 };
 
-function resolveManifestExternalAuthProviderRefs(
-  params: SyntheticAuthProviderRefParams = {},
-): string[] {
-  if (params.index && (params.registryDiagnostics?.length ?? 0) > 0) {
-    return [];
-  }
-  const result = loadPluginRegistrySnapshotWithMetadata(params);
-  if (result.source !== "persisted" && result.source !== "provided") {
-    return [];
-  }
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index: result.snapshot,
-  });
-  return uniqueProviderRefs(
-    manifestRegistry.plugins.flatMap((plugin) => plugin.contracts?.externalAuthProviders ?? []),
-  );
-}
-
 /** Lists provider refs that can satisfy synthetic auth profile lookups. */
 export function resolveRuntimeSyntheticAuthProviderRefs(
   params: SyntheticAuthProviderRefParams = {},
@@ -96,35 +77,4 @@ export function resolveRuntimeSyntheticAuthProviderRefState(
     };
   }
   return resolveManifestSyntheticAuthProviderRefState(params);
-}
-
-/** Lists provider refs that can expose external auth profiles to runtime consumers. */
-export function resolveRuntimeExternalAuthProviderRefs(
-  params: SyntheticAuthProviderRefParams = {},
-): string[] {
-  const registry = getPluginRegistryState()?.activeRegistry;
-  if (registry) {
-    return uniqueProviderRefs([
-      ...registry.plugins.flatMap((plugin) => plugin.contracts?.externalAuthProviders ?? []),
-      ...(registry.providers ?? [])
-        .filter(
-          (entry) =>
-            ("resolveExternalAuthProfiles" in entry.provider &&
-              typeof entry.provider.resolveExternalAuthProfiles === "function") ||
-            ("resolveExternalOAuthProfiles" in entry.provider &&
-              typeof entry.provider.resolveExternalOAuthProfiles === "function"),
-        )
-        .map((entry) => entry.provider.id),
-      ...registry.cliBackends
-        .filter(
-          (entry) =>
-            ("resolveExternalAuthProfiles" in entry.backend &&
-              typeof entry.backend.resolveExternalAuthProfiles === "function") ||
-            ("resolveExternalOAuthProfiles" in entry.backend &&
-              typeof entry.backend.resolveExternalOAuthProfiles === "function"),
-        )
-        .map((entry) => entry.backend.id),
-    ]);
-  }
-  return resolveManifestExternalAuthProviderRefs(params);
 }

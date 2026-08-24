@@ -14,7 +14,7 @@ This is for adding to the threat model, not reporting live vulnerabilities. If y
 
 ## Ways to contribute
 
-**Add a threat.** Open an issue on [openclaw/trust](https://github.com/openclaw/trust/issues) describing the attack scenario in your own words. Helpful but not required:
+**Add a threat.** Open a [documentation issue](https://github.com/openclaw/openclaw/issues/new?template=docs_bug_report.yml) describing the attack scenario in your own words. Helpful but not required:
 
 - The attack scenario and how it could be exploited.
 - Which components are affected (CLI, gateway, channels, ClawHub, MCP servers, etc.).
@@ -65,13 +65,12 @@ Threats are mapped to [MITRE ATLAS](https://atlas.mitre.org/) (Adversarial Threa
 ## Resources
 
 - [ATLAS website](https://atlas.mitre.org/)
-- [ATLAS techniques](https://atlas.mitre.org/techniques/)
-- [ATLAS case studies](https://atlas.mitre.org/studies/)
+- [ATLAS data and contribution guide](https://github.com/mitre-atlas/atlas-data)
 
 ## Contact
 
 - **Security vulnerabilities:** [Trust page](https://trust.openclaw.ai) for reporting instructions, or `security@openclaw.ai`.
-- **Threat model questions:** open an issue on [openclaw/trust](https://github.com/openclaw/trust/issues).
+- **Threat model questions:** open a [documentation issue](https://github.com/openclaw/openclaw/issues/new?template=docs_bug_report.yml).
 - **General chat:** Discord `#security` channel.
 
 ## Recognition

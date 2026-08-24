@@ -1,10 +1,23 @@
 // Discord plugin module implements api.messages behavior.
-import { Routes, type APIChannel, type APIMessage } from "discord-api-types/v10";
+import {
+  Routes,
+  type APIChannel,
+  type APIMessage,
+  type APIThreadMember,
+} from "discord-api-types/v10";
 import type { RequestQuery } from "./rest-scheduler.js";
 import type { RequestClient, RequestData } from "./rest.js";
 
 export async function getChannel(rest: RequestClient, channelId: string): Promise<APIChannel> {
   return (await rest.get(Routes.channel(channelId))) as APIChannel;
+}
+
+export async function getThreadMember(
+  rest: RequestClient,
+  threadId: string,
+  userId: string,
+): Promise<APIThreadMember> {
+  return (await rest.get(Routes.threadMembers(threadId, userId))) as APIThreadMember;
 }
 
 export async function editChannel(

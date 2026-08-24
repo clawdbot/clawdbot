@@ -31,6 +31,7 @@ type WizardTextParams = {
   initialValue?: string;
   placeholder?: string;
   validate?: (value: string) => string | undefined;
+  signal?: AbortSignal;
   // Render as a masked input. The entered value is never echoed to the
   // terminal — keeps secrets out of scrollback, transcripts, and screenshots.
   sensitive?: boolean;
@@ -48,6 +49,14 @@ export type WizardProgress = {
   update: (message: string) => void;
   stop: (message?: string) => void;
 };
+
+/**
+ * Device-code phishing gets the victim to enter the attacker's code, so warning
+ * only against sharing the code misses the actual attack. Wording tracks the
+ * Codex CLI prompt so operators see one story across both tools.
+ */
+export const DEVICE_CODE_PHISHING_WARNING =
+  "Continue only if you started this sign-in yourself. If a website or another person gave you this code, cancel.";
 
 type WizardDeviceCodeParams = {
   title: string;

@@ -8,15 +8,28 @@ type CopilotReasoningCompat = {
   supportedReasoningEfforts?: readonly string[] | null;
 };
 
+// Provider-owned general-purpose preference. Setup verifies it against the
+// authenticated live catalog instead of assuming every account can use it.
+export const DEFAULT_COPILOT_MODEL = "github-copilot/claude-sonnet-5";
+
 const COPILOT_CHAT_COMPLETIONS_COMPAT: ModelDefinitionConfig["compat"] = {
   supportsStore: false,
   supportsDeveloperRole: false,
   supportsUsageInStreaming: false,
   maxTokensField: "max_tokens",
 };
-const COPILOT_XHIGH_MODEL_IDS = new Set(["gpt-5.4", "gpt-5.3-codex"]);
+const COPILOT_XHIGH_MODEL_IDS = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.3-codex",
+]);
 
 const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
+  // These two non-catalog ids preserve metadata for legacy configured refs and
+  // account discovery responses. They are intentionally not picker entries.
   [
     "claude-opus-4.6-1m",
     {
@@ -42,11 +55,39 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
     },
   ],
   [
+    "gpt-5.3-codex",
+    {
+      name: "GPT-5.3-Codex",
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    },
+  ],
+  [
+    "gpt-5.4",
+    {
+      name: "GPT-5.4",
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    },
+  ],
+  [
     "gpt-5.5",
     {
       name: "GPT-5.5",
+      api: "openai-responses",
       reasoning: true,
-      contextWindow: 400_000,
+      input: ["text", "image"],
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_050_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
     },

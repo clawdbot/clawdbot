@@ -28,7 +28,6 @@ import Testing
             lanHost: lanHost,
             tailnetDns: tailnetDns,
             gatewayPort: gatewayPort,
-            canvasPort: nil,
             tlsEnabled: tlsEnabled,
             tlsFingerprintSha256: fingerprint,
             cliPath: nil)
@@ -426,6 +425,7 @@ import Testing
         self.clearTLSFingerprint(stableID: stableID)
 
         let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
         let staleProblem = GatewayConnectionProblem(
             kind: .pairingRequired,
             owner: .gateway,
@@ -434,7 +434,7 @@ import Testing
             requestId: "stale-request",
             retryable: true,
             pauseReconnect: true)
-        appModel._test_applyOperatorGatewayConnectionProblem(staleProblem)
+        appModel.applyOperatorGatewayConnectionProblem(staleProblem)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
@@ -444,7 +444,9 @@ import Testing
         await controller.connectManual(host: host, port: port, useTLS: true)
 
         #expect(controller.pendingTrustPrompt == nil)
-        #expect(appModel.lastGatewayProblem == nil)
+        #expect(appModel.lastGatewayProblem == staleProblem)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
         #expect(appModel.gatewayStatusText.contains("TLS fingerprint verification timed out"))
         #expect(appModel.gatewayStatusText.contains("\(host):\(port)"))
     }
@@ -551,23 +553,6 @@ import Testing
         #expect(message == nil)
         #expect(appModel.activeGatewayConnectConfig == nil)
         #expect(controller.pendingTrustPrompt == nil)
-    }
-
-    @Test @MainActor func `clear all TLS fingerprints removes stored pins`() {
-        let stableID1 = "test|\(UUID().uuidString)"
-        let stableID2 = "test|\(UUID().uuidString)"
-        defer { GatewayTLSStore.clearAllFingerprints() }
-
-        GatewayTLSStore.saveFingerprint("11", stableID: stableID1)
-        GatewayTLSStore.saveFingerprint("22", stableID: stableID2)
-
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == "11")
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == "22")
-
-        GatewayTLSStore.clearAllFingerprints()
-
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == nil)
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
     }
 
     @Test func `TLS fingerprints preserve exact unicode gateway owners`() {

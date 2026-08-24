@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.restart-resume
+      - channels.resumed-final-reply
   objective: Verify channel delivery resumes after a Gateway restart without replaying completed delivery.
   successCriteria:
     - A reply is delivered before restart.
@@ -21,7 +21,6 @@ scenario:
     suiteIsolation: isolated
     summary: Exercise normalized restart and continuation delivery.
     config:
-      requiredChannelDriver: live
       conversationKind: direct
       conversationId: 15550000001@s.whatsapp.net
       senderId: 15550000002@s.whatsapp.net
@@ -31,53 +30,4 @@ scenario:
       timeoutMs: 60000
 
 flow:
-  steps:
-    - name: resumes after restart without replay
-      actions:
-        - call: waitForGatewayHealthy
-          args: [{ ref: env }, 60000]
-        - call: waitForTransportReady
-          args: [{ ref: env }, 60000]
-        - resetTransport: true
-        - set: firstMarker
-          value:
-            expr: "`${config.firstPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`"
-        - sendInbound:
-            conversation:
-              id: { ref: config.conversationId }
-              kind: { ref: config.conversationKind }
-            senderId: { ref: config.senderId }
-            senderName: QA Driver
-            text:
-              expr: "`${config.mentionPrefix}Reply with only this exact marker: ${firstMarker}`"
-        - waitForOutbound:
-            textIncludes: { ref: firstMarker }
-            timeoutMs: { ref: config.timeoutMs }
-        - assert:
-            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
-            message: qa gateway child does not expose restartAfterStateMutation
-        - call: env.gateway.restartAfterStateMutation
-          args:
-            - lambda:
-                async: true
-                params: [ctx]
-                expr: "Promise.resolve()"
-        - call: waitForGatewayHealthy
-          args: [{ ref: env }, 60000]
-        - call: waitForTransportReady
-          args: [{ ref: env }, 60000]
-        - set: secondMarker
-          value:
-            expr: "`${config.secondPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`"
-        - sendInbound:
-            conversation:
-              id: { ref: config.conversationId }
-              kind: { ref: config.conversationKind }
-            senderId: { ref: config.senderId }
-            senderName: QA Driver
-            text:
-              expr: "`${config.mentionPrefix}Reply with only this exact marker: ${secondMarker}`"
-        - waitForOutbound:
-            textIncludes: { ref: secondMarker }
-            timeoutMs: { ref: config.timeoutMs }
-      detailsExpr: "`${firstMarker} -> restart -> ${secondMarker}`"
+  shared: channel-restart-resume

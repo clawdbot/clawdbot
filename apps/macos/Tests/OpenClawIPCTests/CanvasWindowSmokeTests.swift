@@ -7,7 +7,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CanvasWindowSmokeTests {
-    @Test func `panel controller shows and hides`() async throws {
+    @Test func `panel controller shows and hides`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-canvas-test-\(UUID().uuidString)")
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
@@ -20,13 +20,29 @@ struct CanvasWindowSmokeTests {
             presentation: .panel(anchorProvider: anchor))
 
         #expect(controller.directoryPath.contains("main_invalid__") == true)
+        #expect(controller.webView.configuration.preferences.tabFocusesLinks)
+        #expect(controller._testIsFilePollingActive == false)
 
         controller.applyPreferredPlacement(CanvasPlacement(x: 120, y: 200, width: 520, height: 680))
-        controller.showCanvas(path: "/")
-        _ = try await controller.eval(javaScript: "1 + 1")
+        controller.load(target: "/")
+        #expect(controller._testIsFilePollingActive == false)
+        let localURL = try #require(CanvasScheme.makeURL(session: "main", path: "/"))
+        controller.updateFilePollingForCommittedNavigation(to: localURL)
+        controller.showCanvas()
+        #expect(controller._testIsFilePollingActive)
+        let remoteURL = try #require(URL(string: "https://example.com"))
+        controller.load(target: remoteURL.absoluteString)
+        #expect(controller._testIsFilePollingActive)
+        controller.updateFilePollingForCommittedNavigation(to: remoteURL)
+        #expect(controller._testIsFilePollingActive == false)
+        controller.load(target: "/")
+        #expect(controller._testIsFilePollingActive == false)
+        controller.updateFilePollingForCommittedNavigation(to: localURL)
+        #expect(controller._testIsFilePollingActive)
         controller.windowDidMove(Notification(name: NSWindow.didMoveNotification))
         controller.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
         controller.hideCanvas()
+        #expect(controller._testIsFilePollingActive == false)
         controller.close()
     }
 
@@ -41,103 +57,45 @@ struct CanvasWindowSmokeTests {
             root: root,
             presentation: .window)
 
+        #expect(controller.window?.isRestorable == false)
         controller.showCanvas(path: "/")
         controller.windowWillClose(Notification(name: NSWindow.willCloseNotification))
         controller.hideCanvas()
         controller.close()
     }
 
-    @Test func `A2UI auto navigation is idempotent for current host target`() throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-canvas-test-\(UUID().uuidString)")
-        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager().removeItem(at: root) }
-
-        let controller = try CanvasWindowController(
-            sessionKey: "main",
-            root: root,
-            presentation: .window)
-        defer { controller.close() }
-
-        let oldTarget = "http://127.0.0.1:18789/__openclaw__/a2ui/?platform=macos"
-        let currentTarget = "http://127.0.0.1:18790/__openclaw__/a2ui/?platform=macos"
-        let userTarget = "https://github.com/openclaw/openclaw"
-
-        #expect(controller.shouldAutoNavigateToA2UI(lastAutoTarget: nil, candidateTarget: currentTarget) == true)
-
-        controller.load(target: "/")
-        #expect(controller.shouldAutoNavigateToA2UI(lastAutoTarget: nil, candidateTarget: currentTarget) == true)
-
-        controller.load(target: currentTarget)
-        #expect(controller
-            .shouldAutoNavigateToA2UI(lastAutoTarget: currentTarget, candidateTarget: currentTarget) == false)
-
-        controller.load(target: oldTarget)
-        #expect(controller.shouldAutoNavigateToA2UI(lastAutoTarget: oldTarget, candidateTarget: currentTarget) == true)
-
-        controller.load(target: userTarget)
-        #expect(controller
-            .shouldAutoNavigateToA2UI(lastAutoTarget: currentTarget, candidateTarget: currentTarget) == false)
-    }
-
-    @Test func `hosted Canvas URL resolver keeps capability scope and only trusts A2UI`() throws {
+    @Test func `hosted Canvas URL resolver keeps capability scope`() throws {
         let surface = "https://gateway.example/root/__openclaw__/cap/token%20value"
         let canvas = try #require(CanvasHostedURLResolver.resolve(
             surfaceURL: surface,
             target: "/__openclaw__/canvas/demo%20page.html?mode=proof#result"))
-        #expect(canvas.url.absoluteString ==
+        #expect(canvas.absoluteString ==
             "https://gateway.example/root/__openclaw__/cap/token%20value/__openclaw__/canvas/demo%20page.html?mode=proof#result")
-        #expect(canvas.allowsA2UIActions == false)
-
-        let a2ui = try #require(CanvasHostedURLResolver.resolve(
-            surfaceURL: surface,
-            target: "/__openclaw__/a2ui/?platform=macos"))
-        #expect(a2ui.url.absoluteString ==
-            "https://gateway.example/root/__openclaw__/cap/token%20value/__openclaw__/a2ui/?platform=macos")
-        #expect(a2ui.allowsA2UIActions)
 
         #expect(CanvasHostedURLResolver.resolve(surfaceURL: surface, target: "/local.html") == nil)
         #expect(CanvasHostedURLResolver.resolve(surfaceURL: surface, target: "https://example.com/") == nil)
         #expect(CanvasHostedURLResolver.resolve(
             surfaceURL: surface,
-            target: "/__openclaw__/a2ui/../canvas/") == nil)
+            target: "/__openclaw__/canvas/../other/") == nil)
         #expect(CanvasHostedURLResolver.resolve(
             surfaceURL: surface,
-            target: "/__openclaw__/a2ui/%252e%252e/canvas/") == nil)
+            target: "/__openclaw__/canvas/%252e%252e/other/") == nil)
         #expect(CanvasHostedURLResolver.resolve(
             surfaceURL: surface,
-            target: "/__openclaw__/a2ui/%25252525252e%25252525252e/canvas/") == nil)
+            target: "/__openclaw__/canvas/%25252525252e%25252525252e/other/") == nil)
         #expect(CanvasHostedURLResolver.resolve(
             surfaceURL: "https://gateway.example/not-capability-scoped",
             target: "/__openclaw__/canvas/") == nil)
     }
 
-    @Test func `A2UI action trust is exact and capability scoped`() throws {
-        let expected = try #require(URL(string:
-            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=macos"))
-        let sameWithFragment = try #require(URL(string: expected.absoluteString + "#card"))
-        let staleCapability = try #require(URL(string:
-            "https://gateway.example/__openclaw__/cap/stale-token/__openclaw__/a2ui/?platform=macos"))
-        let changedQuery = try #require(URL(string:
-            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=other"))
-        let canvasPage = try #require(URL(string:
-            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/canvas/"))
-        let traversingA2UI = try #require(URL(string:
-            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/a2ui/%2e%2e/canvas/"))
-        let localCanvas = try #require(URL(string: "openclaw-canvas://main/"))
+    @Test func `Canvas target resolver accepts only hosted paths and app-local URLs`() {
+        #expect(CanvasHostedURLResolver.isHostedTarget(
+            "/__openclaw__/canvas/documents/widget/index.html"))
+        #expect(CanvasHostedURLResolver.isAppLocalTarget("openclaw-canvas://main/widget/index.html"))
 
-        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(expected, expectedRemoteURL: expected))
-        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(sameWithFragment, expectedRemoteURL: expected))
-        #expect(!CanvasA2UIActionMessageHandler.isTrustedSourceURL(staleCapability, expectedRemoteURL: expected))
-        #expect(!CanvasA2UIActionMessageHandler.isTrustedSourceURL(changedQuery, expectedRemoteURL: expected))
-        #expect(!CanvasA2UIActionMessageHandler.isTrustedSourceURL(canvasPage, expectedRemoteURL: expected))
-        #expect(!CanvasHostedURLResolver.isCapabilityScopedA2UIURL(traversingA2UI))
-        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(localCanvas, expectedRemoteURL: nil))
-
-        let handler = CanvasA2UIActionMessageHandler(sessionKey: "main")
-        handler.setTrustedRemoteURL(expected)
-        #expect(handler.isTrustedSourceURL(expected))
-        handler.updateTrustForMainFrameNavigation(to: canvasPage)
-        #expect(!handler.isTrustedSourceURL(expected))
+        #expect(!CanvasHostedURLResolver.isAppLocalTarget("https://example.com/widget.html"))
+        #expect(!CanvasHostedURLResolver.isAppLocalTarget("file:///tmp/widget.html"))
+        #expect(!CanvasHostedURLResolver.isAppLocalTarget("openclaw-canvas:///widget.html"))
+        #expect(!CanvasHostedURLResolver.isAppLocalTarget("openclaw-canvas://main/%252e%252e/secret"))
     }
 }

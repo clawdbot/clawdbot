@@ -1,6 +1,7 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { buildApprovalPresentation } from "./approval-presentation.js";
+import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
 
@@ -16,6 +17,7 @@ function buildExecPresentation(request: {
 function buildPluginPresentation(request: {
   title: string;
   description: string;
+  detail?: string;
   pluginId?: string;
   toolName?: string;
   agentId?: string;
@@ -53,6 +55,7 @@ describe("buildApprovalPresentation", () => {
     const presentation = buildPluginPresentation({
       title: "Deploy\u202Eprod\nnow",
       description: "Line one\r\nLine two\u0000\u202E",
+      detail: "Input one\r\nInput two\u0000\u202E",
       pluginId: "plugin\u202Eid",
       toolName: "tool\nname",
       agentId: "agent\u0000id",
@@ -62,6 +65,7 @@ describe("buildApprovalPresentation", () => {
       kind: "plugin",
       title: "Deploy\\u{202E}prod\\u{A}now",
       description: "Line one\nLine two\\u{0}\\u{202E}",
+      detail: "Input one\nInput two\\u{0}\\u{202E}",
       pluginId: "plugin\\u{202E}id",
       toolName: "tool\\u{A}name",
       agentId: "agent\\u{0}id",
@@ -110,5 +114,59 @@ describe("buildApprovalPresentation", () => {
         description: `${description}${String.fromCodePoint(0x1f6e1)}`,
       }),
     ).toBeNull();
+  });
+
+  it("truncates oversized plugin detail without invalidating the presentation", () => {
+    const presentation = buildPluginPresentation({
+      title: "Review tool input",
+      description: "Bounded channel summary",
+      detail: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH + 1),
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "plugin",
+      detail: expect.stringMatching(/…\[truncated\]$/u),
+    });
+    if (presentation?.kind !== "plugin" || !presentation.detail) {
+      throw new Error("expected plugin detail");
+    }
+    expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+  });
+});
+
+describe("buildApprovalPresentation (system-agent)", () => {
+  function buildSystemAgentPresentation(request: { title: string; description: string }) {
+    return buildApprovalPresentation({
+      kind: "system-agent",
+      request: {
+        ...request,
+        command: "true",
+        proposalHash: "a".repeat(64),
+        allowedDecisions,
+        sessionId: "s1",
+      },
+      allowedDecisions,
+    });
+  }
+
+  it("drops a split emoji at the title boundary instead of leaving a lone surrogate", () => {
+    const title = `${"a".repeat(79)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).toMatchObject({ kind: "system-agent", title: "a".repeat(79) });
+  });
+
+  it("keeps an emoji that fits within the title limit intact", () => {
+    const title = `${"a".repeat(78)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).toMatchObject({ kind: "system-agent", title });
+  });
+
+  it("drops a split emoji at the description boundary instead of leaving a lone surrogate", () => {
+    const description = `${"a".repeat(511)}\u{1F6E1}`;
+    const presentation = buildSystemAgentPresentation({ title: "t", description });
+    expect(presentation).toMatchObject({
+      kind: "system-agent",
+      description: "a".repeat(511),
+    });
   });
 });

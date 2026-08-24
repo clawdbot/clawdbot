@@ -1,0 +1,208 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  collectEnvVarNames,
+  isCountedSourcePath,
+  main,
+} from "../../scripts/check-env-var-count.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("check-env-var-count", () => {
+  it("counts production source and excludes tests and QA Lab", () => {
+    expect(isCountedSourcePath("src/config/paths.ts")).toBe(true);
+    expect(isCountedSourcePath("packages/api/src/index.ts")).toBe(true);
+    expect(isCountedSourcePath("extensions/demo/src/index.ts")).toBe(true);
+    expect(isCountedSourcePath("src/config/paths.test.ts")).toBe(false);
+    expect(isCountedSourcePath("extensions/qa-lab/src/index.ts")).toBe(false);
+  });
+
+  it("collects each distinct name once", () => {
+    const root = tempDirs.make("openclaw-env-count-");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "src/runtime.ts"),
+      'const a = process.env.OPENCLAW_ALPHA; const b = "OPENCLAW_ALPHA OPENCLAW_BETA";\n',
+    );
+    fs.writeFileSync(path.join(root, "src/runtime.test.ts"), "OPENCLAW_TEST_ONLY\n");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+
+    expect(collectEnvVarNames(root)).toEqual(["OPENCLAW_ALPHA", "OPENCLAW_BETA"]);
+    fs.rmSync(path.join(root, "src/runtime.ts"));
+    expect(collectEnvVarNames(root)).toEqual([]);
+  });
+
+  it("reads staged source from the index", () => {
+    const root = tempDirs.make("openclaw-env-count-staged-");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const sourcePath = path.join(root, "src/runtime.ts");
+    fs.writeFileSync(sourcePath, "process.env.OPENCLAW_STAGED;\n");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "src/runtime.ts"], { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(sourcePath, "process.env.OPENCLAW_WORKTREE;\n");
+
+    expect(collectEnvVarNames(root, { staged: true })).toEqual(["OPENCLAW_STAGED"]);
+    expect(collectEnvVarNames(root)).toEqual(["OPENCLAW_WORKTREE"]);
+  });
+
+  it("fails closed when the base ref cannot be resolved", () => {
+    const root = tempDirs.make("openclaw-env-count-base-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "0\n");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+
+    expect(() => main(["--base", "missing"], root)).toThrow(/Could not resolve/u);
+  });
+
+  it("still checks the budget when the base shares no reachable ancestor", () => {
+    // Shallow clones and grafted agent checkouts resolve origin/main but truncate the
+    // history behind it, which used to fail the whole changed-file gate.
+    const root = tempDirs.make("openclaw-env-count-shallow-");
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", ...args],
+        { cwd: root, stdio: "ignore" },
+      );
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONLY;\n");
+    git("init");
+    git("add", ".");
+    git("commit", "-m", "detached base");
+    // Name the base explicitly; init.defaultBranch varies by environment.
+    git("branch", "-M", "severed-base");
+    git("checkout", "--orphan", "severed");
+    git("add", ".");
+    git("commit", "-m", "severed history");
+
+    expect(() => main(["--base", "severed-base"], root)).not.toThrow();
+
+    // The absolute budget check must still run without a baseline.
+    fs.writeFileSync(
+      path.join(root, "src/runtime.ts"),
+      "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n",
+    );
+    expect(() => main(["--base", "severed-base"], root)).toThrow(/exceeds budget/u);
+  });
+
+  it("compares against the fork budget when the base branch later shrinks", () => {
+    const root = tempDirs.make("openclaw-env-count-fork-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "2\n");
+    fs.writeFileSync(
+      path.join(root, "src/runtime.ts"),
+      "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n",
+    );
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["branch", "release"], { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONE;\n");
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw",
+        "-c",
+        "user.email=test@openclaw.local",
+        "commit",
+        "-m",
+        "shrink main",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["branch", "moving-main"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["checkout", "release"], { cwd: root, stdio: "ignore" });
+
+    expect(() => main(["--base", "moving-main"], root)).not.toThrow();
+  });
+
+  it("rejects growth above the budget", () => {
+    const root = tempDirs.make("openclaw-env-count-grow-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(
+      path.join(root, "src/runtime.ts"),
+      "process.env.OPENCLAW_ONE; process.env.OPENCLAW_TWO;\n",
+    );
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/exceeds budget|over budget/u);
+  });
+
+  it.each([
+    [501, 502],
+    [502, 503],
+  ])("rejects the retired temporary %i to %i budget increase", (baseBudget, nextBudget) => {
+    const root = tempDirs.make("openclaw-env-count-retired-grow-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const names = Array.from({ length: nextBudget + 1 }, (_, index) => `OPENCLAW_TEST_${index}`);
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${baseBudget}\n`);
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, baseBudget).join("\n"));
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, nextBudget).join("\n"));
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${nextBudget}\n`);
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/budget grew/u);
+  });
+
+  it("passes when the count exactly matches the budget", () => {
+    const root = tempDirs.make("openclaw-env-count-exact-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "1\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONLY;\n");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+
+    expect(() => main(["--base", "HEAD"], root)).not.toThrow();
+  });
+
+  it("rejects stale headroom after the count shrinks", () => {
+    const root = tempDirs.make("openclaw-env-count-tight-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), "2\n");
+    fs.writeFileSync(path.join(root, "src/runtime.ts"), "process.env.OPENCLAW_ONLY;\n");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+
+    expect(() => main(["--base", "HEAD"], root)).toThrow(/is below budget/u);
+  });
+});

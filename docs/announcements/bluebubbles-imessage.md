@@ -1,5 +1,5 @@
 ---
-summary: "BlueBubbles support was removed from OpenClaw. Use the bundled iMessage plugin with imsg for new and migrated iMessage setups."
+summary: "BlueBubbles support was removed from OpenClaw. Use the official iMessage plugin with imsg for new and migrated iMessage setups."
 read_when:
   - You used the old BlueBubbles channel and need to move to iMessage
   - You are choosing the supported OpenClaw iMessage setup
@@ -9,7 +9,7 @@ title: "BlueBubbles removal and the imsg iMessage path"
 
 # BlueBubbles removal and the imsg iMessage path
 
-OpenClaw no longer ships the BlueBubbles channel. iMessage support runs through the bundled `imessage` plugin: the Gateway spawns [`imsg`](https://github.com/steipete/imsg) as a child process, locally or through an SSH wrapper, and talks JSON-RPC over stdin/stdout. No server, no webhook, no port.
+OpenClaw no longer ships the BlueBubbles channel. iMessage support runs through the official `@openclaw/imessage` plugin: the Gateway spawns [`imsg`](https://github.com/steipete/imsg) as a child process, locally or through an SSH wrapper, and talks JSON-RPC over stdin/stdout. No server, no webhook, no port.
 
 If your config still contains `channels.bluebubbles`, migrate it to `channels.imessage`. The legacy `/channels/bluebubbles` docs URL redirects to [Coming from BlueBubbles](/channels/imessage-from-bluebubbles), which has the full config translation table and cutover checklist.
 
@@ -23,7 +23,13 @@ If your config still contains `channels.bluebubbles`, migrate it to `channels.im
 
 ## What to do
 
-1. Install and verify `imsg` on the Messages Mac:
+1. Install the official plugin on the Gateway host, then restart the Gateway:
+
+   ```bash
+   openclaw plugins install @openclaw/imessage
+   ```
+
+2. Install and verify `imsg` on the Messages Mac:
 
    ```bash
    brew install steipete/tap/imsg
@@ -32,9 +38,9 @@ If your config still contains `channels.bluebubbles`, migrate it to `channels.im
    imsg rpc --help
    ```
 
-2. Grant Full Disk Access and Automation permissions to the process context that runs `imsg` and OpenClaw.
+3. Grant Full Disk Access and Automation permissions to the process context that runs `imsg` and OpenClaw.
 
-3. Translate the old config:
+4. Translate the old config:
 
    ```json5
    {
@@ -55,13 +61,13 @@ If your config still contains `channels.bluebubbles`, migrate it to `channels.im
    }
    ```
 
-4. Restart the gateway and verify:
+5. Restart the gateway and verify:
 
    ```bash
    openclaw channels status --probe
    ```
 
-5. Test DMs, groups, attachments, and any private API actions you depend on before deleting your old BlueBubbles server.
+6. Test DMs, groups, attachments, and any private API actions you depend on before deleting your old BlueBubbles server.
 
 ## Migration notes
 

@@ -23,10 +23,10 @@ class AndroidScreenshotModeTest {
       parseAndroidScreenshotModeIntent(
         Intent(Intent.ACTION_MAIN)
           .putExtra(extraAndroidScreenshotMode, true)
-          .putExtra(extraAndroidScreenshotScene, "voice"),
+          .putExtra(extraAndroidScreenshotScene, "chat"),
       )
 
-    assertEquals(AndroidScreenshotScene.Voice, parsed)
+    assertEquals(AndroidScreenshotScene.Chat, parsed)
   }
 
   @Test
@@ -45,8 +45,9 @@ class AndroidScreenshotModeTest {
   fun mapsScenesToProductionShellDestinations() {
     assertEquals(HomeDestination.Connect, AndroidScreenshotScene.Home.homeDestination)
     assertEquals(HomeDestination.Chat, AndroidScreenshotScene.Chat.homeDestination)
-    assertEquals(HomeDestination.Voice, AndroidScreenshotScene.Voice.homeDestination)
+    assertEquals(HomeDestination.Chat, AndroidScreenshotScene.Swarm.homeDestination)
     assertEquals(HomeDestination.Settings, AndroidScreenshotScene.Settings.homeDestination)
+    assertEquals(HomeDestination.Settings, AndroidScreenshotScene.Desktop.homeDestination)
     assertEquals(HomeDestination.Settings, AndroidScreenshotScene.VoiceWake.homeDestination)
   }
 
@@ -66,10 +67,27 @@ class AndroidScreenshotModeTest {
   }
 
   @Test
+  fun openClawSceneTargetsSystemAgentSettings() {
+    val scene = AndroidScreenshotScene.fromRawValue("openclaw")
+
+    assertEquals(AndroidScreenshotScene.OpenClaw, scene)
+    assertEquals(HomeDestination.Settings, scene.homeDestination)
+    assertEquals(SettingsRoute.SystemAgent, scene.settingsRoute)
+  }
+
+  @Test
   fun voiceWakeSceneTargetsVoiceSettings() {
     val scene = AndroidScreenshotScene.fromRawValue("voice-wake")
 
     assertEquals(AndroidScreenshotScene.VoiceWake, scene)
     assertEquals(SettingsRoute.Voice, scene.settingsRoute)
+  }
+
+  @Test
+  fun desktopSceneTargetsDesktopSettings() {
+    val scene = AndroidScreenshotScene.fromRawValue("desktop")
+
+    assertEquals(AndroidScreenshotScene.Desktop, scene)
+    assertEquals(SettingsRoute.Desktop, scene.settingsRoute)
   }
 }

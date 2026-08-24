@@ -147,6 +147,16 @@ function resolveAccountContext(
   return { accountId };
 }
 
+function isChannelMissingFromGatewayRegistry(error: unknown): error is Error {
+  const requestError = error as (Error & { gatewayCode?: unknown }) | undefined;
+  return (
+    requestError instanceof Error &&
+    requestError.name === "GatewayClientRequestError" &&
+    requestError.gatewayCode === "INVALID_REQUEST" &&
+    requestError.message === "invalid channels.start channel"
+  );
+}
+
 async function reconcileGatewayRuntimeAfterLocalLogin(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
@@ -177,6 +187,26 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       deviceIdentity: null,
     });
   } catch (error) {
+    // A plugin installed or enabled after Gateway startup is absent from its
+    // process-stable registry. Restart only for that exact RPC rejection.
+    if (isChannelMissingFromGatewayRegistry(error)) {
+      try {
+        await callGateway({
+          config: params.cfg,
+          method: "gateway.restart.request",
+          params: { reason: `channel login: load ${params.channelId}` },
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          deviceIdentity: null,
+        });
+        params.runtime.log(
+          `Gateway restart requested to load ${params.channelId}; the channel will start after restart.`,
+        );
+        return;
+      } catch {
+        // Fall through to the generic warning if the restart request also fails.
+      }
+    }
     params.runtime.log(
       `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
     );

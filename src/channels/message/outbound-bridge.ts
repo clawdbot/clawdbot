@@ -3,7 +3,7 @@
  *
  * Wraps old channel send functions in the newer channel message adapter contract.
  */
-import { createMessageReceiptFromOutboundResults } from "./receipt.js";
+import { createMessageReceiptFromOutboundResults, resolveReceiptSourceId } from "./receipt.js";
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageLiveAdapterShape,
@@ -25,7 +25,7 @@ const defaultManualReceiveAdapter = {
 } as const satisfies ChannelMessageReceiveAdapterShape;
 
 /** Send result accepted from legacy outbound bridge methods before receipt normalization. */
-export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
+type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
   messageId?: string;
 };
@@ -35,7 +35,7 @@ type ChannelMessageOutboundBridgeContext<TContext> = Omit<TContext, "onDeliveryR
 };
 
 /** Legacy outbound adapter shape bridged into the channel message adapter contract. */
-export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
+type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   deliveryCapabilities?: {
     durableFinal?: DurableFinalDeliveryRequirementMap;
   };
@@ -54,27 +54,13 @@ export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
 };
 
 /** Options for building a message adapter from legacy outbound send functions. */
-export type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
+type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
   id?: string;
   outbound: ChannelMessageOutboundBridgeAdapter<TConfig>;
   capabilities?: DurableFinalDeliveryRequirementMap;
   live?: ChannelMessageLiveAdapterShape;
   receive?: ChannelMessageReceiveAdapterShape;
 };
-
-function resolveResultMessageId(result: ChannelMessageOutboundBridgeResult): string | undefined {
-  return (
-    result.messageId ??
-    result.receipt?.primaryPlatformMessageId ??
-    result.receipt?.platformMessageIds[0] ??
-    result.chatId ??
-    result.channelId ??
-    result.roomId ??
-    result.conversationId ??
-    result.toJid ??
-    result.pollId
-  );
-}
 
 type MessageSendResultParams = {
   kind: MessageReceiptPartKind;
@@ -100,13 +86,21 @@ function toMessageSendResult(
         threadId: params.threadId == null ? undefined : String(params.threadId),
         replyToId: params.replyToId ?? undefined,
       });
+  const messageId = resolveReceiptSourceId({ ...result, receipt });
   return {
+    // Preserve sanctioned owner facts for delivery hooks without exposing private
+    // provider fields or trusting a provider-authored channel identity.
+    ...(result.target !== undefined ? { target: result.target } : {}),
+    ...(result.chatId !== undefined ? { chatId: result.chatId } : {}),
+    ...(result.channelId !== undefined ? { channelId: result.channelId } : {}),
+    ...(result.roomId !== undefined ? { roomId: result.roomId } : {}),
+    ...(result.conversationId !== undefined ? { conversationId: result.conversationId } : {}),
+    ...(result.toJid !== undefined ? { toJid: result.toJid } : {}),
+    ...(result.pollId !== undefined ? { pollId: result.pollId } : {}),
+    ...(result.timestamp !== undefined ? { timestamp: result.timestamp } : {}),
+    ...(result.meta !== undefined ? { meta: result.meta } : {}),
     receipt,
-    ...(resolveResultMessageId({ ...result, receipt })
-      ? {
-          messageId: resolveResultMessageId({ ...result, receipt }),
-        }
-      : {}),
+    ...(messageId ? { messageId } : {}),
   };
 }
 

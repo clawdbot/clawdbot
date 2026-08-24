@@ -6,6 +6,7 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
 /** Materialize presentation content once before Signal's text-only delivery funnels. */
@@ -13,6 +14,13 @@ export function materializeSignalPresentationFallback(
   payload: ReplyPayload,
   presentationOverride?: MessagePresentation,
 ): ReplyPayload {
+  const reactionPayload = questionGatewayRuntime.prepareReactionPayloadForDelivery({
+    payload,
+    presentation: presentationOverride ?? payload.presentation,
+  });
+  if (reactionPayload) {
+    return reactionPayload;
+  }
   const presentation = presentationOverride ?? normalizeMessagePresentation(payload.presentation);
   if (!presentation) {
     return payload;

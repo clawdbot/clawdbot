@@ -8,13 +8,8 @@ import type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.te
 /** Shared integration helpers for full secrets runtime snapshot tests. */
 export {
   asConfig,
-  createOpenAIFileRuntimeConfig,
-  createOpenAIFileRuntimeFixture,
   EMPTY_LOADABLE_PLUGIN_ORIGINS,
-  expectResolvedOpenAIRuntime,
   loadAuthStoreWithProfiles,
-  OPENAI_ENV_KEY_REF,
-  OPENAI_FILE_KEY_REF,
 } from "./runtime-openai-file-fixture.test-helper.js";
 export type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";

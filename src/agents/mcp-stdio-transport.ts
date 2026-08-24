@@ -2,13 +2,16 @@
  * OpenClaw stdio transport wrapper for MCP server subprocesses.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import process from "node:process";
 import { PassThrough } from "node:stream";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
+import { signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
 type OpenClawStdioServerParameters = {
@@ -16,6 +19,7 @@ type OpenClawStdioServerParameters = {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  prepareDataDir?: string;
   stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
@@ -37,6 +41,7 @@ export class OpenClawStdioClientTransport implements Transport {
   private readonly stderrStream: PassThrough | null = null;
   private process?: ChildProcess;
   private closingProcess?: ChildProcess;
+  private ownedProcessGroupId?: number;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
@@ -51,11 +56,20 @@ export class OpenClawStdioClientTransport implements Transport {
       );
     }
 
+    const prepareDataDir = this.serverParams.prepareDataDir?.trim();
+    if (prepareDataDir) {
+      try {
+        await fs.mkdir(prepareDataDir, { recursive: true });
+      } catch (error) {
+        throw new Error(
+          `unable to prepare PLUGIN_DATA directory "${prepareDataDir}": ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
+    }
+
     await new Promise<void>((resolve, reject) => {
-      const baseEnv = {
-        ...getDefaultEnvironment(),
-        ...this.serverParams.env,
-      };
+      const baseEnv = mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]);
       const preparedSpawn = prepareOomScoreAdjustedSpawn(
         this.serverParams.command,
         this.serverParams.args ?? [],
@@ -70,6 +84,11 @@ export class OpenClawStdioClientTransport implements Transport {
         windowsHide: process.platform === "win32",
       });
       this.process = child;
+      if (process.platform !== "win32" && child.pid) {
+        // Detached spawn makes the leader PID the durable PGID. Keep it after
+        // the leader handle exits so descendants remain owned until disposal.
+        this.ownedProcessGroupId = child.pid;
+      }
 
       child.on("error", (error: Error) => {
         reject(error);
@@ -77,13 +96,26 @@ export class OpenClawStdioClientTransport implements Transport {
       });
       child.on("spawn", () => resolve());
       child.on("close", () => {
-        this.process = undefined;
+        if (this.process === child) {
+          this.process = undefined;
+        }
+        if (child.pid && this.ownedProcessGroupId === child.pid) {
+          // The leader still owns this PGID at close notification time. Kill any
+          // descendants now so a retained numeric PGID can never outlive ownership.
+          signalProcessTree(child.pid, "SIGKILL", { detached: true });
+          this.ownedProcessGroupId = undefined;
+        }
         this.onclose?.();
       });
       child.stdin?.on("error", (error: Error) => this.onerror?.(error));
       child.stdout?.on("data", (chunk: Buffer) => {
-        this.readBuffer.append(chunk);
-        this.processReadBuffer();
+        try {
+          this.readBuffer.append(chunk);
+          this.processReadBuffer();
+        } catch (error) {
+          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          void this.close();
+        }
       });
       child.stdout?.on("error", (error: Error) => this.onerror?.(error));
       if (this.stderrStream && child.stderr) {
@@ -117,11 +149,9 @@ export class OpenClawStdioClientTransport implements Transport {
 
   async close(): Promise<void> {
     const processToClose = this.process ?? this.closingProcess;
+    const ownedProcessGroupId = this.ownedProcessGroupId;
     this.process = undefined;
     this.closingProcess = processToClose;
-    if (processToClose) {
-      this.closingProcess = processToClose;
-    }
     if (processToClose) {
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
@@ -133,11 +163,10 @@ export class OpenClawStdioClientTransport implements Transport {
       }
       await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
       if (processToClose.exitCode === null && processToClose.pid) {
-        killProcessTree(processToClose.pid);
+        signalProcessTree(processToClose.pid, "SIGTERM", { detached: true });
         await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
         if (processToClose.exitCode === null && processToClose.pid) {
-          // SIGKILL synchronously: killProcessTree's setTimeout is .unref()'d and races shutdown (#86412).
-          signalProcessTree(processToClose.pid, "SIGKILL");
+          signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
           await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
         }
       }
@@ -145,21 +174,30 @@ export class OpenClawStdioClientTransport implements Transport {
     if (this.closingProcess === processToClose) {
       this.closingProcess = undefined;
     }
+    if (this.ownedProcessGroupId === ownedProcessGroupId) {
+      this.ownedProcessGroupId = undefined;
+    }
     this.readBuffer.clear();
   }
 
   async forceClose(): Promise<void> {
     const processToClose = this.process ?? this.closingProcess;
+    const ownedProcessGroupId = this.ownedProcessGroupId;
     this.process = undefined;
     if (processToClose?.pid && processToClose.exitCode === null) {
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
       });
-      signalProcessTree(processToClose.pid, "SIGKILL");
+      signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
       await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
+    } else if (ownedProcessGroupId) {
+      signalProcessTree(ownedProcessGroupId, "SIGKILL", { detached: true });
     }
     if (this.closingProcess === processToClose) {
       this.closingProcess = undefined;
+    }
+    if (this.ownedProcessGroupId === ownedProcessGroupId) {
+      this.ownedProcessGroupId = undefined;
     }
     this.readBuffer.clear();
   }

@@ -1,7 +1,7 @@
 /**
  * Sandbox backend registry.
  *
- * Stores process-wide backend factories so core and plugins can register Docker, SSH, or custom sandbox providers.
+ * Stores process-wide backend factories so core and plugins can register local container, SSH, or custom sandbox providers.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -12,6 +12,17 @@ import type {
   SandboxBackendRegistration,
   SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
+import {
+  createDockerSandboxBackend,
+  createPodmanSandboxBackend,
+  dockerSandboxBackendManager,
+  podmanSandboxBackendManager,
+} from "./docker-backend.js";
+import {
+  createSshSandboxBackend,
+  resolveSshRuntimePaths,
+  sshSandboxBackendManager,
+} from "./ssh-backend.js";
 
 export type {
   CreateSandboxBackendParams,
@@ -35,7 +46,7 @@ export type {
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
 
 // Process-wide sandbox backend registry. Tests and plugins can install temporary
-// factories while core still auto-registers the bundled Docker and SSH backends.
+// factories while core still auto-registers the bundled container and SSH backends.
 function getSandboxBackendFactories(): Map<SandboxBackendId, RegisteredSandboxBackend> {
   const globalStore = globalThis as typeof globalThis & {
     [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<SandboxBackendId, RegisteredSandboxBackend>;
@@ -101,16 +112,15 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
   );
 }
 
-import { createDockerSandboxBackend, dockerSandboxBackendManager } from "./docker-backend.js";
-import {
-  createSshSandboxBackend,
-  resolveSshRuntimePaths,
-  sshSandboxBackendManager,
-} from "./ssh-backend.js";
-
 registerSandboxBackend("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
+  resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+});
+
+registerSandboxBackend("podman", {
+  factory: createPodmanSandboxBackend,
+  manager: podmanSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
 });
 

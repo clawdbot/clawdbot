@@ -30,8 +30,10 @@ describe("QA Lab static-SSH worker provider", () => {
     const replay = await provider.provision(profile, "operation-123");
 
     expect(provider.id).toBe("static-ssh");
+    expect(provider.supportedExecutionModes).toEqual(["remote-exec"]);
     expect(first).toStrictEqual({
       leaseId: "static-ssh:operation-123",
+      sharedHost: true,
       ssh: {
         host: "worker.example.test",
         port: 22,
@@ -152,6 +154,7 @@ describe("QA Lab static-SSH worker provider", () => {
       provider.inspect({ leaseId: "static-ssh:operation-123", profile: PROFILE }),
     ).resolves.toStrictEqual({
       status: "active",
+      sharedHost: true,
     });
     await expect(
       provider.inspect({ leaseId: "static-ssh:", profile: PROFILE }),

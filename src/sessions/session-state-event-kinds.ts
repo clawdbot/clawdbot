@@ -1,6 +1,7 @@
 export type SessionStateActorType = "human" | "agent" | "system";
 
 export type SessionStateEventKind =
+  | "created"
   | "human_direct_message"
   | "adopted"
   | "run_completed"
@@ -12,6 +13,7 @@ export type SessionStateEventKind =
 
 // Future utility-model materiality belongs at this deterministic seam; no config until then.
 export const NOTIFY_BY_SESSION_STATE_EVENT_KIND: Record<SessionStateEventKind, boolean> = {
+  created: false,
   human_direct_message: true,
   upstream_missing: true,
   adopted: false,

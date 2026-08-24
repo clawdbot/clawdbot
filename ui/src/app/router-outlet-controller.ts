@@ -17,12 +17,14 @@ export type RouterOutletSnapshot<
   TModule = unknown,
   TData = unknown,
 > = RouterOutletStateSlice<TRouteId, TModule, TData> & {
+  settled: RouteMatch<TRouteId, TModule, TData> | undefined;
   showPending: boolean;
 };
 
 type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => void;
+  onNotFound?: () => boolean | void;
+  notFoundRecoveryReady?: boolean;
 };
 
 type RouterOutletControllerOptions = {
@@ -68,6 +70,7 @@ function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSn
     status: "idle",
     active: undefined,
     pending: undefined,
+    settled: undefined,
     showPending: false,
   };
 }
@@ -84,17 +87,20 @@ export class RouterOutletController<
   TData = unknown,
 > {
   private router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  private onNotFound?: () => void;
+  private onNotFound?: () => boolean | void;
   private connected = false;
   private unsubscribe?: () => void;
   private selection: RouterOutletStateSlice<TRouteId, TModule, TData> = idleSnapshot();
   private snapshotValue: RouterOutletSnapshot<TRouteId, TModule, TData> = idleSnapshot();
+  private settled?: RouteMatch<TRouteId, TModule, TData>;
   private pendingMatchId?: string;
   private pendingTimer?: ReturnType<typeof globalThis.setTimeout>;
   private showPending = false;
   private notFoundActive = false;
+  private notFoundDeclined = false;
   private notFoundQueued = false;
   private notFoundGeneration = 0;
+  private notFoundRecoveryReady = true;
   private readonly pendingDelayMs: number;
 
   constructor(
@@ -110,12 +116,21 @@ export class RouterOutletController<
 
   setInputs(inputs: RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>): void {
     this.onNotFound = inputs.onNotFound;
+    const nextNotFoundRecoveryReady = inputs.notFoundRecoveryReady ?? true;
+    const recoveryBecameReady =
+      !this.notFoundRecoveryReady && nextNotFoundRecoveryReady && this.notFoundDeclined;
+    this.notFoundRecoveryReady = nextNotFoundRecoveryReady;
     if (this.router === inputs.router) {
+      if (recoveryBecameReady && this.selection.status === "notFound") {
+        this.cancelNotFoundEffect();
+        this.updateNotFoundEffect(this.selection.status);
+      }
       return;
     }
 
     this.detachSource();
     this.router = inputs.router;
+    this.settled = undefined;
     if (this.connected) {
       this.attachSource();
       return;
@@ -123,8 +138,7 @@ export class RouterOutletController<
     const selection = inputs.router
       ? selectRouterOutletState(inputs.router.getState())
       : idleSnapshot<TRouteId, TModule, TData>();
-    this.selection = selection;
-    this.publish({ ...selection, showPending: false });
+    this.applySelection(selection);
   }
 
   connect(): void {
@@ -148,7 +162,11 @@ export class RouterOutletController<
 
   private attachSource(notify = true): void {
     const router = this.router;
-    if (!router || this.unsubscribe) {
+    if (this.unsubscribe) {
+      return;
+    }
+    if (!router) {
+      this.applySelection(idleSnapshot<TRouteId, TModule, TData>(), notify);
       return;
     }
     this.applySelection(selectRouterOutletState(router.getState()), notify);
@@ -173,6 +191,14 @@ export class RouterOutletController<
     notify = true,
   ): void {
     this.selection = selection;
+    if (selection.status === "idle") {
+      this.settled = undefined;
+    } else {
+      const rendered = selectRenderedRouteMatch(selection.active, selection.pending);
+      if (rendered?.status === "success") {
+        this.settled = rendered;
+      }
+    }
     const pending = selection.pending;
     const coldPending =
       pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
@@ -190,7 +216,7 @@ export class RouterOutletController<
       this.schedulePendingFallback(pending.id);
     }
 
-    this.publish({ ...selection, showPending: this.showPending }, notify);
+    this.publish({ ...selection, settled: this.settled, showPending: this.showPending }, notify);
     this.updateNotFoundEffect(selection.status);
   }
 
@@ -211,7 +237,7 @@ export class RouterOutletController<
         return;
       }
       this.showPending = true;
-      this.publish({ ...this.selection, showPending: true });
+      this.publish({ ...this.selection, settled: this.settled, showPending: true });
     }, this.pendingDelayMs);
   }
 
@@ -238,13 +264,18 @@ export class RouterOutletController<
         return;
       }
       this.notFoundQueued = false;
-      this.onNotFound?.();
+      // A disconnected shell declines transiently. Keep the latch until its
+      // readiness input changes so unrelated renders cannot spin retries.
+      if (this.onNotFound?.() === false) {
+        this.notFoundDeclined = true;
+      }
     });
   }
 
   private cancelNotFoundEffect(): void {
     this.notFoundGeneration += 1;
     this.notFoundActive = false;
+    this.notFoundDeclined = false;
     this.notFoundQueued = false;
   }
 
@@ -254,6 +285,7 @@ export class RouterOutletController<
       previous.status === snapshot.status &&
       previous.active === snapshot.active &&
       previous.pending === snapshot.pending &&
+      previous.settled === snapshot.settled &&
       previous.showPending === snapshot.showPending
     ) {
       return;

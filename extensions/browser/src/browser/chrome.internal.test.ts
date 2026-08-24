@@ -1,14 +1,16 @@
 // Browser tests cover chrome.internal plugin behavior.
-import { EventEmitter } from "node:events";
+import { execFile } from "node:child_process";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -59,7 +61,7 @@ vi.mock("./cdp-timeouts.js", async () => {
 
 import { CHROME_STDERR_HINT_MAX_CHARS } from "./cdp-timeouts.js";
 import {
-  getChromeWebSocketUrl,
+  getChromeWebSocketEndpoint,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -70,6 +72,12 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 
 const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+
+async function getChromeWebSocketUrl(
+  ...args: Parameters<typeof getChromeWebSocketEndpoint>
+): Promise<string | null> {
+  return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
+}
 
 /**
  * Covers the parts of chrome.ts that the mainline chrome.test.ts does
@@ -170,6 +178,53 @@ function deferred<T = void>() {
     reject = rejectPromise;
   });
   return { promise, reject, resolve };
+}
+
+async function startLinuxZombieProcess(): Promise<{ pid: number; reap: () => Promise<void> }> {
+  const parent = execFile("python3", [
+    "-c",
+    [
+      "import os, sys",
+      "pid = os.fork()",
+      "if pid == 0:",
+      "    os._exit(0)",
+      "print(pid, flush=True)",
+      "sys.stdin.readline()",
+      "os.waitpid(pid, 0)",
+    ].join("\n"),
+  ]);
+  const closed = once(parent, "close");
+  const pid = await new Promise<number>((resolve, reject) => {
+    const onError = (err: Error) => reject(err);
+    parent.once("error", onError);
+    parent.stdout?.once("data", (chunk) => {
+      parent.off("error", onError);
+      resolve(Number.parseInt(String(chunk).trim(), 10));
+    });
+  });
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      if (stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z ")) {
+        return {
+          pid,
+          reap: async () => {
+            parent.stdin?.end();
+            await closed;
+          },
+        };
+      }
+    } catch {
+      // The child may not have reached zombie state yet.
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  parent.stdin?.end();
+  await closed;
+  throw new Error(`child ${pid} did not enter zombie state`);
 }
 
 function linuxProcStatLine(pid: number, startTime: string): string {
@@ -332,6 +387,13 @@ async function withMockChromeCdpServer(params: {
 describe("chrome.ts internal", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        throw new Error("ENOENT");
+      }
+      return { isFile: () => true } as fs.Stats;
+    });
   });
 
   afterEach(() => {
@@ -966,6 +1028,93 @@ describe("chrome.ts internal", () => {
         },
       });
     });
+
+    it.runIf(process.platform === "linux")(
+      "recovers a current-host profile locked by a zombie process",
+      async () => {
+        const zombie = await startLinuxZombieProcess();
+        try {
+          let cdpReachable = false;
+          const originalFetch = globalThis.fetch;
+          vi.stubGlobal(
+            "fetch",
+            vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+              if (!cdpReachable) {
+                throw new Error("ECONNREFUSED");
+              }
+              return await originalFetch(input, init);
+            }),
+          );
+          const executablePath = path.join(tmpDir, "chrome");
+          await fsp.writeFile(executablePath, "");
+          const existsSync = fs.existsSync.bind(fs);
+          vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+            const value = String(candidate);
+            if (value.endsWith("Local State") || value.endsWith("Preferences")) {
+              return true;
+            }
+            return existsSync(candidate);
+          });
+
+          const firstProc = makeFakeProc();
+          const secondProc = makeFakeProc();
+          let spawnCalls = 0;
+          mockExpiredLaunchPollingClock();
+          spawnMock.mockImplementation(() => {
+            spawnCalls += 1;
+            if (spawnCalls === 1) {
+              queueMicrotask(() => {
+                firstProc.stderr.emit(
+                  "data",
+                  Buffer.from("The profile appears to be in use by another Chromium process"),
+                );
+              });
+              return firstProc;
+            }
+            cdpReachable = true;
+            return secondProc;
+          });
+
+          await withMockChromeCdpServer({
+            wsPath: "/devtools/browser/ZOMBIE_SINGLETON_RETRY",
+            run: async (baseUrl) => {
+              const port = Number(new URL(baseUrl).port);
+              const profile = {
+                ...makeProfile(port),
+                cdpUrl: baseUrl,
+                executablePath,
+              } as ResolvedBrowserProfile;
+              const userDataDir = resolveOpenClawUserDataDir(profile.name);
+              await fsp.mkdir(userDataDir, { recursive: true });
+              await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+              await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket");
+              await fsp.symlink(
+                `${os.hostname()}-${zombie.pid}`,
+                path.join(userDataDir, "SingletonLock"),
+              );
+
+              try {
+                const running = await launchOpenClawChrome(
+                  makeResolved({ localLaunchTimeoutMs: 20 }),
+                  profile,
+                );
+                expect(running.proc).toBe(secondProc);
+                expect(firstProc.kill).toHaveBeenCalledWith("SIGKILL");
+                expect(spawnCalls).toBe(2);
+                expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+                expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+                running.proc.kill?.("SIGTERM");
+              } finally {
+                await fsp.rm(userDataDir, { recursive: true, force: true });
+              }
+            },
+          });
+        } finally {
+          await zombie.reap();
+        }
+      },
+      15_000,
+    );
 
     it("preserves the exact surviving child when a singleton retry cleanup fails", async () => {
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
@@ -1738,10 +1887,12 @@ describe("chrome.ts internal", () => {
     it("buffers stderr chunks when Chrome emits diagnostics while CDP comes up", async () => {
       // Covers onStderr (appending chunks to the bounded stderr tail) plus the
       // stderrHint truthy branch on failure.
-      const configDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-redact-off-"));
-      const configPath = path.join(configDir, "openclaw.json");
-      await fsp.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const openClawState = await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "openclaw-redact-off-",
+      });
+      await openClawState.writeConfig({ logging: { redactSensitive: "off" } });
+      const configDir = openClawState.root;
       const executablePath = path.join(configDir, "chrome-stderr-existing");
       await fsp.writeFile(executablePath, "");
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
@@ -1787,7 +1938,7 @@ describe("chrome.ts internal", () => {
       expect(message).toContain("Chrome stderr:");
       expect(message).toContain("chrome crash log");
       expect(message).not.toContain(secretToken);
-      await fsp.rm(configDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     });
 
     it("omits the sandbox hint on non-linux platforms", async () => {
@@ -2082,7 +2233,6 @@ describe("chrome.ts internal", () => {
             `${baseUrl}/json/version`,
           );
           expect(release).toHaveBeenCalled();
-          expect(running.releaseCdpProxyBypass).toBeUndefined();
           running.proc.kill?.("SIGTERM");
         },
       });

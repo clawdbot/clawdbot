@@ -27,8 +27,6 @@ describe("scripts/bench-model", () => {
   });
 
   it("rejects unknown args before checking provider credentials", () => {
-    expect(() => testing.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
-
     const result = runBenchModel(["--wat"]);
 
     expect(result.status).toBe(1);

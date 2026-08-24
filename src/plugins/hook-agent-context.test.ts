@@ -12,10 +12,12 @@ describe("buildAgentHookContextChannelFields", () => {
         sessionKey: "agent:main:discord:channel:c1",
         messageChannel: "discord",
         messageProvider: "discord",
+        agentAccountId: "work",
         senderId: "user-123",
       }),
     ).toEqual({
       channel: "discord",
+      accountId: "work",
       messageProvider: "discord",
       channelId: "c1",
       chatId: "c1",

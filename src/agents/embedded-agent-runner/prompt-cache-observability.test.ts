@@ -1,8 +1,9 @@
 // Coverage for prompt-cache diagnostic tracking across turns.
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   beginPromptCacheObservation,
-  collectPromptCacheToolNames,
+  collectPromptCacheTools,
   completePromptCacheObservation,
 } from "./prompt-cache-observability.js";
 
@@ -18,13 +19,13 @@ describe("prompt cache observability", () => {
     currentTestScope = String(++testScope);
   });
 
-  it("collects trimmed tool names only", () => {
+  it("collects canonical trimmed tool snapshots", () => {
     expect(
-      collectPromptCacheToolNames([{ name: " read " }, { name: "" }, {}, { name: "write" }]),
-    ).toEqual(["read", "write"]);
+      collectPromptCacheTools([{ name: "write" }, { name: "" }, {}, { name: " read " }]),
+    ).toEqual([{ name: "read" }, { name: "write" }]);
   });
 
-  it("collects prompt-cache tool names without aborting on unreadable descriptors", () => {
+  it("collects prompt-cache tools without aborting on unreadable descriptors", () => {
     const unreadableTool = {
       get name(): string {
         throw new Error("tool name getter exploded");
@@ -32,8 +33,123 @@ describe("prompt cache observability", () => {
     };
 
     expect(
-      collectPromptCacheToolNames([{ name: " read " }, unreadableTool, { name: "write" }]),
-    ).toEqual(["read", "write"]);
+      collectPromptCacheTools([{ name: " read " }, unreadableTool, { name: "write" }]),
+    ).toEqual([{ name: "read" }, { name: "write" }]);
+  });
+
+  it("fingerprints tool descriptions and schemas without retaining their content", () => {
+    const first = collectPromptCacheTools([
+      {
+        name: "read",
+        description: "Read a text file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
+    ]);
+    const changedDescription = collectPromptCacheTools([
+      {
+        name: "read",
+        description: "Read a workspace file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
+    ]);
+    const changedSchema = collectPromptCacheTools([
+      {
+        name: "read",
+        description: "Read a text file",
+        parameters: { type: "object", properties: { path: { type: "number" } } },
+      },
+    ]);
+
+    expect(first[0]).toEqual({
+      name: "read",
+      descriptionDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(first[0]?.descriptionDigest).not.toBe(changedDescription[0]?.descriptionDigest);
+    expect(first[0]?.schemaDigest).not.toBe(changedSchema[0]?.schemaDigest);
+  });
+
+  it("fingerprints own __proto__ schema properties without prototype pollution", () => {
+    const collectSchema = (properties: Record<string, unknown>) =>
+      collectPromptCacheTools([
+        {
+          name: "read",
+          parameters: { type: "object", properties },
+        },
+      ]);
+    const stringPrototype = collectSchema({
+      ["__proto__"]: { type: "string" },
+    });
+    const numberPrototype = collectSchema({
+      ["__proto__"]: { type: "number" },
+    });
+    const noPrototype = collectSchema({});
+
+    expect(stringPrototype[0]?.schemaDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(stringPrototype[0]?.schemaDigest).not.toBe(numberPrototype[0]?.schemaDigest);
+    expect(stringPrototype[0]?.schemaDigest).not.toBe(noPrototype[0]?.schemaDigest);
+    expect(numberPrototype[0]?.schemaDigest).not.toBe(noPrototype[0]?.schemaDigest);
+  });
+
+  it("bounds hostile, circular, and unreadable schema fingerprints", () => {
+    const circular: Record<string, unknown> = { type: "object" };
+    circular.self = circular;
+    const unreadable = {
+      name: "unreadable",
+      get parameters(): unknown {
+        throw new Error("schema getter exploded");
+      },
+    };
+    const oversized = {
+      name: "oversized",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: 1_000 }, (_, index) => [
+            `property_${String(index).padStart(4, "0")}`,
+            { type: "string", description: "x".repeat(10_000) },
+          ]),
+        ),
+      },
+    };
+
+    expect(
+      collectPromptCacheTools([oversized, unreadable, { name: "circular", parameters: circular }]),
+    ).toEqual([
+      { name: "circular", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      { name: "oversized", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      { name: "unreadable", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+    ]);
+  });
+
+  it("rejects wide schemas before reading values and ignores their insertion order", () => {
+    let propertyReads = 0;
+    const createWideSchema = (reversed: boolean) => {
+      const properties: Record<string, unknown> = {};
+      const names = Array.from(
+        { length: 256 },
+        (_, index) => `property_${String(index).padStart(4, "0")}`,
+      );
+      for (const name of reversed ? names.toReversed() : names) {
+        Object.defineProperty(properties, name, {
+          enumerable: true,
+          get: () => {
+            propertyReads += 1;
+            return { type: "string" };
+          },
+        });
+      }
+      return { type: "object", properties };
+    };
+
+    const first = collectPromptCacheTools([{ name: "wide", parameters: createWideSchema(false) }]);
+    const reversed = collectPromptCacheTools([
+      { name: "wide", parameters: createWideSchema(true) },
+    ]);
+
+    expect(reversed).toEqual(first);
+    expect(first[0]?.schemaDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(propertyReads).toBe(0);
   });
 
   it("tracks cache-relevant changes and reports a real cache-read drop", () => {
@@ -49,7 +165,7 @@ describe("prompt cache observability", () => {
       streamStrategy: "boundary-aware:openai-responses",
       transport: "sse",
       systemPrompt: "stable system",
-      toolNames: ["read", "write"],
+      tools: [{ name: "read" }, { name: "write" }],
     });
 
     expect(first.changes).toBeNull();
@@ -71,7 +187,7 @@ describe("prompt cache observability", () => {
       streamStrategy: "boundary-aware:openai-responses",
       transport: "websocket",
       systemPrompt: "stable system with hook change",
-      toolNames: ["read", "write"],
+      tools: [{ name: "read" }, { name: "write" }],
     });
 
     expect(second.changes?.map((change) => change.code)).toEqual([
@@ -105,7 +221,7 @@ describe("prompt cache observability", () => {
       modelApi: "anthropic-messages",
       streamStrategy: "boundary-aware:anthropic-messages",
       systemPrompt: "stable system",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: scopedKey("session-1"),
@@ -119,7 +235,7 @@ describe("prompt cache observability", () => {
       modelApi: "anthropic-messages",
       streamStrategy: "boundary-aware:anthropic-messages",
       systemPrompt: "stable system",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
 
     expect(
@@ -140,7 +256,7 @@ describe("prompt cache observability", () => {
       modelApi: "openai-responses",
       streamStrategy: "boundary-aware:openai-responses",
       systemPrompt: "stable system",
-      toolNames: ["read", "write"],
+      tools: [{ name: "read" }, { name: "write" }],
     });
     completePromptCacheObservation({
       sessionId: scopedKey("session-1"),
@@ -154,10 +270,81 @@ describe("prompt cache observability", () => {
       modelApi: "openai-responses",
       streamStrategy: "boundary-aware:openai-responses",
       systemPrompt: "stable system",
-      toolNames: ["write", "read"],
+      tools: [{ name: "write" }, { name: "read" }],
     });
 
     expect(second.changes).toBeNull();
+  });
+
+  it("ignores dynamic system prompt suffix changes after the cache boundary", () => {
+    const sessionId = scopedKey("dynamic-system-suffix");
+    const stablePrefix = "stable instructions and tool capability directory";
+    beginPromptCacheObservation({
+      sessionId,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "anthropic-messages",
+      streamStrategy: "boundary-aware:anthropic-messages",
+      systemPrompt: `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}first turn context`,
+      tools: [{ name: "read" }],
+    });
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+
+    const next = beginPromptCacheObservation({
+      sessionId,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "anthropic-messages",
+      streamStrategy: "boundary-aware:anthropic-messages",
+      systemPrompt: `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}second turn context`,
+      tools: [{ name: "read" }],
+    });
+
+    expect(next.changes).toBeNull();
+  });
+
+  it("reports visible schema changes even when tool names and count are unchanged", () => {
+    const sessionId = scopedKey("changed-tool-schema");
+    const initialTools = collectPromptCacheTools([
+      {
+        name: "read",
+        description: "Read a file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
+    ]);
+    beginPromptCacheObservation({
+      sessionId,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      tools: initialTools,
+    });
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+
+    const next = beginPromptCacheObservation({
+      sessionId,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      tools: collectPromptCacheTools([
+        {
+          name: "read",
+          description: "Read a file",
+          parameters: { type: "object", properties: { path: { type: "number" } } },
+        },
+      ]),
+    });
+
+    expect(next.changes).toEqual([{ code: "tools", detail: "tool set changed with same count" }]);
+    expect(completePromptCacheObservation({ sessionId, usage: { cacheRead: 0 } })).toEqual({
+      previousCacheRead: 8_000,
+      cacheRead: 0,
+      changes: [{ code: "tools", detail: "tool set changed with same count" }],
+    });
   });
 
   it("tracks recurring prompt-cache affinity across rotating session ids", () => {
@@ -172,7 +359,7 @@ describe("prompt cache observability", () => {
       modelApi: "openai-responses",
       streamStrategy: "boundary-aware:openai-responses",
       systemPrompt: "stable system",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: "isolated-run-1",
@@ -190,7 +377,7 @@ describe("prompt cache observability", () => {
       modelApi: "openai-responses",
       streamStrategy: "boundary-aware:openai-responses",
       systemPrompt: "stable system",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
 
     expect(nextRun.previousCacheRead).toBe(8_000);
@@ -205,7 +392,7 @@ describe("prompt cache observability", () => {
       modelApi: "openai-responses",
       streamStrategy: "boundary-aware:openai-responses",
       systemPrompt: "stable system",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: scopedKey("session-0"),
@@ -220,7 +407,7 @@ describe("prompt cache observability", () => {
         modelApi: "openai-responses",
         streamStrategy: "boundary-aware:openai-responses",
         systemPrompt: `stable system ${index}`,
-        toolNames: ["read"],
+        tools: [{ name: "read" }],
       });
     }
 
@@ -231,7 +418,7 @@ describe("prompt cache observability", () => {
       modelApi: "openai-responses",
       streamStrategy: "boundary-aware:openai-responses",
       systemPrompt: "stable system",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
 
     expect(restarted.previousCacheRead).toBeNull();
@@ -249,7 +436,7 @@ describe("prompt cache observability", () => {
       streamStrategy: "boundary-aware:openai-responses",
       transport: "sse",
       systemPrompt: "stable system",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: scopedKey("session-1"),
@@ -267,7 +454,7 @@ describe("prompt cache observability", () => {
       streamStrategy: "boundary-aware:openai-responses",
       transport: "websocket",
       systemPrompt: "stable system with hook change",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
 
     expect(
@@ -287,7 +474,7 @@ describe("prompt cache observability", () => {
       streamStrategy: "boundary-aware:openai-responses",
       transport: "websocket",
       systemPrompt: "stable system with hook change",
-      toolNames: ["read"],
+      tools: [{ name: "read" }],
     });
 
     expect(resumed.previousCacheRead).toBe(8_000);

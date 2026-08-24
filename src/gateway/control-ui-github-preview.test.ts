@@ -1,4 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
+  setActiveDegradedSecretOwners,
+  SecretSurfaceUnavailableError,
+} from "../secrets/runtime-degraded-state.js";
 import { ControlUiGitHubError } from "./control-ui-github-api.js";
 import {
   loadControlUiGitHubPreview,
@@ -53,6 +61,32 @@ describe("parseControlUiGitHubPreviewTarget", () => {
       repo: "openclaw",
     });
     expect(target).toEqual({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" });
+    expect(
+      parseControlUiGitHubPreviewTarget({
+        kind: "issue",
+        number: 1,
+        owner: "github",
+        repo: ".github",
+      }),
+    ).toEqual({ kind: "issue", number: 1, owner: "github", repo: ".github" });
+    for (const repo of [
+      ".whitesource",
+      ".emacs.d",
+      "-edge",
+      "_edge",
+      "repo-",
+      "repo.",
+      "foo..bar",
+    ]) {
+      expect(
+        parseControlUiGitHubPreviewTarget({
+          kind: "issue",
+          number: 1,
+          owner: "openclaw",
+          repo,
+        }),
+      ).toEqual({ kind: "issue", number: 1, owner: "openclaw", repo });
+    }
   });
 
   it("rejects invalid repository paths and item numbers", () => {
@@ -72,16 +106,30 @@ describe("parseControlUiGitHubPreviewTarget", () => {
         repo: "..",
       }),
     ).toBeNull();
+    for (const repo of [".", "..", "repo.git", "repo.atom"]) {
+      expect(
+        parseControlUiGitHubPreviewTarget({
+          kind: "issue",
+          number: 1,
+          owner: "openclaw",
+          repo,
+        }),
+      ).toBeNull();
+    }
   });
 });
 
 describe("loadControlUiGitHubPreview", () => {
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    setActiveDegradedSecretOwners([]);
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
   });
 
@@ -121,20 +169,108 @@ describe("loadControlUiGitHubPreview", () => {
     expect(avatarRequest instanceof URL ? avatarRequest.href : "").toContain(
       "avatars.githubusercontent.com/u/58493",
     );
+    expect(avatarRequest instanceof URL ? avatarRequest.hash : "").toBe("");
+    expect(avatarRequest instanceof URL ? avatarRequest.search : "").toBe("?s=64");
     expect(avatarRequest instanceof URL ? avatarRequest.searchParams.get("s") : null).toBe("64");
   });
 
-  it("does not fetch avatar URLs outside GitHub's avatar host", async () => {
+  it("does not reuse cached previews after the GitHub credential scope changes", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = requestUrl(input);
+      if (!url.includes("/issues/")) {
+        return githubJson({ private: false });
+      }
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return githubJson(
+        previewPayload({
+          user: {
+            login: authorization === "Bearer preview-token-a" ? "token-a" : "token-b",
+          },
+        }),
+      );
+    });
+    const target = {
+      kind: "issue" as const,
+      number: 70013,
+      owner: "openclaw",
+      repo: "credential-scope",
+    };
+    vi.stubEnv("GH_TOKEN", "preview-token-a");
+
+    const first = await loadControlUiGitHubPreview(target, fetchMock);
+    vi.stubEnv("GH_TOKEN", "preview-token-b");
+    const second = await loadControlUiGitHubPreview(target, fetchMock);
+
+    expect(first.login).toBe("token-a");
+    expect(second.login).toBe("token-b");
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+  });
+
+  it("revalidates configured credential availability before serving a cached preview", async () => {
+    setRuntimeConfigSnapshot({
+      gateway: { controlUi: { github: { token: "configured-preview-token" } } },
+    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (input) =>
+        requestUrl(input).includes("/issues/")
+          ? githubJson(previewPayload({ user: { login: "cached-preview" } }))
+          : githubJson({ private: false }),
+      );
+    const target = {
+      kind: "issue" as const,
+      number: 70014,
+      owner: "openclaw",
+      repo: "configured-degraded",
+    };
+
+    await loadControlUiGitHubPreview(target, fetchMock);
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "control-ui-github",
+        state: "unavailable",
+        degradationState: "cold",
+        paths: ["gateway.controlUi.github.token"],
+        refKeys: ["store:default:PREVIEW_TOKEN"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    expect(() => loadControlUiGitHubPreview(target, fetchMock)).toThrow(
+      SecretSurfaceUnavailableError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    { avatarUrl: "https://example.com/avatar.png", number: 70001, repo: "avatar-host" },
+    {
+      avatarUrl: "https://avatars.githubusercontent.com/u/58493?v=4#fragment",
+      number: 70002,
+      repo: "avatar-fragment",
+    },
+    {
+      avatarUrl: "https://avatars.githubusercontent.com/u/../58493?v=4",
+      number: 70003,
+      repo: "avatar-dot-segment",
+    },
+    {
+      avatarUrl: "https://avatars.githubusercontent.com/u\\58493?v=4",
+      number: 70004,
+      repo: "avatar-backslash",
+    },
+  ])("does not fetch unsafe avatar URL $avatarUrl", async ({ avatarUrl, number, repo }) => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       githubJson(
         previewPayload({
-          user: { avatar_url: "https://example.com/avatar.png", login: "octocat" },
+          user: { avatar_url: avatarUrl, login: "octocat" },
         }),
       ),
     );
 
     const preview = await loadControlUiGitHubPreview(
-      { kind: "issue", number: 70001, owner: "openclaw", repo: "avatar-safety" },
+      { kind: "issue", number, owner: "openclaw", repo },
       fetchMock,
     );
 
@@ -187,6 +323,33 @@ describe("loadControlUiGitHubPreview", () => {
     for (const call of fetchMock.mock.calls) {
       expect(call[1]?.headers).toHaveProperty("Authorization", "Bearer github-test-token");
     }
+  });
+
+  it("retries stale optional authentication anonymously for public previews", async () => {
+    vi.stubEnv("GH_TOKEN", "stale-github-token");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(githubJson({ message: "Bad credentials" }, 401))
+      .mockResolvedValueOnce(
+        githubJson(
+          previewPayload({
+            user: { login: "octocat" },
+          }),
+        ),
+      );
+
+    const preview = await loadControlUiGitHubPreview(
+      { kind: "pull", number: 70012, owner: "openclaw", repo: "openclaw" },
+      fetchMock,
+    );
+
+    expect(preview.login).toBe("octocat");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toHaveProperty(
+      "Authorization",
+      "Bearer stale-github-token",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
   });
 
   it("follows GitHub API redirects for renamed public repositories", async () => {

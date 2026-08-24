@@ -1,17 +1,34 @@
 // Settings page owning the dashboard's gateway connection draft (URL, token,
 // password, default session key) plus the latest handshake snapshot.
+import "../../styles/connection.css";
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import { titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "./system-info.ts";
 import { renderConnection } from "./view.ts";
 
-class ConnectionPage extends OpenClawLightDomElement {
+const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
+const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
+
+export { supportsSystemInfo } from "./system-info.ts";
+
+export class ConnectionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
@@ -19,23 +36,40 @@ class ConnectionPage extends OpenClawLightDomElement {
   @state() private password = "";
   @state() private gatewayTokenVisible = false;
   @state() private gatewayPasswordVisible = false;
+  @state() private systemInfo: SystemInfoResult | null = null;
+  @state() private systemInfoUnavailable = false;
 
   // Distinguishes an operator-edited session key from the stored selection so
   // Connect only overrides the per-gateway selection after an explicit edit.
   private sessionKeyDirty = false;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
+  private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
+  private systemInfoClient: GatewayBrowserClient | null = null;
+  private systemInfoLoading = false;
+  private systemInfoRequestId = 0;
+
+  private readonly systemInfoPolling = new PollController(
+    this,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
+    () => {
+      void this.loadSystemInfo();
+    },
+    false,
+  );
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
       (gateway) => {
         this.resetDraft(gateway);
+        this.synchronizeSystemInfoGateway(gateway);
         return gateway.subscribe((snapshot) => {
           if (snapshot.client !== this.gatewayClient) {
             this.resetDraft(gateway);
-          } else if (!snapshot.connected) {
+          } else if (snapshot.phase !== "connected") {
             this.resetSensitiveUi();
           }
+          this.handleSystemInfoGatewaySnapshot(snapshot);
           this.requestUpdate();
         });
       },
@@ -46,6 +80,10 @@ class ConnectionPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
+    this.systemInfoPolling.stop();
+    this.invalidateSystemInfoRequest();
+    this.systemInfoGatewaySource = null;
+    this.systemInfoClient = null;
     this.subscriptions.clear();
     this.resetSensitiveUi();
     super.disconnectedCallback();
@@ -54,6 +92,118 @@ class ConnectionPage extends OpenClawLightDomElement {
   private resetSensitiveUi() {
     this.gatewayTokenVisible = false;
     this.gatewayPasswordVisible = false;
+  }
+
+  private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
+    if (gateway !== this.systemInfoGatewaySource) {
+      this.systemInfoPolling.stop();
+      this.invalidateSystemInfoRequest();
+      this.systemInfoGatewaySource = gateway;
+      this.systemInfoClient = null;
+      this.systemInfo = null;
+      this.systemInfoUnavailable = false;
+    }
+    this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
+  }
+
+  private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+    const clientChanged = snapshot.client !== this.systemInfoClient;
+    const hasSystemInfo = supportsSystemInfo(snapshot.hello);
+    this.systemInfoClient = snapshot.client;
+    if (clientChanged) {
+      this.invalidateSystemInfoRequest();
+      this.systemInfo = null;
+      this.systemInfoUnavailable = false;
+    } else if (snapshot.phase !== "connected") {
+      this.invalidateSystemInfoRequest();
+      this.systemInfo = null;
+    }
+    if (snapshot.phase === "connected" && snapshot.hello) {
+      this.systemInfoUnavailable = !hasSystemInfo;
+      if (!hasSystemInfo) {
+        this.invalidateSystemInfoRequest();
+        this.systemInfo = null;
+      }
+    }
+    this.syncSystemInfoPolling();
+  }
+
+  private syncSystemInfoPolling() {
+    const gateway = this.context.gateway.snapshot;
+    const shouldPoll =
+      this.isConnected &&
+      !this.systemInfoUnavailable &&
+      gateway.phase === "connected" &&
+      supportsSystemInfo(gateway.hello) &&
+      gateway.client != null;
+    if (!shouldPoll) {
+      this.systemInfoPolling.stop();
+      return;
+    }
+    if (this.systemInfoPolling.start()) {
+      void this.loadSystemInfo();
+    }
+  }
+
+  private invalidateSystemInfoRequest() {
+    this.systemInfoRequestId += 1;
+    this.systemInfoLoading = false;
+  }
+
+  private isCurrentSystemInfoRequest(
+    requestId: number,
+    client: GatewayBrowserClient,
+    gatewaySource: ApplicationContext["gateway"],
+  ): boolean {
+    const gateway = gatewaySource.snapshot;
+    return (
+      this.isConnected &&
+      requestId === this.systemInfoRequestId &&
+      this.systemInfoGatewaySource === gatewaySource &&
+      this.context.gateway === gatewaySource &&
+      gateway.phase === "connected" &&
+      gateway.client === client
+    );
+  }
+
+  private async loadSystemInfo() {
+    const gatewaySource = this.systemInfoGatewaySource;
+    if (!gatewaySource || gatewaySource !== this.context.gateway) {
+      return;
+    }
+    const gateway = gatewaySource.snapshot;
+    const client = gateway.client;
+    if (
+      gateway.phase !== "connected" ||
+      !client ||
+      this.systemInfoUnavailable ||
+      this.systemInfoLoading
+    ) {
+      return;
+    }
+
+    const requestId = ++this.systemInfoRequestId;
+    this.systemInfoLoading = true;
+    try {
+      const response = await client.request("system.info", {});
+      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
+        return;
+      }
+      this.systemInfo = response as SystemInfoResult;
+    } catch (error) {
+      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
+        return;
+      }
+      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
+        this.systemInfo = null;
+        this.systemInfoUnavailable = true;
+        this.systemInfoPolling.stop();
+      }
+    } finally {
+      if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
+        this.systemInfoLoading = false;
+      }
+    }
   }
 
   private resetDraft(gateway: ApplicationContext["gateway"]) {
@@ -92,12 +242,14 @@ class ConnectionPage extends OpenClawLightDomElement {
   override render() {
     const gateway = this.context.gateway.snapshot;
     const body = renderConnection({
-      connected: gateway.connected,
+      connected: gateway.phase === "connected",
       hello: gateway.hello,
       settings: this.settings,
       password: this.password,
       lastError: gateway.lastError,
       lastChannelsRefresh: this.context.channels.state.channelsLastSuccess,
+      systemInfo: this.systemInfo,
+      systemInfoUnavailable: this.systemInfoUnavailable,
       showGatewayToken: this.gatewayTokenVisible,
       showGatewayPassword: this.gatewayPasswordVisible,
       onConnectionChange: (patch) => {
@@ -125,6 +277,10 @@ class ConnectionPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("connection")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("connection")}
+            ${renderDocsLink(CONNECTION_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

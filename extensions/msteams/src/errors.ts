@@ -1,5 +1,9 @@
 // Msteams plugin module implements errors behavior.
 import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isTransientNetworkError,
+  parseRetryAfterHeaderSeconds,
+} from "openclaw/plugin-sdk/retry-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
@@ -136,7 +140,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = parseNonNegativeRetryAfterSeconds(raw);
+      const parsed = parseRetryAfterHeaderSeconds(raw);
       if (parsed !== undefined) {
         return parsed * 1000;
       }
@@ -152,7 +156,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = parseNonNegativeRetryAfterSeconds(raw);
+      const parsed = parseRetryAfterHeaderSeconds(raw);
       if (parsed !== undefined) {
         return parsed * 1000;
       }
@@ -173,28 +177,28 @@ function parseNonNegativeRetryAfterSeconds(raw: string): number | undefined {
   });
 }
 
-type MSTeamsSendErrorKind =
-  | "auth"
-  | "throttled"
-  | "transient"
-  | "permanent"
-  | "network"
-  | "unknown";
-
-type MSTeamsSendErrorClassification = {
-  kind: MSTeamsSendErrorKind;
+type MSTeamsSendErrorMetadata = {
   statusCode?: number;
-  retryAfterMs?: number;
   errorCode?: string;
 };
 
+type MSTeamsSendErrorClassification =
+  | (MSTeamsSendErrorMetadata & { kind: "auth" })
+  | (MSTeamsSendErrorMetadata & {
+      kind: "replay-safe";
+      statusCode: 429;
+      retryAfterMs?: number;
+    })
+  | (MSTeamsSendErrorMetadata & {
+      kind: "ambiguous";
+      source: "http" | "transport";
+    })
+  | (MSTeamsSendErrorMetadata & { kind: "permanent" })
+  | (MSTeamsSendErrorMetadata & { kind: "unknown" });
+
 /**
- * Classify outbound send errors for safe retries and actionable logs.
- *
- * Important: We only mark errors as retryable when we have an explicit HTTP
- * status code that indicates the message was not accepted (e.g. 429, 5xx).
- * For transport-level errors where delivery is ambiguous, we prefer to avoid
- * retries to reduce the chance of duplicate posts.
+ * Owns retry safety and delivery ambiguity for Teams send failures.
+ * Only Teams rate-limit rejection proves this unkeyed POST safe to replay.
  */
 export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
   const statusCode = extractStatusCode(err);
@@ -214,7 +218,7 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
 
   if (statusCode === 429) {
     return {
-      kind: "throttled",
+      kind: "replay-safe",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
       errorCode,
@@ -223,9 +227,9 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
 
   if (statusCode === 408 || (statusCode != null && statusCode >= 500)) {
     return {
-      kind: "transient",
+      kind: "ambiguous",
+      source: "http",
       statusCode,
-      retryAfterMs: retryAfterMs ?? undefined,
       errorCode,
     };
   }
@@ -234,25 +238,15 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
     return { kind: "permanent", statusCode, errorCode };
   }
 
-  // Transport-level errors (no HTTP status code) — check for well-known
-  // network error codes that indicate egress is blocked (#77674).
-  if (statusCode == null) {
-    const networkCode = isRecord(err) && typeof err.code === "string" ? err.code : null;
-    if (
-      networkCode === "ECONNREFUSED" ||
-      networkCode === "ENOTFOUND" ||
-      networkCode === "EHOSTUNREACH" ||
-      networkCode === "ETIMEDOUT" ||
-      networkCode === "ECONNRESET"
-    ) {
-      return { kind: "network", errorCode: networkCode };
-    }
+  // A transport failure can happen after the Connector accepted the POST.
+  // Preserve its code for diagnostics without implying replay is safe.
+  if (statusCode == null && isTransientNetworkError(err)) {
+    return { kind: "ambiguous", source: "transport", errorCode };
   }
 
   return {
     kind: "unknown",
     statusCode: statusCode ?? undefined,
-    retryAfterMs: retryAfterMs ?? undefined,
     errorCode,
   };
 }
@@ -281,14 +275,26 @@ export function formatMSTeamsSendErrorHint(
   if (classification.errorCode === "ContentStreamNotAllowed") {
     return "Teams expired the content stream; stop streaming earlier and fall back to normal message delivery";
   }
-  if (classification.kind === "throttled") {
+  if (classification.kind === "replay-safe") {
     return "Teams throttled the bot; backing off may help";
   }
-  if (classification.kind === "transient") {
-    return "transient Teams/Bot Framework error; retry may succeed";
+  if (classification.kind === "ambiguous") {
+    if (classification.source === "transport") {
+      return "transport-level failure sending to Teams Bot Connector (smba.trafficmanager.net); the outcome is unknown, so check egress and conversation history before taking further action";
+    }
+    return "Teams/Bot Framework delivery outcome is unknown; inspect the conversation history before taking further action";
   }
-  if (classification.kind === "network") {
-    return "transport-level failure sending reply to Teams Bot Connector (smba.trafficmanager.net) — check egress firewall rules allow outbound HTTPS to smba.trafficmanager.net";
+  return undefined;
+}
+
+export function formatMSTeamsDeliveryFailureGuidance(
+  classification: MSTeamsSendErrorClassification,
+): string | undefined {
+  if (classification.kind === "replay-safe") {
+    return "The request was rate-limited before delivery; retrying later may succeed.";
+  }
+  if (classification.kind === "ambiguous") {
+    return "Delivery may already have succeeded; do not send the same content again without checking the conversation.";
   }
   return undefined;
 }

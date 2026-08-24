@@ -2,6 +2,9 @@
   "id": "longcat",
   "name": "LongCat",
   "description": "OpenClaw LongCat provider plugin.",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
@@ -31,7 +34,7 @@
               "input": 0.75,
               "output": 2.95,
               "cacheRead": 0.015,
-              "cacheWrite": 0.75
+              "cacheWrite": 0
             },
             "compat": {
               "supportsStore": false,
@@ -48,7 +51,7 @@
       }
     },
     "discovery": {
-      "longcat": "static"
+      "longcat": "refreshable"
     }
   },
   "setup": {

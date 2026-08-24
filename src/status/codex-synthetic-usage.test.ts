@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { mergeUsageSummaries } from "./codex-synthetic-usage.js";
+import {
+  mergeUsageSummaries,
+  shouldUseCodexSyntheticUsageForRuntime,
+} from "./codex-synthetic-usage.js";
+
+describe("shouldUseCodexSyntheticUsageForRuntime", () => {
+  it("keeps Codex usage enabled after the effective runtime falls back", () => {
+    expect(
+      shouldUseCodexSyntheticUsageForRuntime({
+        provider: "openai",
+        effectiveHarness: "openclaw",
+        sessionHarnessId: "codex",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not enable Codex usage for a never-Codex session", () => {
+    expect(
+      shouldUseCodexSyntheticUsageForRuntime({
+        provider: "openai",
+        effectiveHarness: "openclaw",
+        sessionHarnessId: "openclaw",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("mergeUsageSummaries", () => {
   it("preserves OAuth plan and billing when synthetic Codex windows win", () => {

@@ -69,6 +69,37 @@ struct ShareDraftComposerTests {
         #expect(SharePayloadNormalizer.webURL(from: text) != nil)
     }
 
+    @Test func `URL mirror does not consume provider text admission`() throws {
+        let url = try #require(URL(string: "https://example.com/article"))
+        let mirrorOnly = SharePayloadNormalizer.distinctProviderText(
+            "  https://example.com/article\n",
+            sharedURL: url)
+        #expect(mirrorOnly == nil)
+        #expect(ShareDraftComposer.compose(from: SharedContentPayload(
+            title: nil,
+            url: url,
+            text: mirrorOnly)) == "https://example.com/article")
+
+        let text = mirrorOnly ?? SharePayloadNormalizer.distinctProviderText(
+            "Article summary",
+            sharedURL: url)
+
+        #expect(text == "Article summary")
+        #expect(ShareDraftComposer.compose(from: SharedContentPayload(
+            title: nil,
+            url: url,
+            text: text)) == "Article summary\n\nhttps://example.com/article")
+    }
+
+    @Test func `first distinct provider text remains authoritative`() throws {
+        let url = try #require(URL(string: "https://example.com/article"))
+
+        let first = SharePayloadNormalizer.distinctProviderText("First provider text", sharedURL: url)
+        let retained = first ?? SharePayloadNormalizer.distinctProviderText("Later provider text", sharedURL: url)
+
+        #expect(retained == "First provider text")
+    }
+
     @Test func `deduplicates attributed content that mirrors provider text or URL`() throws {
         let url = try #require(URL(string: "https://example.com/article"))
         #expect(SharePayloadNormalizer.distinctAttributedText(

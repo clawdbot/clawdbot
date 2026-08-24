@@ -3,6 +3,11 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+  resolvePluginInstallOwnerLookup,
+} from "./candidate-install-owner.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -142,17 +147,17 @@ function matchesExplicitInstallRule(params: {
 
 function resolveCandidateDuplicateRank(params: {
   candidate: PluginCandidate;
-  manifestByRoot: Map<string, PluginManifestRecord>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
-  const pluginId = manifestRecord?.id;
+  const installOwner = isPluginCandidateInstallOwnerAmbiguous(params.candidate)
+    ? undefined
+    : resolvePluginCandidateInstallOwner(params.candidate);
   const isExplicitInstall =
     params.candidate.origin === "global" &&
-    pluginId !== undefined &&
+    installOwner !== undefined &&
     matchesExplicitInstallRule({
-      pluginId,
+      pluginId: installOwner,
       source: params.candidate.source,
       index: params.provenance,
       env: params.env,
@@ -187,25 +192,23 @@ function resolveCandidateDuplicateRank(params: {
 export function compareDuplicateCandidateOrder(params: {
   left: PluginCandidate;
   right: PluginCandidate;
-  manifestByRoot: Map<string, PluginManifestRecord>;
+  manifestBySource: Map<string, PluginManifestRecord>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
-  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
+  const leftPluginId = params.manifestBySource.get(params.left.source)?.id;
+  const rightPluginId = params.manifestBySource.get(params.right.source)?.id;
   if (!leftPluginId || leftPluginId !== rightPluginId) {
     return 0;
   }
   return (
     resolveCandidateDuplicateRank({
       candidate: params.left,
-      manifestByRoot: params.manifestByRoot,
       provenance: params.provenance,
       env: params.env,
     }) -
     resolveCandidateDuplicateRank({
       candidate: params.right,
-      manifestByRoot: params.manifestByRoot,
       provenance: params.provenance,
       env: params.env,
     })
@@ -301,9 +304,11 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     if (allowSet.has(plugin.id)) {
       continue;
     }
+    const installOwner = resolvePluginInstallOwnerLookup(params)?.get(plugin.id);
     if (
+      installOwner &&
       isTrackedByProvenance({
-        pluginId: plugin.id,
+        pluginId: installOwner,
         source: plugin.source,
         index: params.provenance,
         env: params.env,
@@ -311,7 +316,7 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
-    const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with '${formatPluginInspectCommand(plugin.id)}', then pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or reinstall from a trusted source so OpenClaw records install provenance.`;
+    const message = `OpenClaw can't verify where this plugin came from. Review it with '${formatPluginInspectCommand(plugin.id)}'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features.`;
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,

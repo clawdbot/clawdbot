@@ -48,18 +48,33 @@ function stubGuardedFetch(response: Response) {
   return release;
 }
 
+function createStalledLookup() {
+  let release: (() => void) | undefined;
+  const lookupFn = vi.fn(
+    async () =>
+      await new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
+        release = () => resolve([{ address: "162.159.136.234", family: 4 }]);
+      }),
+  );
+  return {
+    lookupFn: lookupFn as unknown as NonNullable<
+      Parameters<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard
+      >[0]["lookupFn"]
+    >,
+    release: () => release?.(),
+  };
+}
+
 describe("Discord gateway metadata", () => {
-  it("resolves gateway info timeouts from strict integer config and env values", () => {
-    expect(resolveDiscordGatewayInfoTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
+  it("resolves gateway info timeouts from strict integer env values", () => {
     expect(
       resolveDiscordGatewayInfoTimeoutMs({
         env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "90000" },
       }),
     ).toBe(90_000);
-    expect(resolveDiscordGatewayInfoTimeoutMs({ configuredTimeoutMs: 150_000 })).toBe(120_000);
     expect(
       resolveDiscordGatewayInfoTimeoutMs({
-        configuredTimeoutMs: 1.5,
         env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "0x1000" },
       }),
     ).toBe(30_000);
@@ -125,6 +140,47 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
 
     await expect(response.json()).resolves.toEqual(JSON.parse(payload));
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("aborts stalled DNS preflight through the gateway metadata deadline", async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    const stalledLookup = createStalledLookup();
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+    let guardSettled = false;
+    mockFetchWithSsrFGuard.mockImplementation(async (params) => {
+      try {
+        return await actual.fetchWithSsrFGuard({
+          ...params,
+          fetchImpl,
+          lookupFn: stalledLookup.lookupFn,
+        });
+      } finally {
+        guardSettled = true;
+      }
+    });
+
+    const fetchPromise = fetchDiscordGatewayInfoWithTimeout({
+      token: "test",
+      timeoutMs: 250,
+      fetchImpl: fetchDiscordGatewayMetadataGuarded,
+    }).catch((error: unknown) => error);
+
+    try {
+      await vi.waitFor(() => expect(stalledLookup.lookupFn).toHaveBeenCalledOnce());
+      const guardedParams = mockFetchWithSsrFGuard.mock.calls[0]?.[0];
+      expect(guardedParams.signal).toBe(guardedParams.init.signal);
+      expect(guardedParams).not.toHaveProperty("timeoutMs");
+
+      await expect(fetchPromise).resolves.toBeInstanceOf(Error);
+      await vi.waitFor(() => expect(guardSettled).toBe(true));
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      stalledLookup.release();
+    }
+    await Promise.resolve();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("rejects oversized response body from a real loopback HTTP server", async () => {

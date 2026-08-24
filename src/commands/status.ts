@@ -1,5 +1,5 @@
 // Public status command barrel.
-// Exposes the command and summary builder without importing implementation details.
+// Keeps the shipped command facade while owner implementations live outside commands.
 
 export { statusCommand } from "./status.command.js";
-export { getStatusSummary } from "./status.summary.js";
+export { getStatusSummary } from "../status/summary.js";

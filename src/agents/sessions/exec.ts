@@ -3,6 +3,7 @@
  */
 
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
 import { spawnCommand } from "../../process/exec.js";
 import { killProcessTree } from "../../process/kill-tree.js";
@@ -41,6 +42,11 @@ type OutputCapture = {
   text: string;
   truncatedChars: number;
 };
+type OutputDecoder = ReturnType<typeof createWindowsOutputDecoder>;
+
+function decodeCapturedOutput(decoder: OutputDecoder, chunk: Buffer | string): string {
+  return Buffer.isBuffer(chunk) ? decoder.decode(chunk) : `${decoder.flush()}${chunk}`;
+}
 
 function clampMaxOutputChars(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -91,10 +97,12 @@ export async function execCommand(
       reject: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const releaseOutput = releaseChildProcessOutputAfterExit(proc);
+    const releaseOutput = releaseChildProcessOutputAfterExit(proc.nodeChildProcess);
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
     let stderr: OutputCapture = { text: "", truncatedChars: 0 };
+    const stdoutDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
+    const stderrDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
     let killed = false;
     let timeoutId: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
@@ -121,6 +129,16 @@ export async function execCommand(
       }
       if (options?.signal) {
         options.signal.removeEventListener("abort", killProcess);
+      }
+      const stdoutBeforeFlush = stdout.truncatedChars;
+      stdout = appendCapturedOutput(stdout, stdoutDecoder.flush(), maxOutputChars, truncateOutput);
+      if (!truncateOutput && stdout.truncatedChars > stdoutBeforeFlush && !outputLimitExceeded) {
+        outputLimitExceeded = "stdout";
+      }
+      const stderrBeforeFlush = stderr.truncatedChars;
+      stderr = appendCapturedOutput(stderr, stderrDecoder.flush(), maxOutputChars, truncateOutput);
+      if (!truncateOutput && stderr.truncatedChars > stderrBeforeFlush && !outputLimitExceeded) {
+        outputLimitExceeded = "stderr";
       }
       if (outputLimitExceeded) {
         stderr = appendCapturedOutput(
@@ -184,7 +202,12 @@ export async function execCommand(
 
     proc.stdout?.on("data", (data) => {
       const before = stdout.truncatedChars;
-      stdout = appendCapturedOutput(stdout, data, maxOutputChars, truncateOutput);
+      stdout = appendCapturedOutput(
+        stdout,
+        decodeCapturedOutput(stdoutDecoder, data),
+        maxOutputChars,
+        truncateOutput,
+      );
       if (stdout.truncatedChars > before) {
         markOutputLimitExceeded("stdout");
       }
@@ -192,7 +215,12 @@ export async function execCommand(
 
     proc.stderr?.on("data", (data) => {
       const before = stderr.truncatedChars;
-      stderr = appendCapturedOutput(stderr, data, maxOutputChars, truncateOutput);
+      stderr = appendCapturedOutput(
+        stderr,
+        decodeCapturedOutput(stderrDecoder, data),
+        maxOutputChars,
+        truncateOutput,
+      );
       if (stderr.truncatedChars > before) {
         markOutputLimitExceeded("stderr");
       }

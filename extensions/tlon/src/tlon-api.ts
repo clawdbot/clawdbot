@@ -58,6 +58,25 @@ const TLON_UPLOAD_TIMEOUT_MS = 300_000;
 
 let currentClientConfig: ClientConfig | null = null;
 
+async function releaseUploadResponse(
+  guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined,
+): Promise<void> {
+  if (!guarded) {
+    return;
+  }
+  try {
+    // Guard release closes the dispatcher, not an unread response stream. Settle terminal
+    // upload bodies first so a streaming response cannot delay dispatcher cleanup.
+    if (!guarded.response.bodyUsed) {
+      await guarded.response.body?.cancel();
+    }
+  } catch {
+    // Response cancellation is best-effort; dispatcher release must still run.
+  } finally {
+    await guarded.release();
+  }
+}
+
 export function configureClient(params: ClientConfig): void {
   currentClientConfig = {
     ...params,
@@ -240,9 +259,9 @@ async function getMemexUploadUrl(params: {
   }
 
   const endpoint = `${MEMEX_BASE_URL}/v1/${params.config.shipName}/upload`;
-  let release: (() => Promise<void>) | undefined;
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    guarded = await fetchWithSsrFGuard({
       url: endpoint,
       init: {
         method: "PUT",
@@ -259,7 +278,6 @@ async function getMemexUploadUrl(params: {
       maxRedirects: 0,
       timeoutMs: TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS,
     });
-    release = guarded.release;
     if (!guarded.response.ok) {
       throw new Error(`Memex upload request failed: ${guarded.response.status}`);
     }
@@ -275,7 +293,7 @@ async function getMemexUploadUrl(params: {
 
     return { hostedUrl: data.filePath, uploadUrl: data.url };
   } finally {
-    await release?.();
+    await releaseUploadResponse(guarded);
   }
 }
 
@@ -310,9 +328,9 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     });
     const trustedUploadUrl = assertTrustedMemexUploadUrl(uploadUrl, "Memex upload URL");
 
-    let release: (() => Promise<void>) | undefined;
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
     try {
-      const guarded = await fetchWithSsrFGuard({
+      guarded = await fetchWithSsrFGuard({
         url: trustedUploadUrl,
         init: {
           method: "PUT",
@@ -327,13 +345,12 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         maxRedirects: 0,
         timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
       });
-      release = guarded.release;
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
       if (!guarded.response.ok) {
         throw new Error(`Upload failed: ${guarded.response.status}`);
       }
     } finally {
-      await release?.();
+      await releaseUploadResponse(guarded);
     }
 
     return { url: assertTrustedMemexUploadUrl(hostedUrl, "Memex hosted URL") };
@@ -371,9 +388,9 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
     expiresIn: 3600,
   });
 
-  let release: (() => Promise<void>) | undefined;
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    guarded = await fetchWithSsrFGuard({
       url: signedUrl,
       init: {
         method: "PUT",
@@ -386,12 +403,11 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       policy: privateNetworkPolicy,
       timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
     });
-    release = guarded.release;
     if (!guarded.response.ok) {
       throw new Error(`Upload failed: ${guarded.response.status}`);
     }
   } finally {
-    await release?.();
+    await releaseUploadResponse(guarded);
   }
 
   const publicUrl = storageConfig.publicUrlBase

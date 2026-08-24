@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 type ReleasePrepareMode = "check" | "shadow" | "write";
 
@@ -40,6 +40,7 @@ type WorktreeState = {
 
 const DEFAULT_JOBS = 4;
 const MAX_JOBS = 16;
+const GIT_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 export function parseReleasePrepareArgs(argv: string[]): ReleasePrepareArgs {
   let android = false;
@@ -280,25 +281,16 @@ export function runReleasePrepareStep(
   progressStream.write(`\n[release-prepare] ${step.name}\n`);
   const result = spawnSync(step.command, step.args, {
     cwd,
-    encoding: json ? "utf8" : undefined,
     env: process.env,
-    stdio: json ? ["ignore", "pipe", "pipe"] : "inherit",
+    stdio: json ? ["ignore", process.stderr.fd, process.stderr.fd] : "inherit",
   });
   if (result.error) {
     throw result.error;
   }
-  if (json) {
-    if (typeof result.stdout === "string" && result.stdout) {
-      process.stderr.write(result.stdout);
-    }
-    if (typeof result.stderr === "string" && result.stderr) {
-      process.stderr.write(result.stderr);
-    }
-  }
   return result.status ?? 1;
 }
 
-function readWorktreeState(rootDir: string): WorktreeState {
+export function readWorktreeState(rootDir: string): WorktreeState {
   const head = git(rootDir, ["rev-parse", "HEAD"]);
   const status = git(rootDir, ["status", "--porcelain=v1", "--untracked-files=all"]);
   const diff = git(rootDir, ["diff", "--binary", "HEAD"]);
@@ -334,6 +326,9 @@ function git(cwd: string, args: string[]): string {
     cwd,
     encoding: "utf8",
     env: process.env,
+    // Version preparation can legitimately create multi-megabyte generated diffs.
+    // Keep the fingerprint capture bounded without inheriting Node's 1 MiB default.
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.status !== 0) {

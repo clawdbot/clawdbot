@@ -4,7 +4,7 @@ import type {
   ChannelApprovalNativeAvailabilityAdapter,
   ChannelApprovalNativeRuntimeAdapter,
 } from "./approval-handler-runtime-types.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 /** Runtime-context capability key used by channels to register native approval resources. */
 export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
@@ -28,7 +28,7 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
   >;
   isConfigured: ChannelApprovalNativeAvailabilityAdapter["isConfigured"];
   shouldHandle: ChannelApprovalNativeAvailabilityAdapter["shouldHandle"];
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
 }): ChannelApprovalNativeRuntimeAdapter<

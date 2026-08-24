@@ -10,6 +10,8 @@ const MEMORY_CORE_PLUGIN_ID = "memory-core";
 export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
 export const DREAMING_SESSION_INGESTION_FILES_NAMESPACE = "dreaming-session-ingestion-files";
 export const DREAMING_SESSION_INGESTION_SEEN_NAMESPACE = "dreaming-session-ingestion-seen";
+export const SESSION_BACKFILL_REWIND_NAMESPACE = "session-backfill-rewind";
+export const DREAMING_MEMORY_BACKUP_NAMESPACE = "dreaming-memory-backups";
 export const SHORT_TERM_RECALL_NAMESPACE = "short-term-recall";
 export const SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "short-term-phase-signals";
 export const SHORT_TERM_META_NAMESPACE = "short-term-meta";
@@ -19,7 +21,9 @@ const DREAMING_WORKSPACE_STATE_MAX_ENTRIES = 50_000;
 export const SHORT_TERM_LOCK_MAX_ENTRIES = 4_096;
 export const SESSION_SEEN_HASHES_PER_CHUNK = 512;
 
-type MemoryCoreOpenKeyedStore = <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+export type MemoryCoreOpenKeyedStore = <T>(
+  options: OpenKeyedStoreOptions,
+) => PluginStateKeyedStore<T>;
 
 type WorkspaceValue<T> = {
   version: 1;
@@ -67,7 +71,7 @@ export function memoryCoreWorkspaceStateKey(workspaceDir: string): string {
   return createHash("sha256").update(normalizeMemoryCoreWorkspaceKey(workspaceDir)).digest("hex");
 }
 
-export function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
+function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
   const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
   const itemKey = createHash("sha256").update(logicalKey).digest("hex");
   return `${workspaceKey}:${itemKey}`;
@@ -160,4 +164,14 @@ export async function clearMemoryCoreWorkspaceNamespace(params: {
       await store.delete(entry.key);
     }
   }
+}
+
+export async function deleteMemoryCoreWorkspaceEntry(params: {
+  namespace: string;
+  workspaceDir: string;
+  key: string;
+}): Promise<void> {
+  await openWorkspaceStore(params.namespace).delete(
+    memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
+  );
 }

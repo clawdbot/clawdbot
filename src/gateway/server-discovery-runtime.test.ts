@@ -154,7 +154,6 @@ describe("startGatewayDiscovery", () => {
       port: 18789,
       gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
       gatewayDirectReachable: true,
-      canvasPort: 18789,
       wideAreaDiscoveryEnabled: false,
       tailscaleMode: "serve",
       mdnsMode: "full",
@@ -168,7 +167,6 @@ describe("startGatewayDiscovery", () => {
       gatewayTlsEnabled: true,
       gatewayTlsFingerprintSha256: "abc123",
       gatewayDirectReachable: true,
-      canvasPort: 18789,
       sshPort: 2222,
       tailnetDns: "gateway.tailnet.example.ts.net",
       cliPath: "/usr/local/bin/openclaw",
@@ -221,6 +219,41 @@ describe("startGatewayDiscovery", () => {
     ]);
     await result.bonjourStop?.();
     vi.useRealTimers();
+  });
+
+  it("waits for delayed discovery when the configured timeout exceeds Node's timer range", async () => {
+    useDevelopmentDiscoveryEnv();
+    process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "2147483648";
+
+    const stop = vi.fn();
+    const service = makeDiscoveryService({
+      id: "slow-discovery",
+      advertise: vi.fn(async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 50);
+        });
+        return { stop };
+      }),
+    });
+    const logs = makeLogs();
+
+    const startedAt = Date.now();
+    const result = await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "off",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: logs,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    await result.bonjourStop?.();
+
+    expect(elapsedMs).toBeGreaterThanOrEqual(25);
+    expect(logs.warn).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("skips local discovery services when mDNS mode is off", async () => {
@@ -330,7 +363,7 @@ describe("startGatewayDiscovery", () => {
     expect(mocks.writeWideAreaGatewayZone).not.toHaveBeenCalled();
     expect(logs.warn.mock.calls).toEqual([
       [
-        "discovery.wideArea.enabled is true, but no domain was configured; set discovery.wideArea.domain to enable unicast DNS-SD",
+        "wide-area discovery was requested without a domain; set discovery.wideArea.domain to enable unicast DNS-SD",
       ],
     ]);
     expect(result.bonjourStop).toBeNull();

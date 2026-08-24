@@ -1,8 +1,10 @@
 // Qa Lab plugin module implements qa transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { QaSuiteInfraError } from "./errors.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
@@ -17,7 +19,7 @@ import type {
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
-export type QaTransportGatewayClient = {
+type QaTransportGatewayClient = {
   call: (
     method: string,
     params?: unknown,
@@ -27,6 +29,85 @@ export type QaTransportGatewayClient = {
     },
   ) => Promise<unknown>;
 };
+
+export async function waitForQaTransportAccountReady(params: {
+  accountId: string;
+  channel: string;
+  gateway: QaTransportGatewayClient;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 45_000;
+  const pollIntervalMs = params.pollIntervalMs ?? 500;
+  const deadline = Date.now() + timeoutMs;
+  let lastAccountStatus = `no ${params.channel} accounts reported`;
+  let lastProbeError: string | undefined;
+
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    try {
+      const payload = (await params.gateway.call(
+        "channels.status",
+        { probe: false, timeoutMs: Math.min(2_000, remainingMs) },
+        { timeoutMs: Math.min(5_000, remainingMs) },
+      )) as {
+        channelAccounts?: Record<
+          string,
+          Array<{
+            accountId?: string;
+            connected?: boolean;
+            lastError?: string | null;
+            lifecycle?: string;
+            restartPending?: boolean;
+            running?: boolean;
+          }>
+        >;
+      };
+      const accounts = payload.channelAccounts?.[params.channel] ?? [];
+      const account = accounts.find((entry) => entry.accountId === params.accountId);
+      lastProbeError = undefined;
+      lastAccountStatus = account
+        ? JSON.stringify({
+            accountId: account.accountId ?? null,
+            running: account.running ?? null,
+            connected: account.connected ?? null,
+            lifecycle: account.lifecycle ?? null,
+            restartPending: account.restartPending ?? null,
+            lastError: account.lastError ?? null,
+          })
+        : accounts.length > 0
+          ? `${params.channel} account "${params.accountId}" not reported; available accounts: ${accounts
+              .map((entry) => entry.accountId ?? "unknown")
+              .join(", ")}`
+          : `no ${params.channel} accounts reported`;
+
+      // Connected sockets can still be unauthenticated or identity-blocked.
+      if (
+        account?.running === true &&
+        account.connected === true &&
+        account.lifecycle === "ready" &&
+        account.restartPending !== true
+      ) {
+        return;
+      }
+    } catch (error) {
+      lastProbeError = formatErrorMessage(error);
+    }
+    const remainingSleepMs = deadline - Date.now();
+    if (remainingSleepMs > 0) {
+      await sleep(Math.min(pollIntervalMs, remainingSleepMs));
+    }
+  }
+
+  throw new QaSuiteInfraError(
+    "transport_ready_timeout",
+    [
+      `timed out after ${timeoutMs}ms waiting for ${params.channel} ready`,
+      `last status: ${lastAccountStatus}`,
+      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
+    ].join("; "),
+  );
+}
 
 export type QaTransportActionName = "delete" | "edit" | "react" | "thread-create";
 
@@ -61,6 +142,7 @@ export type QaTransportState = {
 type QaTransportFailureCursorSpace = "all" | "outbound";
 
 type QaTransportFailureAssertionOptions = {
+  accountId?: string;
   sinceIndex?: number;
   cursorSpace?: QaTransportFailureCursorSpace;
 };
@@ -111,6 +193,7 @@ export async function waitForQaTransportCondition<T>(
   check: () => T | Promise<T | null | undefined> | null | undefined,
   timeoutMs = 15_000,
   intervalMs = 100,
+  describeTimeout?: () => string,
 ): Promise<T> {
   const pollIntervalMs = resolveTimerTimeoutMs(intervalMs, 100, 0);
   const startedAt = Date.now();
@@ -125,7 +208,8 @@ export async function waitForQaTransportCondition<T>(
     }
     await sleep(Math.min(pollIntervalMs, remainingMs));
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  const details = describeTimeout?.().trim();
+  throw new Error(`timed out after ${timeoutMs}ms${details ? `; ${details}` : ""}`);
 }
 
 export function findFailureOutboundMessage(
@@ -142,7 +226,9 @@ export function findFailureOutboundMessage(
           .slice(options?.sinceIndex ?? 0);
   return observedMessages.find(
     (message) =>
-      message.direction === "outbound" && Boolean(extractQaFailureReplyText(message.text)),
+      message.direction === "outbound" &&
+      (!options?.accountId || message.accountId === options.accountId) &&
+      Boolean(extractQaFailureReplyText(message)),
   );
 }
 
@@ -152,25 +238,28 @@ function assertNoFailureReplies(
 ) {
   const failureMessage = findFailureOutboundMessage(state, options);
   if (failureMessage) {
-    throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+    throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
   }
 }
 
-function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
+function createFailureAwareTransportWaitForCondition(state: QaTransportState, accountId: string) {
   return async function waitForTransportCondition<T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
     timeoutMs = 15_000,
     intervalMs = 100,
+    describeTimeout?: () => string,
   ): Promise<T> {
     const sinceIndex = state.getSnapshot().messages.length;
     return await waitForQaTransportCondition(
       async () => {
         assertNoFailureReplies(state, {
+          accountId,
           sinceIndex,
           cursorSpace: "all",
         });
         const value = await check();
         assertNoFailureReplies(state, {
+          accountId,
           sinceIndex,
           cursorSpace: "all",
         });
@@ -178,8 +267,35 @@ function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
       },
       timeoutMs,
       intervalMs,
+      describeTimeout,
     );
   };
+}
+
+const QA_TRANSPORT_TIMEOUT_EVENT_LIMIT = 8;
+
+function describeQaTransportTimeout(params: {
+  accountId: string;
+  describeTransportState?: () => string;
+  state: QaTransportState;
+}) {
+  const eventKinds = params.state
+    .getSnapshot()
+    .events.filter((event) => event.accountId === params.accountId)
+    .slice(-QA_TRANSPORT_TIMEOUT_EVENT_LIMIT)
+    .map((event) => event.kind);
+  let transportState: string | undefined;
+  try {
+    transportState = params.describeTransportState?.().trim();
+  } catch {
+    transportState = "transport state unavailable";
+  }
+  return [
+    transportState,
+    `final bus-event kinds=[${eventKinds.length > 0 ? eventKinds.join(",") : "none"}]`,
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 type QaTransportAdapterDefinition = Awaited<
@@ -210,6 +326,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   readonly state: QaTransportState;
   readonly waitForCondition: QaTransportAdapter["waitForCondition"];
   private readonly assertTransportHealthy: () => void;
+  private readonly describeTimeout: () => string;
 
   constructor(params: {
     id: string;
@@ -219,6 +336,8 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     supportedActions?: readonly QaTransportActionName[];
     state: QaTransportState;
     assertTransportHealthy?: () => void;
+    describeTimeout?: () => string;
+    describeTransportState?: () => string;
   }) {
     this.id = params.id;
     this.label = params.label;
@@ -227,7 +346,18 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     this.supportedActions = params.supportedActions ?? [];
     this.state = params.state;
     this.assertTransportHealthy = params.assertTransportHealthy ?? (() => undefined);
-    const waitForCondition = createFailureAwareTransportWaitForCondition(this.state);
+    this.describeTimeout =
+      params.describeTimeout ??
+      (() =>
+        describeQaTransportTimeout({
+          accountId: this.accountId,
+          describeTransportState: params.describeTransportState,
+          state: this.state,
+        }));
+    const waitForCondition = createFailureAwareTransportWaitForCondition(
+      this.state,
+      this.accountId,
+    );
     this.waitForCondition = async (check, timeoutMs, intervalMs) =>
       await waitForCondition(
         async () => {
@@ -236,6 +366,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
         },
         timeoutMs,
         intervalMs,
+        this.describeTimeout,
       );
   }
 
@@ -274,6 +405,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     await sleep(quietMs);
     this.assertTransportHealthy();
     assertNoFailureReplies(this.state, {
+      accountId: this.accountId,
       sinceIndex: input.sinceIndex,
       cursorSpace: "outbound",
     });
@@ -285,35 +417,45 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   }
 
   async waitForOutbound(input: QaTransportOutboundMatch) {
-    return await waitForQaTransportCondition(() => {
-      this.assertTransportHealthy();
-      assertNoFailureReplies(this.state, {
-        sinceIndex: input.sinceIndex,
-        cursorSpace: "outbound",
-      });
-      return this.outboundSince(input.sinceIndex).find((message) => {
-        if (input.conversation && message.conversation.id !== input.conversation.id) {
-          return false;
-        }
-        if (input.conversation && message.conversation.kind !== input.conversation.kind) {
-          return false;
-        }
-        if (input.senderId && message.senderId !== input.senderId) {
-          return false;
-        }
-        if (input.threadId && message.threadId !== input.threadId) {
-          return false;
-        }
-        return !input.textIncludes || message.text.includes(input.textIncludes);
-      });
-    }, input.timeoutMs);
+    return await waitForQaTransportCondition(
+      () => {
+        this.assertTransportHealthy();
+        assertNoFailureReplies(this.state, {
+          accountId: this.accountId,
+          sinceIndex: input.sinceIndex,
+          cursorSpace: "outbound",
+        });
+        return this.outboundSince(input.sinceIndex).find((message) => {
+          if (message.deleted) {
+            return false;
+          }
+          if (input.conversation && message.conversation.id !== input.conversation.id) {
+            return false;
+          }
+          if (input.conversation && message.conversation.kind !== input.conversation.kind) {
+            return false;
+          }
+          if (input.senderId && message.senderId !== input.senderId) {
+            return false;
+          }
+          if (input.threadId && message.threadId !== input.threadId) {
+            return false;
+          }
+          return !input.textIncludes || message.text.includes(input.textIncludes);
+        });
+      },
+      input.timeoutMs,
+      undefined,
+      this.describeTimeout,
+    );
   }
 
   private outboundSince(sinceIndex = 0) {
     return this.state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound")
-      .slice(sinceIndex);
+      .slice(sinceIndex)
+      .filter((message) => message.accountId === this.accountId);
   }
 }
 
@@ -321,6 +463,12 @@ export function createQaStateBackedTransportAdapter(
   state: QaTransportState,
   params: QaTransportAdapterDefinition,
 ): QaTransportAdapter {
+  const describeTimeout = () =>
+    describeQaTransportTimeout({
+      accountId: params.accountId,
+      describeTransportState: params.describeTransportState,
+      state,
+    });
   const adapter = new (class extends QaStateBackedTransportAdapter {
     createGatewayConfig = params.createGatewayConfig;
     waitReady = params.waitReady;
@@ -342,6 +490,7 @@ export function createQaStateBackedTransportAdapter(
     supportedActions: params.supportedActions,
     state,
     assertTransportHealthy: params.assertTransportHealthy,
+    describeTimeout,
   });
   Object.assign(adapter, {
     ...(params.sendNativeCommand ? { sendNativeCommand: params.sendNativeCommand } : {}),
@@ -349,17 +498,22 @@ export function createQaStateBackedTransportAdapter(
       params.waitForOutboundSequence ??
       (async (input: QaTransportOutboundSequenceMatch) =>
         await waitForQaTransportOutboundSequence({
+          accountId: params.accountId,
           input,
           readEvents: () => {
             params.assertTransportHealthy?.();
             return state.getSnapshot().events;
           },
+          describeTimeout,
         })),
     ...(params.createRuntimeEnvPatch
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
     ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
+    ...(params.cleanupAfterGatewayStop
+      ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }
+      : {}),
   });
   return adapter;
 }
@@ -384,23 +538,38 @@ function isQaTransportOutboundEvent(
 }
 
 export async function waitForQaTransportOutboundSequence(params: {
+  accountId: string;
   input: QaTransportOutboundSequenceMatch;
   readEvents: () =>
     | readonly (QaBusEvent | QaTransportOutboundEvent)[]
     | Promise<readonly (QaBusEvent | QaTransportOutboundEvent)[]>;
+  describeTimeout?: () => string;
 }): Promise<QaTransportOutboundSequence> {
   const minimumPreviewEvents = params.input.minimumPreviewEvents ?? 1;
   const finalSettleMs = params.input.finalSettleMs ?? 300;
   let stableCursor: number | null = null;
   let stableSince = 0;
-  return await waitForQaTransportCondition(async () => {
-    const events = (await params.readEvents())
-      .filter((event) => event.cursor > (params.input.sinceCursor ?? 0))
-      .map((event) =>
-        isQaTransportOutboundEvent(event) ? event : normalizeQaBusOutboundEvent(event),
-      )
-      .filter((event): event is QaTransportOutboundEvent => event !== null)
-      .filter(({ message }) => {
+  return await waitForQaTransportCondition(
+    async () => {
+      const ownedEvents = (await params.readEvents())
+        .filter((event) => event.cursor > (params.input.sinceCursor ?? 0))
+        .map((event) =>
+          isQaTransportOutboundEvent(event) ? event : normalizeQaBusOutboundEvent(event),
+        )
+        .filter((event): event is QaTransportOutboundEvent => event !== null)
+        .filter(
+          ({ message }) =>
+            message.accountId === params.accountId && message.direction === "outbound",
+        );
+      // Failures belong to the account, even when a different conversation has a matching final.
+      for (const { kind, message } of ownedEvents) {
+        const failureReply =
+          kind === "deleted" || message.deleted ? undefined : extractQaFailureReplyText(message);
+        if (failureReply) {
+          throw new Error(failureReply);
+        }
+      }
+      const events = ownedEvents.filter(({ message }) => {
         if (
           params.input.conversationId &&
           message.conversation.id !== params.input.conversationId
@@ -409,47 +578,58 @@ export async function waitForQaTransportOutboundSequence(params: {
         }
         return !params.input.threadId || message.threadId === params.input.threadId;
       });
-    const finalIndex = events.findLastIndex(
-      ({ kind, message }) =>
-        kind !== "deleted" && message.text.includes(params.input.finalTextIncludes),
-    );
-    if (finalIndex < 0) {
-      return undefined;
-    }
-    const candidate = events[finalIndex];
-    if (!candidate) {
-      return undefined;
-    }
-    const sequenceEvents = events.filter(({ message }) => message.id === candidate.message.id);
-    const latest = sequenceEvents.at(-1);
-    if (
-      !latest ||
-      latest.kind === "deleted" ||
-      !latest.message.text.includes(params.input.finalTextIncludes)
-    ) {
-      stableCursor = null;
-      return undefined;
-    }
-    const previewEvents = sequenceEvents.filter(
-      ({ cursor, kind, message }) =>
-        cursor < candidate.cursor &&
-        kind !== "deleted" &&
-        !message.text.includes(params.input.finalTextIncludes),
-    );
-    if (previewEvents.length < minimumPreviewEvents) {
-      return undefined;
-    }
-    if (stableCursor !== latest.cursor) {
-      stableCursor = latest.cursor;
-      stableSince = Date.now();
-      return finalSettleMs === 0 ? { events: sequenceEvents, final: latest.message } : undefined;
-    }
-    if (Date.now() - stableSince < finalSettleMs) {
-      return undefined;
-    }
-    return {
-      events: sequenceEvents,
-      final: latest.message,
-    };
-  }, params.input.timeoutMs);
+      const finalIndex = events.findLastIndex(
+        ({ kind, message }) =>
+          kind !== "deleted" &&
+          !message.deleted &&
+          message.text.includes(params.input.finalTextIncludes),
+      );
+      if (finalIndex < 0) {
+        return undefined;
+      }
+      const candidate = events[finalIndex];
+      if (!candidate) {
+        return undefined;
+      }
+      const finalLineage = events.filter(({ message }) => message.id === candidate.message.id);
+      const latest = finalLineage.at(-1);
+      if (
+        !latest ||
+        latest.kind === "deleted" ||
+        latest.message.deleted ||
+        !latest.message.text.includes(params.input.finalTextIncludes)
+      ) {
+        stableCursor = null;
+        return undefined;
+      }
+      const previewEvents = events.filter(
+        ({ cursor, kind, message }) =>
+          cursor < candidate.cursor &&
+          kind !== "deleted" &&
+          !message.text.includes(params.input.finalTextIncludes),
+      );
+      if (previewEvents.length < minimumPreviewEvents) {
+        return undefined;
+      }
+      const sequenceCursors = new Set(
+        [...previewEvents, ...finalLineage].map(({ cursor }) => cursor),
+      );
+      const sequenceEvents = events.filter(({ cursor }) => sequenceCursors.has(cursor));
+      if (stableCursor !== latest.cursor) {
+        stableCursor = latest.cursor;
+        stableSince = Date.now();
+        return finalSettleMs === 0 ? { events: sequenceEvents, final: latest.message } : undefined;
+      }
+      if (Date.now() - stableSince < finalSettleMs) {
+        return undefined;
+      }
+      return {
+        events: sequenceEvents,
+        final: latest.message,
+      };
+    },
+    params.input.timeoutMs,
+    undefined,
+    params.describeTimeout,
+  );
 }

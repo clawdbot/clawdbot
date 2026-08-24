@@ -1,4 +1,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACTIVE_MEMORY_DEBUG_PREFIX,
@@ -27,6 +31,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
       | undefined;
     for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
       agentId: params.agentId,
+      readOnly: true,
     })) {
       if (!entry || typeof entry !== "object") {
         continue;
@@ -118,9 +123,9 @@ function resolveRecallRunChannelContext(params: {
       agentId: params.agentId,
       sessionKey: resolvedSessionKey,
     });
-    const rawStrongEntryChannel =
-      normalizeOptionalString(sessionEntry?.lastChannel) ??
-      normalizeOptionalString(sessionEntry?.channel);
+    const rawStrongEntryChannel = normalizeOptionalString(
+      deliveryContextFromSession(sessionEntry)?.channel,
+    );
     // Channel IDs containing ":" or "/" are scoped conversation IDs, not
     // runnable channel names. The same guard that
     // applies to explicit channelId (#76704) must also apply to channels
@@ -129,7 +134,7 @@ function resolveRecallRunChannelContext(params: {
       rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel)
         ? rawStrongEntryChannel
         : undefined;
-    const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
+    const weakEntryChannel = normalizeOptionalString(sessionDeliveryOrigin(sessionEntry)?.provider);
     return resolveReturnValue({
       resolvedChannel: strongEntryChannel ?? weakEntryChannel,
       resolvedChannelStrength: strongEntryChannel

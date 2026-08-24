@@ -18,6 +18,7 @@ export function createCommandTerminationController(params: {
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
   killProcessTree?: boolean;
+  killGraceMs: number;
   isChildExited: () => boolean;
   isCommandSettled: () => boolean;
 }): { terminate: () => boolean; settle: () => Promise<void> } {
@@ -70,7 +71,7 @@ export function createCommandTerminationController(params: {
       if (graceful) {
         startTaskkill(["/PID", String(childPid), "/T"]);
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          const timer = setTimeout(resolve, params.killGraceMs);
           timer.unref();
         });
         if (isDirectChildAlive()) {
@@ -97,12 +98,15 @@ export function createCommandTerminationController(params: {
       return false;
     }
     if (params.killProcessTree && typeof childPid === "number") {
-      processTreeSettleAt ??= Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
+      processTreeSettleAt ??= Date.now() + params.killGraceMs;
       if (process.platform === "win32") {
         startWindowsTermination(childPid, true);
         return true;
       }
-      terminateProcessTree(childPid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+      terminateProcessTree(childPid, {
+        graceMs: params.killGraceMs,
+        detached: true,
+      });
       return false;
     }
     if (!directChildAlive) {
@@ -136,7 +140,7 @@ export function createCommandTerminationController(params: {
       });
     }
     if (process.platform !== "win32") {
-      terminateProcessTree(params.child.pid, { force: true });
+      terminateProcessTree(params.child.pid, { force: true, detached: true });
     }
   };
 

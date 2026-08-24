@@ -2,22 +2,24 @@
 import fs from "node:fs/promises";
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { Static } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
-import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
+import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
-import type {
-  DiffArtifactContext,
-  DiffRenderOptions,
-  DiffRenderTarget,
-  DiffToolDefaults,
-} from "./types.js";
 import {
+  type DiffArtifactContext,
+  type DiffRenderOptions,
+  type DiffRenderTarget,
+  type DiffToolDefaults,
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_LAYOUTS,
   DIFF_MODES,
@@ -38,6 +40,7 @@ const MAX_TITLE_BYTES = 1_024;
 const MAX_PATH_BYTES = 2_048;
 const MAX_LANG_BYTES = 128;
 const MAX_DIFF_ARTIFACT_TTL_SECONDS = 21_600;
+const loadDiffsBrowserRuntime = createLazyRuntimeModule(() => import("./browser.runtime.js"));
 
 const DiffsToolSchema = Type.Object(
   {
@@ -124,15 +127,21 @@ export function createDiffsTool(params: {
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
+  const loadScreenshotter = async () =>
+    params.screenshotter ??
+    new (await loadDiffsBrowserRuntime()).PlaywrightDiffScreenshotter({
+      config: params.api.config,
+    });
+
   return {
     name: "diffs",
     label: "Diffs",
     description:
-      "Create a read-only diff viewer from before/after text or a unified patch. Returns a gateway viewer URL for canvas use and can also render the same diff to a PNG or PDF.",
+      "Create a read-only diff viewer from before/after text or a unified patch. Returns a gateway viewer URL for interactive viewing and can also render the same diff to a PNG or PDF.",
     parameters: DiffsToolSchema,
     execute: async (_toolCallId, rawParams) => {
-      const toolParams = rawParams as DiffsToolParams;
-      const rawRecord = rawParams as Record<string, unknown>;
+      const toolParams = asNonArrayRecord(rawParams) as DiffsToolParams;
+      const rawRecord = toolParams as Record<string, unknown>;
       const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
       if (input.kind === "before_after" && input.before === input.after) {
@@ -187,10 +196,8 @@ export function createDiffsTool(params: {
         throw error;
       });
 
-      const screenshotter =
-        params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
-
       if (isArtifactOnlyMode(mode)) {
+        const screenshotter = await loadScreenshotter();
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
@@ -240,7 +247,8 @@ export function createDiffsTool(params: {
       const viewerUrl = buildViewerUrl({
         config: params.api.config,
         viewerPath: artifact.viewerPath,
-        baseUrl: normalizeBaseUrl(toolParams.baseUrl) ?? params.viewerBaseUrl,
+        baseUrl: normalizeBaseUrl(toolParams.baseUrl),
+        viewerBaseUrl: params.viewerBaseUrl,
       });
 
       const baseDetails = {
@@ -269,15 +277,16 @@ export function createDiffsTool(params: {
       }
 
       try {
+        const screenshotter = await loadScreenshotter();
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
-          artifactId: artifact.id,
           html: requireRenderedHtml(rendered.imageHtml, "image"),
           theme,
           image,
+          ttlMs,
+          context: artifactContext,
         });
-        await params.store.updateFilePath(artifact.id, artifactFile.path);
 
         return {
           content: [
@@ -374,45 +383,44 @@ function buildFileArtifactMessage(params: {
 }): string {
   const lines = params.viewerUrl ? [`Diff viewer: ${params.viewerUrl}`] : [];
   lines.push(`Diff ${params.format.toUpperCase()} generated at: ${params.filePath}`);
-  lines.push("Use the `message` tool with `path` or `filePath` to send this file.");
+  lines.push("To send this file, use an available file-sending tool to send it as an attachment.");
   return lines.join("\n");
 }
 
 async function renderDiffArtifactFile(params: {
   screenshotter: DiffScreenshotter;
   store: DiffArtifactStore;
-  artifactId?: string;
   html: string;
   theme: DiffTheme;
   image: DiffRenderOptions["image"];
   ttlMs?: number;
   context?: DiffArtifactContext;
 }): Promise<{ path: string; bytes: number; artifactId?: string; expiresAt?: string }> {
-  const standaloneArtifact = params.artifactId
-    ? undefined
-    : await params.store.createStandaloneFileArtifact({
-        format: params.image.format,
-        ttlMs: params.ttlMs,
-        context: params.context,
-      });
-  const outputPath = params.artifactId
-    ? params.store.allocateFilePath(params.artifactId, params.image.format)
-    : standaloneArtifact!.filePath;
-
-  await params.screenshotter.screenshotHtml({
-    html: params.html,
-    outputPath,
-    theme: params.theme,
-    image: params.image,
+  const fileArtifact = await params.store.createStandaloneFileArtifact({
+    format: params.image.format,
+    ttlMs: params.ttlMs,
+    context: params.context,
   });
+  try {
+    await params.screenshotter.screenshotHtml({
+      html: params.html,
+      outputPath: fileArtifact.filePath,
+      theme: params.theme,
+      image: params.image,
+    });
 
-  const stats = await fs.stat(outputPath);
-  return {
-    path: outputPath,
-    bytes: stats.size,
-    ...(standaloneArtifact?.id ? { artifactId: standaloneArtifact.id } : {}),
-    ...(standaloneArtifact?.expiresAt ? { expiresAt: standaloneArtifact.expiresAt } : {}),
-  };
+    const stats = await fs.stat(fileArtifact.filePath);
+    await params.store.completeFileArtifact(fileArtifact.id);
+    return {
+      path: fileArtifact.filePath,
+      bytes: stats.size,
+      artifactId: fileArtifact.id,
+      expiresAt: fileArtifact.expiresAt,
+    };
+  } catch (error) {
+    await params.store.deleteFileArtifact(fileArtifact.id);
+    throw error;
+  }
 }
 
 function buildArtifactContext(
@@ -422,16 +430,18 @@ function buildArtifactContext(
     return undefined;
   }
 
-  const artifactContext = {
-    agentId: normalizeOptionalString(context.agentId),
-    sessionId: normalizeOptionalString(context.sessionId),
-    messageChannel: normalizeOptionalString(context.messageChannel),
-    agentAccountId: normalizeOptionalString(context.agentAccountId),
+  const agentId = normalizeOptionalString(context.agentId);
+  const sessionId = normalizeOptionalString(context.sessionId);
+  const messageChannel = normalizeOptionalString(context.messageChannel);
+  const agentAccountId = normalizeOptionalString(context.agentAccountId);
+  const artifactContext: DiffArtifactContext = {
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(messageChannel ? { messageChannel } : {}),
+    ...(agentAccountId ? { agentAccountId } : {}),
   };
 
-  return Object.values(artifactContext).some((value) => value !== undefined)
-    ? artifactContext
-    : undefined;
+  return Object.keys(artifactContext).length > 0 ? artifactContext : undefined;
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {

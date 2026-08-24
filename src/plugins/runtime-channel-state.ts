@@ -6,10 +6,6 @@ type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
     activeVersion?: number;
     activeRegistry?: ActivePluginChannelRegistry | null;
-    channel?: {
-      registry: ActivePluginChannelRegistry | null;
-      version?: number;
-    };
   };
 };
 
@@ -20,55 +16,21 @@ export type ActivePluginChannelRegistrySnapshot = {
   version: number;
 };
 
-let activePluginChannelRegistrySnapshot:
-  | {
-      state: GlobalChannelRegistryRuntimeState;
-      pinnedRegistry: ActivePluginChannelRegistry | null;
-      activeRegistry: ActivePluginChannelRegistry | null;
-      pinnedChannelCount: number;
-      activeChannelCount: number;
-      snapshot: ActivePluginChannelRegistrySnapshot;
-    }
-  | undefined;
+let activePluginChannelRegistrySnapshot: ActivePluginChannelRegistrySnapshot | undefined;
 
-function countChannels(registry: ActivePluginChannelRegistry | null | undefined): number {
-  return registry?.channels?.length ?? 0;
-}
-
-/** Returns a cached channel registry snapshot, preferring pinned channel state when populated. */
+/** Returns a snapshot of the process-root plugin registry. */
 export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginChannelRegistrySnapshot {
-  const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
-  const pinnedRegistry = state?.channel?.registry ?? null;
-  const activeRegistry = state?.activeRegistry ?? null;
-  const pinnedChannelCount = countChannels(pinnedRegistry);
-  const activeChannelCount = countChannels(activeRegistry);
-  const selectedPinnedRegistry =
-    pinnedChannelCount > 0 || (pinnedRegistry !== null && activeChannelCount === 0);
-  const version = selectedPinnedRegistry
-    ? (state?.channel?.version ?? 0)
-    : (state?.activeVersion ?? 0);
+  const state: GlobalChannelRegistryRuntimeState = (globalThis as GlobalChannelRegistryState)[
+    PLUGIN_REGISTRY_STATE
+  ];
+  const registry = state?.activeRegistry ?? null;
+  const version = state?.activeVersion ?? 0;
   const cached = activePluginChannelRegistrySnapshot;
-  if (
-    cached &&
-    cached.state === state &&
-    cached.pinnedRegistry === pinnedRegistry &&
-    cached.activeRegistry === activeRegistry &&
-    cached.pinnedChannelCount === pinnedChannelCount &&
-    cached.activeChannelCount === activeChannelCount &&
-    cached.snapshot.version === version
-  ) {
-    return cached.snapshot;
+  if (cached && cached.registry === registry && cached.version === version) {
+    return cached;
   }
-  const registry = selectedPinnedRegistry ? pinnedRegistry : activeRegistry;
   const snapshot = { registry, version };
-  activePluginChannelRegistrySnapshot = {
-    state,
-    pinnedRegistry,
-    activeRegistry,
-    pinnedChannelCount,
-    activeChannelCount,
-    snapshot,
-  };
+  activePluginChannelRegistrySnapshot = snapshot;
   return snapshot;
 }
 

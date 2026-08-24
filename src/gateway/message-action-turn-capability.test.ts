@@ -20,13 +20,18 @@ describe("message action turn capability", () => {
       agentId: "main",
       runId: "run-1",
       sessionKey: "agent:main:matrix:direct:room-1",
+      sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",
+      requesterSenderName: "Sender Name",
+      requesterSenderUsername: "sender-user",
+      requesterSenderE164: "+15551234567",
       toolContext: {
         currentChannelProvider: "matrix",
         currentChannelId: "!room-1:example.org",
         currentChatType: "direct",
+        currentSourceTurnId: "channel-user:v1:source-1",
       },
       nowMs: 1000,
       ttlMs: 5000,
@@ -43,13 +48,18 @@ describe("message action turn capability", () => {
       }),
     ).toMatchObject({
       expiresAtMs: 6000,
+      sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",
+      requesterSenderName: "Sender Name",
+      requesterSenderUsername: "sender-user",
+      requesterSenderE164: "+15551234567",
       toolContext: {
         currentChannelProvider: "matrix",
         currentChannelId: "!room-1:example.org",
         currentChatType: "direct",
+        currentSourceTurnId: "channel-user:v1:source-1",
       },
     });
 

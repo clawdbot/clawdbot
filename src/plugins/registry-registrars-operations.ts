@@ -13,21 +13,20 @@ import {
 } from "../cli/program/command-descriptor-utils.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
+  isPrivateNodeInvokeCommand,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
-import {
-  isReservedCommandName,
-  registerPluginCommand,
-  validatePluginCommandDefinition,
-} from "./command-registration.js";
-import { pluginCommands } from "./command-registry-state.js";
+import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type {
   OpenClawGatewayDiscoveryService,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCommandDefinition,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -52,23 +51,74 @@ function isOfficialCodexPluginRecord(
   return sourcePath.includes("/node_modules/@openclaw/codex");
 }
 
-function canClaimReservedCommandOwnership(
+export function canClaimReservedCommandOwnership(
   record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
   return record.origin === "bundled" || isOfficialCodexPluginRecord(record);
 }
 
 export function createOperationRegistrars(state: PluginRegistryState) {
-  const { registry, registryParams, pushDiagnostic } = state;
+  const { registry, pushDiagnostic } = state;
+
+  const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
+    const description = normalizeOptionalString(presenter.description);
+    const currentCapabilities =
+      presenter.target === "current_channel" ? presenter.capabilities : undefined;
+    const currentChannelValid =
+      presenter.target === "current_channel" &&
+      typeof presenter.match === "function" &&
+      currentCapabilities !== undefined &&
+      Array.isArray(currentCapabilities.sourceKinds) &&
+      currentCapabilities.sourceKinds.length > 0 &&
+      currentCapabilities.sourceKinds.every(
+        (kind) => typeof kind === "string" && kind.trim().length > 0,
+      ) &&
+      (currentCapabilities.maxSourceBytes === undefined ||
+        (Number.isInteger(currentCapabilities.maxSourceBytes) &&
+          currentCapabilities.maxSourceBytes > 0));
+    if (
+      (presenter.target !== "node_panel" && !currentChannelValid) ||
+      !description ||
+      description.length > 160 ||
+      typeof presenter.availability !== "function" ||
+      typeof presenter.present !== "function"
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "invalid widget presenter registration",
+      });
+      return;
+    }
+    const existing =
+      presenter.target === "current_channel"
+        ? undefined
+        : registry.widgetPresenters.find(
+            (registration) => registration.presenter.target === presenter.target,
+          );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `widget presenter already registered for ${presenter.target} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.widgetPresenters.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      presenter: { ...presenter, description },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
 
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
-    opts?: {
-      parentPath?: string[];
-      commands?: string[];
-      descriptors?: OpenClawPluginCliCommandDescriptor[];
-    },
+    opts?: OpenClawPluginCliRegistrationOptions,
   ) => {
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
@@ -89,16 +139,29 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       return;
     }
     const normalizedParentPath = parentPath as string[];
+    const rootRegistration = normalizedParentPath.length === 0;
     const descriptors = (opts?.descriptors ?? [])
       .map((descriptor) => {
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
         const description = sanitizeCommandDescriptorDescription(descriptor.description);
-        return name && description
-          ? { name, description, hasSubcommands: descriptor.hasSubcommands }
-          : null;
+        const machineOutput = rootRegistration
+          ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
+          : undefined;
+        if (!name || !description) {
+          return null;
+        }
+        const normalized: OpenClawPluginCliRootCommandDescriptor = {
+          name,
+          description,
+          hasSubcommands: descriptor.hasSubcommands,
+        };
+        if (machineOutput) {
+          normalized.machineOutput = machineOutput;
+        }
+        return normalized;
       })
       .filter(
-        (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,
+        (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
       );
     const commands = [
       ...(opts?.commands ?? []),
@@ -181,6 +244,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     ...NODE_SYSTEM_RUN_COMMANDS,
     ...NODE_EXEC_APPROVALS_COMMANDS,
     NODE_SYSTEM_NOTIFY_COMMAND,
+    ...NODE_WORKER_PRIVATE_COMMANDS,
   ]);
 
   const registerNodeHostCommand = (
@@ -246,6 +310,16 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       });
       return;
     }
+    const reservedCommand = commands.find(isPrivateNodeInvokeCommand);
+    if (reservedCommand) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `node invoke policy command reserved by core: ${reservedCommand}`,
+      });
+      return;
+    }
     if (typeof policy.handle !== "function") {
       pushDiagnostic({
         level: "error",
@@ -297,7 +371,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     if (!id) {
       return;
     }
-    const existing = registry.services.find((entry) => entry.service.id === id);
+    const existing = registry.services.find((entry) => entry.service.id.trim() === id);
     if (existing) {
       // Snapshot and activating loads can both register the same owner; keep the first.
       if (existing.pluginId === record.id) {
@@ -331,7 +405,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     if (!id) {
       return;
     }
-    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
+    const existing = registry.gatewayDiscoveryServices.find((row) => row.service.id.trim() === id);
     if (existing) {
       if (existing.pluginId === record.id) {
         return;
@@ -393,59 +467,40 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (!registryParams.activateGlobalSideEffects) {
-      const validationError = validatePluginCommandDefinition(command, {
+    const { ownership: _ownership, ...commandForRegistration } = command;
+    void _ownership;
+    const result = registerPluginCommandInRegistry(
+      registry,
+      record.id,
+      allowReservedCommandNames ? commandForRegistration : command,
+      {
+        pluginName: record.name,
+        pluginRoot: record.rootDir,
         allowReservedCommandNames,
+        allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
+      },
+    );
+    if (!result.ok) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `command registration failed: ${result.error}`,
       });
-      if (validationError) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `command registration failed: ${validationError}`,
-        });
-        return;
-      }
-    } else {
-      const { ownership: _ownership, ...commandForRegistration } = command;
-      void _ownership;
-      const result = registerPluginCommand(
-        record.id,
-        allowReservedCommandNames ? commandForRegistration : command,
-        {
-          pluginName: record.name,
-          pluginRoot: record.rootDir,
-          allowReservedCommandNames,
-          allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
-        },
-      );
-      if (!result.ok) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `command registration failed: ${result.error}`,
-        });
-        return;
-      }
+      return;
+    }
+    const registered = registry.commands.at(-1);
+    if (registered?.pluginId === record.id) {
+      registered.source = record.source;
       if (allowReservedCommandNames) {
-        const registeredCommand = pluginCommands.get(`/${name.toLowerCase()}`);
-        if (registeredCommand?.pluginId === record.id) {
-          registeredCommand.ownership = "reserved";
-        }
+        registered.command.ownership = "reserved";
       }
     }
     record.commands.push(name);
-    registry.commands.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      command,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
   };
 
   return {
+    registerWidgetPresenter,
     registerCli,
     registerReload,
     registerNodeHostCommand,

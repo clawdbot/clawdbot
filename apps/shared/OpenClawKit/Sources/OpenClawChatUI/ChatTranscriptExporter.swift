@@ -14,11 +14,21 @@ public enum ChatTranscriptExporter {
         timestampFormatter.timeZone = TimeZone(secondsFromGMT: 0)
 
         var sections = ["# \(title)"]
-        for message in messages where self.shouldExport(message) {
-            let timestamp = self.timestamp(message.timestamp, formatter: timestampFormatter)
-            let heading = "### \(self.displayRole(message.role)) — \(timestamp)"
-            let body = self.body(for: message)
-            sections.append([heading, body].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        for row in ChatTranscriptRow.build(from: messages) {
+            switch row {
+            case let .message(message) where self.shouldExport(message):
+                let timestamp = self.timestamp(message.timestamp, formatter: timestampFormatter)
+                let heading = "### \(self.displayRole(message.role)) — \(timestamp)"
+                let body = self.body(for: message)
+                sections.append([heading, body].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+            case .message:
+                continue
+            case let .systemNotice(notice):
+                let timestamp = self.timestamp(notice.timestamp, formatter: timestampFormatter)
+                sections.append("### System — \(timestamp)\n\n[\(notice.label)] \(notice.body)")
+            case let .historyDivider(divider):
+                sections.append(self.dividerLine(divider))
+            }
         }
         return sections.joined(separator: "\n\n") + "\n"
     }
@@ -104,15 +114,24 @@ public enum ChatTranscriptExporter {
         return parts.joined(separator: "\n\n")
     }
 
+    private static func dividerLine(_ divider: ChatTranscriptRow.HistoryDivider) -> String {
+        switch divider.kind {
+        case .compaction:
+            let text = [divider.label, divider.metric]
+                .compactMap(\.self)
+                .joined(separator: " · ")
+            return "[\(text)]"
+        case .reset:
+            return "[\(divider.label) — \(divider.description ?? "")]"
+        }
+    }
+
     private static func visibleText(in message: OpenClawChatMessage) -> String {
         ChatMessageVisibleText.visibleText(in: message)
     }
 
     private static func attachments(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
-        message.content.filter { content in
-            let kind = (content.type ?? "text").lowercased()
-            return kind == "file" || kind == "attachment"
-        }
+        message.content.filter(\.isInlineAttachment)
     }
 
     private static func displayRole(_ role: String) -> String {

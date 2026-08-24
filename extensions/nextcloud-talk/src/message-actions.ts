@@ -49,6 +49,18 @@ export const nextcloudTalkMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "react") {
+      // describeMessageTool only offers `react` for enabled, configured accounts.
+      // An explicit accountId can still target a disabled or uncredentialed
+      // account, so enforce the same gate at dispatch before it reaches the
+      // sender — otherwise a disabled account with leftover credentials still
+      // emits reactions.
+      const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
+      if (!isAccountConfigured(account)) {
+        throw new Error(
+          `Nextcloud Talk account "${account.accountId}" is disabled or not configured.`,
+        );
+      }
+
       const target = readStringParam(params, "to", {
         required: true,
         label: "to (room token)",

@@ -6,8 +6,6 @@ import {
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
-  InteractiveReply,
-  InteractiveReplyButton,
   MessagePresentation,
   MessagePresentationAction,
   MessagePresentationButton,
@@ -16,6 +14,7 @@ import { formatHumanList } from "../shared/human-list.js";
 // Builds reply payloads for exec approval prompts and outcomes.
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
@@ -36,7 +35,7 @@ export type ExecApprovalUnavailableReason =
 export type ExecApprovalReplyMetadata = {
   approvalId: string;
   approvalSlug: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   sessionKey?: string;
@@ -204,7 +203,7 @@ export function buildExecApprovalActionDescriptors(
 /** Build approval descriptors with explicit owner-aware typed actions. */
 export function buildTypedApprovalActionDescriptors(
   params: BuildExecApprovalActionDescriptorsParams & {
-    approvalKind: "exec" | "plugin";
+    approvalKind: ChannelApprovalKind;
   },
 ): TypedApprovalActionDescriptor[] {
   const approvalId = params.approvalCommandId;
@@ -227,22 +226,6 @@ export function buildTypedApprovalActionDescriptors(
       };
     },
   );
-}
-
-function buildApprovalInteractiveButtons(
-  descriptors: readonly ExecApprovalActionDescriptor[],
-): InteractiveReplyButton[] {
-  return descriptors.map((descriptor) => {
-    const action =
-      descriptor.action ??
-      ({ type: "command", command: descriptor.command } satisfies MessagePresentationAction);
-    return {
-      label: descriptor.label,
-      action,
-      ...(descriptor.action ? {} : { value: descriptor.command }),
-      style: descriptor.style,
-    };
-  });
 }
 
 function buildApprovalPresentationButtons(
@@ -276,7 +259,7 @@ type BuildApprovalPresentationParams = {
 };
 
 /** Build the shipped command-backed portable approval controls. */
-export function buildApprovalPresentation(
+export function buildApprovalButtonPresentation(
   params: BuildApprovalPresentationParams,
 ): MessagePresentation | undefined {
   return buildApprovalPresentationFromActionDescriptors(
@@ -290,7 +273,7 @@ export function buildApprovalPresentation(
 
 /** Build portable approval controls with explicit owner-aware typed actions. */
 export function buildTypedApprovalPresentation(
-  params: BuildApprovalPresentationParams & { approvalKind: "exec" | "plugin" },
+  params: BuildApprovalPresentationParams & { approvalKind: ChannelApprovalKind },
 ): MessagePresentation | undefined {
   return buildApprovalPresentationFromActionDescriptors(
     buildTypedApprovalActionDescriptors({
@@ -308,7 +291,7 @@ export function buildExecApprovalPresentation(params: {
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): MessagePresentation | undefined {
-  return buildApprovalPresentation({
+  return buildApprovalButtonPresentation({
     approvalId: params.approvalCommandId,
     ask: params.ask,
     allowedDecisions: params.allowedDecisions,
@@ -327,16 +310,6 @@ export function buildTypedExecApprovalPresentation(params: {
     ask: params.ask,
     allowedDecisions: params.allowedDecisions,
   });
-}
-
-/**
- * @deprecated Use buildApprovalPresentationFromActionDescriptors.
- */
-export function buildApprovalInteractiveReplyFromActionDescriptors(
-  actions: readonly ExecApprovalActionDescriptor[],
-): InteractiveReply | undefined {
-  const buttons = buildApprovalInteractiveButtons(actions);
-  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
 export function getExecApprovalApproverDmNoticeText(): string {
@@ -468,7 +441,7 @@ export function buildExecApprovalPendingReplyPayload(
 
   return {
     text: lines.join("\n\n"),
-    presentation: buildApprovalPresentation({
+    presentation: buildApprovalButtonPresentation({
       approvalId: params.approvalId,
       allowedDecisions,
     }),
@@ -503,6 +476,11 @@ export function buildExecApprovalUnavailableReplyPayload(
   params: ExecApprovalUnavailableReplyParams,
 ): ReplyPayload {
   const lines: string[] = [];
+  const channelData = {
+    execApprovalUnavailable: {
+      reason: params.reason,
+    },
+  };
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText);
@@ -512,6 +490,7 @@ export function buildExecApprovalUnavailableReplyPayload(
     lines.push(getExecApprovalApproverDmNoticeText());
     return {
       text: lines.join("\n\n"),
+      channelData,
     };
   }
 
@@ -563,5 +542,6 @@ export function buildExecApprovalUnavailableReplyPayload(
 
   return {
     text: lines.join("\n\n"),
+    channelData,
   };
 }

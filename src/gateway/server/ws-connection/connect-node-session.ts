@@ -1,14 +1,15 @@
 // Gateway WebSocket node connects reconcile the approved command/capability surface.
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
   requestNodePairing,
-} from "../../../infra/node-pairing.js";
+} from "../../../infra/device-pairing-node.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
+import { resolveEffectiveComputerUseDescriptor } from "../../node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
@@ -28,7 +29,7 @@ async function requestNodePairingFromConnect(params: {
   rateLimiter?: import("../../auth-rate-limit.js").AuthRateLimiter;
   clientIp?: string;
   pairedReconnect?: boolean;
-  cleanupClaim?: import("../../../infra/node-pairing.js").NodePairingCleanupClaim;
+  cleanupClaim?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   reapprovalCoordinator?: import("../../node-reapproval-coordinator.js").NodeReapprovalCoordinator;
 }): Promise<Awaited<ReturnType<typeof requestNodePairing>> | null> {
   if (params.pairedReconnect) {
@@ -137,18 +138,21 @@ export async function prepareGatewayNodeConnect(
     }
     throw error;
   }
-  // The ssh-verify key match already proved this node runs under the
-  // operator's account on a machine they own, which is the same claim
-  // a manual capability approval asserts; approve the first declared
-  // surface directly. Surface upgrades still prompt.
-  if (deviceApprovedVia === "ssh-verified" && !pairedNode && reconciliation.pendingPairing) {
+  // SSH verification proves machine ownership, while an admin-minted setup code
+  // records that admin's consent to this machine's initial declared surface.
+  // Approve either initial surface directly; later manifest upgrades still prompt.
+  if (
+    (deviceApprovedVia === "ssh-verified" || deviceApprovedVia === "bootstrap") &&
+    !pairedNode &&
+    reconciliation.pendingPairing
+  ) {
     const surfaceRequestId = reconciliation.pendingPairing.request.requestId;
     const approvedSurface = await approveNodePairing(surfaceRequestId, {
       callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
     });
     if (approvedSurface && "node" in approvedSurface) {
       logGateway.info(
-        `security audit: node capability surface ssh-verified auto-approve node=${reconciliation.nodeId} commands=${reconciliation.declaredCommands.join(",") || "<none>"}`,
+        `security audit: node capability surface ${deviceApprovedVia} auto-approve node=${reconciliation.nodeId} commands=${reconciliation.declaredCommands.join(",") || "<none>"}`,
       );
       buildRequestContext().broadcast(
         "node.pair.resolved",
@@ -179,12 +183,14 @@ export async function prepareGatewayNodeConnect(
   const nodeConnectParams = connectParams as ConnectParams & {
     declaredCaps?: string[];
     declaredCommands?: string[];
+    declaredComputerUse?: unknown;
     declaredPermissions?: Record<string, boolean>;
     sessionCapsCeiling?: string[];
     sessionCommandsCeiling?: string[];
   };
   nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
   nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
+  nodeConnectParams.declaredComputerUse = reconciliation.declaredComputerUse;
   nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
   const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);
   if (usesLegacyNodeProtocol) {
@@ -208,6 +214,10 @@ export async function prepareGatewayNodeConnect(
       };
   connectParams.caps = effectiveFeatures.caps;
   connectParams.commands = effectiveFeatures.commands;
+  connectParams.computerUse = resolveEffectiveComputerUseDescriptor({
+    commands: effectiveFeatures.commands,
+    declared: reconciliation.declaredComputerUse,
+  });
   connectParams.permissions = reconciliation.effectivePermissions;
   return true;
 }

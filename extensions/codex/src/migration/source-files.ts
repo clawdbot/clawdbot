@@ -28,7 +28,6 @@ export type CodexPluginMigrationBlockCode =
 export type CodexPluginMigrationAppFact = {
   id: string;
   name: string;
-  needsAuth?: boolean;
   isAccessible?: boolean;
   isEnabled?: boolean;
 };
@@ -42,9 +41,7 @@ type CodexPluginMigrationBlock = {
 export type CodexPluginSource = {
   name: string;
   source: string;
-  sourceKind: "app-server" | "cache";
   migratable: boolean;
-  manifestPath?: string;
   marketplaceName?: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
   pluginName?: string;
   installed?: boolean;
@@ -112,8 +109,6 @@ export async function discoverPluginDirs(codexHome: string): Promise<CodexPlugin
       discovered.set(dir, {
         name: manifestName || path.basename(dir),
         source: dir,
-        manifestPath,
-        sourceKind: "cache",
         migratable: false,
         message:
           "Cached Codex plugin bundle found. Review manually unless the plugin is also installed in the source Codex app-server inventory",
@@ -155,10 +150,7 @@ async function discoverCodexMemoryFile(
   }
 }
 
-export async function discoverCodexMemorySources(codexHome: string): Promise<{
-  memoriesDir?: string;
-  memoryFiles: CodexMemorySource[];
-}> {
+export async function discoverCodexMemorySources(codexHome: string): Promise<CodexMemorySource[]> {
   const memoriesDir = path.join(codexHome, "memories");
   const memoryFiles = (
     await Promise.all(
@@ -179,8 +171,5 @@ export async function discoverCodexMemorySources(codexHome: string): Promise<{
       ),
     )
   ).filter((entry): entry is CodexMemorySource => entry !== undefined);
-  return {
-    ...((await isDirectory(memoriesDir)) ? { memoriesDir } : {}),
-    memoryFiles,
-  };
+  return memoryFiles;
 }

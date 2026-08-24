@@ -4,10 +4,15 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
-import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isPidAlive, runExec } from "openclaw/plugin-sdk/process-runtime";
+import { CODEX_ACP_PACKAGE, LEGACY_CODEX_ACP_PACKAGE } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
-import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import {
+  OPENCLAW_ACPX_LEASE_ID_ARG,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+  readAcpxProcessLeaseIdentity,
+} from "./process-lease.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const GENERATED_WRAPPER_BASENAMES = new Set([
@@ -15,8 +20,12 @@ const GENERATED_WRAPPER_BASENAMES = new Set([
   "claude-agent-acp-wrapper.mjs",
 ]);
 const OPENCLAW_PLUGIN_DEPS_MARKER = "/plugin-runtime-deps/";
+const ACPX_PROCESS_LIST_TIMEOUT_MS = 2_000;
 const OWNED_ACP_PACKAGE_NAMES = [
-  "@zed-industries/codex-acp",
+  CODEX_ACP_PACKAGE,
+  // Shipped Zed adapter processes can survive a gateway upgrade. Keep cleanup
+  // recognition until their OpenClaw-owned wrapper/process tree is gone.
+  LEGACY_CODEX_ACP_PACKAGE,
   "@zed-industries/codex-acp-darwin-arm64",
   "@zed-industries/codex-acp-darwin-x64",
   "@zed-industries/codex-acp-linux-arm64",
@@ -26,8 +35,20 @@ const OWNED_ACP_PACKAGE_NAMES = [
   "@agentclientprotocol/claude-agent-acp",
   "acpx",
 ];
+const PLUGIN_DEPS_CODEX_PACKAGE_NAMES = [
+  "@openai/codex",
+  "@openai/codex-darwin-arm64",
+  "@openai/codex-darwin-x64",
+  "@openai/codex-linux-arm64",
+  "@openai/codex-linux-x64",
+  "@openai/codex-win32-arm64",
+  "@openai/codex-win32-x64",
+];
+// Codex app-server is also owned by the native Codex plugin. Recognize its
+// package only inside ACPX's isolated plugin-runtime-deps tree.
 const ACP_PACKAGE_MARKERS = [
   ...OWNED_ACP_PACKAGE_NAMES.map((packageName) => `/node_modules/${packageName}/`),
+  ...PLUGIN_DEPS_CODEX_PACKAGE_NAMES.map((packageName) => `/node_modules/${packageName}/`),
   "/acpx/dist/",
 ];
 
@@ -42,6 +63,7 @@ type AcpxProcessInfo = {
 export type AcpxProcessCleanupDeps = {
   listProcesses?: () => Promise<AcpxProcessInfo[]>;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  platform?: NodeJS.Platform;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -49,7 +71,13 @@ export type AcpxProcessCleanupDeps = {
 type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
-  skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
+  skippedReason?:
+    | "missing-root"
+    | "ambiguous-root"
+    | "not-openclaw-owned"
+    | "process-list-unavailable"
+    | "unsupported-platform"
+    | "unverified-root";
 };
 
 /** Result from startup orphan reaping. */
@@ -112,6 +140,20 @@ function commandWrapperBelongsToRoot(command: string, wrapperRoot: string | unde
   const normalizedRoot = normalizePathLike(wrapperRoot).replace(/\/+$/, "");
   return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) =>
     normalizedCommand.includes(`${normalizedRoot}/${basename}`),
+  );
+}
+
+function commandContainsExactWrapperPath(command: string, wrapperPath: string): boolean {
+  const expectedPath = normalizePathLike(wrapperPath);
+  return splitCommandParts(command).some((part) => normalizePathLike(part) === expectedPath);
+}
+
+function wrapperPathBelongsToRoot(wrapperPath: string, wrapperRoot: string): boolean {
+  const normalizedPath = normalizePathLike(wrapperPath);
+  const normalizedRoot = normalizePathLike(wrapperRoot).replace(/\/+$/, "");
+  return (
+    GENERATED_WRAPPER_BASENAMES.has(path.posix.basename(normalizedPath)) &&
+    normalizedPath.startsWith(`${normalizedRoot}/`)
   );
 }
 
@@ -219,6 +261,7 @@ async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
     logOutput: false,
     maxBuffer: 8 * 1024 * 1024,
+    timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
   });
   return parseProcessList(stdout);
 }
@@ -261,15 +304,6 @@ function uniquePids(processes: AcpxProcessInfo[]): number[] {
   );
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function terminatePids(
   pids: number[],
   deps: AcpxProcessCleanupDeps | undefined,
@@ -296,7 +330,7 @@ async function terminatePids(
   }
   await sleep(750);
   for (const pid of terminated) {
-    if (deps?.killProcess || isProcessAlive(pid)) {
+    if (deps?.killProcess || isPidAlive(pid)) {
       try {
         killProcess(pid, "SIGKILL");
       } catch {
@@ -320,12 +354,19 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   if (!rootPid || rootPid <= 0 || rootPid === process.pid) {
     return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
   }
+  if ((params.deps?.platform ?? process.platform) === "win32") {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
+  }
 
   let processes: AcpxProcessInfo[];
   try {
     processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
   } catch {
-    processes = [];
+    return {
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    };
   }
 
   const listedTree = collectProcessTree(processes, rootPid);
@@ -392,12 +433,66 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   };
 }
 
+/** Recover a pending lease by matching its exact live wrapper identity. */
+export async function cleanupOpenClawOwnedAcpxPendingLease(params: {
+  leaseId: string;
+  gatewayInstanceId: string;
+  wrapperRoot: string;
+  wrapperPath: string;
+  deps?: AcpxProcessCleanupDeps;
+}): Promise<AcpxProcessCleanupResult> {
+  if ((params.deps?.platform ?? process.platform) === "win32") {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
+  }
+  if (!params.wrapperPath || !wrapperPathBelongsToRoot(params.wrapperPath, params.wrapperRoot)) {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "unverified-root" };
+  }
+
+  let processes: AcpxProcessInfo[];
+  try {
+    processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
+  } catch {
+    return {
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    };
+  }
+
+  const matchingRoots = processes.filter(
+    (processInfo) =>
+      commandContainsExactWrapperPath(processInfo.command, params.wrapperPath) &&
+      liveCommandMatchesLeaseIdentity({
+        command: processInfo.command,
+        expectedLeaseId: params.leaseId,
+        expectedGatewayInstanceId: params.gatewayInstanceId,
+      }),
+  );
+  if (matchingRoots.length === 0) {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
+  }
+  if (matchingRoots.length > 1) {
+    return {
+      inspectedPids: uniquePids(matchingRoots),
+      terminatedPids: [],
+      skippedReason: "ambiguous-root",
+    };
+  }
+
+  const listedTree = collectProcessTree(processes, matchingRoots[0]!.pid);
+  const pids = uniquePids(listedTree.toReversed());
+  return {
+    inspectedPids: uniquePids(listedTree),
+    terminatedPids: await terminatePids(pids, params.deps),
+  };
+}
+
 /** Reap orphaned OpenClaw-owned ACPX wrapper trees during runtime startup. */
 export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   wrapperRoot: string;
   deps?: AcpxProcessCleanupDeps;
 }): Promise<AcpxStartupReapResult> {
-  if (process.platform === "win32") {
+  if ((params.deps?.platform ?? process.platform) === "win32") {
     return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
   }
 
@@ -411,6 +506,10 @@ export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   const orphans = processes.filter(
     (processInfo) =>
       processInfo.ppid === 1 &&
+      // Lease-aware wrapper roots are recovered one lease at a time. This
+      // temporary marker fallback remains only for direct agents and
+      // reparented descendants that upstream acpx cannot identify yet.
+      !readAcpxProcessLeaseIdentity(processInfo.command) &&
       isOpenClawOwnedAcpxProcessCommand({
         command: processInfo.command,
         wrapperRoot: params.wrapperRoot,

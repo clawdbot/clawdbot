@@ -1,9 +1,9 @@
 ---
-summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, TTS, web search)"
+summary: "Google Gemini setup (AI Studio API key, Vertex AI, optional CLI runtime, and multimodal tools)"
 title: "Google (Gemini)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
-  - You need the API key or OAuth auth flow
+  - You need Google AI Studio, Vertex AI, or Gemini CLI runtime guidance
 ---
 
 The Google plugin provides access to Gemini models through Google AI Studio, plus image generation, media understanding (image/audio/video), text-to-speech, and web search via Gemini Grounding.
@@ -11,17 +11,22 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Runtime option: `agentRuntime.id: "google-gemini-cli"` reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
+- Managed-cloud provider: `google-vertex` with Google Cloud Application Default Credentials
+- Optional runtime: `agentRuntime.id: "google-gemini-cli"` runs an explicitly configured model through the local Gemini CLI
 
 ## Getting started
 
-Choose your preferred auth method and follow the setup steps.
+For most installations, use a Google AI Studio API key. Use `google-vertex` when
+the Gateway already runs inside a managed Google Cloud environment.
 
 <Tabs>
-  <Tab title="API key">
-    **Best for:** standard Gemini API access through Google AI Studio.
+  <Tab title="AI Studio API key">
+    **Recommended for:** standard Gemini API access.
 
     <Steps>
+      <Step title="Get an API key">
+        Create a free key in [Google AI Studio](https://aistudio.google.com/apikey).
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice gemini-api-key
@@ -30,7 +35,7 @@ Choose your preferred auth method and follow the setup steps.
         Or pass the key directly:
 
         ```bash
-        openclaw onboard --non-interactive \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
           --mode local \
           --auth-choice gemini-api-key \
           --gemini-api-key "$GEMINI_API_KEY"
@@ -58,18 +63,32 @@ Choose your preferred auth method and follow the setup steps.
     `GEMINI_API_KEY` and `GOOGLE_API_KEY` are both accepted. Use whichever you already have configured.
     </Tip>
 
+    With a configured API key, OpenClaw refreshes Google AI Studio's text-model
+    catalog from the Gemini `models.list` API. Newly released Gemini 3 Pro, Flash,
+    and Flash-Lite variants therefore appear in
+    `openclaw models list --provider google` without waiting for an OpenClaw
+    release. If discovery is unavailable, OpenClaw keeps the bundled fallback
+    catalog.
+
   </Tab>
 
-  <Tab title="Gemini CLI (OAuth)">
-    **Best for:** reusing an existing Gemini CLI login via PKCE OAuth instead of a separate API key.
+  <Tab title="Gemini CLI runtime">
+    **Advanced use only:** run a canonical `google/*` model through an installed
+    Gemini CLI while keeping authentication on the supported AI Studio API-key
+    path.
 
-    <Warning>
-    The `google-gemini-cli` provider is an unofficial integration. Some users
-    report account restrictions when using OAuth this way. Use at your own risk.
-    </Warning>
+    OpenClaw does not offer new Gemini CLI OAuth or Antigravity OAuth setup.
+    [Google ended consumer Gemini CLI Login with Google access on June 18, 2026](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals),
+    and the [Antigravity terms](https://antigravity.google/terms) prohibit
+    third-party tools from accessing the service through Antigravity OAuth. Use
+    an AI Studio API key or Vertex AI instead.
 
     <Steps>
-      <Step title="Install the Gemini CLI">
+      <Step title="Configure Google AI Studio">
+        Complete the API-key setup in the first tab. OpenClaw must have a usable
+        `google` API-key profile before the CLI runtime can be selected.
+      </Step>
+      <Step title="Install Gemini CLI">
         The local `gemini` command must be available on `PATH`.
 
         ```bash
@@ -83,42 +102,37 @@ Choose your preferred auth method and follow the setup steps.
         OpenClaw supports both Homebrew installs and global npm installs, including
         common Windows/npm layouts.
       </Step>
-      <Step title="Log in via OAuth">
-        ```bash
-        openclaw models auth login --provider google-gemini-cli --set-default
-        ```
-      </Step>
-      <Step title="Verify the model is available">
-        ```bash
-        openclaw models list --provider google
+      <Step title="Select the CLI runtime">
+        Keep the canonical Google model ref and opt that model into the CLI
+        runtime:
+
+        ```json5
+        {
+          agents: {
+            defaults: {
+              model: { primary: "google/gemini-3.1-pro-preview" },
+              models: {
+                "google/gemini-3.1-pro-preview": {
+                  agentRuntime: { id: "google-gemini-cli" },
+                },
+              },
+            },
+          },
+        }
         ```
       </Step>
     </Steps>
 
-    - Default model: `google/gemini-3.1-pro-preview`
     - Runtime: `google-gemini-cli`
-    - Alias: `gemini-cli`
+    - Auth: selected Google AI Studio API-key profile
+    - Model refs: canonical `google/*`
 
-    Gemini 3.1 Pro's Gemini API model id is `gemini-3.1-pro-preview`. OpenClaw accepts the shorter `google/gemini-3.1-pro` as a convenience alias and normalizes it before provider calls.
+    Existing valid Gemini CLI OAuth profiles remain executable for compatibility,
+    but OpenClaw cannot create or repair them. If one breaks, replace it with a
+    Google AI Studio API-key profile.
 
-    **Environment variables:**
-
-    - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_ID`
-    - `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET` / `GEMINI_CLI_OAUTH_CLIENT_SECRET`
-
-    <Note>
-    If Gemini CLI OAuth requests fail after login, set `GOOGLE_CLOUD_PROJECT` or
-    `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and retry.
-    </Note>
-
-    <Note>
-    If login fails before the browser flow starts, make sure the local `gemini`
-    command is installed and on `PATH`.
-    </Note>
-
-    `google-gemini-cli/*` model refs are legacy compatibility aliases. New
-    configs should use `google/*` model refs plus the `google-gemini-cli`
-    runtime when they want local Gemini CLI execution.
+    `google-gemini-cli/*` refs remain legacy compatibility aliases. New configs
+    should use `google/*` model refs plus the explicit runtime selection above.
 
   </Tab>
 </Tabs>
@@ -197,9 +211,9 @@ instead of sending it.
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
-`google/gemini-3.1-flash-image-preview`.
+`google/gemini-3.1-flash-image`.
 
-- Also supports `google/gemini-3-pro-image-preview`
+- Also supports `google/gemini-3-pro-image`
 - Generate: up to 4 images per request
 - Edit mode: enabled, up to 5 input images
 - Geometry controls: `size`, `aspectRatio`, and `resolution`
@@ -210,8 +224,10 @@ To use Google as the default image provider:
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "google/gemini-3.1-flash-image-preview",
+      mediaModels: {
+        image: {
+          primary: "google/gemini-3.1-flash-image",
+        },
       },
     },
   },
@@ -238,8 +254,10 @@ To use Google as the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "google/veo-3.1-fast-generate-preview",
+      mediaModels: {
+        video: {
+          primary: "google/veo-3.1-fast-generate-preview",
+        },
       },
     },
   },
@@ -268,8 +286,10 @@ To use Google as the default music provider:
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
+      mediaModels: {
+        music: {
+          primary: "google/lyria-3-clip-preview",
+        },
       },
     },
   },
@@ -286,7 +306,7 @@ The bundled `google` speech provider uses the Gemini API TTS path with
 `gemini-3.1-flash-tts-preview`.
 
 - Default voice: `Kore`
-- Auth: `messages.tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
+- Auth: `tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
@@ -299,16 +319,14 @@ To use Google as the default TTS provider:
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "google",
-      providers: {
-        google: {
-          model: "gemini-3.1-flash-tts-preview",
-          speakerVoice: "Kore",
-          audioProfile: "Speak professionally with a calm tone.",
-        },
+  tts: {
+    auto: "always",
+    provider: "google",
+    providers: {
+      google: {
+        model: "gemini-3.1-flash-tts-preview",
+        speakerVoice: "Kore",
+        audioProfile: "Speak professionally with a calm tone.",
       },
     },
   },
@@ -404,16 +422,22 @@ nearest supported level, while `-1` leaves Google's default in place. See the
 
 <Note>
 Control UI Talk supports Google Live browser sessions with constrained one-use
-tokens. Backend-only realtime voice providers can also run through the generic
-Gateway relay transport, which keeps provider credentials on the Gateway.
+tokens. In Video Talk, the browser sends bounded JPEG frames directly to
+Google Live at the provider's maximum of one frame per second. The
+`describe_view` function reports whether that camera stream is active.
+Camera frames do not pass through the Gateway. Backend-only realtime voice
+providers can also run through the generic Gateway relay transport, which
+keeps provider credentials on the Gateway.
 </Note>
 
 For maintainer live verification, run
 `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`.
 The smoke also covers OpenAI backend/WebRTC paths; the Google leg mints the same
 constrained Live API token shape used by Control UI Talk, opens the browser
-WebSocket endpoint, sends the initial setup payload, and waits for
-`setupComplete`.
+WebSocket endpoint, sends the initial setup payload plus a JPEG frame, and
+verifies a text response and `describe_view` function roundtrip.
+The OpenAI path also performs a synthesized PCM24 speech-to-response audio
+roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
 ## Advanced configuration
 
@@ -450,10 +474,9 @@ WebSocket endpoint, sends the initial setup payload, and waits for
   </Accordion>
 
   <Accordion title="Gemini CLI usage notes">
-    When using the `google-gemini-cli` OAuth provider, OpenClaw uses Gemini
-    CLI `stream-json` output by default and normalizes usage from the final
-    `stats` payload. Legacy `--output-format json` overrides still use the
-    JSON parser.
+    The optional `google-gemini-cli` runtime uses Gemini CLI `stream-json`
+    output by default and normalizes usage from the final `stats` payload.
+    Legacy `--output-format json` overrides still use the JSON parser.
 
     - Streamed reply text comes from assistant `message` events.
     - For legacy JSON output, reply text comes from the CLI JSON `response` field.

@@ -31,8 +31,7 @@ extension ChannelsStore {
             async let schemaLoad: Void = self.loadConfigSchema()
             async let configLoad: Void = self.loadConfig(force: false)
             _ = await (schemaLoad, configLoad)
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+            while await SimpleTaskSupport.waitForNextOperation(interval: self.interval) {
                 await self.refresh(probe: false)
             }
         }

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   compileSafeRegex,
   compileSafeRegexDetailed,
-  hasNestedRepetition,
   testRegexWithBoundedInput,
 } from "./safe-regex.js";
 
@@ -17,16 +16,6 @@ function expectCompiledRegex(pattern: string, flags?: string): RegExp {
 }
 
 describe("safe regex", () => {
-  it.each([
-    ["(a+)+$", true],
-    ["(a|aa)+$", true],
-    ["^(?:foo|bar)$", false],
-    ["^(ab|cd)+$", false],
-    [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`, false],
-  ] as const)("classifies nested repetition for %s", (pattern, expected) => {
-    expect(hasNestedRepetition(pattern)).toBe(expected);
-  });
-
   it.each([
     ["(a+)+$", null],
     ["(a|aa)+$", null],

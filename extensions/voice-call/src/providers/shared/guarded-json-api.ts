@@ -3,7 +3,7 @@ import { fetchWithSsrFGuard } from "../../../api.js";
 import {
   cancelProviderResponseBody,
   readProviderErrorResponseSnippet,
-  readProviderJsonResponseText,
+  readVoiceCallProviderJsonResponse,
 } from "./response-body.js";
 
 // Shared guarded JSON API client for voice-call providers.
@@ -48,15 +48,10 @@ export async function guardedJsonApiRequest<T = unknown>(
       throw new Error(`${params.errorPrefix}: ${response.status} ${errorText}`);
     }
 
-    const text = await readProviderJsonResponseText(response);
-    if (!text) {
-      return undefined as T;
-    }
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new Error(`${params.errorPrefix}: malformed JSON response`);
-    }
+    return (await readVoiceCallProviderJsonResponse<T>(
+      response,
+      `${params.errorPrefix}: malformed JSON response`,
+    )) as T;
   } finally {
     await release();
   }

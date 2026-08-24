@@ -3,16 +3,17 @@ title: Active goal context survives compaction
 scenario:
   id: goal-context-survives-compaction
   surface: goals
-  category: session-memory-and-context-engine.context-engine
+  category: session-memory.context-engine
   coverage:
     primary:
-      - goals.context-injection
+      - session-memory.goal-continuance-context-injection
     secondary:
-      - goals.continuance
-      - runtime.compaction
+      - session-memory.goal-continuance-continuance
+      - session-memory.compaction
   objective: Verify compaction does not remove active session-goal context from the next model turn.
   successCriteria:
     - An authorized channel turn starts a session goal through `/goal start`.
+    - A separate conversation completes a turn before the original session is compacted.
     - The same session completes a manual `/compact` operation.
     - The first post-compaction inbound turn reaches the mock model with the exact active-goal context line.
     - The assertion uses the captured post-compaction provider request.
@@ -20,8 +21,6 @@ scenario:
     agents:
       defaults:
         compaction:
-          reserveTokens: 64
-          reserveTokensFloor: 0
           keepRecentTokens: 64
   docsRefs:
     - docs/tools/goal.md
@@ -33,14 +32,15 @@ scenario:
   execution:
     kind: flow
     summary: Start a goal, compact the session, then inspect the next mock-provider request for active-goal context.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       requiredProviderMode: mock-openai
       conversationId: goal-context-compaction
       senderId: qa-goal-operator
       goalObjective: Preserve the deployment audit objective
-      expectedGoalContext: "Active goal: Preserve the deployment audit objective — advance it or update its status (get_goal/update_goal)."
+      expectedGoalContext: "Active goal: Preserve the deployment audit objective — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final."
       contextSeedMarker: GOAL-COMPACTION-CONTEXT-SEED
+      otherConversationMarker: GOAL-COMPACTION-SECOND-SESSION-READY
       postCompactionMessage: GOAL-CONTEXT-POST-COMPACTION unrelated lunch question
 
 flow:
@@ -106,6 +106,46 @@ flow:
               ref: seedOutboundIndex
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
+        - set: otherConversationId
+          value:
+            expr: "`${conversationId}-other`"
+        - set: otherDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `group:${otherConversationId}` })"
+        - set: otherSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: otherDelivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: otherDelivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: otherOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: otherConversationId
+              kind: group
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text:
+              expr: "`@openclaw reply exactly: ${config.otherConversationMarker}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: otherConversationId
+              kind: group
+            sinceIndex:
+              ref: otherOutboundIndex
+            textIncludes:
+              ref: config.otherConversationMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === otherSessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
         - set: compactOutboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"

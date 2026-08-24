@@ -28,8 +28,12 @@ const CASES: GuidanceCase[] = [
   },
   {
     file: "extensions/canvas/skills/canvas/SKILL.md",
-    required: ["OPENCLAW_CONFIG_PATH"],
-    forbidden: ["cat ~/.openclaw/openclaw.json"],
+    forbidden: [
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_STATE_DIR",
+      "~/.openclaw/canvas",
+      "cat ~/.openclaw/openclaw.json",
+    ],
   },
   {
     file: "skills/openai-whisper-api/SKILL.md",
@@ -50,8 +54,18 @@ const CASES: GuidanceCase[] = [
   },
   {
     file: "skills/coding-agent/SKILL.md",
-    required: ["OPENCLAW_STATE_DIR"],
-    forbidden: ["NEVER start Codex in ~/.openclaw/"],
+    required: [
+      "OPENCLAW_STATE_DIR",
+      "CODEX_WORKER_HOME",
+      'CODEX_HOME="$CODEX_WORKER_HOME" codex login status',
+      "env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY",
+    ],
+    forbidden: [
+      "NEVER start Codex in ~/.openclaw/",
+      'command:"codex exec - < \\"$PROMPT\\""',
+      "CODEX_HOME=~/.codex",
+      "CODEX_HOME=/absolute/codex-worker-home",
+    ],
   },
 ];
 
@@ -68,4 +82,14 @@ describe("bundled skill env-path guidance", () => {
       }
     },
   );
+  it("isolates every bundled Codex worker launch from ambient auth", () => {
+    const content = fs.readFileSync(path.join(REPO_ROOT, "skills/coding-agent/SKILL.md"), "utf8");
+    const launches = content.split("\n").filter((line) => line.includes("codex exec -"));
+
+    expect(launches).toHaveLength(2);
+    for (const launch of launches) {
+      expect(launch).toContain("env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY");
+      expect(launch).toContain('CODEX_HOME=\\"$HOME/.codex-coding-agent\\"');
+    }
+  });
 });

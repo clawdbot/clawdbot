@@ -17,6 +17,7 @@ type OnePasswordCliContext = {
   resolveConfig: () => OnePasswordConfig | undefined;
   resolveOpClient: () => Pick<OpClient, "opBin" | "tokenFilePresent">;
   auditStore: PluginStateKeyedStore<AuditRow>;
+  registerAdditionalCommands?: (command: CommandLike) => void;
   write?: (message: string) => void;
 };
 
@@ -86,6 +87,7 @@ export function registerOnePasswordCommands(context: OnePasswordCliContext): voi
   const command = context.program
     .command("onepassword")
     .description("Inspect the 1Password broker");
+  context.registerAdditionalCommands?.(command);
   command
     .command("status")
     .description("Show broker readiness without secret values")

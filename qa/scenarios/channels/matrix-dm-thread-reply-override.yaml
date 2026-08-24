@@ -4,16 +4,15 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
-    secondary:
-      - channels.dm
+      - matrix.matrix-thread-reply-routing
   execution:
     kind: flow
     channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Asserts fresh DM native-thread routing after session-scope scenarios and cannot inherit their DM session binding.
     timeoutMs: 45000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         dm:
           threadReplies: always

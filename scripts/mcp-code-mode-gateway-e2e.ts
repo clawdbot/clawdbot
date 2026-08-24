@@ -23,7 +23,7 @@ import {
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
 import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
-import { readBoundedResponseText } from "./lib/bounded-response.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -56,10 +56,10 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
       timeoutPromise,
     ]);
     const text = await readBoundedResponseText(response, url, 1024 * 1024, {
-      createTooLargeError(message) {
+      createTooLargeError(message: string) {
         return Object.assign(new Error(message), { code: "ETOOBIG" });
       },
-      formatTooLargeMessage(targetUrl, byteLimit) {
+      formatTooLargeMessage(targetUrl: string, byteLimit: number) {
         return `HTTP response from ${targetUrl} exceeded ${byteLimit} bytes`;
       },
       timeoutPromise,
@@ -85,8 +85,8 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
       apiFileList: "API.list",
       apiFileRead: "API.read",
       mcpNamespace: "MCP.fixture",
-      mcpTool: "fixture__lookup_note",
-      toolSearchPollution: 'tools.search("lookup note"',
+      mcpTool: "MCP.fixture.lookupNote",
+      toolSearchPollution: 'catalog.search("lookup note"',
     },
   });
 }
@@ -125,20 +125,11 @@ async function writeConfig(params: {
         memory: "none",
       },
     },
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        memorySearch: {
-          ...cfg.agents?.defaults?.memorySearch,
-          enabled: false,
-          sync: {
-            ...cfg.agents?.defaults?.memorySearch?.sync,
-            onSearch: false,
-            onSessionStart: false,
-            watch: false,
-          },
-        },
+    memory: {
+      ...cfg.memory,
+      search: {
+        ...cfg.memory?.search,
+        enabled: false,
       },
     },
     tools: {
@@ -181,7 +172,7 @@ async function writeConfig(params: {
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 }
 
-export async function main() {
+async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
   const previousEnv = {

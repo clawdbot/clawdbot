@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
+  acknowledgeOnboardRecommendationsCommand: vi.fn(),
+  onboardRecommendationsCommand: vi.fn(),
+  refreshOnboardRecommendationsCommand: vi.fn(),
   runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
@@ -49,6 +52,12 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
+vi.mock("../../commands/onboard-recommendations.js", () => ({
+  acknowledgeOnboardRecommendationsCommand: mocks.acknowledgeOnboardRecommendationsCommand,
+  onboardRecommendationsCommand: mocks.onboardRecommendationsCommand,
+  refreshOnboardRecommendationsCommand: mocks.refreshOnboardRecommendationsCommand,
+}));
+
 vi.mock("../../commands/system-agent-with-inference.js", () => ({
   runSystemAgentWithInference: mocks.runSystemAgentWithInference,
 }));
@@ -79,10 +88,78 @@ describe("registerOnboardCommand", () => {
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
+  it("routes the read-only recommendations subcommand", async () => {
+    await runCli(["onboard", "recommendations", "--json"]);
+
+    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations acknowledgement subcommand", async () => {
+    await runCli(["onboard", "recommendations", "acknowledge"]);
+
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+      { retry: undefined },
+      runtime,
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes failed recommendation ids through acknowledgement", async () => {
+    await runCli([
+      "onboard",
+      "recommendations",
+      "acknowledge",
+      "--retry",
+      "chat-plugin",
+      "@demo-owner/notes",
+    ]);
+
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+      { retry: ["chat-plugin", "@demo-owner/notes"] },
+      runtime,
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the recommendations refresh subcommand", async () => {
+    await runCli(["onboard", "recommendations", "refresh"]);
+
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { leaf: "read", args: ["--reset", "recommendations"] },
+    { leaf: "acknowledge", args: ["--reset", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--reset", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["--json", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--json", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["recommendations", "--json", "acknowledge"] },
+    { leaf: "refresh", args: ["recommendations", "--json", "refresh"] },
+  ])("rejects inapplicable parent options for recommendations $leaf", async ({ args }) => {
+    await runCli(["onboard", ...args]);
+
+    const unsupportedFlag = args.includes("--reset") ? "--reset" : "--json";
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unsupportedFlag));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps parent --json supported for reading recommendations", async () => {
+    await runCli(["onboard", "--json", "recommendations"]);
+
+    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+  });
+
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
     await runCli(["onboard"]);
 
     expect(setupWizardOptions().installDaemon).toBeUndefined();
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
@@ -96,19 +173,23 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions(2).installDaemon).toBe(false);
   });
 
-  it("parses numeric gateway port and drops invalid values", async () => {
+  it("parses a valid numeric gateway port", async () => {
     await runCli(["onboard", "--gateway-port", "18789"]);
-    expect(setupWizardOptions(0).gatewayPort).toBe(18789);
-
-    await runCli(["onboard", "--gateway-port", "nope"]);
-    expect(setupWizardOptions(1).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "18789x"]);
-    expect(setupWizardOptions(2).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "99999"]);
-    expect(setupWizardOptions(3).gatewayPort).toBeUndefined();
+    expect(setupWizardOptions().gatewayPort).toBe(18789);
   });
+
+  it.each(["not-a-port", "70000"])(
+    "rejects invalid --gateway-port %s before onboarding dispatch",
+    async (gatewayPort) => {
+      await runCli(["onboard", "--gateway-port", gatewayPort]);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "--gateway-port must be an integer between 1 and 65535.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards --reset-scope to setup wizard options", async () => {
     await runCli(["onboard", "--reset", "--reset-scope", "full"]);
@@ -120,6 +201,64 @@ describe("registerOnboardCommand", () => {
   it("forwards --skip-bootstrap to setup wizard options", async () => {
     await runCli(["onboard", "--skip-bootstrap"]);
     expect(setupWizardOptions().skipBootstrap).toBe(true);
+  });
+
+  it("forwards --agent-name to onboarding", async () => {
+    await runCli(["onboard", "--agent-name", "robby"]);
+    expect(setupWizardOptions().agentName).toBe("robby");
+  });
+
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
+    await runCli(["onboard", "--tailscale-reset-on-exit"]);
+
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
+  });
+
+  it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {
+    await runCli(["onboard", "--no-tailscale-reset-on-exit"]);
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
+  });
+
+  it.each([
+    { flag: "--remote-token", optionKey: "remoteToken" },
+    { flag: "--remote-password", optionKey: "remotePassword" },
+  ])("forwards $flag to remote setup wizard options", async ({ flag, optionKey }) => {
+    const credential = ["fixture", "value"].join("-");
+    await runCli([
+      "onboard",
+      "--mode",
+      "remote",
+      "--remote-url",
+      "wss://gateway.example.com:18789",
+      flag,
+      credential,
+    ]);
+
+    const options = setupWizardOptions();
+    expect(options.remoteUrl).toBe("wss://gateway.example.com:18789");
+    expect(options[optionKey]).toBe(credential);
+  });
+
+  it("forwards --tui to guided onboarding", async () => {
+    await runCli(["onboard", "--tui"]);
+
+    expect(setupWizardOptions().tui).toBe(true);
+  });
+
+  it("forwards --skip-ui to guided onboarding", async () => {
+    await runCli(["onboard", "--skip-ui"]);
+
+    expect(setupWizardOptions().skipUi).toBe(true);
+  });
+
+  it("rejects conflicting custom model input capabilities", async () => {
+    await runCli(["onboard", "--custom-image-input", "--custom-text-input"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Use either --custom-image-input or --custom-text-input, not both.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
@@ -160,7 +299,7 @@ describe("registerOnboardCommand", () => {
 
     await runCli(["onboard"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
+    expect(runtime.error).toHaveBeenCalledWith("setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

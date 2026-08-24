@@ -57,25 +57,16 @@ export function extractTextContent(content: unknown): string {
   return text;
 }
 
-export interface ParsedSkillBlock {
-  name: string;
-  location: string;
-  content: string;
-  userMessage: string | undefined;
-}
-
-export function parseSkillBlock(text: string): ParsedSkillBlock | null {
-  const match = text.match(
-    /^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/,
-  );
-  if (!match) {
-    return null;
+export function replaceAgentMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
+  // Agent-core stores the finalized message object before emitting message_end.
+  // Mutating it in place keeps agent state, later events, and persistence in sync.
+  if (target === replacement) {
+    return;
   }
-  const [, name, location, content, userMessage] = match;
-  if (name === undefined || location === undefined || content === undefined) {
-    return null;
+  for (const key of Object.keys(target)) {
+    Reflect.deleteProperty(target, key);
   }
-  return { name, location, content, userMessage: userMessage?.trim() || undefined };
+  Object.assign(target, replacement);
 }
 
 export function estimateMessagesFromContent(messages: AgentMessage[]): number {

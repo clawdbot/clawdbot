@@ -159,7 +159,7 @@ GRAPHQL
   rm -f "$variables_file"
 
   local result
-  result=$(gh api graphql --input - <<< "$payload" 2>&1) || {
+  result=$(gh_plain api graphql --input - <<< "$payload" 2>&1) || {
     echo "GraphQL push failed: $result" >&2
     return 1
   }
@@ -175,37 +175,21 @@ GRAPHQL
   printf '%s\n' "$new_oid"
 }
 
-resolve_head_push_url_https() {
-  # shellcheck disable=SC1091
-  source .local/pr-meta.env
-
-  if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
-    printf 'https://github.com/%s/%s.git\n' "$PR_HEAD_OWNER" "$PR_HEAD_REPO_NAME"
-    return 0
-  fi
-
-  if [ -n "${PR_HEAD_REPO_URL:-}" ] && [ "$PR_HEAD_REPO_URL" != "null" ]; then
-    case "$PR_HEAD_REPO_URL" in
-      *.git) printf '%s\n' "$PR_HEAD_REPO_URL" ;;
-      *) printf '%s.git\n' "$PR_HEAD_REPO_URL" ;;
-    esac
-    return 0
-  fi
-
-  return 1
-}
-
 verify_pr_head_branch_matches_expected() {
   local pr="$1"
   local expected_head="$2"
 
-  local current_head
-  current_head=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+  local current_head current_head_json
+  current_head_json=$(read_pr_view_json "$pr" "headRefName") || exit 1
+  current_head=$(pr_view_string_field "$current_head_json" "headRefName" "$pr" "Re-run prepare-init.") || exit 1
   if [ "$current_head" != "$expected_head" ]; then
     echo "PR head branch changed from $expected_head to $current_head. Re-run prepare-init."
     exit 1
   fi
 }
+
+PRHEAD_REMOTE_URL=""
+PRHEAD_REMOTE_SHA=""
 
 setup_prhead_remote() {
   local push_url
@@ -214,33 +198,22 @@ setup_prhead_remote() {
     exit 1
   }
 
-  git remote remove prhead 2>/dev/null || true
-  git remote add prhead "$push_url"
+  # Git remotes live in shared repository config across every linked worktree.
+  # Keep this URL process-local so concurrent PR lanes cannot redirect a push.
+  PRHEAD_REMOTE_URL="$push_url"
 }
 
 resolve_prhead_remote_sha() {
   local pr_head="$1"
 
   local remote_sha
-  remote_sha=$(git ls-remote prhead "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
+  remote_sha=$(git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
   if [ -z "$remote_sha" ]; then
-    local https_url
-    https_url=$(resolve_head_push_url_https 2>/dev/null) || true
-    local current_push_url
-    current_push_url=$(git remote get-url prhead 2>/dev/null || true)
-    if [ -n "$https_url" ] && [ "$https_url" != "$current_push_url" ]; then
-      echo "SSH remote failed; falling back to HTTPS..." >&2
-      git remote set-url prhead "$https_url"
-      git remote set-url --push prhead "$https_url"
-      remote_sha=$(git ls-remote prhead "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
-    fi
-    if [ -z "$remote_sha" ]; then
-      echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
-      exit 1
-    fi
+    echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
+    exit 1
   fi
 
-  printf '%s\n' "$remote_sha"
+  PRHEAD_REMOTE_SHA="$remote_sha"
 }
 
 verify_prep_first_parent_range_signed() {
@@ -282,7 +255,7 @@ push_prep_head_once() {
     return 2
   fi
 
-  git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead "$prep_head_sha:refs/heads/$pr_head" >&2
+  git push --force-with-lease=refs/heads/$pr_head:$lease_sha "$PRHEAD_REMOTE_URL" "$prep_head_sha:refs/heads/$pr_head" >&2
   printf '%s\n' "$prep_head_sha"
 }
 
@@ -298,8 +271,8 @@ push_prep_head_to_pr_branch() {
 
   setup_prhead_remote
 
-  local remote_sha
-  remote_sha=$(resolve_prhead_remote_sha "$pr_head")
+  resolve_prhead_remote_sha "$pr_head"
+  local remote_sha="$PRHEAD_REMOTE_SHA"
 
   local pushed_from_sha="$remote_sha"
   if [ "$remote_sha" = "$prep_head_sha" ]; then

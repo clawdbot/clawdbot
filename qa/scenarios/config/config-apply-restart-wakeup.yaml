@@ -5,9 +5,9 @@ scenario:
   surface: config
   coverage:
     primary:
-      - config.restart-apply
+      - gateway.restart-and-stop-restart-apply
     secondary:
-      - runtime.gateway-restart
+      - gateway.restart-and-stop-gateway-restart
   objective: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
   successCriteria:
     - config.apply schedules a restart-required change.
@@ -22,8 +22,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       channelId: qa-room
       announcePrompt: "Acknowledge restart wake-up setup in qa-room."
 

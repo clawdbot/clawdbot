@@ -61,6 +61,61 @@ describe("Slack message tools", () => {
     );
   });
 
+  it("preserves a workspace-qualified channel for reactions", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "react",
+      cfg: {} as OpenClawConfig,
+      params: {
+        channelId: "team:T123:channel:C123",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "react",
+        channelId: "team:T123:channel:C123",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("preserves a workspace-qualified channel for implicit upload destinations", async () => {
+    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("Slack message actions must provide an executor.");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "upload-file",
+      cfg: {} as OpenClawConfig,
+      params: {
+        channelId: "team:T123:channel:C123",
+        filePath: "/tmp/report.png",
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "team:T123:channel:C123",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
   it("classifies provider-native mutation actions", () => {
     const actions = createSlackActions("slack");
     for (const action of ["sendMessage", "editMessage", "deleteMessage", "pinMessage"]) {
@@ -165,6 +220,18 @@ describe("Slack message tools", () => {
     ]);
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
+    const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    for (const propertyName of ["forceDocument", "asDocument"]) {
+      const entries = schemas.filter((entry) => propertyName in entry.properties);
+      expect(entries.map((entry) => entry.actions)).toEqual([["send"], ["upload-file"]]);
+      for (const entry of entries) {
+        const description = (entry.properties[propertyName] as { description?: string })
+          .description;
+        expect(description).toMatch(/preserve original image bytes/i);
+        expect(description).toMatch(/without image optimization/i);
+        expect(description).toMatch(/not.*Slack document/i);
+      }
+    }
   });
 
   it("honors account-scoped action gates", () => {
@@ -198,6 +265,34 @@ describe("Slack message tools", () => {
           actions: {
             messages: true,
           },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "download-file",
+      "upload-file",
+      "pin",
+      "unpin",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+    ]);
+  });
+
+  it("exposes message actions for a configured user-identity account", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          postAs: "user",
+          userToken: "test-user-token",
+          appToken: "test-app-token",
         },
       },
     } as OpenClawConfig;
@@ -312,23 +407,30 @@ describe("Slack message tools", () => {
     expect(alias.description).toMatch(/Alias for messageId/i);
   });
 
-  it("describes Slack shortcode and common glyph reaction inputs", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
+  it.each([true, false])(
+    "describes Slack custom emoji and advertises discovery only when enabled (%s)",
+    (emojiList) => {
+      const discovery = describeSlackMessageTool({
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-test",
+              actions: { emojiList },
+            },
           },
         },
-      },
-    });
+      });
 
-    const { schema, property } = requireSchemaProperty(discovery, "emoji");
+      const { schema, property } = requireSchemaProperty(discovery, "emoji");
 
-    expect(schema.actions).toEqual(["react", "reactions"]);
-    expect(property.description).toContain("white_check_mark");
-    expect(property.description).toContain("✅");
-  });
+      expect(schema.actions).toEqual(["react", "reactions"]);
+      expect(property.description).toContain("white_check_mark");
+      expect(property.description).toContain("✅");
+      expect(property.description).toContain("workspace custom emoji");
+      expect(property.description?.includes('action:"emoji-list"')).toBe(emojiList);
+      expect(discovery.actions?.includes("emoji-list")).toBe(emojiList);
+    },
+  );
 
   it("omits the react emoji schema when reactions are disabled", () => {
     const discovery = describeSlackMessageTool({

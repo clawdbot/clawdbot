@@ -5,10 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import {
-  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-  createHappyPathPromptSnapshotFiles,
-} from "../test/helpers/agents/happy-path-prompt-snapshots.js";
+import { createHappyPathPromptSnapshotFiles } from "../test/helpers/agents/happy-path-prompt-snapshots.js";
+import { CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR } from "../test/helpers/agents/prompt-snapshot-paths.js";
+import { coerceErrorMessage as describeError } from "./lib/error-format.mts";
 import {
   deleteStalePromptSnapshotFiles,
   listCommittedSnapshotArtifactPaths,
@@ -24,10 +23,14 @@ const oxfmtPath = path.resolve(
 const execFileAsync = promisify(execFile);
 
 type PromptSnapshotFile = Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>[number];
+type CodexDynamicToolSnapshotSpec = { name: string };
+type CodexDynamicToolSnapshotOverrides = {
+  base: string;
+  replace: Record<string, CodexDynamicToolSnapshotSpec>;
+};
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+const CODEX_DYNAMIC_TOOL_SNAPSHOT_PREFIX = "codex-dynamic-tools.";
+const CODEX_DYNAMIC_TOOL_BASE_SNAPSHOT = `${CODEX_DYNAMIC_TOOL_SNAPSHOT_PREFIX}telegram-direct.json`;
 
 async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   await Promise.all(
@@ -60,8 +63,49 @@ async function readSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   );
 }
 
-export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
-  const files = await createHappyPathPromptSnapshotFiles();
+/** Keep complete Codex tool specs on the wire; deduplicate only their committed review fixtures. */
+function factorCodexDynamicToolSnapshotFiles(files: PromptSnapshotFile[]): PromptSnapshotFile[] {
+  const base = files.find((file) => path.basename(file.path) === CODEX_DYNAMIC_TOOL_BASE_SNAPSHOT);
+  if (!base) {
+    return files;
+  }
+  const baseTools = JSON.parse(base.content) as CodexDynamicToolSnapshotSpec[];
+  if (new Set(baseTools.map((tool) => tool.name)).size !== baseTools.length) {
+    return files;
+  }
+
+  return files.map((file) => {
+    const fileName = path.basename(file.path);
+    if (
+      fileName === CODEX_DYNAMIC_TOOL_BASE_SNAPSHOT ||
+      !fileName.startsWith(CODEX_DYNAMIC_TOOL_SNAPSHOT_PREFIX) ||
+      !fileName.endsWith(".json")
+    ) {
+      return file;
+    }
+    const tools = JSON.parse(file.content) as CodexDynamicToolSnapshotSpec[];
+    if (
+      tools.length !== baseTools.length ||
+      tools.some((tool, index) => tool.name !== baseTools[index]?.name)
+    ) {
+      return file;
+    }
+    const replace = Object.fromEntries(
+      tools.flatMap((tool, index) =>
+        JSON.stringify(tool) === JSON.stringify(baseTools[index]) ? [] : [[tool.name, tool]],
+      ),
+    );
+    const overrides: CodexDynamicToolSnapshotOverrides = {
+      base: CODEX_DYNAMIC_TOOL_BASE_SNAPSHOT,
+      replace,
+    };
+    return { ...file, content: `${JSON.stringify(overrides, null, 2)}\n` };
+  });
+}
+
+async function formatPromptSnapshotFiles(
+  files: PromptSnapshotFile[],
+): Promise<PromptSnapshotFile[]> {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-snapshots-"));
   try {
     await writeSnapshotFiles(tmpRoot, files);
@@ -70,6 +114,56 @@ export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapsh
   } finally {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
+}
+
+async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
+  const files = await createHappyPathPromptSnapshotFiles();
+  return await formatPromptSnapshotFiles(factorCodexDynamicToolSnapshotFiles(files));
+}
+
+/** Materialize one complete, formatted Codex dynamic-tool catalog for human review. */
+export async function materializeCodexDynamicToolSnapshot(scenario: string): Promise<string> {
+  if (!/^[a-z][a-z0-9-]*$/u.test(scenario)) {
+    throw new Error(`Invalid Codex dynamic-tool snapshot scenario: ${scenario}`);
+  }
+  const snapshotPath = path.join(
+    CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+    `${CODEX_DYNAMIC_TOOL_SNAPSHOT_PREFIX}${scenario}.json`,
+  );
+  const snapshot = JSON.parse(await fs.readFile(path.resolve(repoRoot, snapshotPath), "utf8")) as
+    | CodexDynamicToolSnapshotSpec[]
+    | CodexDynamicToolSnapshotOverrides;
+  let tools: CodexDynamicToolSnapshotSpec[];
+  if (Array.isArray(snapshot)) {
+    tools = snapshot;
+  } else {
+    if (snapshot.base !== CODEX_DYNAMIC_TOOL_BASE_SNAPSHOT) {
+      throw new Error(`Unsupported Codex dynamic-tool snapshot base: ${snapshot.base}`);
+    }
+    const basePath = path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, snapshot.base);
+    const base = JSON.parse(await fs.readFile(path.resolve(repoRoot, basePath), "utf8")) as
+      | CodexDynamicToolSnapshotSpec[]
+      | CodexDynamicToolSnapshotOverrides;
+    if (!Array.isArray(base)) {
+      throw new Error("The canonical Codex dynamic-tool snapshot must contain complete tools");
+    }
+    const baseNames = new Set(base.map((tool) => tool.name));
+    for (const [name, replacement] of Object.entries(snapshot.replace)) {
+      if (!baseNames.has(name) || replacement.name !== name) {
+        throw new Error(`Invalid Codex dynamic-tool snapshot replacement: ${name}`);
+      }
+    }
+    tools = base.map((tool) =>
+      Object.hasOwn(snapshot.replace, tool.name) ? snapshot.replace[tool.name]! : tool,
+    );
+  }
+  const [formatted] = await formatPromptSnapshotFiles([
+    { path: snapshotPath, content: `${JSON.stringify(tools, null, 2)}\n` },
+  ]);
+  if (!formatted) {
+    throw new Error(`Failed to materialize Codex dynamic-tool snapshot: ${scenario}`);
+  }
+  return formatted.content;
 }
 
 async function writeSnapshots() {
@@ -117,6 +211,18 @@ async function checkSnapshots() {
 }
 
 async function runPromptSnapshotGenerator(argv = process.argv.slice(2)) {
+  if (argv[0] === "--materialize") {
+    const scenario = argv[1];
+    if (!scenario || argv.length !== 2) {
+      console.error(
+        "Usage: node --import tsx scripts/generate-prompt-snapshots.ts --materialize <scenario>",
+      );
+      process.exitCode = 2;
+      return;
+    }
+    process.stdout.write(await materializeCodexDynamicToolSnapshot(scenario));
+    return;
+  }
   const mode = argv.includes("--write") ? "write" : argv.includes("--check") ? "check" : undefined;
 
   if (!mode) {

@@ -1,28 +1,37 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { ReefMessageFlow } from "./flow.js";
 import type { ReefFriendManager } from "./friends.js";
 import type { ReviewApprovalStore } from "./state.js";
 
-let runtime: PluginRuntime | undefined;
-let active:
+type ActiveReef =
   | { flow: ReefMessageFlow; friends: ReefFriendManager; reviews: ReviewApprovalStore }
   | undefined;
 
-export function setReefRuntime(value: PluginRuntime): void {
-  runtime = value;
-}
-export function getReefRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Reef runtime unavailable");
+const {
+  setRuntime: setReefRuntime,
+  tryGetRuntime: getOptionalReefRuntime,
+  getRuntime: getReefRuntime,
+} = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "reef",
+  errorMessage: "Reef runtime unavailable",
+});
+
+// Keep the live channel handle in a second named slot: duplicate bundled-plugin
+// module instances must observe the same running Reef instance for outbound sends.
+const activeReefStore = createPluginRuntimeStore<Exclude<ActiveReef, undefined>>({
+  key: "plugin-runtime:reef:active",
+  errorMessage: "Reef channel is not running",
+});
+
+export { getOptionalReefRuntime, getReefRuntime, setReefRuntime };
+
+export function setActiveReef(value: ActiveReef): void {
+  if (value) {
+    activeReefStore.setRuntime(value);
+  } else {
+    activeReefStore.clearRuntime();
   }
-  return runtime;
 }
-export function setActiveReef(value: typeof active): void {
-  active = value;
-}
-export function getActiveReef() {
-  if (!active) {
-    throw new Error("Reef channel is not running");
-  }
-  return active;
-}
+
+export const getActiveReef = activeReefStore.getRuntime;

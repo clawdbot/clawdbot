@@ -106,7 +106,7 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["openai/gpt-5.2", "zai/glm-5"]);
   });
 
-  it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
+  it("uses default subagent fallbacks ahead of the agent primary", () => {
     expect(
       resolveCronFallbacksOverride({
         cfg: {
@@ -115,6 +115,38 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
+                  fallbacks: ["openai/gpt-5.2"],
+                },
+              },
+            },
+            list: [
+              {
+                id: "research",
+                model: {
+                  primary: "anthropic/claude-opus-4-6",
+                },
+              },
+            ],
+          },
+        },
+        agentId: "research",
+        useSubagentFallbacks: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual(["openai/gpt-5.2"]);
+  });
+
+  it("keeps the agent primary strict when the default subagent model has no primary", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: {
+                model: {
                   fallbacks: ["openai/gpt-5.2"],
                 },
               },
@@ -401,9 +433,24 @@ describe("resolveCronFallbacksOverride", () => {
         }),
       }),
     ).toEqual([
-      { provider: "ollama", model: "qwen3:32b" },
-      { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" },
-      { provider: "openai", model: "gpt-5.4" },
+      {
+        provider: "ollama",
+        model: "qwen3:32b",
+        routeOrigin: "requested",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openrouter",
+        model: "nvidia/nemotron-3-super-120b-a12b:free",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.4",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
     ]);
   });
 
@@ -420,7 +467,14 @@ describe("resolveCronFallbacksOverride", () => {
           fallbacks: [],
         }),
       }),
-    ).toStrictEqual([{ provider: "ollama", model: "qwen3:32b" }]);
+    ).toStrictEqual([
+      {
+        provider: "ollama",
+        model: "qwen3:32b",
+        routeOrigin: "requested",
+        routeResolution: "resolved",
+      },
+    ]);
   });
 
   it("documents that cron preflight walks fallbacks before skipping", () => {

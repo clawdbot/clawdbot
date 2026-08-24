@@ -4,18 +4,20 @@
  */
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
-import dynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
-import errorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
-import modelListResponseSchema from "./protocol-generated/json/v2/ModelListResponse.json" with { type: "json" };
-import threadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResumeResponse.json" with { type: "json" };
-import threadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
-import turnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
-import turnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
+import rawDynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
+import sharedDefinitionsSchema from "./protocol-generated/json/v2/CodexAppServerProtocolDefinitions.json" with { type: "json" };
+import rawErrorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
+import rawModelListResponseSchema from "./protocol-generated/json/v2/ModelListResponse.json" with { type: "json" };
+import rawThreadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResumeResponse.json" with { type: "json" };
+import rawThreadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
+import rawTurnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
+import rawTurnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
 import type {
   CodexDynamicToolCallParams,
   CodexErrorNotification,
   CodexModelListResponse,
   CodexThreadForkResponse,
+  CodexThreadForkParams,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurn,
@@ -32,6 +34,96 @@ type CodexValidator<T> = {
   check: (value: unknown) => value is T;
   errors: (value: unknown) => ValidationError[];
 };
+
+const externalDefinitionRefPrefix = "./CodexAppServerProtocolDefinitions.json#/definitions/";
+const rootExternalDefinitionRefPrefix = "./v2/CodexAppServerProtocolDefinitions.json#/definitions/";
+const localDefinitionRefPrefix = "#/definitions/";
+
+function materializeCodexSchema(
+  schema: unknown,
+  externalRefPrefix = externalDefinitionRefPrefix,
+): unknown {
+  const sharedDefinitions: unknown = sharedDefinitionsSchema.definitions;
+  if (!isRecord(schema) || !isRecord(sharedDefinitions)) {
+    return schema;
+  }
+  const reachable = collectDefinitionRefs(schema, externalRefPrefix);
+  const pending = [...reachable];
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name === undefined) {
+      continue;
+    }
+    const definition = sharedDefinitions[name];
+    if (definition === undefined) {
+      throw new Error(`Missing generated Codex schema definition: ${name}`);
+    }
+    for (const dependency of collectDefinitionRefs(definition, localDefinitionRefPrefix)) {
+      if (!reachable.has(dependency)) {
+        reachable.add(dependency);
+        pending.push(dependency);
+      }
+    }
+  }
+  if (reachable.size === 0) {
+    return schema;
+  }
+  const definitions = Object.fromEntries(
+    Object.entries(sharedDefinitions).filter(([name]) => reachable.has(name)),
+  );
+  return rewriteDefinitionRefs({ ...schema, definitions }, externalRefPrefix);
+}
+
+function collectDefinitionRefs(
+  value: unknown,
+  prefix: string,
+  names = new Set<string>(),
+): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectDefinitionRefs(entry, prefix, names);
+    }
+  } else if (isRecord(value)) {
+    if (typeof value.$ref === "string" && value.$ref.startsWith(prefix)) {
+      const name = value.$ref.slice(prefix.length).split("/", 1)[0];
+      if (name) {
+        names.add(name.replaceAll("~1", "/").replaceAll("~0", "~"));
+      }
+    }
+    for (const entry of Object.values(value)) {
+      collectDefinitionRefs(entry, prefix, names);
+    }
+  }
+  return names;
+}
+
+function rewriteDefinitionRefs(value: unknown, externalRefPrefix: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewriteDefinitionRefs(entry, externalRefPrefix));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "$ref" && typeof entry === "string" && entry.startsWith(externalRefPrefix)
+        ? `${localDefinitionRefPrefix}${entry.slice(externalRefPrefix.length)}`
+        : rewriteDefinitionRefs(entry, externalRefPrefix),
+    ]),
+  );
+}
+
+const dynamicToolCallParamsSchema = materializeCodexSchema(
+  rawDynamicToolCallParamsSchema,
+  rootExternalDefinitionRefPrefix,
+);
+const errorNotificationSchema = materializeCodexSchema(rawErrorNotificationSchema);
+const modelListResponseSchema = materializeCodexSchema(rawModelListResponseSchema);
+const threadResumeResponseSchema = materializeCodexSchema(rawThreadResumeResponseSchema);
+const threadStartResponseSchema = materializeCodexSchema(rawThreadStartResponseSchema);
+const turnCompletedNotificationSchema = materializeCodexSchema(rawTurnCompletedNotificationSchema);
+const turnStartResponseSchema = materializeCodexSchema(rawTurnStartResponseSchema);
 
 function compileCodexSchema<T>(schema: unknown): CodexValidator<T> {
   const validator = Compile(normalizeJsonSchemaNode(schema) as never) as TypeBoxValidator;
@@ -236,6 +328,21 @@ export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkRe
   return assertCodexShape(validateThreadStartResponse, normalized, "thread/fork response");
 }
 
+/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
+export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
+  if (
+    !isRecord(value) ||
+    typeof value.threadId !== "string" ||
+    !value.threadId.trim() ||
+    (value.beforeTurnId !== undefined &&
+      value.beforeTurnId !== null &&
+      typeof value.beforeTurnId !== "string")
+  ) {
+    throw new Error("Invalid Codex app-server thread/fork params");
+  }
+  return value as CodexThreadForkParams;
+}
+
 /** Asserts and normalizes a Codex thread/resume response. */
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
   const normalized = normalizeWithDefaults(threadResumeResponseSchema, value);
@@ -269,11 +376,12 @@ export function readCodexErrorNotification(value: unknown): CodexErrorNotificati
   );
 }
 
-/** Reads a Codex model/list response if it matches the protocol schema. */
-export function readCodexModelListResponse(value: unknown): CodexModelListResponse | undefined {
-  return readCodexShape(
+/** Asserts and normalizes a Codex model/list response. */
+export function assertCodexModelListResponse(value: unknown): CodexModelListResponse {
+  return assertCodexShape(
     validateModelListResponse,
     normalizeWithDefaults(modelListResponseSchema, value),
+    "model/list response",
   );
 }
 

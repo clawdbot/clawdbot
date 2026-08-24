@@ -96,13 +96,13 @@ struct WatchSessionActivationGateTests {
                 "Sources/Services/WatchMessagingService.swift"),
             encoding: .utf8)
 
+        #expect(receiverSource.contains("final class WatchMessageAcknowledgment"))
         #expect(receiverSource.contains(
-            "let accepted = self.consumeIncomingPayload(message, transport: \"sendMessage\")"))
-        #expect(receiverSource.contains("accepted\n                ? [\"ok\": true]"))
+            "acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler)"))
+        #expect(receiverSource.contains("acknowledgment?.accept()"))
+        #expect(receiverSource.contains("acknowledgment?.rejectUnsupportedPayload()"))
         #expect(receiverSource.contains(
-            ": [\"ok\": false, \"error\": \"unsupported_payload\"]"))
-        #expect(receiverSource.contains(
-            "private func consumeIncomingPayload(_ payload: [String: Any], transport: String) -> Bool"))
+            "acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool"))
         #expect(receiverSource.contains("guard activationState == .activated else { return }"))
         #expect(receiverSource.contains("try requireAcceptedWatchMessageReply(reply)"))
         #expect(transportSource.contains("try requireAcceptedWatchMessageReply(reply)"))

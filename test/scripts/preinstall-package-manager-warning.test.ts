@@ -1,7 +1,6 @@
 // Preinstall Package Manager Warning tests cover preinstall package manager warning script behavior.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
@@ -17,6 +16,7 @@ import {
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
+import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const EXPECTED_NODE_ENGINE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
@@ -43,21 +43,23 @@ describe("install runtime enforcement", () => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
 
-  it.each(["22.22.2", "22.22.3", "23.11.0", "24.14.1", "24.15.0", "25.8.1", "25.9.0", "26.0.0"])(
-    "matches the CLI runtime guard for Node %s",
-    (version) => {
-      expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
-        isSupportedNodeVersion(version),
-      );
-    },
-  );
+  it.each(NODE_RELEASE_VERSION_CASES)("matches the CLI runtime guard for Node %s", (version) => {
+    expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
+      isSupportedNodeVersion(version),
+    );
+  });
 
-  it.each(["24.15.0-rc.1", "25.9.1-nightly.20260714", "24.15", "24.15.0+", "24.15.0+local..1"])(
-    "rejects non-release Node version %s",
-    (version) => {
-      expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(false);
-    },
-  );
+  it.each([
+    "24.15.0-rc.1",
+    "25.9.1-nightly.20260714",
+    "24.15",
+    "24.15.0+",
+    "24.15.0+local..1",
+    "garbage24.15.0suffix",
+    "24.15.0suffix",
+  ])("rejects non-release Node version %s", (version) => {
+    expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(false);
+  });
 
   it("accepts SemVer build metadata on a supported Node release", () => {
     expect(nodeVersionSatisfiesPackageEngine("24.15.0+local.1", EXPECTED_NODE_ENGINE_RANGE)).toBe(
@@ -99,13 +101,17 @@ describe("install runtime enforcement", () => {
   });
 
   it("exits nonzero when the packed entrypoint sees an unsupported runtime", () => {
-    const root = tempDirs.make("openclaw-preinstall-", realpathSync(tmpdir()));
+    const root = tempDirs.make("openclaw-preinstall-");
     const scriptsDir = join(root, "scripts");
     mkdirSync(scriptsDir);
     const scriptPath = join(scriptsDir, "preinstall-package-manager-warning.mjs");
     copyFileSync(
       new URL("../../scripts/preinstall-package-manager-warning.mjs", import.meta.url),
       scriptPath,
+    );
+    copyFileSync(
+      new URL("../../node-version.mjs", import.meta.url),
+      join(root, "node-version.mjs"),
     );
     writeFileSync(join(root, "package.json"), JSON.stringify({ engines: { node: ">=999.0.0" } }));
 

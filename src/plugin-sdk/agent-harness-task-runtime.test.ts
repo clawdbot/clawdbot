@@ -2,7 +2,8 @@
  * Tests agent harness task runtime scope, persistence, and completion delivery.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deliverSubagentAnnouncement } from "../agents/subagent-announce-delivery.js";
+import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subagent-announce-delivery.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
@@ -12,8 +13,11 @@ import {
   isDurableAgentHarnessCompletionDelivery,
 } from "./agent-harness-task-runtime.js";
 
-vi.mock("../agents/subagent-announce-delivery.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/subagent-announce-delivery.js")>();
+vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../agents/subagents/announce/subagent-announce-delivery.js")
+    >();
   return {
     ...actual,
     deliverSubagentAnnouncement: vi.fn(async () => ({ delivered: true, path: "steered" })),
@@ -84,6 +88,7 @@ describe("agent-harness-task-runtime", () => {
   it("rejects task run ids outside the configured harness scope", () => {
     const runtime = createAgentHarnessTaskRuntime({
       runtime: "subagent",
+      taskKind: "example-harness",
       scope: createScope(),
       runIdPrefix: "example:",
     });
@@ -104,6 +109,7 @@ describe("agent-harness-task-runtime", () => {
     expect(() =>
       createAgentHarnessTaskRuntime({
         runtime: "subagent",
+        taskKind: "example-harness",
         scope: forgedScope,
       }),
     ).toThrow(/host-issued scope/);
@@ -161,8 +167,18 @@ describe("agent-harness-task-runtime", () => {
   });
 
   it("delivers a generic harness completion through subagent announcement delivery", async () => {
+    const gatewayContextResolver = vi.fn();
+    vi.mocked(deliverSubagentAnnouncement).mockImplementationOnce(async () => {
+      expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext).toBe(
+        gatewayContextResolver,
+      );
+      return { delivered: true, path: "steered" };
+    });
     await deliverAgentHarnessTaskCompletion({
-      scope: createScope("agent:main:main"),
+      scope: createAgentHarnessTaskRuntimeScope({
+        requesterSessionKey: "agent:main:main",
+        gatewayContextResolver,
+      }),
       childSessionKey: "harness-thread:child",
       childSessionId: "child",
       announceId: "harness:parent:child:succeeded",
@@ -182,6 +198,9 @@ describe("agent-harness-task-runtime", () => {
         expectsCompletionMessage: true,
         directIdempotencyKey: "announce:harness:parent:child:succeeded",
       }),
+    );
+    expect(vi.mocked(deliverSubagentAnnouncement).mock.calls[0]?.[0]).not.toHaveProperty(
+      "resolveGatewayContext",
     );
   });
 

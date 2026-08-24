@@ -176,6 +176,56 @@ describe("provider error utils", () => {
     } satisfies Partial<ProviderHttpError>);
   });
 
+  it("propagates a bounded error-body timeout instead of hanging normalization", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel,
+        }),
+        { status: 503 },
+      );
+      const assertion = expect(
+        assertOkOrThrowHttpError(response, "Provider API error", {
+          bodyTimeoutMs: () => 50,
+          onBodyTimeout: ({ timeoutMs }) => new Error(`provider body timed out ${timeoutMs}`),
+        }),
+      ).rejects.toThrow("provider body timed out 50");
+
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates an already-expired lazy error-body deadline", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          return new Promise<void>(() => {});
+        },
+        cancel,
+      }),
+      { status: 503 },
+    );
+
+    await expect(
+      assertOkOrThrowHttpError(response, "Provider API error", {
+        bodyTimeoutMs: () => {
+          throw new Error("provider deadline already expired");
+        },
+      }),
+    ).rejects.toThrow("provider deadline already expired");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("releases provider error body reader locks after bounded reads complete", async () => {
     const releaseLock = vi.fn();
     const cancel = vi.fn(async () => undefined);
@@ -310,6 +360,19 @@ describe("provider error utils", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
+  it("rejects provider JSON responses with invalid UTF-8 bytes instead of silently replacing them", async () => {
+    const invalidUtf8Bytes = new Uint8Array([0x7b, 0x22, 0x6b, 0x65, 0x79, 0x22, 0x3a, 0xff, 0x7d]);
+    const response = new Response(invalidUtf8Bytes.buffer, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    await expect(readProviderJsonResponse(response, "Provider JSON failed")).rejects.toMatchObject({
+      message: "Provider JSON failed: malformed JSON response",
+      cause: expect.any(TypeError) as unknown,
+    });
+  });
+
   it("caps successful text responses instead of buffering oversized bodies", async () => {
     const streamed = createStreamingTextResponse({
       chunkCount: 20,
@@ -339,5 +402,86 @@ describe("provider error utils", () => {
     ).rejects.toThrow("Provider TTS failed: audio response exceeds 2048 bytes");
 
     expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("does not await clone-tee cancellation for rejected binary responses", async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const captureClone = response.clone();
+
+    await expect(
+      readProviderBinaryResponse(response, "Provider TTS failed", "audio"),
+    ).rejects.toThrow("Provider TTS failed: malformed audio response");
+    expect(cancel).not.toHaveBeenCalled();
+    await captureClone.body?.cancel();
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects stalled JSON response body after chunk idle timeout", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      readProviderJsonResponse(response, "stalled-provider", { chunkTimeoutMs: 20 }),
+    ).rejects.toThrow("stalled-provider: response body stalled for 20ms");
+  });
+
+  it("rejects stalled non-2xx error body read after chunk idle timeout", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error": {"message": "par'));
+        },
+      });
+      const response = new Response(stream, {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      });
+
+      const assertion = expect(
+        assertOkOrThrowProviderError(response, "stalled-error"),
+      ).rejects.toThrow("stalled-error (502)");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("proves idle timeout with a real TCP server that stalls mid-JSON-body", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"status": "par');
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, resolve);
+    });
+    const port = (server.address() as import("node:net").AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://localhost:${port}/test`);
+      await expect(
+        readProviderJsonResponse(response, "tcp-stall", { chunkTimeoutMs: 100 }),
+      ).rejects.toThrow("tcp-stall: response body stalled for 100ms");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });

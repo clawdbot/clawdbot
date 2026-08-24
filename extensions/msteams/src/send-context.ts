@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   resolveChannelMediaMaxBytes,
   type MSTeamsConfig,
-  type MSTeamsReplyStyle,
   type OpenClawConfig,
   type PluginRuntime,
 } from "../runtime-api.js";
@@ -13,6 +12,7 @@ import {
   isAllowedBotFrameworkServiceUrl,
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
+import { resolveMSTeamsAccount } from "./channel-config.js";
 import {
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
@@ -24,6 +24,7 @@ import type {
   StoredConversationReference,
 } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -31,6 +32,12 @@ import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 type MSTeamsConversationType = "personal" | "groupChat" | "channel";
+
+// Keep reply policy and the Connector thread suffix together so every proactive
+// activity kind uses the same resolved destination instead of re-deriving it.
+type MSTeamsProactiveReplyTarget =
+  | { replyStyle: "thread"; threadActivityId: string }
+  | { replyStyle: "top-level"; threadActivityId?: never };
 
 export type MSTeamsProactiveContext = {
   appId: string;
@@ -40,8 +47,6 @@ export type MSTeamsProactiveContext = {
   log: ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
   /** The type of conversation: personal (1:1), groupChat, or channel */
   conversationType: MSTeamsConversationType;
-  /** Reply style resolved for proactive text/media sends. */
-  replyStyle: MSTeamsReplyStyle;
   /** Teams SDK cloud/service endpoint used to validate proactive sends. */
   sdkCloudOptions: MSTeamsSdkCloudOptions;
   /** Token provider for Graph API / SharePoint operations */
@@ -50,17 +55,17 @@ export type MSTeamsProactiveContext = {
   sharePointSiteId?: string;
   /** Resolved media max bytes from config (default: 100MB) */
   mediaMaxBytes?: number;
-};
+} & MSTeamsProactiveReplyTarget;
 
-function resolveMSTeamsProactiveReplyStyle(params: {
+function resolveMSTeamsProactiveReplyTarget(params: {
   cfg?: MSTeamsConfig;
   conversationId: string;
   ref: StoredConversationReference;
   conversationType: MSTeamsConversationType;
-}): MSTeamsReplyStyle {
+}): MSTeamsProactiveReplyTarget {
   const threadRootId = params.ref.threadId ?? params.ref.activityId;
   if (params.conversationType !== "channel" || !threadRootId) {
-    return "top-level";
+    return { replyStyle: "top-level" };
   }
 
   const routeConfig = resolveMSTeamsRouteConfig({
@@ -75,25 +80,42 @@ function resolveMSTeamsProactiveReplyStyle(params: {
     teamConfig: routeConfig.teamConfig,
     channelConfig: routeConfig.channelConfig,
   });
-  return replyStyle;
+  return replyStyle === "thread" ? { replyStyle, threadActivityId: threadRootId } : { replyStyle };
 }
 
 /**
  * Parse the target value into a conversation reference lookup key.
  * Supported formats:
  * - conversation:19:abc@thread.tacv2 → lookup by conversation ID
+ * - conversation:19:abc@thread.tacv2;messageid=root → lookup base ID, use root
  * - user:aad-object-id → lookup by user AAD object ID
  * - 19:abc@thread.tacv2 → direct conversation ID
  */
 function parseRecipient(to: string): {
   type: "conversation" | "user";
   id: string;
+  threadId?: string;
 } {
   const trimmed = to.trim();
   const finalize = (type: "conversation" | "user", id: string) => {
     const normalized = id.trim();
     if (!normalized) {
       throw new Error(`Invalid target value: missing ${type} id`);
+    }
+    if (type === "conversation") {
+      const threadId = extractMSTeamsConversationMessageId(normalized);
+      const normalizedConversationId = normalizeMSTeamsConversationId(normalized);
+      const slashIndex = normalizedConversationId.indexOf("/");
+      const graphChannelId =
+        slashIndex > 0 ? normalizedConversationId.slice(slashIndex + 1) : undefined;
+      return {
+        type,
+        id:
+          graphChannelId && (graphChannelId.startsWith("19:") || graphChannelId.includes("@thread"))
+            ? graphChannelId
+            : normalizedConversationId,
+        ...(threadId ? { threadId } : {}),
+      };
     }
     return { type, id: normalized };
   };
@@ -147,6 +169,13 @@ export async function resolveMSTeamsSendContext(params: {
     throw new Error("msteams provider is not enabled");
   }
 
+  const account = resolveMSTeamsAccount(params.cfg);
+  if (account.tokenStatus === "configured_unavailable") {
+    throw new Error("msteams credential file is configured but unavailable");
+  }
+  if (!account.configured) {
+    throw new Error("msteams credentials not configured");
+  }
   const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     throw new Error("msteams credentials not configured");
@@ -165,7 +194,8 @@ export async function resolveMSTeamsSendContext(params: {
     );
   }
 
-  const { conversationId, ref } = found;
+  const conversationId = found.conversationId;
+  const ref = recipient.threadId ? { ...found.ref, threadId: recipient.threadId } : found.ref;
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams:send" });
 
@@ -228,12 +258,18 @@ export async function resolveMSTeamsSendContext(params: {
     // groupChat, or unknown defaults to groupChat behavior
     conversationType = "groupChat";
   }
-  const replyStyle = resolveMSTeamsProactiveReplyStyle({
-    cfg: msteamsCfg,
-    conversationId,
-    ref: safeRef,
-    conversationType,
-  });
+  // An explicit messageid is a caller-owned destination. Ambient and stored
+  // roots still obey route policy, but explicit channel roots must not be
+  // flattened by a top-level default.
+  const replyTarget: MSTeamsProactiveReplyTarget =
+    recipient.threadId && conversationType === "channel"
+      ? { replyStyle: "thread", threadActivityId: recipient.threadId }
+      : resolveMSTeamsProactiveReplyTarget({
+          cfg: msteamsCfg,
+          conversationId,
+          ref: safeRef,
+          conversationType,
+        });
 
   // Get SharePoint site ID from config (required for file uploads in group chats/channels)
   const sharePointSiteId = msteamsCfg.sharePointSiteId;
@@ -251,7 +287,7 @@ export async function resolveMSTeamsSendContext(params: {
     app,
     log,
     conversationType,
-    replyStyle,
+    ...replyTarget,
     sdkCloudOptions,
     tokenProvider,
     sharePointSiteId,

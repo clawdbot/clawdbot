@@ -1,22 +1,30 @@
 // Cron service timer tests cover timer scheduling, cancellation, and wakeups.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
-import { createCronServiceState } from "../../cron/service/state.js";
+import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.test-support.js";
-import * as cronStoreModule from "../../cron/store.js";
 import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
 });
+
+function createCronServiceState(
+  params: Parameters<typeof createCronServiceStateBase>[0],
+): ReturnType<typeof createCronServiceStateBase> {
+  return createCronServiceStateBase({ defaultAgentId: "main", ...params });
+}
 
 function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
   return {
@@ -66,6 +74,32 @@ function createDueCommandJob(params: { now: number }): CronJob {
   };
 }
 
+function createDueScriptJob(params: {
+  now: number;
+  sessionTarget?: "main" | "isolated";
+  pacing?: CronJob["pacing"];
+}): CronJob {
+  return {
+    id: "script-job",
+    agentId: "finn",
+    name: "script job",
+    enabled: true,
+    createdAtMs: params.now - 60_000,
+    updatedAtMs: params.now - 60_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
+    pacing: params.pacing,
+    sessionTarget: params.sessionTarget ?? "isolated",
+    wakeMode: "now",
+    payload: {
+      kind: "script",
+      script: "return { notify: 'done' }",
+      timeoutSeconds: 300,
+      toolBudget: 50,
+    },
+    state: { nextRunAtMs: params.now - 1, triggerState: { revision: 1 } },
+  };
+}
+
 function findCronTaskByBaseRunId(baseRunId: string) {
   return (
     findTaskByRunId(baseRunId) ??
@@ -78,7 +112,7 @@ afterEach(() => {
 });
 
 describe("cron service timer seam coverage", () => {
-  it("routes main cron jobs onto a cron run lane derived from the target agent", async () => {
+  it("routes main cron jobs to the owning agent's main session", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
@@ -89,16 +123,15 @@ describe("cron service timer seam coverage", () => {
       sessionKey: "agent:main-pr-router:main",
       state: { runningAtMs: now },
     };
-    const cronRunSessionKey = `agent:main-pr-router:cron:main-heartbeat-job:run:${now}`;
     const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath: sessionStorePath, sessionKey: "agent:main-pr-router:main" },
       {
         sessionId: "main-pr-router-session",
         updatedAt: now,
-        lastChannel: "discord",
-        lastTo: "channel-1",
-        lastAccountId: "default",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "discord", to: "channel-1", accountId: "default" },
+        }),
       },
     );
 
@@ -107,6 +140,7 @@ describe("cron service timer seam coverage", () => {
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
+      defaultAgentId: "main-pr-router",
       resolveSessionStorePath: () => sessionStorePath,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -116,10 +150,10 @@ describe("cron service timer seam coverage", () => {
 
     const result = await executeJobCore(state, job);
 
-    expect(result).toMatchObject({ status: "ok", sessionKey: cronRunSessionKey });
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.sessionKey).toBeUndefined();
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main-pr-router",
       contextKey: "cron:main-heartbeat-job",
       deliveryContext: { channel: "discord", to: "channel-1", accountId: "default" },
     });
@@ -127,8 +161,8 @@ describe("cron service timer seam coverage", () => {
       source: "cron",
       intent: "immediate",
       reason: "cron:main-heartbeat-job",
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main-pr-router",
+      owningCronJobMarker: undefined,
       heartbeat: { target: "last" },
     });
   });
@@ -140,16 +174,17 @@ describe("cron service timer seam coverage", () => {
     const requestHeartbeat = vi.fn();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    await writeCronStoreSnapshot({
-      storePath,
-      jobs: [createDueMainJob({ now, wakeMode: "next-heartbeat" })],
-    });
+    const jobWithoutExplicitOwner = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+    delete jobWithoutExplicitOwner.sessionKey;
+    await writeCronStoreSnapshot({ storePath, jobs: [jobWithoutExplicitOwner] });
 
     const state = createCronServiceState({
       storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
+      defaultAgentId: "stale-default",
+      resolveDefaultAgentId: () => "ops",
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -157,18 +192,15 @@ describe("cron service timer seam coverage", () => {
 
     await onTimer(state);
 
-    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "ops",
       contextKey: "cron:main-heartbeat-job",
     });
     expect(requestHeartbeat).toHaveBeenCalledWith({
       source: "cron",
       intent: "event",
       reason: "cron:main-heartbeat-job",
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "ops",
       heartbeat: { target: "last" },
     });
 
@@ -186,9 +218,10 @@ describe("cron service timer seam coverage", () => {
     }
     expect(task.runtime).toBe("cron");
     expect(task.sourceId).toBe("main-heartbeat-job");
+    expect(task.agentId).toBe("ops");
     expect(task.ownerKey).toBe("");
     expect(task.scopeKind).toBe("system");
-    expect(task.childSessionKey).toBe(cronRunSessionKey);
+    expect(task.childSessionKey).toBeUndefined();
     expect(task.runId).toMatch(new RegExp(`^cron:main-heartbeat-job:${now}:`));
     expect(task.label).toBe("main heartbeat job");
     expect(task.task).toBe("main heartbeat job");
@@ -198,7 +231,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.startedAt).toBe(now);
     expect(task.lastEventAt).toBe(now);
     expect(task.endedAt).toBe(now);
-    expect(task.cleanupAfter).toBeUndefined();
+    expect(task.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
@@ -209,7 +242,7 @@ describe("cron service timer seam coverage", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("uses the persisted reservation timestamp for the canonical timer task", async () => {
+  it("uses the persisted execution timestamp for the canonical timer task", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     let clock = now;
@@ -217,6 +250,7 @@ describe("cron service timer seam coverage", () => {
     let liveReservation: number | undefined;
     let liveError: string | undefined;
     let emittedStartedAt: number | undefined;
+    let reservedAt: number | undefined;
     const job = createDueIsolatedAgentJob({ now });
     job.state.lastError = "previous failure";
     await writeCronStoreSnapshot({
@@ -242,14 +276,37 @@ describe("cron service timer seam coverage", () => {
         }
       },
     });
+    const database = openOpenClawStateDatabase().db;
+    database.function("observe_timer_reservation", (stateJson) => {
+      if (typeof stateJson === "string") {
+        const marker = (JSON.parse(stateJson) as CronJob["state"]).queuedAtMs;
+        if (reservedAt === undefined && typeof marker === "number") {
+          reservedAt = marker;
+        }
+      }
+      return 0;
+    });
+    database.exec(`
+      CREATE TEMP TRIGGER observe_timer_reservation
+      AFTER UPDATE ON cron_jobs
+      WHEN NEW.job_id = '${job.id}'
+      BEGIN
+        SELECT observe_timer_reservation(NEW.state_json);
+      END;
+    `);
 
-    await onTimer(state);
+    try {
+      await onTimer(state);
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS observe_timer_reservation");
+    }
 
+    expect(reservedAt).toEqual(expect.any(Number));
     expect(persistedReservation).toEqual(expect.any(Number));
+    expect(reservedAt).not.toBe(persistedReservation);
     expect(liveReservation).toBe(persistedReservation);
     expect(liveError).toBeUndefined();
-    expect(emittedStartedAt).toEqual(expect.any(Number));
-    expect(emittedStartedAt).toBeGreaterThan(persistedReservation ?? 0);
+    expect(emittedStartedAt).toBe(persistedReservation);
     expect(
       findCronTaskByBaseRunId(`cron:isolated-agent-job:${persistedReservation}`),
     ).toMatchObject({
@@ -266,19 +323,23 @@ describe("cron service timer seam coverage", () => {
       trigger: { script: "json({ fire: false })" },
     };
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
-    const order: string[] = [];
-    const save = cronStoreModule.saveCronJobsStore;
-    const finalize = taskExecutor.finalizeTaskRunByRunId;
-    const saveSpy = vi
-      .spyOn(cronStoreModule, "saveCronJobsStore")
-      .mockImplementation(async (...args) => {
-        order.push("persist");
-        return await save(...args);
-      });
+    let terminalStatePersisted = false;
+    let finalizedAfterPersist = false;
+    const finalize = taskExecutor.finalizeTaskRunByRunIdCore;
     const finalizeSpy = vi
-      .spyOn(taskExecutor, "finalizeTaskRunByRunId")
+      .spyOn(taskExecutor, "finalizeTaskRunByRunIdCore")
       .mockImplementation((params) => {
-        order.push("finalize");
+        const persistedJob = openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT running_at_ms AS runningAtMs, next_run_at_ms AS nextRunAtMs FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+          )
+          .get(cronStoreKey(storePath), job.id) as {
+          runningAtMs: number | null;
+          nextRunAtMs: number | null;
+        };
+        terminalStatePersisted =
+          persistedJob.runningAtMs === null && (persistedJob.nextRunAtMs ?? 0) > now;
+        finalizedAfterPersist = terminalStatePersisted;
         return finalize(params);
       });
     const state = createCronServiceState({
@@ -295,15 +356,78 @@ describe("cron service timer seam coverage", () => {
 
     try {
       await onTimer(state);
-      expect(order).toEqual(["persist", "persist", "finalize"]);
+      expect(finalizedAfterPersist).toBe(true);
       const task = findCronTaskByBaseRunId(`cron:${job.id}:${now}`);
       expect(task).toMatchObject({ status: "succeeded" });
-      expect(task?.detail).toEqual({ storeKey: cronStoreKey(storePath) });
+      expect(task?.detail).toEqual({
+        storeKey: cronStoreKey(storePath),
+        triggerFired: false,
+        triggerStateChanged: false,
+      });
     } finally {
-      saveSpy.mockRestore();
       finalizeSpy.mockRestore();
     }
   });
+
+  it.each(["command", "script", "systemEvent", "heartbeat"] as const)(
+    "does not run a %s payload when trigger evaluation resolves after cancellation",
+    async (kind) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-07-27T12:00:00.000Z");
+      const evaluation = createDeferred<{
+        kind: "evaluated";
+        fire: true;
+        state: { revision: number };
+      }>();
+      const evaluateCronTrigger = vi.fn(() => evaluation.promise);
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
+      const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        cronConfig: { triggers: { enabled: true } },
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        evaluateCronTrigger,
+        runCommandJob,
+        runScriptJob,
+        runIsolatedAgentJob,
+      });
+      const baseJob =
+        kind === "command"
+          ? createDueCommandJob({ now })
+          : kind === "script"
+            ? createDueScriptJob({ now })
+            : kind === "heartbeat"
+              ? {
+                  ...createDueMainJob({ now, wakeMode: "next-heartbeat" }),
+                  payload: { kind: "heartbeat" as const },
+                }
+              : createDueMainJob({ now, wakeMode: "next-heartbeat" });
+      const job: CronJob = {
+        ...baseJob,
+        trigger: { script: "json({ fire: true })" },
+      };
+      const controller = new AbortController();
+
+      const result = executeJobCore(state, job, controller.signal);
+      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      controller.abort(new Error("operator cancelled the scheduled run"));
+      evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+
+      await expect(result).resolves.toMatchObject({ status: "error" });
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(runCommandJob).not.toHaveBeenCalled();
+      expect(runScriptJob).not.toHaveBeenCalled();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs command cron jobs without isolated agent setup", async () => {
     const { storePath } = await makeStorePath();
@@ -333,6 +457,199 @@ describe("cron service timer seam coverage", () => {
       abortSignal: undefined,
     });
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+  });
+
+  it("records an execution error when script payloads are disabled", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-18T12:00:00.000Z");
+    const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: false } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob,
+    });
+
+    await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("the operator set cron.triggers.enabled: false"),
+    });
+    expect(runScriptJob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["now", "immediate"],
+    ["next-heartbeat", "event"],
+  ] as const)("turns a main script notify and %s wake into one event", async (wake, intent) => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-18T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const job = createDueScriptJob({ now, sessionTarget: "main" });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob: vi.fn(async () => ({
+        status: "ok" as const,
+        notify: "queue changed",
+        wake,
+      })),
+    });
+
+    await expect(executeJobCore(state, job)).resolves.toMatchObject({
+      status: "ok",
+      summary: "queue changed",
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("queue changed", {
+      agentId: "finn",
+      contextKey: "cron:script-job:script",
+    });
+    expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
+      source: "cron",
+      intent,
+      reason: "cron:script-job:script",
+      agentId: "finn",
+    });
+  });
+
+  it("delivers nothing and enqueues nothing when notify and wake are absent", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-18T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob: vi.fn(async () => ({
+        status: "ok" as const,
+        stateChanged: true,
+        state: { revision: 2 },
+        delivered: false,
+        deliveryAttempted: false,
+      })),
+    });
+
+    await expect(
+      executeJobCore(state, createDueScriptJob({ now, sessionTarget: "main" })),
+    ).resolves.toMatchObject({ status: "ok", scriptStateChanged: true });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("rejects nextCheck without pacing before applying state", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-18T12:00:00.000Z");
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob: vi.fn(async () => ({
+        status: "ok" as const,
+        stateChanged: true,
+        state: { revision: 2 },
+        nextCheck: { delayMs: 5_000 },
+      })),
+    });
+
+    await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toEqual({
+      status: "error",
+      error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+      errorClassification: { kind: "permanent" },
+      failureNotificationDetail: {
+        kind: "script-failure",
+        source: "payload",
+        code: "invalid_input",
+      },
+    });
+  });
+
+  it.each([
+    ["ok", { status: "ok" as const, stateChanged: true, state: { revision: 2 } }, 2, 0],
+    [
+      "error",
+      {
+        status: "error" as const,
+        error: "script threw",
+        stateChanged: true,
+        state: { revision: 2 },
+      },
+      1,
+      1,
+    ],
+  ] as const)(
+    "persists script state on %s runs only",
+    async (_label, outcome, revision, errors) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-07-18T12:00:00.000Z");
+      const job = createDueScriptJob({ now });
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        cronConfig: { triggers: { enabled: true } },
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        runScriptJob: vi.fn(async () => outcome),
+      });
+
+      await onTimer(state);
+
+      const stored = await loadCronStore(storePath);
+      expect(stored.jobs[0]?.state.triggerState).toEqual({ revision });
+      expect(stored.jobs[0]?.state.consecutiveErrors ?? 0).toBe(errors);
+    },
+  );
+
+  it("clamps a script nextCheck through the shared pacing path", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-18T12:00:00.000Z");
+    const job = createDueScriptJob({ now, pacing: { min: "15m", max: "4h" } });
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runScriptJob: vi.fn(async () => ({
+        status: "ok" as const,
+        nextCheck: { delayMs: 5 * 60_000 },
+      })),
+    });
+
+    await onTimer(state);
+
+    const stored = await loadCronStore(storePath);
+    expect(stored.jobs[0]?.state.nextRunAtMs).toBe(now + 15 * 60_000);
+    expect(stored.jobs[0]?.state.pacedNextRunAtMs).toBe(now + 15 * 60_000);
   });
 
   it("records isolated cron task runs against the backing cron session", async () => {
@@ -472,8 +789,8 @@ describe("cron service timer seam coverage", () => {
       throw new Error("expected active cron task ledger record");
     }
     expect(task.status).toBe("running");
-    expect(task.progressSummary).toBe("Running cron job.");
-    expect(formatTaskStatusDetail(task)).toBe("Running cron job.");
+    expect(task.progressSummary).toBe("Running automation.");
+    expect(formatTaskStatusDetail(task)).toBe("Running automation.");
 
     resolveRun?.({ status: "ok", summary: "done" });
     await timerRun;
@@ -492,7 +809,7 @@ describe("cron service timer seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(taskExecutor, "createRunningTaskRun")
+      .spyOn(taskExecutor, "createRunningTaskRunCore")
       .mockImplementation(() => {
         throw ledgerError;
       });
@@ -513,10 +830,8 @@ describe("cron service timer seam coverage", () => {
       { jobId: "main-heartbeat-job", error: ledgerError },
       "cron: failed to create task ledger record",
     );
-    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main",
       contextKey: "cron:main-heartbeat-job",
     });
 

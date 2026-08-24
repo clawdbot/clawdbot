@@ -141,7 +141,7 @@ metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEM
     | `requires.env` | Each env var must exist in the process or config |
     | `requires.config` | Each `openclaw.json` path must be truthy |
     | `os` | Platform filter: `["darwin"]`, `["linux"]`, `["win32"]` |
-    | `always` | Set `true` to skip all gates and always include the skill |
+    | `always` | Include on a compatible OS even when `requires.*` checks fail |
 
     Full reference: [Skills — Gating](/tools/skills#gating).
 
@@ -204,6 +204,7 @@ After review:
 
 ```bash
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop evaluate <proposal-id>
 openclaw skills workshop apply <proposal-id>
 ```
 

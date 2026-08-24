@@ -5,19 +5,29 @@ import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
 export const whatsAppChannelConfigUiHints = {
   "": {
     label: "WhatsApp",
-    help: "WhatsApp channel provider configuration for access policy and message batching behavior. Use this section to tune responsiveness and direct-message routing safety for WhatsApp chats.",
+    help: "WhatsApp channel provider configuration for access policy and direct-message routing safety.",
   },
   ...createChannelConfigUiHints({
     channelLabel: "WhatsApp",
     dmPolicy: { channelKey: "whatsapp" },
   }),
+  allowFrom: { presentation: "phone-number" },
+  defaultTo: { presentation: "phone-number" },
+  groupAllowFrom: { presentation: "phone-number" },
+  "accounts.*.allowFrom.*": { presentation: "phone-number" },
+  "accounts.*.defaultTo": { presentation: "phone-number" },
+  "accounts.*.groupAllowFrom.*": { presentation: "phone-number" },
   selfChatMode: {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
-  debounceMs: {
-    label: "WhatsApp Message Debounce (ms)",
-    help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
+  direct: {
+    label: "WhatsApp Direct Chat Overrides",
+    help: 'Per-conversation overrides keyed by WhatsApp DM id. Applied after a DM is already admitted by dmPolicy; "*" supplies a default without admitting anyone.',
+  },
+  pluginHooks: {
+    label: "WhatsApp Plugin Hooks",
+    help: "Opt in to broadcasting inbound WhatsApp events to plugins. Payloads carry personal content, so only enable it for plugins you trust.",
   },
   ...createChannelConfigUiHints({ channelLabel: "WhatsApp", configWrites: true }),
   "actions.calls": {

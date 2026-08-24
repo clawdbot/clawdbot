@@ -2,14 +2,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { info, success } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  info,
+  success,
+  getChildLogger,
+  defaultRuntime,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   assertWebCredsPathRegularFileOrMissing,
   hasWebCredsSync,
+  isWhatsAppBaileysAuthFileName,
   readWebCredsJsonRaw,
   readWebCredsJsonRawSync,
   resolveWebCredsBackupPath,
@@ -225,19 +231,6 @@ export async function readWebAuthSnapshotBestEffort(authDir: string = resolveDef
   } as const;
 }
 
-function isBaileysAuthFileName(name: string): boolean {
-  if (name === "oauth.json") {
-    return false;
-  }
-  if (name === "creds.json" || name === "creds.json.bak") {
-    return true;
-  }
-  if (!name.endsWith(".json")) {
-    return false;
-  }
-  return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
-}
-
 async function clearBaileysAuthFiles(
   authDir: string,
   beforeCredentialPersistence?: () => Promise<void>,
@@ -248,7 +241,7 @@ async function clearBaileysAuthFiles(
   }
   const entries = await fs.readdir(authDir, { withFileTypes: true });
   const credentialFiles = entries.filter(
-    (entry) => entry.isFile() && isBaileysAuthFileName(entry.name),
+    (entry) => entry.isFile() && isWhatsAppBaileysAuthFileName(entry.name),
   );
   if (credentialFiles.length === 0) {
     return;
@@ -273,7 +266,7 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
         if (!entry.isFile()) {
           return false;
         }
-        return isBaileysAuthFileName(entry.name);
+        return isWhatsAppBaileysAuthFileName(entry.name);
       });
     }
     const credsStats = await fs.lstat(resolveWebCredsPath(authDir)).catch(() => null);
@@ -290,11 +283,6 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
     const code = typeof codeValue === "string" ? codeValue : "";
     return code !== "ENOENT";
   }
-}
-
-function isPathInsideDirectory(baseDir: string, targetPath: string): boolean {
-  const relativePath = path.relative(baseDir, targetPath);
-  return relativePath !== "" && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
 async function pathHasSymlinkComponent(baseDir: string, targetPath: string): Promise<boolean> {
@@ -328,7 +316,7 @@ async function isLegacyWebAuthDir(authDir: string): Promise<boolean> {
 async function classifyWebAuthDirOwnership(authDir: string): Promise<WebAuthDirOwnership> {
   const whatsappAuthBase = path.resolve(resolveOAuthDir(), "whatsapp");
   const resolvedAuthDir = path.resolve(authDir);
-  if (!isPathInsideDirectory(whatsappAuthBase, resolvedAuthDir)) {
+  if (!isPathStrictlyInside(whatsappAuthBase, resolvedAuthDir)) {
     return { kind: "external" };
   }
 
@@ -339,7 +327,7 @@ async function classifyWebAuthDirOwnership(authDir: string): Promise<WebAuthDirO
   if (!baseRealPath || !authDirRealPath) {
     return { kind: "unsafe-owned" };
   }
-  if (!isPathInsideDirectory(baseRealPath, authDirRealPath)) {
+  if (!isPathStrictlyInside(baseRealPath, authDirRealPath)) {
     return { kind: "unsafe-owned" };
   }
   if (await pathHasSymlinkComponent(whatsappAuthBase, resolvedAuthDir)) {

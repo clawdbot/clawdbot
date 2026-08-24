@@ -25,7 +25,9 @@ let browser: Browser;
 let server: ControlUiE2eServer;
 
 function configSnapshot(enabled: boolean, hash: string) {
-  const config = enabled ? { skills: { workshop: { autonomous: { enabled: true } } } } : {};
+  const config = {
+    skills: { workshop: { autonomous: { mode: enabled ? "auto" : "off" } } },
+  };
   return {
     config,
     sourceConfig: config,
@@ -122,7 +124,7 @@ describeControlUiE2e("Skill Workshop self-learning config recovery mocked Gatewa
       );
       expect(stalePatch.baseHash).toBe("hash-stale");
       expect(JSON.parse(String(stalePatch.raw))).toEqual({
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
       });
 
       await gateway.setMethodResponse("config.get", configSnapshot(false, "hash-current"));
@@ -140,7 +142,7 @@ describeControlUiE2e("Skill Workshop self-learning config recovery mocked Gatewa
       await gateway.setMethodResponse("config.get", configSnapshot(true, "hash-enabled"));
       await gateway.resolveDeferred("config.patch", { ok: true });
 
-      const toggle = page.getByLabel("Toggle self-learning skill proposals", { exact: true });
+      const toggle = page.getByLabel("Toggle autonomous self-learning", { exact: true });
       await expect.poll(() => toggle.isChecked()).toBe(true);
       expect(await page.locator(".sw-error").count()).toBe(0);
       expect(mainFrameNavigations).toBe(initialNavigationCount);

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { validateTerminalOpenParams, validateTerminalUploadParams } from "../index.js";
-import { MAX_TERMINAL_UPLOAD_BASE64_LENGTH } from "../terminal-upload-constants.js";
+import {
+  validateTerminalCloseParams,
+  validateTerminalOpenParams,
+  validateTerminalUploadParams,
+} from "../index.js";
+import { MAX_TERMINAL_UPLOAD_BASE64_LENGTH } from "./terminal-constants.js";
 
 describe("terminal protocol", () => {
   it("accepts a typed catalog reference and rejects client command fields", () => {
     expect(
       validateTerminalOpenParams({
+        sessionKey: "agent:main:thread",
         cols: 80,
         rows: 24,
         catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },
@@ -55,5 +60,10 @@ describe("terminal protocol", () => {
         destination: "/etc",
       }),
     ).toBe(false);
+  });
+
+  it("rejects extra terminal close fields", () => {
+    expect(validateTerminalCloseParams({ sessionId: "terminal-1" })).toBe(true);
+    expect(validateTerminalCloseParams({ sessionId: "terminal-1", terminate: true })).toBe(false);
   });
 });

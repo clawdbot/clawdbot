@@ -58,6 +58,9 @@ function formatCardDetails(card: WorkboardCard): string {
   if (card.runId) {
     lines.push(`run: ${card.runId}`);
   }
+  if (card.metadata?.archivedAt) {
+    lines.push("archived: yes (excluded from dispatch)");
+  }
   if (card.notes) {
     lines.push("", card.notes);
   }

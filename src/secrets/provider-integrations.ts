@@ -7,6 +7,7 @@ import type {
   ManualExecSecretProviderConfig,
   PluginIntegrationSecretProviderConfig,
 } from "../config/types.secrets.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
@@ -25,7 +26,7 @@ export type SecretProviderIntegrationPreset = {
 };
 
 /** Result of materializing a plugin integration into a manual exec provider config. */
-export type SecretProviderIntegrationResolution =
+type SecretProviderIntegrationResolution =
   | {
       ok: true;
       providerConfig: ManualExecSecretProviderConfig;
@@ -38,17 +39,9 @@ export type SecretProviderIntegrationResolution =
 const NODE_COMMAND_PLACEHOLDER = "${node}";
 const PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH = 128;
 
-function isPathInsideOrEqual(rootDir: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(rootDir), path.resolve(candidate));
-  return (
-    relative === "" ||
-    (relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function resolvePluginRelativePath(value: string, pluginRoot: string): string | undefined {
   const resolved = path.resolve(pluginRoot, value);
-  return isPathInsideOrEqual(pluginRoot, resolved) ? resolved : undefined;
+  return isPathInside(pluginRoot, resolved) ? resolved : undefined;
 }
 
 function isPluginRelativeEntrypoint(value: string): boolean {
@@ -85,12 +78,12 @@ function isSecurePosixPathStat(stat: fs.Stats): boolean {
 }
 
 function pathSegmentsBetween(rootDir: string, targetDir: string): string[] | undefined {
+  if (!isPathInside(rootDir, targetDir)) {
+    return undefined;
+  }
   const relative = path.relative(rootDir, targetDir);
   if (relative === "") {
     return [];
-  }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
   }
   return relative.split(path.sep).filter(Boolean);
 }
@@ -100,9 +93,8 @@ function isSecurePluginEntrypointPath(params: {
   pluginRootRealpath: string;
   resolvedEntrypoint: string;
   entrypointRealpath: string;
-  allowInsecurePath: boolean;
 }): boolean {
-  if (params.allowInsecurePath || process.platform === "win32") {
+  if (process.platform === "win32") {
     return true;
   }
   const originalSegments = pathSegmentsBetween(
@@ -178,12 +170,12 @@ function resolveNodeEntrypointArg(params: {
   if (params.rejectHardlinks && stat.nlink > 1) {
     return undefined;
   }
-  if (params.integration.allowInsecurePath !== true && !isSecurePosixPathStat(stat)) {
+  if (!isSecurePosixPathStat(stat)) {
     return undefined;
   }
   try {
     const realpath = fs.realpathSync(resolved);
-    if (!isPathInsideOrEqual(pluginRootRealpath, realpath)) {
+    if (!isPathInside(pluginRootRealpath, realpath)) {
       return undefined;
     }
     if (
@@ -192,7 +184,6 @@ function resolveNodeEntrypointArg(params: {
         pluginRootRealpath,
         resolvedEntrypoint: resolved,
         entrypointRealpath: realpath,
-        allowInsecurePath: params.integration.allowInsecurePath === true,
       })
     ) {
       return undefined;
@@ -249,9 +240,6 @@ function materializeExecProviderConfig(
     ...(integration.env ? { env: integration.env } : {}),
     ...(integration.passEnv ? { passEnv: integration.passEnv } : {}),
     trustedDirs,
-    ...(integration.command === NODE_COMMAND_PLACEHOLDER || integration.allowInsecurePath
-      ? { allowInsecurePath: true }
-      : {}),
   };
 }
 

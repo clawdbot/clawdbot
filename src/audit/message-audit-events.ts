@@ -1,3 +1,4 @@
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 /** Trusted in-process message lifecycle stream for durable audit projection. */
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { MessageAuditEventInput } from "./audit-event-types.js";
@@ -13,7 +14,10 @@ export type TrustedMessageAuditEvent = TrustedMessageAuditEventVariant<MessageAu
 
 type MessageAuditListener = (event: TrustedMessageAuditEvent) => void;
 
-const listeners = new Set<MessageAuditListener>();
+const listeners = resolveGlobalSet<MessageAuditListener>(
+  Symbol.for("openclaw.messageAuditListeners"),
+  "close-and-restart",
+);
 
 /** Emit only closed metadata. This stream is intentionally not part of the plugin SDK. */
 export function emitTrustedMessageAuditEvent(event: TrustedMessageAuditEvent): void {

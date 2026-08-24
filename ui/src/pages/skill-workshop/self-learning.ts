@@ -1,61 +1,75 @@
-// Self-learning (skills.workshop.autonomous.enabled) surface for the Workshop
+// Self-learning (skills.workshop.autonomous.mode) surface for the Workshop
 // tab: config read/patch plumbing plus the toggle, pitch, and error renderers.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import {
-  resolveEditableSnapshotConfig,
-  type RuntimeConfigCapability,
-} from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 
 export type SkillWorkshopSelfLearning = {
   enabled: boolean;
   busy: boolean;
+  canUpdate: boolean;
   error: string | null;
 };
 
 const CONFIG_CHANGED_SINCE_LOAD = "config changed since last load";
 
-// Mirrors the gateway default for skills.workshop.autonomous.enabled: absent
-// config means self-learning is off. Snapshot sourceConfig/resolved are both
+// Mirrors the gateway default for skills.workshop.autonomous.mode: absent
+// config means automatic self-learning. Snapshot sourceConfig/resolved are both
 // $include-resolved (src/config/io.ts), so the editable read is display-safe.
 function isSelfLearningEnabled(config: Record<string, unknown>): boolean {
   const workshop = asRecord(asRecord(config.skills)?.workshop);
-  return asRecord(workshop?.autonomous)?.enabled === true;
+  return asRecord(workshop?.autonomous)?.mode !== "off";
 }
 
 export function resolveSelfLearning(
   runtimeConfig: RuntimeConfigCapability | undefined,
   busy: boolean,
   error: string | null,
+  canUpdate: boolean,
 ): SkillWorkshopSelfLearning | null {
   const config = resolveEditableSnapshotConfig(runtimeConfig?.state.configSnapshot);
-  return config ? { enabled: isSelfLearningEnabled(config), busy, error } : null;
+  return config ? { enabled: isSelfLearningEnabled(config), busy, canUpdate, error } : null;
 }
 
 /** Patch the canonical config key; returns an error message or null on success. */
 export async function setSelfLearningEnabled(
   runtimeConfig: RuntimeConfigCapability,
   enabled: boolean,
+  isCurrent: () => boolean = () => true,
 ): Promise<string | null> {
+  const mode = enabled ? "auto" : "off";
   const patch = {
-    raw: { skills: { workshop: { autonomous: { enabled } } } },
+    raw: { skills: { workshop: { autonomous: { mode } } } },
     note: enabled ? "Enable Skill Workshop self-learning" : "Disable Skill Workshop self-learning",
   };
   let patched = await runtimeConfig.patch(patch);
+  if (!isCurrent()) {
+    return null;
+  }
   if (!patched && runtimeConfig.state.lastError?.includes(CONFIG_CHANGED_SINCE_LOAD)) {
     // This scalar toggle is safe to replay after refreshing the optimistic-lock hash.
     // Keep arbitrary merge patches fail-closed: arrays and derived objects may need rebuilding.
     await runtimeConfig.refresh();
+    if (!isCurrent()) {
+      return null;
+    }
     if (runtimeConfig.state.lastError) {
       return runtimeConfig.state.lastError;
     }
     patched = await runtimeConfig.patch(patch);
+    if (!isCurrent()) {
+      return null;
+    }
   }
   if (!patched) {
     return runtimeConfig.state.lastError ?? t("skillWorkshop.selfLearning.updateError");
   }
   await runtimeConfig.refresh();
+  if (!isCurrent()) {
+    return null;
+  }
   return null;
 }
 
@@ -75,7 +89,7 @@ export function renderSelfLearningToggle(
         type="checkbox"
         aria-label=${t("skillWorkshop.header.selfLearningAria")}
         .checked=${selfLearning.enabled}
-        ?disabled=${selfLearning.busy}
+        ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @change=${(event: Event) => onToggle((event.currentTarget as HTMLInputElement).checked)}
       />
       <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
@@ -100,7 +114,7 @@ export function renderSelfLearningPitch(
       <button
         type="button"
         class="sw-btn sw-btn--primary ${selfLearning.busy ? "is-busy" : ""}"
-        ?disabled=${selfLearning.busy}
+        ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @click=${() => onToggle(true)}
       >
         ${selfLearning.busy

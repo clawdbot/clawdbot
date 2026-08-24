@@ -1,5 +1,8 @@
 // Auth monitor tests cover optional systemd and Termux helper script contracts.
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const AUTH_MONITOR_PATH = "scripts/auth-monitor.sh";
@@ -15,6 +18,83 @@ const TERMUX_WIDGET_PATHS = [
 
 function readScript(path: string): string {
   return readFileSync(path, "utf8");
+}
+
+function createAuthMonitorHarness() {
+  const home = mkdtempSync(join(tmpdir(), "openclaw-auth-monitor-"));
+  const binDir = join(home, "bin");
+  const curlLog = join(home, "curl.log");
+  const openclawLog = join(home, "openclaw.log");
+  const stateFile = join(home, ".openclaw", "auth-monitor-state");
+  mkdirSync(binDir);
+  writeFileSync(
+    join(binDir, "curl"),
+    '#!/bin/sh\nprintf "called\\n" >> "$FAKE_CURL_LOG"\nexit "$FAKE_CURL_EXIT_CODE"\n',
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(binDir, "openclaw"),
+    [
+      "#!/bin/sh",
+      'if [ "$1" = "models" ]; then',
+      "  exit 1",
+      "fi",
+      'printf "called\\n" >> "$FAKE_OPENCLAW_LOG"',
+      'exit "$FAKE_OPENCLAW_EXIT_CODE"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  return {
+    curlLog,
+    home,
+    openclawLog,
+    stateFile,
+    cleanup: () => rmSync(home, { recursive: true, force: true }),
+    enablePhoneAuth: () => {
+      const expiresAt = Date.now() + 90 * 60 * 1000;
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      mkdirSync(join(home, ".openclaw", "agents", "main", "agent"), { recursive: true });
+      writeFileSync(
+        join(home, ".claude", ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { expiresAt } }),
+      );
+      writeFileSync(
+        join(home, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
+        JSON.stringify({
+          profiles: { "anthropic:default": { expires: expiresAt, provider: "anthropic" } },
+        }),
+      );
+    },
+    run: ({
+      curlExitCode = 0,
+      notifyNtfy = "test-topic",
+      notifyPhone = "",
+      openclawExitCode = 0,
+    }: {
+      curlExitCode?: number;
+      notifyNtfy?: string;
+      notifyPhone?: string;
+      openclawExitCode?: number;
+    } = {}) =>
+      spawnSync("bash", [AUTH_MONITOR_PATH], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_CURL_EXIT_CODE: String(curlExitCode),
+          FAKE_CURL_LOG: curlLog,
+          FAKE_OPENCLAW_EXIT_CODE: String(openclawExitCode),
+          FAKE_OPENCLAW_LOG: openclawLog,
+          HOME: home,
+          NOTIFY_NTFY: notifyNtfy,
+          NOTIFY_PHONE: notifyPhone,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          WARN_HOURS: "2",
+        },
+      }),
+  };
 }
 
 describe("auth monitoring scripts", () => {
@@ -48,6 +128,97 @@ describe("auth monitoring scripts", () => {
     expect(readScript("scripts/termux-sync-widget.sh")).toContain(
       "'$HOME/openclaw/scripts/sync-claude-code-auth.sh'",
     );
+  });
+
+  it("bounds ntfy notification requests", () => {
+    const script = readScript(AUTH_MONITOR_PATH);
+
+    expect(script).toContain("curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null");
+  });
+
+  it("retries after ntfy rejects a notification", () => {
+    const harness = createAuthMonitorHarness();
+
+    try {
+      const rejected = harness.run({ curlExitCode: 22 });
+      expect(rejected.status).toBe(1);
+      expect(existsSync(harness.stateFile)).toBe(false);
+      expect(rejected.stderr).toContain("No notification delivered; cooldown not updated");
+
+      const retry = harness.run();
+      expect(retry.stdout).toContain("Sending via ntfy.sh to test-topic...");
+      expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
+      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rate-limits after ntfy accepts a notification", () => {
+    const harness = createAuthMonitorHarness();
+
+    try {
+      const accepted = harness.run();
+      expect(accepted.status).toBe(1);
+      expect(existsSync(harness.stateFile)).toBe(true);
+
+      const throttled = harness.run();
+      expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rate-limits after any configured notification channel succeeds", () => {
+    const harness = createAuthMonitorHarness();
+    harness.enablePhoneAuth();
+
+    try {
+      const delivered = harness.run({
+        curlExitCode: 22,
+        notifyPhone: "+15550000000",
+      });
+      expect(delivered.status).toBe(0);
+      expect(existsSync(harness.stateFile)).toBe(true);
+
+      const throttled = harness.run({
+        curlExitCode: 22,
+        notifyPhone: "+15550000000",
+      });
+      expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+      expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(1);
+      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("retries when all configured notification channels fail", () => {
+    const harness = createAuthMonitorHarness();
+    harness.enablePhoneAuth();
+
+    try {
+      const failed = harness.run({
+        curlExitCode: 22,
+        notifyPhone: "+15550000000",
+        openclawExitCode: 1,
+      });
+      expect(failed.status).toBe(0);
+      expect(existsSync(harness.stateFile)).toBe(false);
+      expect(failed.stderr).toContain("No notification delivered; cooldown not updated");
+
+      const retry = harness.run({
+        curlExitCode: 22,
+        notifyPhone: "+15550000000",
+        openclawExitCode: 1,
+      });
+      expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
+      expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(2);
+      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      harness.cleanup();
+    }
   });
 
   it("keeps mobile reauth wired to local auth status and Claude token setup", () => {

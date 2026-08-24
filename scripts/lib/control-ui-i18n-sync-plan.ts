@@ -1,5 +1,3 @@
-import { expectDefined } from "../../packages/normalization-core/src/expect.js";
-
 export interface TranslationMap {
   [key: string]: string | TranslationMap;
 }
@@ -21,6 +19,8 @@ export type TranslationMemoryEntry = {
   model: string;
   provider: string;
   segment_id: string;
+  // Aliases share their primary segment's source hash and translated text.
+  segment_ids?: string[];
   source_path: string;
   src_lang: string;
   text: string;
@@ -102,6 +102,11 @@ export function createControlUiLocaleSyncPlan(input: {
 }) {
   const previousFallbackKeys = new Set(input.previousMeta?.fallbackKeys ?? []);
   const translationMemory = new Map(input.translationMemory);
+  const translationMemoryBySegment = new Map(
+    [...translationMemory.values()].flatMap((entry) =>
+      [entry.segment_id, ...(entry.segment_ids ?? [])].map((key) => [key, entry] as const),
+    ),
+  );
   const translationMemoryByTextHash = new Map(
     [...translationMemory.values()]
       .filter(
@@ -117,7 +122,10 @@ export function createControlUiLocaleSyncPlan(input: {
   for (const [key, text] of input.sourceFlat.entries()) {
     const textHash = input.hashText(text);
     const segmentCacheKey = input.cacheKeyFor(key, textHash);
-    const cached = translationMemory.get(segmentCacheKey);
+    const exactSegment = translationMemoryBySegment.get(key);
+    const cached =
+      translationMemory.get(segmentCacheKey) ??
+      (exactSegment?.text_hash === textHash ? exactSegment : undefined);
     const cachedByText = translationMemoryByTextHash.get(textHash);
     const existing = input.existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
@@ -137,8 +145,9 @@ export function createControlUiLocaleSyncPlan(input: {
 
     if (cachedByText && (shouldRefreshFallback || existing === undefined)) {
       nextFlat.set(key, cachedByText.translated);
+      const { segment_ids: _aliases, ...cachedTranslation } = cachedByText;
       translationMemory.set(segmentCacheKey, {
-        ...cachedByText,
+        ...cachedTranslation,
         cache_key: segmentCacheKey,
         segment_id: key,
         source_path: `ui/src/i18n/locales/${input.entry.fileName}`,
@@ -241,20 +250,19 @@ export function createControlUiLocaleSyncPlan(input: {
         translatedKeys,
         workflow: options.workflow,
       };
-      const nextMap: TranslationMap = {};
-      for (const [key, value] of input.sourceFlat.entries()) {
-        setNestedValue(nextMap, key, nextFlat.get(key) ?? value);
-      }
-
       return {
         fallbackCount: sortedFallbackKeys.length,
         glossary: renderJson(
           options.glossary.length === 0 ? options.defaultGlossary : options.glossary,
         ),
-        localeModule: renderLocaleModule(input.entry, nextMap),
         meta: renderJson(nextMeta),
         nextFlat,
-        translationMemory: renderTranslationMemory(translationMemory),
+        translationMemory: renderTranslationMemory(
+          translationMemory,
+          input.sourceFlat,
+          nextFlat,
+          input.hashText,
+        ),
       };
     },
   };
@@ -264,54 +272,50 @@ export function compareStringArrays(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function setNestedValue(root: TranslationMap, dottedKey: string, value: string): void {
-  const parts = dottedKey.split(".");
-  let cursor: TranslationMap = root;
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    const key = expectDefined(parts[index], `translation key segment at index ${index}`);
-    const next = cursor[key];
-    if (!next || typeof next === "string") {
-      const replacement: TranslationMap = {};
-      cursor[key] = replacement;
-      cursor = replacement;
+function renderTranslationMemory(
+  entries: ReadonlyMap<string, TranslationMemoryEntry>,
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  hashText: (text: string) => string,
+): string {
+  const bySegment = new Map(
+    [...entries.values()].flatMap((entry) =>
+      [entry.segment_id, ...(entry.segment_ids ?? [])].map((key) => [key, entry] as const),
+    ),
+  );
+  const byTranslation = new Map(
+    [...entries.values()].map((entry) => [
+      JSON.stringify([entry.text_hash, entry.translated]),
+      entry,
+    ]),
+  );
+  const canonical = new Map<string, TranslationMemoryEntry>();
+
+  for (const [key, text] of sourceFlat) {
+    const translated = translatedFlat.get(key);
+    if (translated === undefined) {
       continue;
     }
-    cursor = next;
+    const textHash = hashText(text);
+    const groupKey = JSON.stringify([textHash, translated]);
+    const existing = canonical.get(groupKey);
+    if (existing) {
+      (existing.segment_ids ??= []).push(key);
+      continue;
+    }
+    const direct = bySegment.get(key);
+    const source =
+      direct?.text_hash === textHash && direct.translated === translated
+        ? direct
+        : byTranslation.get(groupKey);
+    if (!source) {
+      continue;
+    }
+    const { segment_ids: _aliases, ...record } = source;
+    canonical.set(groupKey, { ...record, segment_id: key, text, text_hash: textHash });
   }
-  cursor[expectDefined(parts.at(-1), "translation leaf key")] = value;
-}
 
-function renderTranslationValue(value: string | TranslationMap, indent = 0): string {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-
-  const entries = Object.entries(value);
-  if (entries.length === 0) {
-    return "{}";
-  }
-
-  const pad = "  ".repeat(indent);
-  const innerPad = "  ".repeat(indent + 1);
-  return `{\n${entries
-    .map(([key, nested]) => {
-      const renderedKey = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-      return `${innerPad}${renderedKey}: ${renderTranslationValue(nested, indent + 1)},`;
-    })
-    .join("\n")}\n${pad}}`;
-}
-
-function renderLocaleModule(entry: LocaleEntry, value: TranslationMap): string {
-  return `// Generated locale bundle for Control UI translations.
-// Run \`pnpm ui:i18n:sync\` instead of editing this file directly.
-import type { TranslationMap } from "../lib/types.ts";
-
-export const ${entry.exportName}: TranslationMap = ${renderTranslationValue(value)};
-`;
-}
-
-function renderTranslationMemory(entries: ReadonlyMap<string, TranslationMemoryEntry>): string {
-  const ordered = [...entries.values()].toSorted((left, right) =>
+  const ordered = [...canonical.values()].toSorted((left, right) =>
     left.cache_key.localeCompare(right.cache_key),
   );
   return ordered.length === 0

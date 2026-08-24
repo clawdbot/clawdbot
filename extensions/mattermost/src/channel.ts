@@ -1,4 +1,11 @@
 // Mattermost plugin module implements channel behavior.
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringParam,
+  withNormalizedTimestamp,
+} from "openclaw/plugin-sdk/channel-actions";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -54,16 +61,18 @@ import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
+  inspectMattermostAccount,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
+import type { MattermostSendResult } from "./mattermost/send.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
-import { mattermostSetupAdapter } from "./setup-core.js";
+import { mattermostSetupContract } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
@@ -115,16 +124,24 @@ function hasMattermostPresentationNavigation(presentation: MessagePresentation):
       block.type === "buttons" &&
       block.buttons.some((button) => {
         const action = resolveMessagePresentationButtonAction(button);
-        return action?.type === "url" || action?.type === "web-app";
+        return action?.type === "url" || (action?.type === "web-app" && Boolean(action.url));
       }),
   );
+}
+
+function readMattermostPayloadData(payload: {
+  channelData?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const data = payload.channelData?.mattermost;
+  return data && typeof data === "object" && !Array.isArray(data)
+    ? (data as Record<string, unknown>)
+    : undefined;
 }
 
 function readMattermostPresentationButtons(payload: {
   channelData?: Record<string, unknown>;
 }): Array<unknown> | undefined {
-  const buttons = (payload.channelData?.mattermost as { presentationButtons?: unknown } | undefined)
-    ?.presentationButtons;
+  const buttons = readMattermostPayloadData(payload)?.presentationButtons;
   return Array.isArray(buttons) ? buttons : undefined;
 }
 
@@ -141,6 +158,7 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
   openScope: "any member",
   groupPolicyPath: "channels.mattermost.groupPolicy",
   groupAllowFromPath: "channels.mattermost.groupAllowFrom",
+  findingTitle: "Mattermost security warning",
   policyPathSuffix: "dmPolicy",
   normalizeDmEntry: (raw) => normalizeAllowEntry(raw),
 });
@@ -153,9 +171,9 @@ function describeMattermostMessageTool({
 >[0]): ChannelMessageToolDiscovery {
   const enabledAccounts = (
     accountId
-      ? [resolveMattermostAccount({ cfg, accountId })]
+      ? [inspectMattermostAccount({ cfg, accountId })]
       : listMattermostAccountIds(cfg).map((listedAccountId) =>
-          resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+          inspectMattermostAccount({ cfg, accountId: listedAccountId }),
         )
   )
     .filter((account) => account.enabled)
@@ -167,7 +185,10 @@ function describeMattermostMessageTool({
     actions.push("send");
   }
 
-  const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+  const actionsConfig = cfg.channels?.mattermost?.actions as
+    | { messages?: boolean; reactions?: boolean }
+    | undefined;
+  const baseMessages = actionsConfig?.messages;
   const baseReactions = actionsConfig?.reactions;
   const hasReactionCapableAccount = enabledAccounts.some((account) => {
     const accountActions = account.config.actions as { reactions?: boolean } | undefined;
@@ -175,6 +196,12 @@ function describeMattermostMessageTool({
   });
   if (hasReactionCapableAccount) {
     actions.push("react");
+  }
+  const hasMessageCapableAccount = enabledAccounts.some(
+    (account) => account.config.actions?.messages ?? baseMessages ?? false,
+  );
+  if (hasMessageCapableAccount) {
+    actions.push("read");
   }
 
   return {
@@ -188,9 +215,9 @@ function hasConfiguredMattermostDirectoryAccount({
   accountId,
 }: Pick<MattermostDirectoryListParams, "cfg" | "accountId">): boolean {
   const accounts = accountId
-    ? [resolveMattermostAccount({ cfg, accountId })]
+    ? [inspectMattermostAccount({ cfg, accountId })]
     : listMattermostAccountIds(cfg).map((listedAccountId) =>
-        resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+        inspectMattermostAccount({ cfg, accountId: listedAccountId }),
       );
   return accounts.some((account) =>
     Boolean(account.enabled && account.botToken?.trim() && account.baseUrl?.trim()),
@@ -361,11 +388,36 @@ async function listMattermostDirectoryPeers(params: MattermostDirectoryListParam
 }
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: ["read"],
   describeMessageTool: describeMattermostMessageTool,
   extractToolSend: ({ args }) => extractMattermostToolSend(args),
   extractToolSendResult: ({ result, send }) => extractMattermostToolSendResult(result, send),
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const mediaUrl = resolveMattermostSendAttachmentMedia(ctx.params);
+    const attachmentText =
+      typeof ctx.params.attachmentText === "string" ? ctx.params.attachmentText : undefined;
+    const existingMattermostData = readMattermostPayloadData(payload);
+    return {
+      ...payload,
+      ...(mediaUrl ? { mediaUrl, mediaUrls: [mediaUrl] } : {}),
+      ...(attachmentText !== undefined
+        ? {
+            channelData: {
+              ...payload.channelData,
+              mattermost: {
+                ...existingMattermostData,
+                attachmentText,
+              },
+            },
+          }
+        : {}),
+    };
+  },
   supportsAction: ({ action }) => {
-    return action === "send" || action === "react";
+    return action === "send" || action === "react" || action === "read";
   },
   handleAction: async ({
     action,
@@ -375,11 +427,79 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    conversationReadOrigin,
+    requesterAccountId,
+    toolContext,
   }) => {
+    if (action === "read") {
+      const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
+      const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
+      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      if (!account.enabled) {
+        throw new Error(`Mattermost account "${resolvedAccountId}" is disabled`);
+      }
+      const messagesEnabled =
+        account.config.actions?.messages ?? mattermostConfig?.actions?.messages ?? false;
+      if (!messagesEnabled) {
+        throw new Error("Mattermost message reads are disabled in config");
+      }
+
+      const rawTarget =
+        readStringParam(params, "to") ??
+        readStringParam(params, "channelId") ??
+        readStringParam(params, "target");
+      if (!rawTarget) {
+        throw new Error("Mattermost read requires target, to, or channelId.");
+      }
+      const normalizedTarget = normalizeMattermostMessagingTarget(rawTarget);
+      const channelId = normalizedTarget?.startsWith("channel:")
+        ? normalizedTarget.slice("channel:".length).trim()
+        : !rawTarget.includes(":")
+          ? rawTarget
+          : "";
+      if (!channelId) {
+        throw new Error("Mattermost read requires a channel target.");
+      }
+
+      const before = readStringParam(params, "before");
+      const after = readStringParam(params, "after");
+      if (before && after) {
+        throw new Error("Mattermost read accepts either before or after, not both.");
+      }
+      const result = await (
+        await loadMattermostChannelRuntime()
+      ).readMattermostMessages({
+        cfg,
+        channelId,
+        limit: readPositiveIntegerParam(params, "limit", {
+          message: "limit must be a positive integer.",
+        }),
+        before,
+        after,
+        accountId: resolvedAccountId,
+        context: {
+          conversationReadOrigin,
+          requesterAccountId,
+          toolContext,
+        },
+      });
+      return jsonResult({
+        ok: true,
+        channelId,
+        messages: result.messages.map((message) =>
+          withNormalizedTimestamp(message as Record<string, unknown>, message.create_at),
+        ),
+        hasMore: result.hasMore,
+      });
+    }
+
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
       const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      if (!account.enabled) {
+        throw new Error(`Mattermost account "${resolvedAccountId}" is disabled`);
+      }
       const reactionsEnabled =
         account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
       if (!reactionsEnabled) {
@@ -387,6 +507,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       }
 
       const { postId, emojiName, remove } = parseMattermostReactActionParams(params);
+      // The runner preserves the caller's spelling in `target` and puts the
+      // directory-resolved provider destination in `to` before dispatch.
+      const authorizedTarget = normalizeOptionalString(params.to);
       if (remove) {
         const result = await (
           await loadMattermostChannelRuntime()
@@ -395,6 +518,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
           postId,
           emojiName,
           accountId: resolvedAccountId,
+          authorizedTarget,
+          conversationReadOrigin,
         });
         if (!result.ok) {
           throw new Error(result.error);
@@ -414,6 +539,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         postId,
         emojiName,
         accountId: resolvedAccountId,
+        authorizedTarget,
+        conversationReadOrigin,
       });
       if (!result.ok) {
         throw new Error(result.error);
@@ -458,17 +585,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       normalizeOptionalString(params.replyTo);
     const resolvedAccountId = accountId || undefined;
 
-    const attachmentMedia = collectMattermostAttachmentMedia(params);
-    if (attachmentMedia.hasUnsupportedAttachmentPayload) {
-      throw new Error(
-        "Mattermost send attachments require media, mediaUrl, path, filePath, fileUrl, mediaUrls, or attachments[] with one of those fields; buffer/base64 payloads are not supported.",
-      );
-    }
-    if (attachmentMedia.mediaUrls.length > 1) {
-      throw new Error(
-        "Mattermost send supports one attachment per message; split multiple mediaUrls or attachments[] entries into separate sends.",
-      );
-    }
+    const mediaUrl = resolveMattermostSendAttachmentMedia(params);
     const buttons = presentation ? buildMattermostPresentationButtons(presentation) : [];
 
     const result = await (
@@ -479,13 +596,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       replyToId,
       buttons: buttons.length > 0 ? buttons : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
-      mediaUrl: attachmentMedia.mediaUrls[0],
+      mediaUrl,
       mediaLocalRoots: mediaLocalRoots ?? mediaAccess?.localRoots,
       mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
       ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
-      requireMediaUpload: requiresMattermostMediaUpload(attachmentMedia.mediaUrls[0])
-        ? true
-        : undefined,
+      requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
     });
 
     return {
@@ -604,8 +719,9 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
   ];
   mediaUrlCandidates.push(...readMattermostStringArrayParam(params, "mediaUrls"));
 
-  let hasUnsupportedAttachmentPayload =
-    typeof params.buffer === "string" || typeof params.base64 === "string";
+  let hasUnsupportedAttachmentPayload = Boolean(
+    readMattermostStringParam(params, "buffer") ?? readMattermostStringParam(params, "base64"),
+  );
   if (Array.isArray(params.attachments)) {
     for (const attachment of params.attachments) {
       if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
@@ -620,8 +736,9 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
         readMattermostStringParam(record, "fileUrl"),
         readMattermostStringParam(record, "url"),
       );
-      hasUnsupportedAttachmentPayload ||= typeof record.buffer === "string";
-      hasUnsupportedAttachmentPayload ||= typeof record.base64 === "string";
+      hasUnsupportedAttachmentPayload ||= Boolean(
+        readMattermostStringParam(record, "buffer") ?? readMattermostStringParam(record, "base64"),
+      );
     }
   }
 
@@ -629,6 +746,40 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
     mediaUrls: collectNonBlankStrings(mediaUrlCandidates),
     hasUnsupportedAttachmentPayload,
   };
+}
+
+function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
+  const attachmentMedia = collectMattermostAttachmentMedia(params);
+  if (attachmentMedia.hasUnsupportedAttachmentPayload) {
+    throw new Error(
+      "Mattermost send attachments require media, mediaUrl, path, filePath, fileUrl, mediaUrls, or attachments[] with one of those fields; buffer/base64 payloads are not supported.",
+    );
+  }
+  if (attachmentMedia.mediaUrls.length > 1) {
+    throw new Error(
+      "Mattermost send supports one attachment per message; split multiple mediaUrls or attachments[] entries into separate sends.",
+    );
+  }
+  return attachmentMedia.mediaUrls[0];
+}
+
+type MattermostOutboundContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+
+function toMattermostOutboundResult(result: MattermostSendResult) {
+  const { channelId, ...delivery } = result;
+  return { ...delivery, target: { kind: "channel" as const, id: channelId } };
+}
+
+function createMattermostDeliveryProgressReporter(
+  onDeliveryResult: MattermostOutboundContext["onDeliveryResult"],
+) {
+  return onDeliveryResult
+    ? async (result: MattermostSendResult) => {
+        await onDeliveryResult(
+          attachChannelToResult("mattermost", toMattermostOutboundResult(result)),
+        );
+      }
+    : undefined;
 }
 
 const mattermostOutbound: ChannelOutboundAdapter = {
@@ -675,7 +826,9 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   },
   sendPayload: async (ctx) => {
     const buttons = readMattermostPresentationButtons(ctx.payload);
-    if (buttons?.length) {
+    const rawAttachmentText = readMattermostPayloadData(ctx.payload)?.attachmentText;
+    const attachmentText = typeof rawAttachmentText === "string" ? rawAttachmentText : undefined;
+    if (buttons?.length || attachmentText !== undefined) {
       const mediaUrl = resolvePayloadMediaUrls({
         ...ctx.payload,
         mediaUrl: ctx.payload.mediaUrl ?? ctx.mediaUrl,
@@ -693,9 +846,11 @@ const mattermostOutbound: ChannelOutboundAdapter = {
         ...(ctx.mediaAccess?.workspaceDir ? { workspaceDir: ctx.mediaAccess.workspaceDir } : {}),
         requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
         replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
-        buttons,
+        buttons: buttons?.length ? buttons : undefined,
+        attachmentText,
+        onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
       });
-      return attachChannelToResult("mattermost", result);
+      return attachChannelToResult("mattermost", toMattermostOutboundResult(result));
     }
     return await sendTextMediaPayload({ channel: "mattermost", ctx, adapter: mattermostOutbound });
   },
@@ -713,14 +868,17 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "mattermost",
-    sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) =>
-      await (
-        await loadMattermostChannelRuntime()
-      ).sendMessageMattermost(to, text, {
-        cfg,
-        accountId: accountId ?? undefined,
-        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-      }),
+    sendText: async ({ cfg, to, text, accountId, replyToId, threadId, onDeliveryResult }) =>
+      toMattermostOutboundResult(
+        await (
+          await loadMattermostChannelRuntime()
+        ).sendMessageMattermost(to, text, {
+          cfg,
+          accountId: accountId ?? undefined,
+          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+          onDeliveryResult: createMattermostDeliveryProgressReporter(onDeliveryResult),
+        }),
+      ),
     sendMedia: async ({
       cfg,
       to,
@@ -732,19 +890,23 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       accountId,
       replyToId,
       threadId,
+      onDeliveryResult,
     }) =>
-      await (
-        await loadMattermostChannelRuntime()
-      ).sendMessageMattermost(to, text, {
-        cfg,
-        accountId: accountId ?? undefined,
-        mediaUrl,
-        mediaLocalRoots: mediaLocalRoots ?? mediaAccess?.localRoots,
-        mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
-        ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
-        requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
-        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-      }),
+      toMattermostOutboundResult(
+        await (
+          await loadMattermostChannelRuntime()
+        ).sendMessageMattermost(to, text, {
+          cfg,
+          accountId: accountId ?? undefined,
+          mediaUrl,
+          mediaLocalRoots: mediaLocalRoots ?? mediaAccess?.localRoots,
+          mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
+          ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
+          requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
+          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+          onDeliveryResult: createMattermostDeliveryProgressReporter(onDeliveryResult),
+        }),
+      ),
   }),
 };
 
@@ -773,7 +935,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     meta: {
       ...meta,
     },
-    setup: mattermostSetupAdapter,
+    setupContract: mattermostSetupContract,
     setupWizard: mattermostSetupWizard,
     capabilities: {
       chatTypes: ["direct", "channel", "group", "thread"],
@@ -785,10 +947,18 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
-    reload: { configPrefixes: ["channels.mattermost"] },
+    reload: {
+      configPrefixes: ["channels.mattermost"],
+      /**
+       * accounts.default is promoted; named resolution merges only channel-wide fields
+       * plus the selected account. Monitor debounce and durable ingress use accountId.
+       */
+      accountScopedRestart: true,
+    },
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
+      inspectAccount: adaptScopedAccountAccessor(inspectMattermostAccount),
       isConfigured: isMattermostConfigured,
       describeAccount: describeMattermostAccount,
     },
@@ -815,6 +985,13 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       targetIdComparison: "case-sensitive",
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeMattermostMessagingTarget(to);
+        if (!target) {
+          return undefined;
+        }
+        return target.startsWith("user:") || target.startsWith("@") ? "direct" : "channel";
+      },
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();
@@ -874,6 +1051,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         configured: Boolean(account.botToken && account.baseUrl),
         extra: {
           botTokenSource: account.botTokenSource,
+          botTokenStatus: account.botTokenStatus,
           baseUrl: account.baseUrl,
           dmPolicy: account.config.dmPolicy ?? "pairing",
           connected: runtime?.connected ?? false,

@@ -7,10 +7,9 @@ export { downloadMSTeamsAttachments } from "./attachments/download.js";
 export { buildMSTeamsGraphMessageUrl, downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 export {
   extractMSTeamsHtmlAttachmentIds,
-  resolveMSTeamsInboundAttachmentPresentation,
+  resolveMSTeamsAdvertisedMedia,
   summarizeMSTeamsHtmlAttachments,
 } from "./attachments/html.js";
-export { buildMSTeamsMediaPayload } from "./attachments/payload.js";
 export type {
   MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,

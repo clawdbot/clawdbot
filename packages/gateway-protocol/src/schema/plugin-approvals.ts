@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
+import { ApprovalChannelReviewerSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -20,6 +21,13 @@ export const PluginApprovalRequestParamsSchema = closedObject({
   pluginId: Type.Optional(NonEmptyString),
   title: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_TITLE_MAX_LENGTH }),
   description: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH }),
+  detail: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 16_384,
+      description: "Reviewer-surface-only detail; not delivered to channels or push notifications.",
+    }),
+  ),
   severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
   toolName: Type.Optional(Type.String()),
   toolCallId: Type.Optional(Type.String()),
@@ -49,6 +57,7 @@ export const PluginApprovalRequestParamsSchema = closedObject({
 export const PluginApprovalResolveParamsSchema = closedObject({
   id: NonEmptyString,
   decision: NonEmptyString,
+  reviewer: Type.Optional(ApprovalChannelReviewerSchema),
 });
 
 // Owner-local wire types derived directly from local schema consts so the

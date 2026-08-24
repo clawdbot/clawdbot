@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as jsonFiles from "../infra/json-files.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -100,6 +101,22 @@ async function writeLocalMarketplaceFixture(params: {
     await fs.mkdir(params.pluginDir, { recursive: true });
   }
   return writeMarketplaceManifest(params.rootDir, params.manifest);
+}
+
+async function withKnownMarketplaceRegistry<T>(
+  marketplaces: Record<string, unknown>,
+  run: (homeDir: string) => Promise<T>,
+): Promise<T> {
+  return await withTempDir("openclaw-marketplace-known-", async (homeDir) => {
+    const openClawHome = path.join(homeDir, "openclaw-home");
+    const registryPath = path.join(homeDir, ".claude", "plugins", "known_marketplaces.json");
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.mkdir(openClawHome, { recursive: true });
+    await fs.writeFile(registryPath, JSON.stringify(marketplaces));
+    return await withEnvAsync({ HOME: homeDir, OPENCLAW_HOME: openClawHome }, async () =>
+      run(homeDir),
+    );
+  });
 }
 
 function mockRemoteMarketplaceClone(params: {
@@ -305,6 +322,67 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("rejects oversized local marketplace manifests", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      await fs.writeFile(manifestPath, Buffer.alloc(16 * 1024 * 1024 + 1, "x"));
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "Marketplace manifest too large",
+      });
+    });
+  });
+
+  it("follows a symlinked marketplace manifest to a regular file", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      const targetPath = path.join(rootDir, "real-manifest.json");
+      await fs.writeFile(
+        targetPath,
+        JSON.stringify({ plugins: [{ name: "symlinked-plugin", source: "." }] }),
+        "utf-8",
+      );
+      await fs.symlink(targetPath, manifestPath);
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result.ok).toBe(true);
+      expect(
+        (result as { ok: true; manifest: { plugins: unknown[] } }).manifest.plugins,
+      ).toHaveLength(1);
+    });
+  });
+
+  it("rejects a symlinked marketplace manifest whose target exceeds the size limit", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      const targetPath = path.join(rootDir, "real-manifest.json");
+      await fs.writeFile(targetPath, Buffer.alloc(16 * 1024 * 1024 + 1, "x"));
+      await fs.symlink(targetPath, manifestPath);
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "Marketplace manifest too large",
+      });
+    });
+  });
+
   it("resolves relative plugin paths against the marketplace root", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");
@@ -440,6 +518,36 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("passes install policy acknowledgement through to marketplace path installs", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const pluginDir = path.join(rootDir, "plugins", "frontend-design");
+      const manifestPath = await writeLocalMarketplaceFixture({
+        rootDir,
+        pluginDir,
+        manifest: {
+          plugins: [{ name: "frontend-design", source: "./plugins/frontend-design" }],
+        },
+      });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        version: "0.1.0",
+        extensions: ["index.ts"],
+      });
+      const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
+
+      await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+        onInstallPolicyWarning,
+      });
+
+      expect(installPluginInput().path).toBe(pluginDir);
+      expect(installPluginInput().onInstallPolicyWarning).toBe(onInstallPolicyWarning);
+    });
+  });
+
   it("resolves Claude-style plugin@marketplace shortcuts from known_marketplaces.json", async () => {
     await withTempDir("openclaw-marketplace-test-", async (homeDir) => {
       const openClawHome = path.join(homeDir, "openclaw-home");
@@ -469,6 +577,151 @@ describe("marketplace plugins", () => {
         marketplaceName: "claude-plugins-official",
         marketplaceSource: "claude-plugins-official",
       });
+    });
+  });
+
+  const cyclicKnownMarketplaces = [
+    {
+      label: "self-referential",
+      marketplace: "loop",
+      marketplaces: {
+        loop: { source: { source: "path", path: "loop" } },
+      },
+      cycle: "loop -> loop",
+    },
+    {
+      label: "two-marketplace",
+      marketplace: "alpha",
+      marketplaces: {
+        alpha: { source: { source: "path", path: "beta" } },
+        beta: { source: { source: "path", path: "alpha" } },
+      },
+      cycle: "alpha -> beta -> alpha",
+    },
+  ] as const;
+
+  it.each(cyclicKnownMarketplaces)(
+    "rejects a $label known marketplace alias cycle while listing",
+    async ({ marketplace, marketplaces, cycle }) => {
+      await withKnownMarketplaceRegistry(marketplaces, async () => {
+        const registryRead = vi.spyOn(jsonFiles, "tryReadJson");
+        for (let read = 0; read <= Object.keys(marketplaces).length; read += 1) {
+          registryRead.mockResolvedValueOnce(marketplaces);
+        }
+        // Bound the unfixed recursive loader so the regression never leaves a runaway task.
+        registryRead.mockResolvedValueOnce({});
+
+        try {
+          const result = await listMarketplacePlugins({ marketplace });
+
+          expect(result).toEqual({
+            ok: false,
+            error: `known marketplace source cycle: ${cycle}`,
+          });
+          expect(registryRead).toHaveBeenCalledTimes(1);
+          expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+          expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+        } finally {
+          registryRead.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(cyclicKnownMarketplaces)(
+    "rejects a $label known marketplace alias cycle before installing",
+    async ({ marketplace, marketplaces, cycle }) => {
+      await withKnownMarketplaceRegistry(marketplaces, async () => {
+        const registryRead = vi.spyOn(jsonFiles, "tryReadJson");
+        for (let read = 0; read <= Object.keys(marketplaces).length; read += 1) {
+          registryRead.mockResolvedValueOnce(marketplaces);
+        }
+        // Bound the unfixed recursive loader so the lifecycle-owning call always settles.
+        registryRead.mockResolvedValueOnce({});
+
+        try {
+          const result = await installPluginFromMarketplace({
+            marketplace,
+            plugin: "frontend-design",
+          });
+
+          expect(result).toEqual({
+            ok: false,
+            error: `known marketplace source cycle: ${cycle}`,
+          });
+          expect(registryRead).toHaveBeenCalledTimes(1);
+          expect(installPluginFromPathMock).not.toHaveBeenCalled();
+          expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+          expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+        } finally {
+          registryRead.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("resolves independent known marketplace alias calls from one registry snapshot each", async () => {
+    await withKnownMarketplaceRegistry({}, async (homeDir) => {
+      const marketplaceRoot = path.join(homeDir, "known-marketplace");
+      const pluginDir = path.join(marketplaceRoot, "plugins", "frontend-design");
+      await writeLocalMarketplaceFixture({
+        rootDir: marketplaceRoot,
+        pluginDir,
+        manifest: {
+          plugins: [{ name: "frontend-design", source: "./plugins/frontend-design" }],
+        },
+      });
+      await fs.writeFile(
+        path.join(homeDir, ".claude", "plugins", "known_marketplaces.json"),
+        JSON.stringify({
+          alpha: { source: { source: "path", path: "beta" } },
+          beta: {
+            installLocation: marketplaceRoot,
+            source: { source: "path", path: "alpha" },
+          },
+        }),
+      );
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        version: "0.1.0",
+        extensions: ["index.ts"],
+      });
+      const registryRead = vi.spyOn(jsonFiles, "tryReadJson");
+
+      try {
+        const listed = await listMarketplacePlugins({ marketplace: "alpha" });
+        const installed = await installPluginFromMarketplace({
+          marketplace: "alpha",
+          plugin: "frontend-design",
+        });
+
+        expect(listed).toMatchObject({ ok: true, sourceLabel: "beta" });
+        expectLocalMarketplaceInstallResult({
+          result: installed,
+          pluginDir,
+          marketplaceSource: "alpha",
+        });
+        expect(registryRead).toHaveBeenCalledTimes(2);
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      } finally {
+        registryRead.mockRestore();
+      }
+    });
+  });
+
+  it("preserves ordinary source fallback for an invalid known marketplace alias", async () => {
+    await withKnownMarketplaceRegistry({ broken: { source: { source: "path" } } }, async () => {
+      const result = await listMarketplacePlugins({ marketplace: "broken" });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "unsupported marketplace source: broken",
+      });
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1169,7 +1422,8 @@ describe("marketplace plugins", () => {
       expect(result.error).toContain(
         "failed to download https://***:***@example.com/frontend-design.tgz:",
       );
-      expect(result.error).toContain("Authorization: Bearer sk-123…mnop");
+      expect(result.error).toContain("Authorization: Bearer sk-123…");
+      expect(result.error).not.toContain("abcdefghijklmnop");
       expect(result.error).not.toContain("user:pass@");
       let hasControlChars = false;
       for (const char of result.error) {

@@ -14,6 +14,13 @@ import {
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 
+const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "port"],
+  message:
+    'gateway.port is outside the valid TCP range (1–65535) and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "number" && (value < 1 || value > 65_535),
+};
+
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
   message:
@@ -27,41 +34,44 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
+const GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE: LegacyConfigRule = {
+  path: ["gateway", "tailscale", "resetOnExit"],
+  message:
+    'gateway.tailscale.resetOnExit is retired because managed routes now follow the Gateway lifecycle automatically. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "boolean",
+};
+
+const GATEWAY_TAILSCALE_SERVICE_NAME_RULE: LegacyConfigRule = {
+  path: ["gateway", "tailscale", "serviceName"],
+  message:
+    'gateway.tailscale.serviceName is retired because named Services require persistent background routes that cannot follow the Gateway lifecycle. Run "openclaw doctor --fix".',
+};
+
+const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
+  path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
+  message:
+    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired and ignored. Control UI browsers pair through the normal device flow; run "openclaw doctor --fix" to remove the legacy key.',
+  match: (value) => typeof value === "boolean",
+};
+
+const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
+  ["0.0.0.0", "lan"],
+  ["::", "lan"],
+  ["[::]", "lan"],
+  ["*", "lan"],
+  ["127.0.0.1", "loopback"],
+  ["localhost", "loopback"],
+  ["::1", "loopback"],
+  ["[::1]", "loopback"],
+]);
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
 }
 
 function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return null;
-  }
-  if (
-    normalized === "auto" ||
-    normalized === "loopback" ||
-    normalized === "lan" ||
-    normalized === "tailnet" ||
-    normalized === "custom"
-  ) {
-    return null;
-  }
-  if (
-    normalized === "0.0.0.0" ||
-    normalized === "::" ||
-    normalized === "[::]" ||
-    normalized === "*"
-  ) {
-    return "lan";
-  }
-  if (
-    normalized === "127.0.0.1" ||
-    normalized === "localhost" ||
-    normalized === "::1" ||
-    normalized === "[::1]"
-  ) {
-    return "loopback";
-  }
-  return null;
+  return normalized ? (LEGACY_GATEWAY_BIND_HOST_ALIASES.get(normalized) ?? null) : null;
 }
 
 function escapeControlForLog(value: string): string {
@@ -70,6 +80,66 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.tailscale.service-name-remove",
+    describe: "Disable managed ingress and remove the retired Tailscale Service name",
+    legacyRules: [GATEWAY_TAILSCALE_SERVICE_NAME_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!gateway || !tailscale || !Object.hasOwn(tailscale, "serviceName")) {
+        return;
+      }
+      const wasManagedService = tailscale.mode === "serve";
+      delete tailscale.serviceName;
+      if (wasManagedService) {
+        tailscale.mode = "off";
+      }
+      gateway.tailscale = tailscale;
+      raw.gateway = gateway;
+      changes.push(
+        wasManagedService
+          ? "Removed gateway.tailscale.serviceName and set gateway.tailscale.mode=off because named Services cannot use lifecycle-owned routes. " +
+              "Inspect the retained Service route, then run `tailscale serve clear <service-name>`; set gateway.tailscale.mode=serve to use device Serve instead."
+          : "Removed retired gateway.tailscale.serviceName; the current Tailscale mode is unchanged because named Services applied only to Serve.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.tailscale.reset-on-exit-remove",
+    describe: "Remove the retired Tailscale route-cleanup preference",
+    legacyRules: [GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!gateway || !tailscale || !Object.hasOwn(tailscale, "resetOnExit")) {
+        return;
+      }
+      const cleanupWasEnabled = tailscale.resetOnExit === true;
+      delete tailscale.resetOnExit;
+      gateway.tailscale = tailscale;
+      raw.gateway = gateway;
+      changes.push(
+        cleanupWasEnabled
+          ? "Removed gateway.tailscale.resetOnExit; managed Tailscale routes now end automatically with the Gateway lifecycle."
+          : "Removed retired gateway.tailscale.resetOnExit config.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.control-ui-device-auth-bypass->pairing-migration",
+    describe: "Remove the retired Control UI device-auth bypass",
+    legacyRules: [CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const controlUi = getRecord(gateway?.controlUi);
+      if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
+        return;
+      }
+      delete controlUi.dangerouslyDisableDeviceAuth;
+      changes.push("Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.");
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.webchat-remove",
     describe: "Remove retired WebChat gateway config",
@@ -86,6 +156,31 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         delete raw.gateway;
       }
       changes.push("Removed retired gateway.webchat config.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.port-oob-repair",
+    describe: "Remove out-of-range gateway.port to avoid post-schema-tightening startup failures",
+    legacyRules: [GATEWAY_PORT_OOB_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "port")) {
+        return;
+      }
+      const port = gateway.port;
+      if (typeof port !== "number" || (port >= 1 && port <= 65_535)) {
+        return;
+      }
+      delete gateway.port;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push(
+        `Removed out-of-range gateway.port (${String(port)}). ` +
+          `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
+      );
     },
   }),
   defineLegacyConfigMigration({

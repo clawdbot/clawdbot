@@ -1,13 +1,12 @@
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { escapeRegExp } from "../shared/regexp.js";
+
 const MIN_SECRET_VALUE_LENGTH = 6;
 const MAX_SECRET_VALUES = 512;
 
 const registeredValues = new Map<string, true>();
 let compiledMatcher: RegExp | undefined;
 let firstChars = new Set<string>();
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function rebuildProbe(): void {
   firstChars = new Set([...registeredValues.keys()].map((value) => value.charAt(0)));
@@ -20,12 +19,7 @@ function registerOneSecretValue(value: string): void {
     return;
   }
   registeredValues.set(value, true);
-  if (registeredValues.size > MAX_SECRET_VALUES) {
-    const oldest = registeredValues.keys().next().value;
-    if (oldest !== undefined) {
-      registeredValues.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(registeredValues, MAX_SECRET_VALUES);
   rebuildProbe();
 }
 

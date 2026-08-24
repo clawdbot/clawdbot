@@ -5,6 +5,7 @@ import {
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { bindConversationNow, buildPluginBindingIdentity } from "./conversation-binding.js";
 import type {
@@ -17,7 +18,7 @@ const log = createSubsystemLogger("plugins/binding");
 // Serializes bind+finalize+rollback per session so a failing older attempt
 // can never unbind or restore over a newer successful one (all session binds
 // go through this in-process seam).
-const pluginSessionBindTails = new Map<string, Promise<void>>();
+const pluginSessionBindQueue = new KeyedAsyncQueue();
 
 /** Binds a plugin-owned runtime to one authenticated Control UI session. */
 export async function bindPluginSessionConversation(params: {
@@ -32,22 +33,9 @@ export async function bindPluginSessionConversation(params: {
   if (!sessionKey) {
     throw new Error("session key is required for a plugin session binding");
   }
-  const previousTail = pluginSessionBindTails.get(sessionKey) ?? Promise.resolve();
-  const operation = previousTail.then(() =>
+  return await pluginSessionBindQueue.enqueue(sessionKey, async () =>
     bindPluginSessionConversationExclusive({ ...params, sessionKey }),
   );
-  const tail = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  pluginSessionBindTails.set(sessionKey, tail);
-  try {
-    return await operation;
-  } finally {
-    if (pluginSessionBindTails.get(sessionKey) === tail) {
-      pluginSessionBindTails.delete(sessionKey);
-    }
-  }
 }
 
 async function bindPluginSessionConversationExclusive(params: {

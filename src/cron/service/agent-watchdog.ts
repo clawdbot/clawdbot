@@ -19,7 +19,8 @@ const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
 
 type CronAgentWatchdogState =
   | "waiting_for_runner"
-  | "waiting_for_execution"
+  | "waiting_for_initial_progress"
+  | "waiting_for_fallback_execution"
   | "executing"
   | "timed_out"
   | "disposed";
@@ -53,6 +54,7 @@ type CronAgentWatchdog = {
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
   notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
   activeExecution: () => CronAgentExecutionStarted | undefined;
+  deadlineAtMs: () => number | undefined;
   observedLaneWait: () => boolean;
   dispose: () => void;
 };
@@ -68,7 +70,9 @@ export function createCronAgentWatchdog(params: {
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
+  let deadlineAtMs: number | undefined;
   let observedLaneWait = false;
+  let waitingForLane = false;
 
   const setTimedOut = (reason: string) => {
     if (state === "timed_out" || state === "disposed") {
@@ -81,6 +85,7 @@ export function createCronAgentWatchdog(params: {
     if (timeoutId || state === "disposed") {
       return;
     }
+    deadlineAtMs = Date.now() + params.jobTimeoutMs;
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
     }, params.jobTimeoutMs);
@@ -92,6 +97,17 @@ export function createCronAgentWatchdog(params: {
     clearTimeout(setupTimeoutId);
     setupTimeoutId = undefined;
   };
+  // Queue contention is not runner setup; admission must begin a fresh setup budget.
+  const startSetupTimeout = () => {
+    if (setupTimeoutId || state !== "waiting_for_runner" || waitingForLane) {
+      return;
+    }
+    setupTimeoutId = setTimeout(() => {
+      if (state === "waiting_for_runner" && !waitingForLane) {
+        setTimedOut(setupTimeoutErrorMessage(activeExecution));
+      }
+    }, CRON_AGENT_SETUP_WATCHDOG_MS);
+  };
   const clearPreExecutionTimeout = () => {
     if (!preExecutionTimeoutId) {
       return;
@@ -99,12 +115,14 @@ export function createCronAgentWatchdog(params: {
     clearTimeout(preExecutionTimeoutId);
     preExecutionTimeoutId = undefined;
   };
+  const isWaitingForExecution = () =>
+    state === "waiting_for_initial_progress" || state === "waiting_for_fallback_execution";
   const startPreExecutionTimeout = () => {
-    if (preExecutionTimeoutId || state !== "waiting_for_execution") {
+    if (preExecutionTimeoutId || !isWaitingForExecution()) {
       return;
     }
     preExecutionTimeoutId = setTimeout(() => {
-      if (state === "waiting_for_execution") {
+      if (isWaitingForExecution()) {
         setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
       }
     }, resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs));
@@ -113,23 +131,15 @@ export function createCronAgentWatchdog(params: {
     if (!info) {
       return;
     }
-    const previousPhase = activeExecution?.phase;
     activeExecution = { ...activeExecution, ...info };
     const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
-    // A fallback attempt can return to setup-like phases after execution began;
-    // re-arm pre-execution timing so the fallback path cannot stall silently.
-    if (
-      state === "executing" &&
-      previousPhase === "before_agent_reply" &&
-      stage === "pre_execution"
-    ) {
-      // Model fallback can move from an execution phase back into setup-like
-      // phases; restart the pre-execution watchdog so fallback stalls are seen.
-      state = "waiting_for_execution";
-      startPreExecutionTimeout();
-      return;
-    }
-    if (stage === "execution") {
+    const observedInitialProgress =
+      state === "waiting_for_initial_progress" &&
+      info.phase !== undefined &&
+      info.phase !== "runner_entered";
+    const observedFallbackExecution =
+      state === "waiting_for_fallback_execution" && stage === "execution";
+    if (observedInitialProgress || observedFallbackExecution) {
       state = "executing";
       clearPreExecutionTimeout();
     }
@@ -138,11 +148,7 @@ export function createCronAgentWatchdog(params: {
   return {
     start: () => {
       if (params.deferUntilRunner) {
-        setupTimeoutId = setTimeout(() => {
-          if (state === "waiting_for_runner") {
-            setTimedOut(setupTimeoutErrorMessage(activeExecution));
-          }
-        }, CRON_AGENT_SETUP_WATCHDOG_MS);
+        startSetupTimeout();
         return;
       }
       startTimeout();
@@ -150,11 +156,15 @@ export function createCronAgentWatchdog(params: {
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = true;
+        waitingForLane = true;
+        clearSetupTimeout();
       }
     },
     noteLaneAdmitted: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = false;
+        waitingForLane = false;
+        startSetupTimeout();
       }
     },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
@@ -163,8 +173,11 @@ export function createCronAgentWatchdog(params: {
       }
       clearSetupTimeout();
       startTimeout();
-      if (state !== "executing") {
-        state = "waiting_for_execution";
+      if (info?.isFallback === true) {
+        clearPreExecutionTimeout();
+        state = "waiting_for_fallback_execution";
+      } else if (state === "waiting_for_runner") {
+        state = "waiting_for_initial_progress";
       }
       noteExecutionProgress(info);
       startPreExecutionTimeout();
@@ -176,6 +189,7 @@ export function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
+    deadlineAtMs: () => deadlineAtMs,
     observedLaneWait: () => observedLaneWait,
     dispose: () => {
       state = "disposed";

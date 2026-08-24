@@ -23,6 +23,7 @@ function createPage(params: {
     claims: [],
     contradictions: params.contradictions,
     questions: [],
+    bridgeAgentIds: [],
   };
 }
 

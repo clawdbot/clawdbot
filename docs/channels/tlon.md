@@ -58,6 +58,12 @@ Or edit config directly:
 Restart the gateway after editing config directly. Then DM the bot or @ mention it in a group
 channel.
 
+## Inbound durability
+
+OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
+
+Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore remain idempotent where practical.
+
 ## Private/LAN ships
 
 OpenClaw blocks private/internal hostnames and IP ranges for SSRF protection by default. If your
@@ -144,6 +150,10 @@ baseline, and override per channel nest:
 
 Once the bot has replied inside a thread, it keeps responding to later messages in that thread
 without requiring another mention.
+
+Set `channels.tlon.implicitMentions.threadParticipation: false` to require a new explicit mention
+for those follow-ups. Account overrides use `channels.tlon.accounts.<id>.implicitMentions`. Tlon
+does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
 
 ## Owner and approval system
 
@@ -293,6 +303,7 @@ Full configuration: [Configuration](/gateway/configuration)
 | `channels.tlon.autoAcceptGroupInvites`                 | Auto-accept group invites from `groupInviteAllowlist`.         |
 | `channels.tlon.groupInviteAllowlist`                   | Ships whose group invites are auto-accepted.                   |
 | `channels.tlon.autoDiscoverChannels`                   | Auto-discover joined group channels (default: `false`).        |
+| `channels.tlon.implicitMentions.threadParticipation`   | Let participated-thread follow-ups bypass mention gating.      |
 | `channels.tlon.groupChannels`                          | Manually pinned channel nests.                                 |
 | `channels.tlon.defaultAuthorizedShips`                 | Ships authorized for all channels (used when no rule matches). |
 | `channels.tlon.authorization.channelRules`             | Per-channel-nest auth mode + allowlist.                        |

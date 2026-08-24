@@ -1,12 +1,14 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
-} from "../../../src/gateway/control-ui-contract.js";
+  type ControlUiEnvironment,
+  type ControlUiPluginFrameGrantAck,
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { setUiTimeFormatPreference } from "../lib/format.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
 type ApplicationConfigAuthSource = {
@@ -14,19 +16,6 @@ type ApplicationConfigAuthSource = {
   settings?: { token?: string | null } | null;
   password?: string | null;
 };
-
-const SEAM_COLOR_CSS_VARIABLES = [
-  "--ring",
-  "--accent",
-  "--accent-hover",
-  "--accent-muted",
-  "--accent-subtle",
-  "--accent-glow",
-  "--primary",
-  "--focus",
-  "--focus-ring",
-  "--focus-glow",
-] as const;
 
 type ApplicationConfig = {
   assistantIdentity: {
@@ -38,12 +27,16 @@ type ApplicationConfig = {
     avatarReason: string | null;
   };
   serverVersion: string | null;
+  serverBuildId?: string | null;
   devGitBranch: string | null;
+  environment: ControlUiEnvironment | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
-  chatMessageMaxWidth: string | null;
+  automaticallyFetchFavicons: boolean;
   terminalEnabled: boolean;
+  cliAgentsEnabled?: boolean;
+  pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
 export type ApplicationConfigCapability = {
@@ -51,7 +44,8 @@ export type ApplicationConfigCapability = {
   refresh: (options?: {
     auth?: ApplicationConfigAuthSource;
     skipWithoutAuthCandidate?: boolean;
-  }) => Promise<void>;
+    signal?: AbortSignal;
+  }) => Promise<ApplicationConfig | null>;
   subscribe: (listener: (config: ApplicationConfig) => void) => () => void;
 };
 
@@ -64,132 +58,93 @@ function readDocumentTerminalEnabled(): boolean | null {
 }
 
 const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
-  assistantIdentity: {
-    agentId: null,
-    name: "Assistant",
-    avatar: null,
-    avatarSource: null,
-    avatarStatus: null,
-    avatarReason: null,
-  },
+  assistantIdentity: normalizeAssistantIdentity(),
   serverVersion: null,
+  serverBuildId: null,
   devGitBranch: null,
+  environment: null,
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
-  chatMessageMaxWidth: null,
+  automaticallyFetchFavicons: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  cliAgentsEnabled: false,
+  pluginFrameGrants: [],
 };
 
-function normalizeSeamColor(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const hex = value.trim().replace(/^#/, "");
-  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
-}
-
-function applyControlUiSeamColor(value: unknown): void {
-  if (typeof document === "undefined") {
-    return;
-  }
+function loadControlUiPresentation(environment: ControlUiEnvironment | null, seamColor?: string) {
   const root = document.documentElement;
-  const color = normalizeSeamColor(value);
-  if (!color) {
-    for (const property of SEAM_COLOR_CSS_VARIABLES) {
-      root.style.removeProperty(property);
-    }
-    return;
+  if (
+    environment ||
+    seamColor ||
+    root.hasAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE) ||
+    root.style.getPropertyValue("--ring")
+  ) {
+    void import("./control-ui-environment-presentation.runtime.ts").then(
+      ({ applyControlUiPresentation }) => applyControlUiPresentation({ environment, seamColor }),
+    );
   }
-
-  root.style.setProperty("--ring", color);
-  root.style.setProperty("--accent", color);
-  root.style.setProperty("--accent-hover", "color-mix(in srgb, var(--accent) 82%, white 18%)");
-  root.style.setProperty("--accent-muted", color);
-  root.style.setProperty("--accent-subtle", "color-mix(in srgb, var(--accent) 16%, transparent)");
-  root.style.setProperty("--accent-glow", "color-mix(in srgb, var(--accent) 30%, transparent)");
-  root.style.setProperty("--primary", color);
-  root.style.setProperty("--focus", "color-mix(in srgb, var(--ring) 22%, transparent)");
-  root.style.setProperty(
-    "--focus-ring",
-    "0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent)",
-  );
-  root.style.setProperty(
-    "--focus-glow",
-    "0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow)",
-  );
 }
 
 function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): ApplicationConfig {
-  const identity = normalizeAssistantIdentity({
-    agentId: parsed.assistantAgentId ?? null,
-    name: parsed.assistantName,
-    avatar: parsed.assistantAvatar ?? null,
-    avatarSource: parsed.assistantAvatarSource ?? null,
-    avatarStatus: parsed.assistantAvatarStatus ?? null,
-    avatarReason: parsed.assistantAvatarReason ?? null,
-  });
   return {
-    assistantIdentity: {
-      agentId: identity.agentId ?? null,
-      name: identity.name,
-      avatar: identity.avatar,
-      avatarSource: identity.avatarSource ?? null,
-      avatarStatus: identity.avatarStatus ?? null,
-      avatarReason: identity.avatarReason ?? null,
-    },
+    assistantIdentity: normalizeAssistantIdentity({
+      agentId: parsed.assistantAgentId,
+      name: parsed.assistantName,
+      avatar: parsed.assistantAvatar,
+      avatarSource: parsed.assistantAvatarSource,
+      avatarStatus: parsed.assistantAvatarStatus,
+      avatarReason: parsed.assistantAvatarReason,
+    }),
     serverVersion: parsed.serverVersion ?? null,
-    devGitBranch:
-      typeof parsed.devGitBranch === "string" && parsed.devGitBranch.trim()
-        ? parsed.devGitBranch.trim()
-        : null,
-    localMediaPreviewRoots: Array.isArray(parsed.localMediaPreviewRoots)
-      ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
-      : [],
-    embedSandboxMode:
-      parsed.embedSandbox === "trusted"
-        ? "trusted"
-        : parsed.embedSandbox === "strict"
-          ? "strict"
-          : "scripts",
-    allowExternalEmbedUrls: parsed.allowExternalEmbedUrls === true,
-    chatMessageMaxWidth:
-      typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
-        ? parsed.chatMessageMaxWidth
-        : null,
-    terminalEnabled: parsed.terminalEnabled === true,
+    serverBuildId: parsed.serverBuildId ?? null,
+    devGitBranch: parsed.devGitBranch?.trim() || null,
+    environment: parsed.environment ?? null,
+    localMediaPreviewRoots: parsed.localMediaPreviewRoots ?? [],
+    embedSandboxMode: parsed.embedSandbox ?? "scripts",
+    allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
+    automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
+    terminalEnabled: Boolean(parsed.terminalEnabled),
+    cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
+    pluginFrameGrants: (parsed.pluginFrameGrants ?? []).filter(
+      (grant): grant is ControlUiPluginFrameGrantAck =>
+        typeof grant?.pluginId === "string" &&
+        typeof grant.path === "string" &&
+        (grant.match === "exact" || grant.match === "prefix"),
+    ),
   };
 }
 
 async function loadApplicationConfig(params: {
-  basePath: string;
+  resourceBasePath: string;
   auth?: ApplicationConfigAuthSource;
   skipWithoutAuthCandidate?: boolean;
+  signal?: AbortSignal;
 }): Promise<ApplicationConfig | null> {
   if (typeof window === "undefined" || typeof fetch !== "function") {
     return null;
   }
 
-  const basePath = normalizeRouteBasePath(params.basePath);
-  const url = basePath
-    ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
-    : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
+  const url = `${normalizeRouteBasePath(params.resourceBasePath)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
   try {
-    const resolvedUrl = new URL(url, window.location.origin);
-    const sameOrigin = resolvedUrl.origin === window.location.origin;
+    const sameOrigin = new URL(url, window.location.origin).origin === window.location.origin;
     const authCandidates = sameOrigin ? resolveControlUiAuthCandidates(params.auth ?? {}) : [];
-    if (params.skipWithoutAuthCandidate && sameOrigin && authCandidates.length === 0) {
+    if (params.skipWithoutAuthCandidate && sameOrigin && !authCandidates.length) {
       return null;
     }
-    const attempts = authCandidates.length > 0 ? authCandidates : [""];
     let res: Response | null = null;
-    for (const candidate of attempts) {
+    for (const candidate of authCandidates.length ? authCandidates : [""]) {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (candidate) {
         headers.Authorization = `Bearer ${candidate}`;
       }
-      res = await fetch(url, { method: "GET", headers, credentials: "same-origin" });
+      res = await fetch(url, {
+        method: "GET",
+        headers,
+        credentials: "same-origin",
+        signal: params.signal,
+      });
       if (res.ok) {
         break;
       }
@@ -197,54 +152,65 @@ async function loadApplicationConfig(params: {
         return null;
       }
     }
-    if (!res || !res.ok) {
+    if (!res?.ok) {
       return null;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
-    setUiTimeFormatPreference(parsed.timeFormat);
-    applyControlUiSeamColor(parsed.seamColor);
-    return normalizeApplicationConfig(parsed);
+    const config = normalizeApplicationConfig(parsed);
+    loadControlUiPresentation(config.environment, parsed.seamColor);
+    return config;
   } catch {
     return null;
   }
 }
 
 export function createApplicationConfigCapability(params: {
-  basePath: string;
+  resourceBasePath: string;
   auth?: ApplicationConfigAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
+  const environmentAttribute = document.documentElement.getAttribute(
+    CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
+  );
+  if (environmentAttribute) {
+    current = {
+      ...current,
+      environment: JSON.parse(environmentAttribute),
+    };
+    loadControlUiPresentation(current.environment);
+  }
+  let currentAuth = params.auth;
   let refreshVersion = 0;
   const listeners = new Set<(config: ApplicationConfig) => void>();
-
-  const publish = (next: ApplicationConfig) => {
-    current = next;
-    for (const listener of listeners) {
-      listener(current);
-    }
-  };
 
   return {
     get current() {
       return current;
     },
     async refresh(options) {
+      currentAuth = options?.auth ?? currentAuth;
       const version = ++refreshVersion;
       const next = await loadApplicationConfig({
-        basePath: params.basePath,
-        auth: options?.auth ?? params.auth,
+        resourceBasePath: params.resourceBasePath,
+        auth: currentAuth,
         skipWithoutAuthCandidate: options?.skipWithoutAuthCandidate,
+        signal: options?.signal,
       });
-      if (next && version === refreshVersion) {
-        const documentTerminalEnabled = readDocumentTerminalEnabled();
-        if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
-          // CSP headers cannot change on a live document. Reload in either
-          // direction so the document and accepted terminal state stay aligned.
-          window.location.reload();
-          return;
-        }
-        publish(next);
+      if (!next || version !== refreshVersion) {
+        return null;
       }
+      const documentTerminalEnabled = readDocumentTerminalEnabled();
+      if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
+        // CSP headers cannot change on a live document. Reload in either
+        // direction so the document and accepted terminal state stay aligned.
+        window.location.reload();
+        return next;
+      }
+      current = next;
+      for (const listener of listeners) {
+        listener(current);
+      }
+      return next;
     },
     subscribe(listener) {
       listeners.add(listener);

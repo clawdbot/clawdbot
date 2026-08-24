@@ -1,8 +1,23 @@
-import { getActiveReef, getReefRuntime } from "./runtime.js";
+import { ReefAutonomySchema } from "./friend-types.js";
+import { getActiveReef } from "./runtime.js";
 
-export async function handleReefCommand({ args }: { args?: string }): Promise<{ text: string }> {
-  const active = getActiveReef();
+export async function handleReefCommand({
+  args,
+  senderIsOwner,
+}: {
+  args?: string;
+  senderIsOwner?: boolean;
+}): Promise<{ text: string }> {
   const words = (args ?? "").trim().split(/\s+/).filter(Boolean);
+  const changesFriendship =
+    words[0] === "friend" && /^(code|request|remove|block|autonomy)$/.test(words[1] ?? "");
+  const decidesReview = words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "");
+  if ((changesFriendship || decidesReview) && senderIsOwner !== true) {
+    return {
+      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+    };
+  }
+  const active = getActiveReef();
   if (words[0] === "friend" && words[1] === "code") {
     const minted = await active.friends.mintCode();
     return {
@@ -12,16 +27,6 @@ export async function handleReefCommand({ args }: { args?: string }): Promise<{ 
   if (words[0] === "friend" && words[1] === "request" && words[2]) {
     await active.friends.request(words[2].replace(/^@/, "").toLowerCase(), words[3]);
     return { text: "Reef friend request submitted." };
-  }
-  if (
-    words[0] === "friend" &&
-    words[1] === "respond" &&
-    words[2] &&
-    /^(accept|reject)$/.test(words[3] ?? "")
-  ) {
-    const peer = words[2].replace(/^@/, "").toLowerCase();
-    await active.friends.transport.respondFriend(peer, words[3] === "accept");
-    return { text: `Reef request ${words[3]}ed for @${peer}.` };
   }
   if (words[0] === "friend" && words[1] === "list") {
     const friends = await active.friends.list();
@@ -39,8 +44,13 @@ export async function handleReefCommand({ args }: { args?: string }): Promise<{ 
   if (words[0] === "friend" && /^(remove|block)$/.test(words[1] ?? "") && words[2]) {
     const peer = words[2].replace(/^@/, "").toLowerCase();
     await active.friends.remove(peer);
-    await persistFriends();
     return { text: `Reef friend @${peer} blocked and removed locally.` };
+  }
+  if (words[0] === "friend" && words[1] === "autonomy" && words[2] && words[3]) {
+    const peer = words[2].replace(/^@/, "").toLowerCase();
+    const autonomy = ReefAutonomySchema.parse(words[3]);
+    await active.friends.setAutonomy(peer, autonomy);
+    return { text: `Reef friend @${peer} autonomy set to ${autonomy}.` };
   }
   if (words[0] === "review" && words[1] === "list") {
     const reviews = await active.reviews.list();
@@ -64,21 +74,6 @@ export async function handleReefCommand({ args }: { args?: string }): Promise<{ 
     };
   }
   return {
-    text: "Usage: /reef friend code|request <handle> [code]|respond <handle> accept|reject|list|remove <handle>; /reef review list|approve <digest>|deny <digest>",
+    text: "Usage: /reef friend code|request <handle> [code]|list|remove <handle>|autonomy <handle> <notify-only|bounded|extended>; /reef review list|approve <digest>|deny <digest>",
   };
-}
-
-async function persistFriends(): Promise<void> {
-  const runtime = getReefRuntime();
-  const friends = structuredClone(getActiveReef().friends.config.friends);
-  await runtime.config.mutateConfigFile({
-    afterWrite: { mode: "auto" },
-    mutate(draft) {
-      const reef = draft.channels?.reef as { friends?: unknown } | undefined;
-      if (!reef) {
-        throw new Error("Reef config missing during friend update");
-      }
-      reef.friends = friends;
-    },
-  });
 }

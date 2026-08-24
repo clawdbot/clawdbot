@@ -71,7 +71,7 @@ export async function checkClickClackSetupConnection(params: {
     }
 
     const client = createClickClackClient({
-      baseUrl: account.baseUrl,
+      baseUrl: account.apiEndpoint,
       token,
     });
     const me = await client.me();

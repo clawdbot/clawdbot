@@ -178,7 +178,10 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: preparedTarget.accountId,
         ...(preparedTarget.baseUrl ? { baseUrl: preparedTarget.baseUrl } : {}),
         ...(preparedTarget.account ? { account: preparedTarget.account } : {}),
-        textMode: "plain",
+        // Approval prompts carry bold headers/labels; render them via
+        // markdownToSignalText so Signal shows native styling rather than
+        // literal `**` markers.
+        textMode: "markdown",
       });
       if (!result.messageId || result.messageId === "unknown") {
         return null;
@@ -204,7 +207,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: entry.accountId,
         ...(entry.baseUrl ? { baseUrl: entry.baseUrl } : {}),
         ...(entry.account ? { account: entry.account } : {}),
-        textMode: "plain",
+        textMode: "markdown",
       });
     },
   },

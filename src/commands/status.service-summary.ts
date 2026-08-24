@@ -7,13 +7,16 @@ import {
   type GatewayServiceLayoutSummary,
 } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
-import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceLoadState,
+} from "../daemon/service-types.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 
 type ServiceStatusSummary = {
   label: string;
   installed: boolean | null;
-  loaded: boolean;
+  loadState: GatewayServiceLoadState;
   managedByOpenClaw: boolean;
   externallyManaged: boolean;
   loadedText: string;
@@ -37,7 +40,9 @@ export async function readServiceStatusSummary(
 ): Promise<ServiceStatusSummary> {
   try {
     const state = await readGatewayServiceState(service, { env: process.env, timeoutMs });
-    const layout = await summarizeGatewayServiceLayout(state.command);
+    // Layout is optional enrichment; a broken manifest or inaccessible path
+    // must not erase service-manager evidence that the gateway is running.
+    const layout = await summarizeGatewayServiceLayout(state.command).catch(() => undefined);
     const wrapperPath = normalizeServiceWrapperPath(state.command);
     const managedByOpenClaw = state.installed;
     // A running unmanaged process still counts as installed for status display.
@@ -45,13 +50,15 @@ export async function readServiceStatusSummary(
     const installed = managedByOpenClaw || externallyManaged;
     const loadedText = externallyManaged
       ? "running (externally managed)"
-      : state.loaded
+      : state.loadState.status === "loaded"
         ? service.loadedText
-        : service.notLoadedText;
+        : state.loadState.status === "not-loaded"
+          ? service.notLoadedText
+          : "unknown";
     return {
       label: service.label,
       installed,
-      loaded: state.loaded,
+      loadState: state.loadState,
       managedByOpenClaw,
       externallyManaged,
       loadedText,
@@ -59,12 +66,12 @@ export async function readServiceStatusSummary(
       ...(layout ? { layout } : {}),
       ...(wrapperPath ? { wrapperPath } : {}),
     };
-  } catch {
+  } catch (error) {
     // Status output should survive service-manager errors and show an unknown row.
     return {
       label: fallbackLabel,
       installed: null,
-      loaded: false,
+      loadState: { status: "unknown", detail: String(error) },
       managedByOpenClaw: false,
       externallyManaged: false,
       loadedText: "unknown",

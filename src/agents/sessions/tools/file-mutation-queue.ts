@@ -5,9 +5,12 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 
-const fileMutationQueue = new KeyedAsyncQueue();
+const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
+  Symbol.for("openclaw.fileMutationTails"),
+  "close-only",
+);
 
 function getMutationQueueKey(filePath: string): string {
   const resolvedPath = resolve(filePath);
@@ -23,6 +26,31 @@ function getMutationQueueKey(filePath: string): string {
  * Operations for different files still run in parallel.
  */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const key = getMutationQueueKey(filePath);
-  return await fileMutationQueue.enqueue(key, fn);
+  return await withFileMutationQueues([filePath], fn);
+}
+
+export async function withFileMutationQueues<T>(
+  filePaths: readonly string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const keys = [...new Set(filePaths.map(getMutationQueueKey))].toSorted();
+  const current = Promise.all(
+    keys.map((key) => (fileMutationTails.get(key) ?? Promise.resolve()).catch(() => undefined)),
+  ).then(fn);
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  for (const key of keys) {
+    fileMutationTails.set(key, tail);
+  }
+  const cleanup = () => {
+    for (const key of keys) {
+      if (fileMutationTails.get(key) === tail) {
+        fileMutationTails.delete(key);
+      }
+    }
+  };
+  tail.then(cleanup, cleanup);
+  return await current;
 }

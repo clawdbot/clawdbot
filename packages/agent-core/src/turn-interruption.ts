@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model } from "../../llm-core/src/index.js";
+import type { AssistantMessage, Model } from "@openclaw/llm-core";
 import type { AgentEvent, AgentMessage } from "./types.js";
 
 /** Canonical empty aborted/error assistant recorded when a run ends without output. */

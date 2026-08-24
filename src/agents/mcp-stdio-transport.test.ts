@@ -1,12 +1,12 @@
 // Exercises MCP stdio process lifecycle, JSON-RPC IO, and close escalation.
 import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const killProcessTreeMock = vi.hoisted(() => vi.fn());
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => ({
@@ -15,7 +15,6 @@ vi.mock("node:child_process", async () => ({
 }));
 
 vi.mock("../process/kill-tree.js", () => ({
-  killProcessTree: killProcessTreeMock,
   signalProcessTree: signalProcessTreeMock,
 }));
 
@@ -32,8 +31,8 @@ class MockChildProcess extends EventEmitter {
 describe("OpenClawStdioClientTransport", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     spawnMock.mockReset();
-    killProcessTreeMock.mockReset();
     signalProcessTreeMock.mockReset();
   });
 
@@ -77,6 +76,28 @@ describe("OpenClawStdioClientTransport", () => {
     expect(transport.stderr).toBeInstanceOf(PassThrough);
   });
 
+  it("does not infer Agent Plugins data-dir ownership from subprocess env", async () => {
+    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new OpenClawStdioClientTransport({
+      command: "node",
+      env: { PLUGIN_ROOT: "/plugin", PLUGIN_DATA: "/user-owned-file" },
+    });
+
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    expect(mkdirSpy).not.toHaveBeenCalled();
+    const options = spawnMock.mock.calls.at(0)?.[2] as SpawnOptions;
+    expect(options.env).toMatchObject({
+      PLUGIN_ROOT: "/plugin",
+      PLUGIN_DATA: "/user-owned-file",
+    });
+    mkdirSpy.mockRestore();
+  });
+
   it("kills the process tree when graceful stdio close does not exit", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
@@ -89,14 +110,14 @@ describe("OpenClawStdioClientTransport", () => {
 
     const closing = transport.close();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGTERM", { detached: true });
 
     child.exitCode = 0;
     child.emit("close", 0);
     await closing;
   });
 
-  it("force-SIGKILLs synchronously when killProcessTree's grace expires (#86412)", async () => {
+  it("force-SIGKILLs synchronously when the owned process group outlives TERM", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
@@ -108,13 +129,11 @@ describe("OpenClawStdioClientTransport", () => {
 
     const closing = transport.close();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
-    expect(signalProcessTreeMock).not.toHaveBeenCalled();
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGTERM", { detached: true });
+    expect(signalProcessTreeMock).not.toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
 
-    // killProcessTree's SIGKILL is .unref()'d (#86412); close() force-SIGKILLs
-    // synchronously instead.
     await vi.advanceTimersByTimeAsync(2000);
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL");
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
 
     child.exitCode = 0;
     child.emit("close", 0);
@@ -134,7 +153,7 @@ describe("OpenClawStdioClientTransport", () => {
     const closing = transport.close();
     const repeatedClose = transport.close();
     const forced = transport.forceClose();
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL");
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
 
     child.exitCode = 0;
     child.emit("close", 0);
@@ -144,22 +163,22 @@ describe("OpenClawStdioClientTransport", () => {
     expect(transport.pid).toBeNull();
   });
 
-  it("does not kill the process tree when graceful stdio close exits", async () => {
+  it("immediately kills the retained process group after the stdio leader exits", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
     child.emit("spawn");
     await started;
 
+    child.exitCode = 1;
+    child.emit("close", 1);
     const closing = transport.close();
-    child.exitCode = 0;
-    child.emit("close", 0);
-    await closing;
 
-    expect(killProcessTreeMock).not.toHaveBeenCalled();
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
+    await vi.advanceTimersByTimeAsync(500);
+    await closing;
   });
 
   it("sends and receives JSON-RPC messages over stdio", async () => {
@@ -245,5 +264,24 @@ describe("OpenClawStdioClientTransport", () => {
 
     child.stderr.write("server diagnostic");
     expect(transport.stderr?.read()?.toString()).toBe("server diagnostic");
+  });
+
+  it("reports an oversized stdout frame without an unhandled error crash", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const onerror = vi.fn();
+    Object.assign(transport, { onerror });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const oversized = Buffer.alloc(10 * 1024 * 1024 + 1, 0x20);
+    expect(() => child.stdout.emit("data", oversized)).not.toThrow();
+    expect(onerror).toHaveBeenCalledTimes(1);
+    const reported = onerror.mock.calls.at(0)?.at(0) as Error;
+    expect(reported).toBeInstanceOf(Error);
+    expect(reported.message).toMatch(/exceeded maximum size/);
   });
 });

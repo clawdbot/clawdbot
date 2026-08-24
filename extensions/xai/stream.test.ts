@@ -3,17 +3,14 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
   type Api,
+  type AssistantMessage,
   type Context,
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
-import {
-  createXaiFastModeWrapper,
-  createXaiToolPayloadCompatibilityWrapper,
-  wrapXaiProviderStream,
-} from "./stream.js";
+import { wrapXaiProviderStream } from "./stream.js";
 import {
   createXaiPayloadCaptureStream,
   expectXaiFastToolStreamShaping,
@@ -21,6 +18,26 @@ import {
 } from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
+
+function xaiAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    content,
+    api: "openai-responses" as const,
+    provider: "xai",
+    model: "grok-4.3",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: 1,
+  };
+}
 
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const events: StreamEvent[] = [];
@@ -60,8 +77,11 @@ function captureWrappedModelId(params: {
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrapped = createXaiFastModeWrapper(baseStreamFn, params.fastMode);
-  void wrapped(
+  const wrapped = wrapXaiProviderStream({
+    streamFn: baseStreamFn,
+    extraParams: { fastMode: params.fastMode, tool_stream: false },
+  } as never);
+  void wrapped?.(
     {
       api: params.api ?? "openai-responses",
       provider: params.provider ?? "xai",
@@ -85,10 +105,13 @@ function runXaiToolPayloadWrapper(params: {
     options?.onPayload?.(params.payload, {} as Model<XaiStreamApi>);
     return {} as ReturnType<StreamFn>;
   };
-  const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+  const wrapped = wrapXaiProviderStream({
+    streamFn: baseStreamFn,
+    extraParams: { tool_stream: false },
+  } as never);
   const api = params.api ?? "openai-responses";
 
-  void wrapped(
+  void wrapped?.(
     {
       api,
       provider: params.provider ?? "xai",
@@ -114,16 +137,17 @@ async function captureXaiResponsesPayloadWithThinking(
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    cost: {
+      input: 2,
+      output: 6,
+      cacheRead: modelId === "grok-4.6" ? 0.5 : 0.3,
+      cacheWrite: 0,
+    },
     contextWindow: 500_000,
     maxTokens: 64_000,
   } as Model<"openai-responses">);
 
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("provider payload callback was not invoked")),
-      1_000,
-    );
     const stream = streamSimple(
       model,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -132,19 +156,85 @@ async function captureXaiResponsesPayloadWithThinking(
         cacheRetention: "none",
         reasoning,
         onPayload: (payload) => {
-          clearTimeout(timeout);
           resolve(structuredClone(payload as Record<string, unknown>));
           throw new Error("stop after payload capture");
         },
       },
     );
-    void stream.result();
+    void stream.result().then(
+      () => reject(new Error("provider payload callback was not invoked")),
+      (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
+    );
   });
 
   return await payloadPromise;
 }
 
 describe("xai stream wrappers", () => {
+  it("adds the Grok OAuth proxy request contract", () => {
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiProviderStream(
+      {
+        streamFn: baseStreamFn,
+        extraParams: { tool_stream: false },
+      } as never,
+      { clientVersion: "2026.7.2" },
+    );
+
+    void wrapped?.(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4.5",
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      { headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" } },
+    );
+
+    expect(capturedHeaders).toEqual({
+      "x-existing": "kept",
+      "x-grok-client-version": "2026.7.2",
+      "x-grok-model-override": "grok-4.5",
+      "x-xai-token-auth": "xai-grok-cli",
+    });
+  });
+
+  it.each([
+    ["the public API-key endpoint", "xai", "https://api.x.ai/v1"],
+    ["a different provider", "other", "https://cli-chat-proxy.grok.com/v1"],
+  ])("does not add Grok OAuth headers for %s", (_label, provider, baseUrl) => {
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiProviderStream(
+      {
+        streamFn: baseStreamFn,
+        extraParams: { tool_stream: false },
+      } as never,
+      { clientVersion: "2026.7.2" },
+    );
+
+    void wrapped?.(
+      {
+        api: "openai-responses",
+        provider,
+        id: "grok-4.5",
+        baseUrl,
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      { headers: { "X-Existing": "kept" } },
+    );
+
+    expect(capturedHeaders).toEqual({ "X-Existing": "kept" });
+  });
+
   it("rewrites supported Grok models to fast variants when fast mode is enabled", () => {
     expect(captureWrappedModelId({ modelId: "grok-3", fastMode: true })).toBe("grok-3-fast");
     expect(
@@ -182,16 +272,19 @@ describe("xai stream wrappers", () => {
       } as unknown as ReturnType<StreamFn>;
     };
     let enabled = true;
-    const wrapped = createXaiFastModeWrapper(baseStreamFn, () => enabled);
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStreamFn,
+      extraParams: { fastMode: () => enabled, tool_stream: false },
+    } as never);
     const model = {
       api: "openai-responses",
       provider: "xai",
       id: "grok-4",
     } as Model<XaiStreamApi>;
 
-    void wrapped(model, { messages: [] } as Context, {});
+    void wrapped?.(model, { messages: [] } as Context, {});
     enabled = false;
-    void wrapped(model, { messages: [] } as Context, {});
+    void wrapped?.(model, { messages: [] } as Context, {});
 
     expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
   });
@@ -246,18 +339,18 @@ describe("xai stream wrappers", () => {
   it("promotes standalone Grok-style tool text to a structured tool call", async () => {
     const rawToolText = '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}';
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: xaiAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: xaiAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: xaiAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = wrapXaiProviderStream({
@@ -391,9 +484,12 @@ describe("xai stream wrappers", () => {
       options?.onPayload?.(payload, model);
       return {} as ReturnType<StreamFn>;
     };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStreamFn,
+      extraParams: { tool_stream: false },
+    } as never);
 
-    void wrapped(
+    void wrapped?.(
       {
         api: "openai-responses",
         provider: "xai",
@@ -421,9 +517,12 @@ describe("xai stream wrappers", () => {
         options?.onPayload?.(payload, model);
         return {} as ReturnType<StreamFn>;
       };
-      const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+      const wrapped = wrapXaiProviderStream({
+        streamFn: baseStreamFn,
+        extraParams: { tool_stream: false },
+      } as never);
 
-      void wrapped(
+      void wrapped?.(
         {
           api: "openai-responses",
           provider,
@@ -467,19 +566,26 @@ describe("xai stream wrappers", () => {
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
     expect(payload.include).toEqual(["reasoning.encrypted_content"]);
-  });
+  }, 10_000);
+
+  it("preserves Grok 4.6 xhigh at the final xAI Responses payload boundary", async () => {
+    const payload = await captureXaiResponsesPayloadWithThinking("xhigh", "grok-4.6");
+
+    expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+  }, 10_000);
 
   it("clamps unsupported Grok 4.5 off reasoning to low", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking("off");
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
-  });
+  }, 10_000);
 
   it("maps Grok 4.3 off reasoning to xAI none", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking("off", "grok-4.3");
 
     expect(payload.reasoning).toEqual({ effort: "none" });
-  });
+  }, 10_000);
 
   it("moves image-bearing tool results out of function_call_output payloads", () => {
     const payload: Record<string, unknown> = {

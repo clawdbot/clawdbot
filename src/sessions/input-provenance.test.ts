@@ -100,6 +100,7 @@ describe("isAgentMediatedCompletionSourceTool", () => {
 describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
   it.each([
     "agent_harness_task",
+    "exec_approval_followup",
     "image_generate",
     "music_generate",
     "subagent_announce",

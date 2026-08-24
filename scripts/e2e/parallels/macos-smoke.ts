@@ -6,7 +6,6 @@ import { pathToFileURL } from "node:url";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
-  ensureValue,
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
@@ -15,12 +14,10 @@ import {
   packageVersionFromTgz,
   parseMacosDsclUserHomeLine,
   packOpenClaw,
-  parseMode,
-  parseProvider,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
-  parseTcpPort,
+  readGitCommitEnv,
   readPositiveIntEnv,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
@@ -50,26 +47,11 @@ import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runne
 import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
+import { parseSmokeCliArgs, type SmokeCliOptions } from "./smoke-common.ts";
 
-interface MacosOptions {
-  vmName: string;
+interface MacosOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
-  snapshotHint: string;
-  mode: Mode;
-  provider: Provider;
-  apiKeyEnv?: string;
-  modelId?: string;
-  installUrl: string;
-  hostPort: number;
-  hostPortExplicit: boolean;
-  hostIp?: string;
-  latestVersion?: string;
-  installVersion?: string;
-  npmRegistry?: string;
-  targetPackageSpec?: string;
   skipLatestRefCheck: boolean;
-  keepServer: boolean;
-  json: boolean;
   discordTokenEnv?: string;
   discordGuildId?: string;
   discordChannelId?: string;
@@ -165,106 +147,30 @@ Options:
   --discord-channel-id <id>  Discord channel ID for smoke roundtrip.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
+
+Environment:
+  OPENCLAW_PARALLELS_DEV_TARGET_REF
+                             Pin the guest dev update to a full commit SHA.
 `;
 }
 
 export function parseArgs(argv: string[]): MacosOptions {
-  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  parseArgv: for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    switch (arg) {
-      case "--":
-        break parseArgv;
-      case "--vm":
-        options.vmName = ensureValue(args, i, arg);
-        options.vmNameExplicit = true;
-        i++;
-        break;
-      case "--snapshot-hint":
-        options.snapshotHint = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--mode":
-        options.mode = parseMode(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--provider":
-        options.provider = parseProvider(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--model":
-        options.modelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--api-key-env":
-      case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-url":
-        options.installUrl = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--host-port":
-        options.hostPort = parseTcpPort(ensureValue(args, i, arg), arg);
-        options.hostPortExplicit = true;
-        i++;
-        break;
-      case "--host-ip":
-        options.hostIp = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--latest-version":
-        options.latestVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-version":
-        options.installVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--npm-registry":
-        options.npmRegistry = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--skip-latest-ref-check":
-        options.skipLatestRefCheck = true;
-        break;
-      case "--keep-server":
-        options.keepServer = true;
-        break;
-      case "--discord-token-env":
-        options.discordTokenEnv = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--discord-guild-id":
-        options.discordGuildId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--discord-channel-id":
-        options.discordChannelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--json":
-        options.json = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
-        die(`unknown arg: ${arg}`);
-    }
-  }
-  return options;
-}
-
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
+  return parseSmokeCliArgs(argv, options, {
+    flagHandlers: {
+      "--skip-latest-ref-check": (parsed) => (parsed.skipLatestRefCheck = true),
+    },
+    usage,
+    valueHandlers: {
+      "--discord-channel-id": (parsed, value) => (parsed.discordChannelId = value),
+      "--discord-guild-id": (parsed, value) => (parsed.discordGuildId = value),
+      "--discord-token-env": (parsed, value) => (parsed.discordTokenEnv = value),
+      "--vm": (parsed, value) => {
+        parsed.vmName = value;
+        parsed.vmNameExplicit = true;
+      },
+    },
+  });
 }
 
 class MacosSmoke {
@@ -288,6 +194,8 @@ class MacosSmoke {
   private guestTransport: "current-user" | "sudo" = "current-user";
   private modelTimeoutSeconds: number;
   private updateDevTimeoutSeconds: number;
+  private devTargetCommit: string | undefined;
+  private options: MacosOptions;
 
   private status = {
     freshAgent: "skip",
@@ -306,7 +214,8 @@ class MacosSmoke {
     upgradeVersion: "skip",
   };
 
-  constructor(private options: MacosOptions) {
+  constructor(options: MacosOptions) {
+    this.options = options;
     this.auth = resolveProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
@@ -318,6 +227,7 @@ class MacosSmoke {
       "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S",
       1800,
     );
+    this.devTargetCommit = readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF");
     this.validateDiscord();
   }
 
@@ -911,6 +821,7 @@ fi`);
       "local",
       "--auth-choice",
       this.auth.authChoice,
+      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
       "--secret-input-mode",
       "ref",
       "--gateway-port",
@@ -945,10 +856,14 @@ npm install --prefix "$bootstrap_root" --no-save pnpm@11
 "$bootstrap_bin/pnpm" --version`);
   }
 
-  private runDevChannelUpdate(): void {
+  private async runDevChannelUpdate(): Promise<void> {
     this.ensureGuestPnpm();
     const home = this.guestHome();
-    this.guestSh(
+    const devTargetEnv = this.devTargetCommit
+      ? ` OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}`
+      : "";
+    await this.guest.shBackground(
+      "macos-update-dev",
       `set -eu
 rm -rf ${shellQuote(`${home}/openclaw`)}
 export PATH=${shellQuote(`/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin:${guestPath}`)}
@@ -956,21 +871,42 @@ ${guestNode} - <<'JS'
 const fs = require("node:fs");
 const path = require("node:path");
 const configPath = path.join(process.env.HOME || ${JSON.stringify(home)}, ".openclaw", "openclaw.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
 config.update = { ...(config.update || {}), channel: "dev" };
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestOpenClawEntryRunner} update --channel dev --yes --json
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1${devTargetEnv} ${guestOpenClawEntryRunner} update --channel dev --yes --json --no-restart --timeout ${this.updateDevTimeoutSeconds}
 ${guestOpenClawEntryRunner} --version
 ${guestOpenClawEntryRunner} update status --json`,
+      {},
+      this.updateDevTimeoutSeconds * 1000,
     );
   }
 
   private verifyDevChannelUpdate(): void {
     const status = this.guestOpenClawEntryExec(["update", "status", "--json"]);
-    for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
+    const expectedBranch = this.devTargetCommit ? "HEAD" : "main";
+    for (const needle of [
+      '"installKind": "git"',
+      '"value": "dev"',
+      `"branch": "${expectedBranch}"`,
+    ]) {
       if (!status.includes(needle)) {
         throw new Error(`dev update status missing ${needle}`);
+      }
+    }
+    if (this.devTargetCommit) {
+      const checkoutHead =
+        this.guestSh(`git -C ${shellQuote(`${this.guestHome()}/openclaw`)} rev-parse HEAD`)
+          .replaceAll("\r", "")
+          .trim()
+          .split("\n")
+          .at(-1) ?? "";
+      if (checkoutHead !== this.devTargetCommit) {
+        throw new Error(
+          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
+        );
       }
     }
   }

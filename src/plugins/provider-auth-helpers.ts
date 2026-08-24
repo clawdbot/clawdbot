@@ -4,7 +4,11 @@ import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import {
+  upsertAuthProfile,
+  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
+} from "../agents/auth-profiles/profiles.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,13 +19,12 @@ import {
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
   agentDir ?? resolveDefaultAgentDir(config ?? {});
@@ -139,15 +142,6 @@ export function upsertApiKeyProfile(params: {
   return profileId;
 }
 
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
-
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
@@ -239,13 +233,49 @@ export function applyAuthProfileConfig(
   };
 }
 
-/** Resolve real path, returning null if the target doesn't exist. */
-function safeRealpathSync(dir: string): string | null {
-  try {
-    return fs.realpathSync(path.resolve(dir));
-  } catch {
-    return null;
+/** Returns true when config still names a removed auth profile. */
+export function configReferencesAuthProfile(cfg: OpenClawConfig, profileId: string): boolean {
+  return (
+    Boolean(cfg.auth?.profiles?.[profileId]) ||
+    Object.values(cfg.auth?.order ?? {}).some((order) => order.includes(profileId))
+  );
+}
+
+/**
+ * Counterpart to {@link applyAuthProfileConfig}: drops a profile from
+ * `auth.profiles` and every `auth.order` list. An emptied provider order is
+ * deleted rather than left as `[]`, because an authored empty order is a hard
+ * "select no profiles" instruction and would disable the provider entirely.
+ */
+export function removeAuthProfileConfig(cfg: OpenClawConfig, profileId: string): OpenClawConfig {
+  if (!configReferencesAuthProfile(cfg, profileId)) {
+    return cfg;
   }
+  const profiles = Object.fromEntries(
+    Object.entries(cfg.auth?.profiles ?? {}).filter(([id]) => id !== profileId),
+  );
+  const order = Object.entries(cfg.auth?.order ?? {}).reduce<Record<string, string[]>>(
+    (acc, [providerId, providerOrder]) => {
+      const next = providerOrder.filter((id) => id !== profileId);
+      // Drop only an order this removal emptied. An order that was already
+      // empty is an authored "select no profiles" instruction for an unrelated
+      // provider and must survive untouched.
+      if (next.length > 0 || next.length === providerOrder.length) {
+        acc[providerId] = next;
+      }
+      return acc;
+    },
+    {},
+  );
+  const { order: _droppedOrder, ...auth } = cfg.auth ?? {};
+  return {
+    ...cfg,
+    auth: {
+      ...auth,
+      profiles,
+      ...(Object.keys(order).length > 0 ? { order } : {}),
+    },
+  };
 }
 
 function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
@@ -273,7 +303,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const dir of [normalized, ...discovered]) {
-    const real = safeRealpathSync(dir);
+    const real = safeRealpathSync(path.resolve(dir));
     if (real && !seen.has(real)) {
       seen.add(real);
       result.push(real);
@@ -313,9 +343,9 @@ export async function writeOAuthCredentials(
   });
 
   if (options?.syncSiblingAgents) {
-    const primaryReal = safeRealpathSync(resolvedAgentDir);
+    const primaryReal = safeRealpathSync(path.resolve(resolvedAgentDir));
     for (const targetAgentDir of targetAgentDirs) {
-      const targetReal = safeRealpathSync(targetAgentDir);
+      const targetReal = safeRealpathSync(path.resolve(targetAgentDir));
       if (targetReal && primaryReal && targetReal === primaryReal) {
         continue;
       }

@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
@@ -25,6 +26,31 @@ internal fun openClawAndroidVersionLabel(): String {
 
 /** Normalizes blank gateway status text for display and diagnostics copy. */
 internal fun gatewayStatusForDisplay(statusText: String): String = gatewayConnectionStatusForDisplay(statusText)
+
+/** Converts raw gateway connection state into a stable compact label for status surfaces. */
+internal fun gatewayStatusLabel(
+  statusText: String,
+  isConnected: Boolean,
+  gatewayConnectionProblem: GatewayConnectionProblem? = null,
+): String {
+  val status = statusText.trim().lowercase()
+  return when {
+    status == "connected (node offline)" -> nativeString("Connected (node offline)")
+    status == "connected (operator offline)" -> nativeString("Connected (operator offline)")
+    isConnected -> nativeString("Ready")
+    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
+    status.contains("pair") -> nativeString("Pairing needed")
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
+    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
+    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
+    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
+    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
+    status.isBlank() -> nativeString("Not connected")
+    else -> nativeString("Not connected")
+  }
+}
+
+internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String = gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
 
 /** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
 internal fun gatewayDiagnosticsEndpoint(

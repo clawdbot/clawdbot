@@ -86,12 +86,27 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("your");
   });
 
+  it("ignores project and recall annotations when deriving concept tags", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-07-28.md",
+      snippet:
+        "Alpha ingest workflow. <!-- project: github.com/acme/alpha --> <!-- trigger: kraken deploy ritual --> <!-- importance: 8 -->",
+    });
+
+    expect(tags).toContain("alpha");
+    expect(tags).toContain("ingest");
+    expect(tags).not.toContain("github.com/acme/alpha");
+    expect(tags).not.toContain("acme");
+    expect(tags).not.toContain("kraken");
+    expect(tags).not.toContain("importance");
+  });
+
   it("summarizes entry coverage across latin, cjk, and mixed tags", () => {
     expect(
       summarizeConceptTagScriptCoverage([
         ["routeur", "sauvegarde"],
         ["路由器", "备份"],
-        ["qmd", "路由器"],
+        ["vectors", "路由器"],
         ["сервер"],
       ]),
     ).toEqual({

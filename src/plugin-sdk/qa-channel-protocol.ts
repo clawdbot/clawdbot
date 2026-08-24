@@ -4,6 +4,78 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.js
 /** Conversation shape supported by the synthetic QA channel bus. */
 export type QaBusConversationKind = "direct" | "channel" | "group";
 
+/** Parsed QA channel target with case-preserving conversation identifiers. */
+export type QaTargetParts = {
+  chatType: QaBusConversationKind;
+  conversationId: string;
+  threadId?: string;
+};
+
+/** Encode a canonical QA channel target. */
+function buildQaTargetCore(params: {
+  chatType: QaBusConversationKind;
+  conversationId: string;
+  threadId?: string | null;
+}): string {
+  if (params.threadId) {
+    return `thread:${params.conversationId}/${params.threadId}`;
+  }
+  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
+}
+
+export { buildQaTargetCore as buildQaTarget };
+
+/** Parse the lowercase, prefix-scoped target grammar shared by QA Channel and QA Lab. */
+function parseQaTargetCore(
+  raw: string,
+  options?: { defaultChatType?: QaBusConversationKind },
+): QaTargetParts {
+  const normalized = raw.trim();
+  if (!normalized) {
+    throw new Error("qa-channel target is required");
+  }
+  const prefixed = /^(thread|channel|group|dm):(.*)$/u.exec(normalized);
+  if (!prefixed && /^(thread|channel|group|dm):/iu.test(normalized)) {
+    throw new Error(`qa-channel target prefixes must be lowercase: ${normalized}`);
+  }
+  const prefix = prefixed?.[1];
+  const rest = prefixed?.[2]?.trim();
+  if (prefix === "thread") {
+    if (!rest) {
+      throw new Error(`invalid qa-channel thread target: ${normalized}`);
+    }
+    const slashIndex = rest.indexOf("/");
+    if (slashIndex <= 0 || slashIndex === rest.length - 1) {
+      throw new Error(`invalid qa-channel thread target: ${normalized}`);
+    }
+    const conversationId = rest.slice(0, slashIndex).trim();
+    const threadId = rest.slice(slashIndex + 1).trim();
+    if (!conversationId || !threadId) {
+      throw new Error(`invalid qa-channel thread target: ${normalized}`);
+    }
+    return {
+      chatType: "channel",
+      conversationId,
+      threadId,
+    };
+  }
+  if (prefix) {
+    if (!rest) {
+      throw new Error(`invalid qa-channel ${prefix} target: ${normalized}`);
+    }
+    return {
+      chatType: prefix === "dm" ? "direct" : prefix === "group" ? "group" : "channel",
+      conversationId: rest,
+    };
+  }
+  return {
+    chatType: options?.defaultChatType ?? "direct",
+    conversationId: normalized,
+  };
+}
+
+export { parseQaTargetCore as parseQaTarget };
+
 /** Addressable conversation used by QA bus messages and thread state. */
 export type QaBusConversation = {
   id: string;
@@ -11,11 +83,18 @@ export type QaBusConversation = {
   title?: string;
 };
 
+/** Account-qualified conversation record returned in QA bus snapshots. */
+export type QaBusSnapshotConversation = QaBusConversation & {
+  accountId: string;
+};
+
 /** Media/file attachment fixture accepted by QA bus message APIs. */
 export type QaBusAttachment = {
   id: string;
   kind: "image" | "video" | "audio" | "file";
   mimeType: string;
+  /** Selects how QA Channel projects an inline fixture after saving it locally. */
+  mediaFactCarrier?: "path" | "media-store-url";
   fileName?: string;
   inline?: boolean;
   url?: string;
@@ -47,6 +126,8 @@ export type QaBusMessage = {
   senderId: string;
   senderName?: string;
   text: string;
+  /** Runtime-authored failure marker; copy wording is not a QA contract. */
+  isError?: boolean;
   timestamp: number;
   threadId?: string;
   threadTitle?: string;
@@ -63,7 +144,7 @@ export type QaBusMessage = {
   }>;
 };
 
-/** Synthetic thread record created inside a QA bus conversation. */
+/** Synthetic thread record created inside a QA bus channel conversation. */
 export type QaBusThread = {
   id: string;
   accountId: string;
@@ -112,6 +193,8 @@ export type QaBusOutboundMessageInput = {
   senderId?: string;
   senderName?: string;
   text: string;
+  /** Preserves ReplyPayload.isError through the synthetic channel transport. */
+  isError?: boolean;
   timestamp?: number;
   threadId?: string;
   replyToId?: string;
@@ -157,7 +240,9 @@ export type QaBusSearchMessagesInput = {
   accountId?: string;
   query?: string;
   conversationId?: string;
-  threadId?: string;
+  conversationKind?: QaBusConversationKind;
+  /** Omit for any thread scope; use null for root-only results. */
+  threadId?: string | null;
   limit?: number;
 };
 
@@ -171,6 +256,8 @@ export type QaBusReadMessageInput = {
 export type QaBusPollInput = {
   accountId?: string;
   cursor?: number;
+  /** Highest contiguous event cursor whose consumer work completed successfully. */
+  acknowledgedCursor?: number;
   timeoutMs?: number;
   limit?: number;
 };
@@ -184,7 +271,7 @@ export type QaBusPollResult = {
 /** Complete QA bus state snapshot exposed to tests and diagnostics. */
 export type QaBusStateSnapshot = {
   cursor: number;
-  conversations: QaBusConversation[];
+  conversations: QaBusSnapshotConversation[];
   threads: QaBusThread[];
   messages: QaBusMessage[];
   events: QaBusEvent[];

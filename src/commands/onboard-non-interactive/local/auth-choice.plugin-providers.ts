@@ -4,13 +4,8 @@
  * This path resolves trusted plugin providers, delegates setup to their
  * non-interactive method, and installs runtime plugins required by the model.
  */
-import {
-  resolveAgentDir,
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-} from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
+import { applyAutoLocalModelLean } from "../../../config/local-model-lean-auto.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
@@ -33,6 +28,11 @@ import {
 } from "../../codex-runtime-plugin-install.js";
 import { ensureCopilotRuntimePluginForModelSelection } from "../../copilot-runtime-plugin-install.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
+import {
+  prepareAgentModelDefaults,
+  projectAgentModelDefaults,
+  type OnboardingAgentTarget,
+} from "../../onboard-agent-target.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -53,6 +53,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  target: OnboardingAgentTarget;
   resolveApiKey: (input: ProviderResolveNonInteractiveApiKeyParams) => Promise<{
     key: string;
     source: "profile" | "env" | "flag";
@@ -62,10 +63,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     input: ProviderNonInteractiveApiKeyCredentialParams,
   ) => ApiKeyCredential | null;
 }): Promise<OpenClawConfig | null | undefined> {
-  const agentId = resolveDefaultAgentId(params.nextConfig);
-  const agentDir = resolveAgentDir(params.nextConfig, agentId);
-  const workspaceDir =
-    resolveAgentWorkspaceDir(params.nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const { agentDir, workspaceDir } = params.target;
   let nextConfig = params.nextConfig;
   const prefixedProviderId = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)
     ? params.authChoice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length).split(":", 1)[0]?.trim()
@@ -97,6 +95,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       config: nextConfig,
       workspaceDir,
       onlyPluginIds: owningPluginIds,
+      ...(preferredProviderId ? { providerRefs: [preferredProviderId] } : {}),
       mode: "setup",
       includeUntrustedWorkspacePlugins: false,
     }),
@@ -195,6 +194,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         config: nextConfig,
         workspaceDir,
         onlyPluginIds: [installCatalogEntry.pluginId],
+        providerRefs: [installCatalogEntry.providerId],
         mode: "setup",
         includeUntrustedWorkspacePlugins: false,
       }),
@@ -235,9 +235,17 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     return null;
   }
 
+  const agentScopedModels = enableResult.config.agents?.ownership === "explicit";
+  const providerConfig = agentScopedModels
+    ? prepareAgentModelDefaults(enableResult.config, params.target)
+    : enableResult.config;
+  const projectProviderResult = (updated: OpenClawConfig) =>
+    agentScopedModels
+      ? projectAgentModelDefaults(enableResult.config, params.target, updated)
+      : updated;
   const result = await method.runNonInteractive({
     authChoice: params.authChoice,
-    config: enableResult.config,
+    config: providerConfig,
     baseConfig: params.baseConfig,
     opts: params.opts as ProviderAuthOptionBag,
     runtime: params.runtime,
@@ -251,7 +259,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   }
   const selectedModel = resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
   if (!selectedModel) {
-    return result;
+    return projectProviderResult(result);
   }
   // Model selection can imply a runtime plugin even when auth setup belonged to
   // a provider plugin; install those runtimes before persisting the config.
@@ -287,5 +295,19 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     runtime: params.runtime,
     workspaceDir,
   });
-  return copilotInstall.cfg;
+  const previousModel = providerConfig.agents?.defaults?.model;
+  const previousAutoModel = enableResult.config.wizard?.localModelLeanAutoModel;
+  const retainsAutoModelOwnership =
+    previousAutoModel !== undefined &&
+    previousAutoModel === resolveAgentModelPrimaryValue(previousModel) &&
+    previousAutoModel === copilotInstall.cfg.wizard?.localModelLeanAutoModel;
+
+  return projectProviderResult(
+    applyAutoLocalModelLean({
+      config: copilotInstall.cfg,
+      providerId: providerChoice.provider.id,
+      modelRef: selectedModel,
+      ...(retainsAutoModelOwnership ? { previousModelRef: previousAutoModel } : {}),
+    }).config,
+  );
 }

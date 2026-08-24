@@ -5,7 +5,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromEpochSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { ProviderAuthContext, ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOauthProviderAuthResult,
   toFormUrlEncoded,
@@ -14,18 +14,15 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
-const XAI_OAUTH_METHOD_ID = "oauth";
-const XAI_OAUTH_CHOICE_ID = "xai-oauth";
-const XAI_DEVICE_CODE_METHOD_ID = "device-code";
-const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
-export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_ISSUER = "https://auth.x.ai";
-export const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
+const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 const XAI_LEGACY_OAUTH_TOKEN_ENDPOINT = `${XAI_OAUTH_ISSUER}/oauth/token`;
 
 const XAI_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
@@ -94,7 +91,7 @@ function getFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
   return fetchImpl ?? fetch;
 }
 
-export function isTrustedXaiOAuthEndpoint(endpoint: string): boolean {
+function isTrustedXaiOAuthEndpoint(endpoint: string): boolean {
   try {
     const url = new URL(endpoint);
     if (url.protocol !== "https:") {
@@ -111,12 +108,6 @@ function requireTrustedXaiOAuthEndpoint(endpoint: string, label: string): string
     throw new Error(`xAI OAuth discovery returned untrusted ${label}`);
   }
   return endpoint;
-}
-
-function readStringRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 async function readResponseBody(response: Response): Promise<XaiOAuthResponseBody> {
@@ -136,8 +127,8 @@ async function readResponseBody(response: Response): Promise<XaiOAuthResponseBod
 async function readJsonResponse(response: Response, context: string): Promise<unknown> {
   const body = await readResponseBody(response);
   if (!response.ok) {
-    const errorText =
-      readStringRecord(body.json).error_description ?? readStringRecord(body.json).error;
+    const json = asOptionalRecord(body.json);
+    const errorText = json?.error_description ?? json?.error;
     throw new Error(
       `${context} failed (${response.status})${typeof errorText === "string" ? `: ${errorText}` : ""}`,
     );
@@ -155,10 +146,10 @@ async function fetchXaiOAuthDiscoveryDocument(
     },
     signal: xaiOAuthFetchSignal(options.signal),
   });
-  return readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
+  return asOptionalRecord(await readJsonResponse(response, "xAI OAuth discovery")) ?? {};
 }
 
-export async function fetchXaiOAuthDiscovery(
+async function fetchXaiOAuthDiscovery(
   options: XaiOAuthFetchOptions = {},
 ): Promise<XaiOAuthDiscovery> {
   const json = await fetchXaiOAuthDiscoveryDocument(options);
@@ -198,7 +189,7 @@ function parseXaiOAuthTokenResponse(
   now: () => number,
   options: { requireRefreshToken?: boolean } = {},
 ): XaiOAuthTokenResponse {
-  const json = readStringRecord(value);
+  const json = asOptionalRecord(value) ?? {};
   const accessToken = json.access_token;
   if (typeof accessToken !== "string" || accessToken.trim().length === 0) {
     throw new Error("xAI OAuth token response is missing access_token");
@@ -238,7 +229,7 @@ function deriveExpiresFromJwt(token: string | undefined): number | undefined {
 }
 
 function parseXaiOAuthErrorResponse(value: unknown): XaiOAuthErrorResponse {
-  const json = readStringRecord(value);
+  const json = asOptionalRecord(value) ?? {};
   const error = typeof json.error === "string" ? json.error : undefined;
   const errorDescription =
     typeof json.error_description === "string" ? json.error_description : undefined;
@@ -380,7 +371,7 @@ async function requestXaiDeviceCode(
       signal: xaiOAuthFetchSignal(params.signal),
     },
   );
-  const json = readStringRecord(await readJsonResponse(response, "xAI device code request"));
+  const json = asOptionalRecord(await readJsonResponse(response, "xAI device code request")) ?? {};
   const deviceCode = json.device_code;
   const userCode = json.user_code;
   const verificationUri = json.verification_uri;
@@ -536,7 +527,7 @@ function decodeJwtPayload(token: string | undefined): Record<string, unknown> {
     return {};
   }
   try {
-    return readStringRecord(JSON.parse(Buffer.from(part, "base64url").toString("utf8")));
+    return asOptionalRecord(JSON.parse(Buffer.from(part, "base64url").toString("utf8"))) ?? {};
   } catch {
     return {};
   }
@@ -651,14 +642,14 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
-      defaultModel: XAI_DEFAULT_MODEL_REF,
+      defaultModel: XAI_OAUTH_DEFAULT_MODEL_REF,
       access: tokens.accessToken,
       refresh: tokens.refreshToken,
       expires: tokens.expires,
       email: identity.email,
       displayName: identity.displayName,
       profileName: identity.email ?? identity.accountId,
-      configPatch: applyXaiConfig(ctx.config),
+      configPatch: applyXaiOAuthConfig(ctx.config),
       credentialExtra: {
         tokenEndpoint: discovery.tokenEndpoint,
         deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
@@ -712,43 +703,4 @@ export async function refreshXaiOAuthCredential(
     tokenEndpoint,
     issuer: XAI_OAUTH_ISSUER,
   } as OAuthCredential;
-}
-
-export function createXaiOAuthAuthMethod(): ProviderAuthMethod {
-  return {
-    id: XAI_OAUTH_METHOD_ID,
-    label: "xAI OAuth",
-    hint: "Remote-friendly browser sign-in without a localhost callback",
-    kind: "oauth",
-    wizard: {
-      choiceId: XAI_OAUTH_CHOICE_ID,
-      choiceLabel: "xAI OAuth",
-      choiceHint: "Remote-friendly browser sign-in without a localhost callback",
-      groupId: PROVIDER_ID,
-      groupLabel: "xAI (Grok)",
-      groupHint: "API key or OAuth",
-      methodId: XAI_OAUTH_METHOD_ID,
-    },
-    run: async (ctx) => loginXaiDeviceCode(ctx),
-  };
-}
-
-export function createXaiDeviceCodeAuthMethod(): ProviderAuthMethod {
-  return {
-    id: XAI_DEVICE_CODE_METHOD_ID,
-    label: "xAI device code",
-    hint: "Deprecated alias for xAI OAuth device-code login",
-    kind: "device_code",
-    wizard: {
-      choiceId: XAI_DEVICE_CODE_CHOICE_ID,
-      choiceLabel: "xAI device code",
-      choiceHint: "Compatibility alias for xAI OAuth device-code sign-in",
-      assistantVisibility: "manual-only",
-      groupId: PROVIDER_ID,
-      groupLabel: "xAI (Grok)",
-      groupHint: "API key or OAuth",
-      methodId: XAI_DEVICE_CODE_METHOD_ID,
-    },
-    run: async (ctx) => loginXaiDeviceCode(ctx),
-  };
 }

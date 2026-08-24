@@ -66,6 +66,17 @@ export async function ackComponentInteraction(params: {
   }
 }
 
+export async function replyUnavailableComponentInteraction(
+  interaction: AgentComponentInteraction,
+  content: string,
+): Promise<void> {
+  try {
+    await interaction.reply({ content, ephemeral: true });
+  } catch {
+    // The interaction may have expired before its failure reply could be delivered.
+  }
+}
+
 export function resolveDiscordChannelContext(
   interaction: AgentComponentInteraction,
 ): DiscordChannelContext {

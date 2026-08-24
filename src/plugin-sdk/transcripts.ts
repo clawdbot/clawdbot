@@ -7,9 +7,12 @@ export type {
   TranscriptSessionDescriptor,
   TranscriptSourceKind,
   TranscriptSourceLocator,
+  TranscriptSourceAccessControl,
   TranscriptSourceProvider,
   TranscriptSourceStatus,
   TranscriptStartRequest,
+  TranscriptToolAction,
+  TranscriptToolCaller,
   TranscriptsStartResult,
   TranscriptStopRequest,
   TranscriptsStopResult,
@@ -20,3 +23,8 @@ export {
   listTranscriptSourceProviders,
   normalizeTranscriptSourceProviderId,
 } from "../transcripts/provider-registry.js";
+export { resolveTranscriptsConfig } from "../transcripts/config.js";
+export {
+  createMeetingTranscriptSourceProvider,
+  type MeetingTranscriptSourceRuntime,
+} from "../meeting-bot/transcripts-bridge.js";

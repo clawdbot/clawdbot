@@ -92,7 +92,7 @@ describe("deepseek provider-policy-api", () => {
     });
   });
 
-  it("hydrates the legacy chat alias with current V4 Flash metadata", () => {
+  it("leaves an uncataloged retired alias unchanged", () => {
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.deepseek.com",
       api: "openai-completions",
@@ -107,18 +107,10 @@ describe("deepseek provider-policy-api", () => {
     };
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
-    const model = requireModel(result, 0);
-    expect(model.contextWindow).toBe(1_000_000);
-    expect(model.maxTokens).toBe(384_000);
-    expect(model.cost).toEqual({
-      input: 0.14,
-      output: 0.28,
-      cacheRead: 0.0028,
-      cacheWrite: 0,
-    });
+    expect(result).toBe(providerConfig);
   });
 
-  it("refreshes exact catalog metadata snapshots written by prior releases", () => {
+  it("refreshes exact current-model catalog metadata snapshots written by prior releases", () => {
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.deepseek.com",
       api: "openai-completions",
@@ -140,24 +132,6 @@ describe("deepseek provider-policy-api", () => {
           contextWindow: 1_000_000,
           maxTokens: 384_000,
           cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
-        },
-        {
-          id: "deepseek-chat",
-          name: "DeepSeek Chat",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 131_072,
-          maxTokens: 8_192,
-          cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
-        },
-        {
-          id: "deepseek-reasoner",
-          name: "DeepSeek Reasoner",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 131_072,
-          maxTokens: 65_536,
-          cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
         },
       ],
     };
@@ -184,22 +158,10 @@ describe("deepseek provider-policy-api", () => {
         maxTokens: 384_000,
         cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
       },
-      {
-        id: "deepseek-chat",
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-      },
-      {
-        id: "deepseek-reasoner",
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-      },
     ]);
   });
 
-  it("refreshes exact zero-cost legacy alias rows written by tagged releases", () => {
+  it("leaves zero-cost retired alias snapshots unchanged when uncataloged", () => {
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.deepseek.com",
       api: "openai-completions",
@@ -226,17 +188,7 @@ describe("deepseek provider-policy-api", () => {
     };
 
     const result = normalizeConfig({ provider: "deepseek", providerConfig });
-
-    for (const model of result.models) {
-      expect(model.contextWindow).toBe(1_000_000);
-      expect(model.maxTokens).toBe(384_000);
-      expect(model.cost).toEqual({
-        input: 0.14,
-        output: 0.28,
-        cacheRead: 0.0028,
-        cacheWrite: 0,
-      });
-    }
+    expect(result).toBe(providerConfig);
   });
 
   it("preserves legacy alias metadata when any catalog-owned field is customized", () => {

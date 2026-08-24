@@ -1,8 +1,10 @@
 // ClickClack plugin module implements guided setup behavior.
 import {
+  baseUrlTextInput,
   createStandardChannelSetupStatus,
   createSetupTranslator,
   DEFAULT_ACCOUNT_ID,
+  defineTokenCredential,
   formatDocsLink,
   hasConfiguredSecretInput,
   setSetupChannelEnabled,
@@ -72,8 +74,10 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       ),
   },
   credentials: [
-    {
+    defineTokenCredential({
       inputKey: "token",
+      configKey: "token",
+      configuredFields: ["token", "tokenFile"],
       providerHint: channel,
       credentialLabel: t("wizard.clickclack.botToken"),
       preferredEnvVar: "CLICKCLACK_BOT_TOKEN",
@@ -81,56 +85,43 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
       keepPrompt: t("wizard.clickclack.botTokenKeep"),
       inputPrompt: t("wizard.clickclack.botTokenInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      inspect: ({ cfg, accountId }) => {
-        const resolved = resolveClickClackAccount({
-          cfg: cfg as CoreConfig,
-          accountId,
-        });
-        const hasConfiguredValue = hasConfiguredClickClackCredential(resolved);
-        return {
-          accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
-          hasConfiguredValue,
-          resolvedValue: resolved.token || undefined,
-          envValue:
-            accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.CLICKCLACK_BOT_TOKEN?.trim() || undefined
-              : undefined,
-        };
-      },
-      applyUseEnv: async ({ cfg, accountId }) =>
-        applyClickClackCredentialConfig({
-          cfg,
-          accountId,
-          useEnv: true,
-        }),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyClickClackCredentialConfig({
-          cfg,
-          accountId,
-          token: value,
-        }),
-    },
+      resolveAccount: ({ cfg, accountId }) =>
+        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
+      hasConfiguredValue: hasConfiguredClickClackCredential,
+      resolvedValue: (account) => account.token || undefined,
+      envValue: ({ accountId }) =>
+        accountId === DEFAULT_ACCOUNT_ID
+          ? process.env.CLICKCLACK_BOT_TOKEN?.trim() || undefined
+          : undefined,
+      patchAccount: ({ cfg, accountId, mode, patch }) =>
+        mode === "env"
+          ? applyClickClackCredentialConfig({ cfg, accountId, useEnv: true })
+          : applyClickClackCredentialConfig({ cfg, accountId, ...patch }),
+      useEnv: { clearFields: ["token", "tokenFile"] },
+      set: { clearFields: ["tokenFile"] },
+    }),
   ],
   textInputs: [
-    {
+    baseUrlTextInput({
       inputKey: "baseUrl",
+      configKey: "baseUrl",
       message: t("wizard.clickclack.baseUrlPrompt"),
-      currentValue: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).baseUrl || undefined,
-      initialValue: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).baseUrl || undefined,
-      validate: ({ value }) =>
+      resolveAccount: ({ cfg, accountId }) =>
+        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
+      currentValue: (account) => account.baseUrl || undefined,
+      includeInitialValue: true,
+      validate: (value) =>
         normalizeClickClackBaseUrl(value)
           ? undefined
           : "ClickClack server URL must be a valid http(s) URL.",
-      normalizeValue: ({ value }) => normalizeClickClackBaseUrl(value) ?? value.trim(),
-      applySet: async ({ cfg, accountId, value }) =>
+      normalize: (value) => normalizeClickClackBaseUrl(value) ?? value.trim(),
+      patchAccount: ({ cfg, accountId, patch }) =>
         applyClickClackSetupConfigPatch({
           cfg,
           accountId,
-          patch: { baseUrl: value },
+          patch,
         }),
-    },
+    }),
     {
       inputKey: "workspace",
       message: t("wizard.clickclack.workspacePrompt"),

@@ -2,16 +2,16 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
+  switchAgent: "Switch agent",
   working: "Working…",
   ready: "Ready to chat",
   whatCanAgentDo: "What can {name} do?",
   help: "Help",
   getHelp: "Get help",
+  getApps: "Get the apps",
   discord: "Discord community",
   viewChangelog: "View changelog",
   agentSettings: "Agent settings",
-  filterAgents: "Find agent…",
-  noAgentMatches: "No matching agents",
 };
 
 export const agentScope = {

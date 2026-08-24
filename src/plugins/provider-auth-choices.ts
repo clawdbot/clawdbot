@@ -8,6 +8,7 @@ import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
 } from "./official-external-plugin-catalog.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type ProviderAuthChoiceMetadata = {
@@ -17,6 +18,8 @@ export type ProviderAuthChoiceMetadata = {
   choiceId: string;
   choiceLabel: string;
   choiceHint?: string;
+  icon?: string;
+  website?: string;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
   deprecatedChoiceIds?: string[];
@@ -29,6 +32,8 @@ export type ProviderAuthChoiceMetadata = {
   cliOption?: string;
   cliDescription?: string;
   appGuidedSecret?: boolean;
+  appGuidedActionLabel?: string;
+  appGuidedDiscovery?: boolean;
   appGuidedAuth?: "oauth" | "device-code";
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
@@ -53,6 +58,7 @@ type ManifestProviderAuthChoiceParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
   includeUntrustedWorkspacePlugins?: boolean;
   includeWorkspacePlugins?: boolean;
 };
@@ -94,6 +100,8 @@ function toProviderAuthChoiceCandidate(params: {
     choiceId: choice.choiceId,
     choiceLabel: choice.choiceLabel ?? choice.choiceId,
     ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+    ...(choice.icon ? { icon: choice.icon } : {}),
+    ...(choice.website ? { website: choice.website } : {}),
     ...(choice.assistantPriority !== undefined
       ? { assistantPriority: choice.assistantPriority }
       : {}),
@@ -108,6 +116,8 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
     ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
     ...(choice.appGuidedSecret ? { appGuidedSecret: true } : {}),
+    ...(choice.appGuidedActionLabel ? { appGuidedActionLabel: choice.appGuidedActionLabel } : {}),
+    ...(choice.appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
     ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
     ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
   };
@@ -185,18 +195,16 @@ function stripChoiceOrigin(choice: ProviderAuthChoiceCandidate): ProviderAuthCho
   return metadata;
 }
 
-function resolveManifestProviderAuthChoiceCandidates(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  includeUntrustedWorkspacePlugins?: boolean;
-  includeWorkspacePlugins?: boolean;
-}): ProviderAuthChoiceCandidate[] {
-  const metadataSnapshot = loadManifestMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-  });
+function resolveManifestProviderAuthChoiceCandidates(
+  params?: ManifestProviderAuthChoiceParams,
+): ProviderAuthChoiceCandidate[] {
+  const metadataSnapshot =
+    params?.metadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: params?.config ?? {},
+      workspaceDir: params?.workspaceDir,
+      env: params?.env ?? process.env,
+    });
   const registry = metadataSnapshot.manifestRegistry;
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
   return registry.plugins.flatMap((plugin) => {

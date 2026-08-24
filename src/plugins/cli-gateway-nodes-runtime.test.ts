@@ -72,4 +72,41 @@ describe("createPluginCliGatewayNodesRuntime", () => {
       }),
     );
   });
+
+  it("forwards node invocation cancellation to the Gateway request", async () => {
+    const controller = new AbortController();
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await nodes.invoke({
+      nodeId: "node-1",
+      command: "ollama.chat",
+      signal: controller.signal,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.invoke",
+        signal: controller.signal,
+      }),
+    );
+    expect(callGatewayMock.mock.calls[0]?.[0].params).not.toHaveProperty("signal");
+  });
+
+  it("preserves the existing Gateway request shape when no signal is supplied", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await nodes.invoke({ nodeId: "node-1", command: "ollama.chat" });
+
+    expect(callGatewayMock.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+    expect(callGatewayMock.mock.calls[0]?.[0].params).not.toHaveProperty("signal");
+  });
+
+  it("rejects duplex commands without opening a polling Gateway fallback", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await expect(nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).rejects.toThrow(
+      "unavailable in the CLI",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 });

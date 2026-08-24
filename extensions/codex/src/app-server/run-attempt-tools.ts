@@ -1,15 +1,8 @@
-import type {
-  EmbeddedRunAttemptParams,
-  NativeHookRelayRegistrationHandle,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
-import type {
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-  JsonValue,
-} from "./protocol.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
+import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
 
 export function toTranscriptToolResult(
@@ -57,7 +50,7 @@ type CodexDynamicToolExecutionIdentity = Pick<
 >;
 
 export function createCodexDynamicToolExecutionRegistry() {
-  const executions = new Map<string, Promise<CodexDynamicToolCallResponse>>();
+  const executions = new Map<string, Promise<CodexDynamicToolRuntimeResponse>>();
   const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
     JSON.stringify([call.threadId, call.turnId, call.callId]);
 
@@ -67,7 +60,7 @@ export function createCodexDynamicToolExecutionRegistry() {
     },
     claim(
       call: CodexDynamicToolExecutionIdentity,
-      start: () => Promise<CodexDynamicToolCallResponse>,
+      start: () => Promise<CodexDynamicToolRuntimeResponse>,
     ) {
       const existing = executions.get(keyFor(call));
       if (existing) {
@@ -78,32 +71,6 @@ export function createCodexDynamicToolExecutionRegistry() {
       return { execution, replayed: false } as const;
     },
   };
-}
-
-export function handleApprovalRequest(params: {
-  method: string;
-  params: JsonValue | undefined;
-  paramsForRun: EmbeddedRunAttemptParams;
-  threadId: string;
-  turnId: string;
-  nativeHookRelay?: NativeHookRelayRegistrationHandle;
-  autoApprove?: boolean;
-  signal?: AbortSignal;
-  onNativeToolFailureDisposition?: Parameters<
-    typeof handleCodexAppServerApprovalRequest
-  >[0]["onNativeToolFailureDisposition"];
-}): Promise<JsonValue | undefined> {
-  return handleCodexAppServerApprovalRequest({
-    method: params.method,
-    requestParams: params.params,
-    paramsForRun: params.paramsForRun,
-    threadId: params.threadId,
-    turnId: params.turnId,
-    nativeHookRelay: params.nativeHookRelay,
-    autoApprove: params.autoApprove,
-    signal: params.signal,
-    onNativeToolFailureDisposition: params.onNativeToolFailureDisposition,
-  });
 }
 
 export function resolveCodexDynamicToolDirectNames(
@@ -121,5 +88,8 @@ export function resolveCodexDynamicToolDirectNames(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     names.push("message");
   }
+  // OpenClaw disables Codex's native update_plan on every thread. Keep its
+  // replacement in the initial context or the run has no visible progress tool.
+  names.push("progress_card");
   return names;
 }

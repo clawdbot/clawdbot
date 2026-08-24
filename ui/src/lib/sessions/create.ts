@@ -3,7 +3,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
   key: string;
-  initialRun: { status: "idle" } | { status: "started" } | { status: "rejected"; error: string };
+  initialRun:
+    | { status: "idle" }
+    | { status: "started"; runId?: string; messageSeq?: number }
+    | { status: "rejected"; error: string };
 };
 
 export type SessionCreateParams = {
@@ -13,8 +16,14 @@ export type SessionCreateParams = {
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
+  forkFrom?: "last-completed";
+  succeedsParent?: boolean;
   label?: string;
+  category?: string;
   model?: string;
+  contextWindow?: string;
+  thinkingLevel?: string;
+  incognito?: boolean;
   worktree?: boolean;
   /** Base ref for the managed worktree branch; requires worktree. */
   worktreeBaseRef?: string;
@@ -39,7 +48,9 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
       : undefined;
   return {
     ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
-    ...(parentSessionKey ? { parentSessionKey, emitCommandHooks: true } : {}),
+    ...(parentSessionKey
+      ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
+      : {}),
   };
 }
 
@@ -53,7 +64,18 @@ export async function requestSessionCreate(
     throw new Error("sessions.create returned no key");
   }
   if (result.runStarted === true) {
-    return { key, initialRun: { status: "started" } };
+    const runId = typeof result.runId === "string" ? result.runId.trim() : "";
+    const messageSeq = result.messageSeq;
+    return {
+      key,
+      initialRun: {
+        status: "started",
+        ...(runId ? { runId } : {}),
+        ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
+          ? { messageSeq }
+          : {}),
+      },
+    };
   }
   if (result.runError !== undefined) {
     const message =

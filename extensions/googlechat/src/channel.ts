@@ -27,9 +27,7 @@ import {
   GoogleChatConfigSchema,
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
-  listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
-  resolveGoogleChatAccount,
   resolveGoogleChatOutboundSessionRoute,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
@@ -41,6 +39,7 @@ import {
 } from "./doctor-contract.js";
 import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { startGoogleChatGatewayAccount } from "./gateway.js";
+import { describeGoogleChatMessageTool } from "./message-tool-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
@@ -49,19 +48,7 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 );
 
 const googlechatActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, accountId }) => {
-    const accounts = accountId
-      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
-          (account) => account.enabled && account.credentialSource !== "none",
-        )
-      : listGoogleChatAccountIds(cfg)
-          .map((id) => resolveGoogleChatAccount({ cfg, accountId: id }))
-          .filter((account) => account.enabled && account.credentialSource !== "none");
-    if (accounts.length === 0) {
-      return null;
-    }
-    return { actions: ["send"] };
-  },
+  describeMessageTool: describeGoogleChatMessageTool,
   supportsAction: ({ action }) => action === "send",
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => {
@@ -88,6 +75,16 @@ export const googlechatPlugin = createChatChannelPlugin({
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
       targetIdComparison: "case-sensitive",
       normalizeTarget: normalizeGoogleChatTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeGoogleChatTarget(to);
+        if (!target) {
+          return undefined;
+        }
+        if (isGoogleChatUserTarget(target)) {
+          return "direct";
+        }
+        return isGoogleChatSpaceTarget(target) ? "group" : undefined;
+      },
       resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: (raw, normalized) => {
@@ -123,7 +120,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     actions: googlechatActions,
     doctor: {
-      dmAllowFromMode: "nestedOnly",
+      dmAllowFromMode: "topOnly",
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
@@ -179,11 +176,12 @@ export const googlechatPlugin = createChatChannelPlugin({
         configured: account.credentialSource !== "none",
         extra: {
           credentialSource: account.credentialSource,
+          tokenStatus: account.tokenStatus,
           audienceType: account.config.audienceType,
           audience: account.config.audience,
           webhookPath: account.config.webhookPath,
           webhookUrl: account.config.webhookUrl,
-          dmPolicy: account.config.dm?.policy ?? "pairing",
+          dmPolicy: account.config.dmPolicy ?? "pairing",
         },
       }),
     }),

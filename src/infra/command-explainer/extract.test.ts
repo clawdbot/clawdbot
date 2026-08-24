@@ -51,7 +51,6 @@ describe("command explainer tree-sitter runtime", () => {
     const source = "echo café😀 && echo 雪";
     const explanation = await explainShellCommand(source);
 
-    expect(explanation.topLevelCommands).toHaveLength(2);
     expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
       ["echo", "café😀"],
       ["echo", "雪"],
@@ -469,6 +468,14 @@ describe("command explainer tree-sitter runtime", () => {
       "foo",
     ]);
     expectRisk(continuedArgument.risks, { kind: "line-continuation" });
+
+    const escapedWordBoundary = await explainShellCommand("tr x\n\\id");
+    expect(escapedWordBoundary.topLevelCommands).toHaveLength(1);
+    expect(escapedWordBoundary.topLevelCommands[0]?.argv).toEqual(["tr", "x", "\nid"]);
+    expectRisk(escapedWordBoundary.risks, {
+      kind: "line-continuation",
+      text: "\n\\id",
+    });
 
     const invalidObfuscation = await explainShellCommand("e'c'h'o hi");
     expect(invalidObfuscation.ok).toBe(false);

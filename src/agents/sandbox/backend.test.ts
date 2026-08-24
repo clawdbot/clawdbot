@@ -9,6 +9,12 @@ import {
 } from "./backend.js";
 
 describe("sandbox backend registry", () => {
+  it("registers Podman as a built-in backend", () => {
+    expect(getSandboxBackendFactory("podman")).not.toBeNull();
+    expect(getSandboxBackendManager("podman")).not.toBeNull();
+    expect(getSandboxBackendWorkdirResolver("podman")).not.toBeNull();
+  });
+
   it("registers and restores backend factories", () => {
     // Tests and optional backends install process-local factories; restore must
     // remove them so later suites see the default registry.

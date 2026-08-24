@@ -169,8 +169,33 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "PROGRAMFILES(X86)",
   "PROGRAMW6432",
   "STATE_DIRECTORY",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_ACCOUNT_ID",
+  "AWS_ACCOUNT_ID_ENDPOINT_MODE",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  "AWS_BEDROCK_SKIP_AUTH",
+  "AWS_CONFIG_FILE",
+  "AWS_CREDENTIAL_EXPIRATION",
+  "AWS_CREDENTIAL_SCOPE",
+  "AWS_EC2_METADATA_DISABLED",
+  "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+  "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE",
+  "AWS_EC2_METADATA_V1_DISABLED",
+  "AWS_ENDPOINT_URL",
+  "AWS_PROFILE",
+  "AWS_ROLE_ARN",
+  "AWS_ROLE_SESSION_NAME",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_SHARED_CREDENTIALS_FILE",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "BUZZ_RELAY_URL",
+  "SMS_ALLOWED_USERS",
+  "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
+  "SMS_PUBLIC_WEBHOOK_URL",
   "SLACK_API_URL",
   "SYNOLOGY_CHAT_INCOMING_URL",
+  "SYNOLOGY_ALLOWED_USER_IDS",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
   "ZALO_API_URL",
@@ -180,17 +205,29 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 // `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
 // in addition to the bare MATRIX_HOMESERVER listed above.
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_ENDPOINT", "_HOMESERVER"];
+const BLOCKED_WORKSPACE_DOTENV_TOKEN_SEQUENCES = [
+  ["DANGEROUSLY"],
+  ["DISABLE", "AUTH"],
+  ["DISABLE", "CERT"],
+  ["DISABLE", "SIGNATURE"],
+  ["DISABLE", "SSL"],
+  ["DISABLE", "TLS"],
+  ["SKIP", "AUTH"],
+];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
   // Google Cloud SDK launchers treat CLOUDSDK_* values as runtime controls.
   // Workspace .env must not steer gcloud subprocess interpreters or args.
   "CLOUDSDK_",
+  // AWS container credentials can redirect credential fetches and auth-token reads.
+  "AWS_CONTAINER_",
+  // AWS SDK endpoint overrides redirect signed provider traffic by service id.
+  "AWS_ENDPOINT_URL_",
   "OPENAI_API_KEY_",
   // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
   // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
   "OPENCLAW_",
-  "OPENCLAW_CLAWHUB_",
   "OPENCLAW_DISABLE_",
   "OPENCLAW_SKIP_",
   "OPENCLAW_UPDATE_",
@@ -198,6 +235,18 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
 
 function shouldBlockWorkspaceRuntimeDotEnvKey(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+}
+
+function hasBlockedWorkspaceDotEnvTokenSequence(key: string): boolean {
+  const tokens = key.split("_").filter(Boolean);
+  return BLOCKED_WORKSPACE_DOTENV_TOKEN_SEQUENCES.some((sequence) => {
+    for (let index = 0; index <= tokens.length - sequence.length; index += 1) {
+      if (sequence.every((token, offset) => tokens[index + offset] === token)) {
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 function buildProviderAuthWorkspaceDotEnvBlocklist(): ReadonlySet<string> {
@@ -223,6 +272,7 @@ function shouldBlockWorkspaceDotEnvKey(
     BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper) ||
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
     BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
+    hasBlockedWorkspaceDotEnvTokenSequence(upper) ||
     getProviderAuthBlockedKeys().has(upper)
   );
 }

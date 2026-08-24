@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 1. Tailscale (mesh VPN for secure remote access)
 2. UFW firewall (SSH + Tailscale ports only)
 3. Docker CE + Compose V2 (default agent sandbox backend)
-4. Node.js and pnpm (OpenClaw requires Node 22.22.3+, 24.15+, or 25.9+; Node 24 is recommended)
+4. Node.js and pnpm (OpenClaw requires Node 22.22.3+, 24.15+, or 25.9+; Node 26 is recommended)
 5. OpenClaw, installed host-based, not containerized
 6. A systemd service with security hardening
 
@@ -88,13 +88,15 @@ sudo systemctl status openclaw
 # View live logs
 sudo journalctl -u openclaw -f
 
-# Restart gateway
-sudo systemctl restart openclaw
+# Restart gateway (run as openclaw user)
+openclaw gateway restart
 
 # Channel login (run as openclaw user)
 sudo -i -u openclaw
 openclaw channels login --channel <name>
 ```
+
+`openclaw gateway restart` records managed restart intent. For a system-scope service, follow the exact `sudo systemctl restart <unit>` command it prints.
 
 ## Security architecture
 

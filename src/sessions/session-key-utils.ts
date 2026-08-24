@@ -4,6 +4,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { escapeRegExp } from "../shared/regexp.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -124,10 +126,6 @@ export function normalizeSessionPeerId(params: {
     : normalizeLowercaseStringOrEmpty(peerId);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 type PreservedSpan = { start: number; end: number; trim: boolean };
 
 const NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES = 2048;
@@ -145,13 +143,7 @@ function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
     return;
   }
   normalizedSessionKeyCache.set(raw, normalized);
-  while (normalizedSessionKeyCache.size > NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES) {
-    const oldest = normalizedSessionKeyCache.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    normalizedSessionKeyCache.delete(oldest);
-  }
+  pruneMapToMaxSize(normalizedSessionKeyCache, NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES);
 }
 
 function mayContainCasePreservingPeer(raw: string): boolean {
@@ -271,16 +263,16 @@ export function parseAgentSessionKey(
   if (!raw) {
     return null;
   }
-  const parts = raw.split(":");
-  if (parts.length < 3 || !parts[1] || !parts[2]) {
+  if (!raw.startsWith("agent:")) {
     return null;
   }
-  if (parts[0] !== "agent") {
+  const agentIdEnd = raw.indexOf(":", "agent:".length);
+  if (agentIdEnd === -1) {
     return null;
   }
-  const agentId = normalizeOptionalString(parts[1]);
-  const rest = parts.slice(2).join(":");
-  if (!agentId || !rest) {
+  const agentId = normalizeOptionalString(raw.slice("agent:".length, agentIdEnd));
+  const rest = raw.slice(agentIdEnd + 1);
+  if (!agentId || !rest || rest.startsWith(":")) {
     return null;
   }
   return { agentId, rest };

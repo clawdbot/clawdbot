@@ -1,5 +1,7 @@
 // Control UI chat module implements user message content behavior.
+import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { hasVideoMediaFileExtension } from "../../lib/media-file-extension.ts";
 import { getChatAttachmentPreviewUrl } from "./attachment-payload-store.ts";
 
 type UserChatMessageContentBlock = {
@@ -9,20 +11,11 @@ type UserChatMessageContentBlock = {
   source?: unknown;
   attachment?: {
     url: string;
-    kind: "audio" | "document";
+    kind: Extract<MediaKind, "audio" | "video" | "document">;
     label: string;
     mimeType?: string;
   };
 };
-
-function isInlineDataUrl(value: string): boolean {
-  return /^\s*data:/iu.test(value);
-}
-
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
-  const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
-}
 
 export function buildUserChatMessageContentBlocks(
   message: string,
@@ -39,10 +32,6 @@ export function buildUserChatMessageContentBlocks(
       continue;
     }
     if (attachment.mimeType.startsWith("image/")) {
-      if (isInlineDataUrl(previewUrl)) {
-        blocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(attachment) });
-        continue;
-      }
       blocks.push({
         type: "image",
         url: previewUrl,
@@ -50,11 +39,16 @@ export function buildUserChatMessageContentBlocks(
       });
       continue;
     }
+    const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
+    const isVideo =
+      normalizedMimeType.startsWith("video/") ||
+      ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
+        hasVideoMediaFileExtension(attachment.fileName ?? ""));
     blocks.push({
       type: "attachment",
       attachment: {
         url: previewUrl,
-        kind: attachment.mimeType.startsWith("audio/") ? "audio" : "document",
+        kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
         label: attachment.fileName?.trim() || "Attached file",
         mimeType: attachment.mimeType,
       },

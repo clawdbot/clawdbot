@@ -2,12 +2,13 @@
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
-const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
+const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../packages/terminal-core/src/restore.js", () => ({
-  restoreTerminalState: restoreTerminalStateMock,
+vi.mock("../runtime.js", () => ({
+  restoreRuntimeTerminalState: restoreRuntimeTerminalStateMock,
 }));
 
+import { loggingState } from "../logging/state.js";
 import { resetFatalErrorHooksForTest } from "./fatal-error-hooks.js";
 import {
   installUnhandledRejectionHandler,
@@ -20,6 +21,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
   let originalExit: typeof process.exit;
+  const originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
 
   beforeAll(() => {
     originalExit = process.exit.bind(process);
@@ -43,6 +45,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
     consoleErrorSpy.mockRestore();
     consoleWarnSpy.mockRestore();
   });
@@ -71,16 +74,16 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     expectedRestoreReason?: string,
   ): void {
     exitCalls = [];
-    restoreTerminalStateMock.mockClear();
+    restoreRuntimeTerminalStateMock.mockClear();
     emitUnhandled(reason);
     expect(exitCalls).toEqual(expected);
     if (expectedRestoreReason) {
-      expect(restoreTerminalStateMock).toHaveBeenCalledWith(expectedRestoreReason, {
+      expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(expectedRestoreReason, {
         resumeStdinIfPaused: false,
       });
       return;
     }
-    expect(restoreTerminalStateMock).not.toHaveBeenCalled();
+    expect(restoreRuntimeTerminalStateMock).not.toHaveBeenCalled();
   }
 
   describe("fatal errors", () => {
@@ -105,6 +108,35 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         "Out of memory",
       );
     });
+
+    it.each([
+      {
+        name: "fatal runtime rejection",
+        errorCode: "ERR_OUT_OF_MEMORY",
+        exitCode: 1,
+        restoreReason: "fatal unhandled rejection",
+      },
+      {
+        name: "invalid configuration rejection",
+        errorCode: "INVALID_CONFIG",
+        exitCode: 78,
+        restoreReason: "configuration error",
+      },
+    ])(
+      "routes $name terminal resets through the machine-aware runtime owner",
+      ({ errorCode, exitCode, restoreReason }) => {
+        loggingState.forceConsoleToStderr = true;
+
+        emitUnhandled(
+          Object.assign(new Error("expected machine-output failure"), { code: errorCode }),
+        );
+
+        expect(exitCalls).toEqual([exitCode]);
+        expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(restoreReason, {
+          resumeStdinIfPaused: false,
+        });
+      },
+    );
   });
 
   describe("scoped uncaught exception handlers", () => {

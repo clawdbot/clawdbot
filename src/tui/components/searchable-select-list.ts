@@ -1,6 +1,7 @@
 // Searchable select list component adds search input to selectable TUI lists.
 import {
   type Component,
+  type Focusable,
   fuzzyFilter,
   Input,
   isKeyRelease,
@@ -8,10 +9,12 @@ import {
   type SelectItem,
   type SelectListTheme,
   truncateToWidth,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeRenderableLine } from "../tui-formatters.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);
 const ANSI_SGR_REGEX = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, "g");
@@ -29,8 +32,14 @@ export interface SearchableSelectItem extends SelectItem {
 /**
  * A select list with a search input at the top for fuzzy filtering.
  */
-export class SearchableSelectList implements Component {
+export class SearchableSelectList implements Component, Focusable {
   private items: SearchableSelectItem[];
+  private preparedItems?: Array<{
+    item: SearchableSelectItem;
+    label: string;
+    description: string;
+    searchText: string;
+  }>;
   private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
   private maxVisible: number;
@@ -38,9 +47,9 @@ export class SearchableSelectList implements Component {
   private searchInput: Input;
   private regexCache = new Map<string, RegExp>();
 
-  onSelect?: (item: SelectItem) => void;
+  onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
-  onSelectionChange?: (item: SelectItem) => void;
+  onSelectionChange?: (item: SearchableSelectItem) => void;
 
   private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
   private static readonly DESCRIPTION_MIN_WIDTH = 12;
@@ -54,6 +63,14 @@ export class SearchableSelectList implements Component {
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.searchInput = new Input();
+  }
+
+  get focused(): boolean {
+    return this.searchInput.focused;
+  }
+
+  set focused(value: boolean) {
+    this.searchInput.focused = value;
   }
 
   private getCachedRegex(pattern: string): RegExp {
@@ -92,35 +109,35 @@ export class SearchableSelectList implements Component {
     const scoredItems: ScoredItem[] = [];
     const fuzzyCandidates: FuzzyCandidate[] = [];
 
-    for (const item of this.items) {
-      const rawLabel = this.getItemLabel(item);
-      const rawDesc = item.description ?? "";
-      const label = normalizeLowercaseStringOrEmpty(stripAnsi(rawLabel));
-      const desc = normalizeLowercaseStringOrEmpty(stripAnsi(rawDesc));
-
+    // Rows are fixed for the overlay lifetime; defer search projection until it is needed.
+    this.preparedItems ??= this.items.map((item) => {
+      const label = stripAnsi(this.getItemLabel(item));
+      const description = stripAnsi(item.description ?? "");
+      const searchText = stripAnsi(item.searchText ?? "");
+      return {
+        item,
+        label: normalizeLowercaseStringOrEmpty(label),
+        description: normalizeLowercaseStringOrEmpty(description),
+        searchText: normalizeLowercaseStringOrEmpty(
+          [label, description, searchText].filter((value) => value.length > 0).join(" "),
+        ),
+      };
+    });
+    for (const prepared of this.preparedItems) {
       // Tier 1: Exact substring in label
-      const labelIndex = label.indexOf(q);
+      const labelIndex = prepared.label.indexOf(q);
       if (labelIndex !== -1) {
-        scoredItems.push({ item, tier: 0, score: labelIndex });
+        scoredItems.push({ item: prepared.item, tier: 0, score: labelIndex });
         continue;
       }
       // Tier 2: Exact substring in description
-      const descIndex = desc.indexOf(q);
+      const descIndex = prepared.description.indexOf(q);
       if (descIndex !== -1) {
-        scoredItems.push({ item, tier: 1, score: descIndex });
+        scoredItems.push({ item: prepared.item, tier: 1, score: descIndex });
         continue;
       }
       // Tier 3: Fuzzy match
-      const searchText = item.searchText ?? "";
-      fuzzyCandidates.push({
-        item,
-        searchText: normalizeLowercaseStringOrEmpty(
-          [rawLabel, rawDesc, searchText]
-            .map((value) => stripAnsi(value))
-            .filter(Boolean)
-            .join(" "),
-        ),
-      });
+      fuzzyCandidates.push(prepared);
     }
 
     scoredItems.sort(this.compareByScore);
@@ -133,8 +150,8 @@ export class SearchableSelectList implements Component {
   }
 
   private compareByScore = (
-    a: { item: SelectItem; tier: number; score: number },
-    b: { item: SelectItem; tier: number; score: number },
+    a: { item: SearchableSelectItem; tier: number; score: number },
+    b: { item: SearchableSelectItem; tier: number; score: number },
   ) => {
     if (a.tier !== b.tier) {
       return a.tier - b.tier;
@@ -145,7 +162,7 @@ export class SearchableSelectList implements Component {
     return this.getItemLabel(a.item).localeCompare(this.getItemLabel(b.item));
   };
 
-  private getItemLabel(item: SelectItem): string {
+  private getItemLabel(item: SearchableSelectItem): string {
     return item.label || item.value;
   }
 
@@ -211,21 +228,22 @@ export class SearchableSelectList implements Component {
 
   render(width: number): string[] {
     const lines: string[] = [];
+    const safeWidth = Math.max(0, width);
 
     // Search input line
     const promptText = "search: ";
     const prompt = this.theme.searchPrompt(promptText);
-    const inputWidth = Math.max(1, width - visibleWidth(prompt));
+    const inputWidth = Math.max(0, safeWidth - visibleWidth(prompt));
     const inputLines = this.searchInput.render(inputWidth);
     const inputText = inputLines[0] ?? "";
-    lines.push(`${prompt}${this.theme.searchInput(inputText)}`);
+    lines.push(truncateToWidth(`${prompt}${this.theme.searchInput(inputText)}`, safeWidth, ""));
     lines.push(""); // Spacer
 
     const query = this.searchInput.getValue().trim();
 
     // If no items match filter, show message
     if (this.filteredItems.length === 0) {
-      lines.push(this.theme.noMatch("  No matches"));
+      lines.push(truncateToWidth(this.theme.noMatch("  No matches"), safeWidth, ""));
       return lines;
     }
 
@@ -246,29 +264,34 @@ export class SearchableSelectList implements Component {
         continue;
       }
       const isSelected = i === this.selectedIndex;
-      lines.push(this.renderItemLine(item, isSelected, width, query));
+      lines.push(
+        truncateToWidth(this.renderItemLine(item, isSelected, safeWidth, query), safeWidth, ""),
+      );
     }
 
     // Show scroll indicator if needed
     if (this.filteredItems.length > this.maxVisible) {
       const scrollInfo = `${this.selectedIndex + 1}/${this.filteredItems.length}`;
-      lines.push(this.theme.scrollInfo(`  ${scrollInfo}`));
+      lines.push(truncateToWidth(this.theme.scrollInfo(`  ${scrollInfo}`), safeWidth, ""));
     }
 
     return lines;
   }
 
   private renderItemLine(
-    item: SelectItem,
+    item: SearchableSelectItem,
     isSelected: boolean,
     width: number,
     query: string,
   ): string {
     const prefix = isSelected ? "→ " : "  ";
     const prefixWidth = prefix.length;
-    const displayValue = this.getItemLabel(item);
+    const displayValue =
+      sanitizeRenderableLine(this.getItemLabel(item)) ||
+      sanitizeRenderableLine(item.value) ||
+      "(unnamed)";
 
-    const description = item.description;
+    const description = sanitizeRenderableLine(item.description ?? "");
     if (description) {
       const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
       if (descriptionLayout) {
@@ -365,6 +388,8 @@ export class SearchableSelectList implements Component {
     const newValue = this.searchInput.getValue();
 
     if (prevValue !== newValue) {
+      // Only current-query patterns are reusable; retaining older edits grows without bound.
+      this.regexCache.clear();
       this.updateFilter();
     }
   }
@@ -376,7 +401,7 @@ export class SearchableSelectList implements Component {
     }
   }
 
-  getSelectedItem(): SelectItem | null {
+  getSelectedItem(): SearchableSelectItem | null {
     return this.filteredItems[this.selectedIndex] ?? null;
   }
 }

@@ -1,5 +1,7 @@
 // Builds the canonical reviewer-safe projection for durable approvals.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ApprovalDecision,
   ApprovalKind,
@@ -14,13 +16,10 @@ import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  truncatePluginApprovalDetail,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
   const result: ApprovalDecision[] = [];
@@ -99,10 +98,15 @@ function buildPluginApprovalPresentation(params: {
     request.severity === "info" || request.severity === "warning" || request.severity === "critical"
       ? request.severity
       : "warning";
+  const rawDetail = normalizeOptionalString(request.detail);
+  const detail = rawDetail
+    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
+    : null;
   return {
     kind: "plugin",
     title,
     description,
+    ...(detail ? { detail } : {}),
     severity,
     pluginId: sanitizeOptionalSingleLine(request.pluginId),
     toolName: sanitizeOptionalSingleLine(request.toolName),
@@ -126,8 +130,8 @@ function buildSystemAgentApprovalPresentation(params: {
   }
   return {
     kind: "system-agent",
-    title: sanitizeExecApprovalDisplayText(title).slice(0, 80),
-    description: sanitizeExecApprovalWarningText(description).slice(0, 512),
+    title: truncateUtf16Safe(sanitizeExecApprovalDisplayText(title), 80),
+    description: truncateUtf16Safe(sanitizeExecApprovalWarningText(description), 512),
     proposalHash: request.proposalHash,
     agentId: sanitizeOptionalSingleLine(request.agentId),
     allowedDecisions: ["allow-once", "deny"],

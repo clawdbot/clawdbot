@@ -1,9 +1,11 @@
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import {
+  isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
   normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
+  type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import type { CodexRouteHit, MutableRecord } from "./codex-route-types.js";
 
@@ -12,7 +14,16 @@ export function recordCodexModelHit(params: {
   path: string;
   model: string;
   runtime?: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): string | undefined {
+  if (
+    isBlockedLegacyCodexModelRef({
+      modelRef: params.model,
+      blockedModelIdentities: params.blockedModelIdentities,
+    })
+  ) {
+    return undefined;
+  }
   const canonicalModel = toCanonicalOpenAIModelRef(params.model);
   if (!canonicalModel) {
     return undefined;
@@ -31,6 +42,7 @@ export function collectStringModelSlot(params: {
   path: string;
   value: unknown;
   runtime?: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   if (typeof params.value !== "string") {
     return false;
@@ -45,6 +57,7 @@ export function collectStringModelSlot(params: {
       path: params.path,
       model,
       runtime: params.runtime,
+      blockedModelIdentities: params.blockedModelIdentities,
     }),
   );
 }
@@ -54,6 +67,7 @@ export function collectModelConfigSlot(params: {
   path: string;
   value: unknown;
   runtime?: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   if (typeof params.value === "string") {
     return collectStringModelSlot(params);
@@ -67,6 +81,7 @@ export function collectModelConfigSlot(params: {
     path: `${params.path}.primary`,
     value: record.primary,
     runtime: params.runtime,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   if (Array.isArray(record.fallbacks)) {
     for (const [index, entry] of record.fallbacks.entries()) {
@@ -74,6 +89,7 @@ export function collectModelConfigSlot(params: {
         hits: params.hits,
         path: `${params.path}.fallbacks.${index}`,
         value: entry,
+        blockedModelIdentities: params.blockedModelIdentities,
       });
     }
   }
@@ -165,6 +181,7 @@ export function rewriteStringModelSlot(params: {
   key: string;
   path: string;
   runtime?: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   if (!params.container) {
     return false;
@@ -179,6 +196,7 @@ export function rewriteStringModelSlot(params: {
     path: params.path,
     model,
     runtime: params.runtime,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   if (!canonicalModel) {
     return false;
@@ -193,6 +211,7 @@ export function rewriteModelConfigSlot(params: {
   key: string;
   path: string;
   runtime?: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   if (!params.container) {
     return false;
@@ -211,6 +230,7 @@ export function rewriteModelConfigSlot(params: {
     key: "primary",
     path: `${params.path}.primary`,
     runtime: params.runtime,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   if (Array.isArray(record.fallbacks)) {
     record.fallbacks = record.fallbacks.map((entry, index) => {
@@ -222,6 +242,7 @@ export function rewriteModelConfigSlot(params: {
         hits: params.hits,
         path: `${params.path}.fallbacks.${index}`,
         model,
+        blockedModelIdentities: params.blockedModelIdentities,
       });
       return canonicalModel ?? entry;
     });
@@ -233,6 +254,7 @@ export function rewriteModelsMap(params: {
   hits: CodexRouteHit[];
   models: MutableRecord | undefined;
   path: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   if (!params.models) {
     return;
@@ -242,11 +264,15 @@ export function rewriteModelsMap(params: {
     if (!canonicalModel) {
       continue;
     }
-    recordCodexModelHit({
+    const recorded = recordCodexModelHit({
       hits: params.hits,
       path: `${params.path}.${legacyRef}`,
       model: legacyRef,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
+    if (!recorded) {
+      continue;
+    }
     const legacyEntry = params.models[legacyRef] ?? {};
     const canonicalEntry = params.models[canonicalModel];
     const legacyRecord = asMutableRecord(legacyEntry);

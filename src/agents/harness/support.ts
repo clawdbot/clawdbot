@@ -1,9 +1,11 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString as readStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
   resolveModelProviderRouteOverridePresence,
 } from "../../config/model-provider-config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -11,10 +13,11 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { hasModelExtraParams } from "../model-extra-params.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
+import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type {
   AgentHarness,
@@ -84,6 +87,9 @@ export function buildAgentHarnessSupportContext(params: {
   providerOwnership?: HarnessProviderOwnership;
 }): AgentHarnessSupportContext {
   const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
+  const authoredConfig = params.config
+    ? projectConfigOntoRuntimeSourceSnapshot(params.config)
+    : undefined;
   const modelId = params.modelId ? normalizeModelId(params.provider, params.modelId) : undefined;
   const modelConfig = modelId
     ? resolveMergedModelProviderModels({
@@ -93,9 +99,14 @@ export function buildAgentHarnessSupportContext(params: {
       }).get(modelId)
     : undefined;
   const agentId =
-    params.agentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
-  const hasConfiguredParams = hasModelExtraParams({
+    params.config && (params.agentId?.trim() || params.sessionKey?.trim())
+      ? resolveSessionAgentIds({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        }).sessionAgentId
+      : params.agentId;
+  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider,
     modelId: params.modelId,
@@ -112,7 +123,7 @@ export function buildAgentHarnessSupportContext(params: {
         requestTransportOverrides: resolveModelProviderRouteOverridePresence({
           provider: params.provider,
           modelId: params.modelId,
-          config: params.config,
+          authoredConfig,
           canonicalizeModelId: (configuredModelId) =>
             canonicalizeProviderModelId(params.provider, configuredModelId),
         }),
@@ -121,11 +132,11 @@ export function buildAgentHarnessSupportContext(params: {
   const requestTransportOverrides: ProviderRouteOverridePresence =
     params.modelProvider?.requestTransportOverrides === "present" ||
     configuredModelProvider?.requestTransportOverrides === "present" ||
-    hasConfiguredParams
+    hasConfiguredProviderRequestParams
       ? "present"
       : "none";
   const modelProviderFacts =
-    params.modelProvider || configuredModelProvider || hasConfiguredParams
+    params.modelProvider || configuredModelProvider || hasConfiguredProviderRequestParams
       ? {
           api: params.modelProvider?.api ?? configuredModelProvider?.api,
           baseUrl: params.modelProvider?.baseUrl ?? configuredModelProvider?.baseUrl,
@@ -215,12 +226,26 @@ export function resolveAutoAgentHarnessId(params: {
   agentId?: string;
   sessionKey?: string;
 }): string | undefined {
+  const registeredHarnesses = listRegisteredAgentHarnesses();
+  if (registeredHarnesses.length === 0) {
+    return undefined;
+  }
+  const candidates = registeredHarnesses.map(({ harness }) => ({
+    harness,
+    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
+  }));
+  if (candidates.every((entry) => entry.support !== undefined)) {
+    return undefined;
+  }
   const supportContext = buildAgentHarnessSupportContext({
     ...params,
     requestedRuntime: "auto",
   });
-  return listRegisteredAgentHarnesses()
-    .map(({ harness }) => ({ harness, support: harness.supports(supportContext) }))
+  return candidates
+    .map(({ harness, support }) => ({
+      harness,
+      support: support ?? harness.supports(supportContext),
+    }))
     .filter(isSupportedHarness)
     .toSorted(compareHarnessSupport)[0]?.harness.id;
 }
@@ -241,10 +266,6 @@ function isSupportedHarness(entry: {
   support: AgentHarnessSupport & { supported: true };
 } {
   return entry.support.supported;
-}
-
-function readStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeModelId(provider: string, modelId: string): string {

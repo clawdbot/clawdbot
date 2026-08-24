@@ -15,7 +15,11 @@ export function renderTelegramMarkdownIR(
   ir: MarkdownIR,
   options: {
     escapeText: (text: string) => string;
-    buildLink: (link: MarkdownLinkSpan, text: string) => TelegramRenderLink | null;
+    buildLink: (
+      link: MarkdownLinkSpan,
+      text: string,
+      context: { origin: "authored" | "linkify" },
+    ) => TelegramRenderLink | null;
     buildCodeBlockOpen: (span: { language?: string }) => string;
   },
 ): string {

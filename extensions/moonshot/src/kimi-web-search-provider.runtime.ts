@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
-  DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
@@ -17,7 +16,6 @@ import {
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
-  resolveSearchCount,
   resolveSearchTimeoutSeconds,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
@@ -35,15 +33,12 @@ import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
-  MOONSHOT_DEFAULT_MODEL_ID,
 } from "../provider-catalog.js";
 
 const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
-const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
-/** Models that require explicit thinking disablement for web search.
- * Reasoning variants (kimi-k2-thinking, kimi-k2-thinking-turbo) are excluded
- * because they default to thinking-enabled and disabling it would defeat their
- * purpose; they are also unlikely to be used for web search. */
+// Search owns a separate model default so chat onboarding changes do not silently reroute searches.
+const DEFAULT_KIMI_SEARCH_MODEL = "kimi-k2.6";
+/** Models that require explicit thinking disablement for web search. */
 const KIMI_THINKING_MODELS = new Set(["kimi-k2.6", "kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
@@ -101,7 +96,7 @@ function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
-    readConfiguredSecretString(kimi?.apiKey, "tools.web.search.kimi.apiKey") ??
+    readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
     readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
   );
 }
@@ -219,6 +214,7 @@ async function runKimiSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<KimiSearchResult> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
   const messages: Array<Record<string, unknown>> = [{ role: "user", content: params.query }];
@@ -230,6 +226,7 @@ async function runKimiSearch(params: {
       {
         url: endpoint,
         timeoutSeconds: params.timeoutSeconds,
+        signal: params.signal,
         init: {
           method: "POST",
           headers: {
@@ -334,17 +331,17 @@ async function runKimiSearch(params: {
     }
   }
 
-  return {
-    content: "Search completed but no final answer was produced.",
-    citations: [...collectedCitations],
-    grounded: hasGroundingEvidence,
-  };
+  throw new Error(
+    "Kimi web search exhausted its tool-call rounds without producing a final answer. Retry the query or choose another search provider.",
+  );
 }
 
 export async function executeKimiWebSearchProviderTool(
   ctx: { config?: OpenClawConfig; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
+  opts?.signal?.throwIfAborted();
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
     "kimi",
@@ -361,28 +358,19 @@ export async function executeKimiWebSearchProviderTool(
     return {
       error: "missing_kimi_api_key",
       message:
-        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure plugins.entries.moonshot.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
 
   const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  void readPositiveIntegerParam(args, "count", {
+    max: MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+  });
   const model = resolveKimiModel(kimiConfig);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
-  const cacheKey = buildSearchCacheKey([
-    "kimi",
-    query,
-    resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-    baseUrl,
-    model,
-  ]);
+  const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, model]);
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
     return cached;
@@ -395,7 +383,9 @@ export async function executeKimiWebSearchProviderTool(
     baseUrl,
     model,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal: opts?.signal,
   });
+  opts?.signal?.throwIfAborted();
   if (!result.grounded) {
     return {
       error: "kimi_web_search_ungrounded",
@@ -514,7 +504,5 @@ export const testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
-  hasKimiSearchResults,
   extractKimiToolResultContent,
 } as const;
-export { testing as __testing };

@@ -60,7 +60,14 @@ vi.mock("./twiml.js", () => ({
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
-import { endCall, initiateCall, sendDtmf, speak, speakInitialMessage } from "./outbound.js";
+import {
+  continueCall,
+  endCall,
+  initiateCall,
+  sendDtmf,
+  speak,
+  speakInitialMessage,
+} from "./outbound.js";
 
 function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn> } = {}) {
   const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
@@ -72,6 +79,7 @@ function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn>
     storePath: "/tmp/voice-call.json",
     transcriptWaiters: new Map(),
     maxDurationTimers: new Map(),
+    endCallOperations: new Map(),
   };
 
   return { call, ctx, hangupCall };
@@ -183,13 +191,14 @@ describe("voice-call outbound helpers", () => {
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 
-  it("assigns per-call session keys to outbound calls when configured", async () => {
+  it("persists the configured agent on outbound call records", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
       config: {
+        agentId: "operator",
         maxConcurrentCalls: 3,
         outbound: { defaultMode: "conversation" },
         fromNumber: "+14155550100",
@@ -205,9 +214,9 @@ describe("voice-call outbound helpers", () => {
     expect(result.callId).toBeTypeOf("string");
     expect(result.callId).not.toBe("");
     expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(
-      `agent:main:voice:call:${result.callId}`,
+      `agent:operator:voice:call:${result.callId}`,
     );
-    expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("main");
+    expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("operator");
   });
 
   it("uses the per-call agent for explicit session normalization", async () => {
@@ -373,6 +382,41 @@ describe("voice-call outbound helpers", () => {
       success: false,
       error: "tts failed",
     });
+    expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
+  });
+
+  it("reports telephony queue overflow without starting a silent listening turn", async () => {
+    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const playTts = vi.fn(async () => {
+      throw new Error("Telephony TTS queue is full for stream; maxPending=8");
+    });
+    const startListening = vi.fn(async () => {});
+    const activeTurnCalls = new Set<string>();
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map([["provider-1", "call-1"]]),
+      provider: {
+        name: "twilio",
+        playTts,
+        startListening,
+        stopListening: vi.fn(async () => {}),
+      },
+      config: { tts: { provider: "openai" } },
+      storePath: "/tmp/voice-call.json",
+      activeTurnCalls,
+      transcriptWaiters: new Map(),
+      maxDurationTimers: new Map(),
+      initialMessageInFlight: new Set(),
+    };
+
+    await expect(continueCall(ctx as never, "call-1", "hello")).resolves.toEqual({
+      success: false,
+      error: "Telephony TTS queue is full for stream; maxPending=8",
+    });
+
+    expect(playTts).toHaveBeenCalledOnce();
+    expect(startListening).not.toHaveBeenCalled();
+    expect(activeTurnCalls.size).toBe(0);
     expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
   });
 
@@ -638,6 +682,7 @@ describe("voice-call outbound helpers", () => {
           storePath: "/tmp/voice-call.json",
           transcriptWaiters: new Map(),
           maxDurationTimers: new Map(),
+          endCallOperations: new Map(),
         } as never,
         "call-1",
       ),

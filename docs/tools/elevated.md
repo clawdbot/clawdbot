@@ -84,8 +84,8 @@ Send `/elevated` with no argument to see the current level.
 
 - **Global gate**: `tools.elevated.enabled` (must be `true`)
 - **Sender allowlist**: `tools.elevated.allowFrom` with per-channel lists
-- **Per-agent gate**: `agents.list[].tools.elevated.enabled` (can only further restrict; both the global and per-agent gate must be `true`)
-- **Per-agent allowlist**: `agents.list[].tools.elevated.allowFrom` (sender must match both global + per-agent)
+- **Per-agent gate**: `agents.entries.*.tools.elevated.enabled` (can only further restrict; both the global and per-agent gate must be `true`)
+- **Per-agent allowlist**: `agents.entries.*.tools.elevated.allowFrom` (sender must match both global + per-agent)
 - **Channel-provided fallback allowlist**: channel plugins can optionally supply a fallback allowlist through an SDK adapter hook, used when `tools.elevated.allowFrom.<provider>` is not configured. No bundled channel currently implements this hook, so in practice every provider needs an explicit `tools.elevated.allowFrom.<provider>` entry today.
 - **All gates must pass**; otherwise elevated is treated as unavailable
 

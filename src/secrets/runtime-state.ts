@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreProfileSetMutationToken,
@@ -16,8 +16,11 @@ import type {
   AuthProfileStore,
   RuntimeAuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
   setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -28,6 +31,13 @@ import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.se
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
+import { secretRefKey } from "./ref-contract.js";
+import {
+  clearActiveCredentialDegradedOwners,
+  setActiveDegradedSecretOwners,
+  type DegradedSecretOwner,
+  type SecretOwnerRefState,
+} from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
@@ -42,13 +52,76 @@ export type PreparedSecretsRuntimeSnapshot = {
   authStores: Array<{ agentDir: string; store: RuntimeAuthProfileStore }>;
   authStoreCredentialsRevision: number;
   warnings: SecretResolverWarning[];
+  degradedOwners?: DegradedSecretOwner[];
+  secretOwners?: SecretOwnerRefState[];
   webTools: RuntimeWebToolsMetadata;
 };
+
+type LocatedSecretRef = {
+  path: Array<string | number>;
+  ref: SecretRef;
+};
+
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
+
+function listLocatedSecretRefs(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+  path: Array<string | number> = [],
+  refs: LocatedSecretRef[] = [],
+): LocatedSecretRef[] {
+  const ref = coerceSecretRef(value, defaults);
+  if (ref) {
+    refs.push({ path, ref });
+    return refs;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      listLocatedSecretRefs(entry, defaults, [...path, index], refs);
+    }
+    return refs;
+  }
+  if (isRecord(value)) {
+    for (const key of Object.keys(value).toSorted()) {
+      listLocatedSecretRefs(value[key], defaults, [...path, key], refs);
+    }
+  }
+  return refs;
+}
+
+/** Canonical store SecretRef keys in config that resolve one team entry name. */
+export function collectSecretStoreRefKeysInConfig(
+  config: OpenClawConfig,
+  name: string,
+): Set<string> {
+  return new Set(
+    listLocatedSecretRefs(config, config.secrets?.defaults).flatMap(({ ref }) =>
+      ref.source === "store" && ref.id === name ? [secretRefKey(ref)] : [],
+    ),
+  );
+}
+
+/** Whether two configs resolve the same SecretRefs through the same provider contracts. */
+export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
+  return isDeepStrictEqual(
+    {
+      refs: listLocatedSecretRefs(left, left.secrets?.defaults),
+      defaults: left.secrets?.defaults,
+      providers: left.secrets?.providers,
+    },
+    {
+      refs: listLocatedSecretRefs(right, right.secrets?.defaults),
+      defaults: right.secrets?.defaults,
+      providers: right.secrets?.providers,
+    },
+  );
+}
 
 /** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
 export type SecretsRuntimeRefreshContext = {
   env: Record<string, string | undefined>;
   explicitAgentDirs: string[] | null;
+  includeConfigRefs?: boolean;
   includeAuthStoreRefs: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
@@ -104,6 +177,7 @@ function cloneSecretsRuntimeRefreshContext(
   const cloned: SecretsRuntimeRefreshContext = {
     env: { ...context.env },
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
+    includeConfigRefs: context.includeConfigRefs ?? true,
     includeAuthStoreRefs: context.includeAuthStoreRefs,
     loadablePluginOrigins: new Map(context.loadablePluginOrigins),
     ...(context.manifestRegistry
@@ -116,16 +190,57 @@ function cloneSecretsRuntimeRefreshContext(
   return cloned;
 }
 
+function cloneDegradedSecretOwner(owner: DegradedSecretOwner): DegradedSecretOwner {
+  const cloned: DegradedSecretOwner = {
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+    state: owner.state,
+    paths: [...owner.paths],
+    refKeys: [...owner.refKeys],
+    reason: owner.reason,
+  };
+  if (owner.degradationState) {
+    cloned.degradationState = owner.degradationState;
+  }
+  if (owner.providerFailures) {
+    cloned.providerFailures = owner.providerFailures.map((failure) => ({ ...failure }));
+  }
+  if (owner.refFailureReason) {
+    cloned.refFailureReason = owner.refFailureReason;
+  }
+  return cloned;
+}
+
+function cloneSecretOwnerRefState(owner: SecretOwnerRefState): SecretOwnerRefState {
+  const cloned: SecretOwnerRefState = {
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+    refKeys: [...owner.refKeys],
+  };
+  if (owner.contractDigest) {
+    cloned.contractDigest = owner.contractDigest;
+  }
+  if (owner.resolvedValues) {
+    cloned.resolvedValues = owner.resolvedValues.map((entry) => ({
+      refKey: entry.refKey,
+      value: structuredClone(entry.value),
+    }));
+  }
+  return cloned;
+}
+
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
-    sourceConfig: structuredClone(snapshot.sourceConfig),
-    config: structuredClone(snapshot.config),
+    sourceConfig: cloneConfigWithResolutionFacts(snapshot.sourceConfig),
+    config: cloneConfigWithResolutionFacts(snapshot.config),
     authStores: snapshot.authStores.map((entry) => ({
       agentDir: entry.agentDir,
       store: structuredClone(entry.store),
     })),
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
+    degradedOwners: (snapshot.degradedOwners ?? []).map(cloneDegradedSecretOwner),
+    secretOwners: (snapshot.secretOwners ?? []).map(cloneSecretOwnerRefState),
     webTools: structuredClone(snapshot.webTools),
   };
 }
@@ -134,7 +249,7 @@ function mergeLiveAuthStoreBookkeeping(
   authStores: PreparedSecretsRuntimeSnapshot["authStores"],
 ): PreparedSecretsRuntimeSnapshot["authStores"] {
   return authStores.map((entry) => {
-    const live = getRuntimeAuthProfileStoreSnapshot(entry.agentDir);
+    const live = getRuntimeAuthProfileStoreSnapshotCore(entry.agentDir);
     if (!live) {
       return entry;
     }
@@ -266,7 +381,10 @@ function mergeRollbackValue(previous: unknown, candidate: unknown, current: unkn
   return merged;
 }
 
-function hasSameSecretProviderDefinition(ref: SecretRef, configs: OpenClawConfig[]): boolean {
+export function hasSameSecretProviderDefinition(
+  ref: SecretRef,
+  configs: OpenClawConfig[],
+): boolean {
   const definition = configs[0]?.secrets?.providers?.[ref.provider];
   if (
     !configs.every((config) =>
@@ -755,7 +873,7 @@ export function graftActiveSecretsRuntimeAuthState(snapshot: PreparedSecretsRunt
 /**
  * Returns the env used by the active runtime snapshot, falling back to process env.
  */
-export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {
+export function getActiveSecretsRuntimeEnvState(): NodeJS.ProcessEnv {
   return {
     ...(activeRefreshContext?.env ?? process.env),
   } as NodeJS.ProcessEnv;
@@ -775,6 +893,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
   snapshot: PreparedSecretsRuntimeSnapshot;
   refreshContext: SecretsRuntimeRefreshContext | null;
   refreshHandler: RuntimeConfigSnapshotRefreshHandler | null;
+  runtimeSourceConfig?: OpenClawConfig;
   mergeLiveAuthBookkeeping?: boolean;
   preserveActivationLineage?: boolean;
 }): void {
@@ -797,7 +916,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
   const nextRefreshContext = params.refreshContext
     ? cloneSecretsRuntimeRefreshContext(params.refreshContext)
     : null;
-  setRuntimeConfigSnapshot(next.config, next.sourceConfig);
+  setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   const previousLineageStartRevision = activeSnapshotLineageStartRevision;
@@ -817,6 +936,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
     preparedSnapshotRefreshContext.set(next, cloneSecretsRuntimeRefreshContext(nextRefreshContext));
   }
   setActiveRuntimeWebToolsMetadata(next.webTools);
+  setActiveDegradedSecretOwners(next.degradedOwners ?? []);
   setRuntimeConfigSnapshotRefreshHandler(params.refreshHandler);
 }
 
@@ -919,7 +1039,7 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
 /**
  * Returns a cloned active secrets runtime snapshot for callers that need mutable data.
  */
-export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
+export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSnapshot | null {
   if (!activeSnapshot) {
     return null;
   }
@@ -936,8 +1056,13 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
 }
 
 /** Stable token for compare-and-activate ownership across cloned snapshot reads. */
-export function getActiveSecretsRuntimeSnapshotRevision(): number {
+export function getActiveSecretsRuntimeSnapshotRevisionState(): number {
   return activeSnapshotRevision;
+}
+
+/** Whether the active snapshot is the activation or a scoped descendant of one revision. */
+export function hasActiveSecretsRuntimeSnapshotLineage(revision: number): boolean {
+  return activeSnapshot !== null && activeSnapshotLineageStartRevision === revision;
 }
 
 /** Advance canonical source ownership without replacing resolved runtime or auth bytes. */
@@ -950,10 +1075,8 @@ export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
   if (activeSnapshotRevision !== params.expectedSecretsRevision) {
     return false;
   }
-  const nextRuntimeSourceConfig = structuredClone(params.runtimeSourceConfig);
-  const nextSecretsSourceConfig = structuredClone(params.secretsSourceConfig);
-  const currentAuthStores = structuredClone(listRuntimeAuthProfileStoreSnapshots());
-  const nextAuthMutations = captureAuthStoreMutationLineage(currentAuthStores, currentAuthStores);
+  const nextRuntimeSourceConfig = cloneConfigWithResolutionFacts(params.runtimeSourceConfig);
+  const nextSecretsSourceConfig = cloneConfigWithResolutionFacts(params.secretsSourceConfig);
   if (
     !setRuntimeConfigSourceSnapshotIfCurrent({
       expectedRevision: params.expectedRuntimeConfigRevision,
@@ -962,13 +1085,50 @@ export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
   ) {
     return false;
   }
+  advanceSecretsRuntimeSourceSnapshot(nextSecretsSourceConfig);
+  return true;
+}
+
+function advanceSecretsRuntimeSourceSnapshot(sourceConfig: OpenClawConfig): void {
   if (activeSnapshot) {
-    activeSnapshot.sourceConfig = nextSecretsSourceConfig;
+    activeSnapshot.sourceConfig = sourceConfig;
     activeSnapshotRevision += 1;
     activeSnapshotLineageStartRevision = activeSnapshotRevision;
-    activeSnapshotLineageAuthStores = currentAuthStores;
-    activeSnapshotLineageAuthMutations = nextAuthMutations;
+    activeSnapshotLineageAuthStores = structuredClone(listRuntimeAuthProfileStoreSnapshots());
+    activeSnapshotLineageAuthMutations = captureAuthStoreMutationLineage(
+      activeSnapshotLineageAuthStores,
+      activeSnapshotLineageAuthStores,
+    );
   }
+}
+
+/** Reverts source ownership while retaining scoped descendants of the committed source write. */
+export function restoreSecretsRuntimeSourceSnapshotIfLineageCurrent(params: {
+  expectedLineageRevision: number;
+  runtimeSourceConfig: OpenClawConfig;
+  secretsSourceConfig: OpenClawConfig;
+}): boolean {
+  if (!activeSnapshot || activeSnapshotLineageStartRevision !== params.expectedLineageRevision) {
+    return false;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeMetadata = getRuntimeConfigSnapshotMetadata();
+  if (
+    !runtimeConfig ||
+    !runtimeMetadata ||
+    !isDeepStrictEqual(runtimeConfig, activeSnapshot.config)
+  ) {
+    return false;
+  }
+  if (
+    !setRuntimeConfigSourceSnapshotIfCurrent({
+      expectedRevision: runtimeMetadata.revision,
+      sourceConfig: cloneConfigWithResolutionFacts(params.runtimeSourceConfig),
+    })
+  ) {
+    return false;
+  }
+  advanceSecretsRuntimeSourceSnapshot(cloneConfigWithResolutionFacts(params.secretsSourceConfig));
   return true;
 }
 
@@ -996,7 +1156,7 @@ export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapsho
     return [];
   }
   return activeSnapshot.authStores.flatMap((entry) => {
-    const store = getRuntimeAuthProfileStoreSnapshot(entry.agentDir);
+    const store = getRuntimeAuthProfileStoreSnapshotCore(entry.agentDir);
     return store ? [{ agentDir: entry.agentDir, store }] : [];
   });
 }
@@ -1004,7 +1164,7 @@ export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapsho
 /**
  * Clears active secrets runtime state and all linked config/auth/web-tool snapshots.
  */
-export function clearSecretsRuntimeSnapshot(): void {
+export function clearSecretsRuntimeSnapshotState(): void {
   activeSnapshotRevision += 1;
   activeSnapshotLineageStartRevision = 0;
   activeSnapshotLineageAuthStores = [];
@@ -1012,6 +1172,8 @@ export function clearSecretsRuntimeSnapshot(): void {
   activeSnapshot = null;
   activeRefreshContext = null;
   clearActiveRuntimeWebToolsMetadata();
+  setActiveDegradedSecretOwners([]);
+  clearActiveCredentialDegradedOwners();
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();

@@ -3,33 +3,53 @@
  * transports.
  */
 import { EventEmitter } from "node:events";
-import fs from "node:fs";
-import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
 
-/** Creates temp directories that are removed by the supplied test cleanup hook. */
-export function useAutoCleanupTempDirTracker(registerCleanup: (cleanup: () => void) => unknown) {
-  const dirs = new Set<string>();
-  registerCleanup(() => {
-    for (const dir of dirs) {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+/** Minimal deterministic host terminal observer for Codex harness tests. */
+export function createCodexTestToolTerminalObserver(): NonNullable<
+  EmbeddedRunAttemptParams["observeToolTerminal"]
+> {
+  let lastToolError: ReturnType<
+    NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>
+  >["lastToolError"];
+
+  return (observation) => {
+    const record =
+      typeof observation.arguments === "object" && observation.arguments !== null
+        ? (observation.arguments as Record<string, unknown>)
+        : {};
+    const action = typeof record.action === "string" ? record.action : undefined;
+    const mutation = observation.nativeMutation ?? {
+      mutatingAction: observation.toolName === "message" && action === "send",
+      replaySafe: !(observation.toolName === "message" && action === "send"),
+    };
+    const executionStarted = observation.executionStarted !== false;
+    if (observation.outcome === "failure") {
+      const mutatingAction = executionStarted && mutation.mutatingAction;
+      lastToolError = {
+        toolName: observation.toolName,
+        ...(observation.meta ? { meta: observation.meta } : {}),
+        ...observation.failure,
+        mutatingAction,
+      };
+    } else if (lastToolError?.toolName === observation.toolName) {
+      lastToolError = undefined;
     }
-    dirs.clear();
-  });
-  return {
-    dirs,
-    make(prefix: string): string {
-      const dir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
-      dirs.add(dir);
-      return dir;
-    },
+    return {
+      ...(lastToolError ? { lastToolError } : {}),
+      executionStarted,
+      ...(Object.keys(record).length > 0 ? { executedArguments: record } : {}),
+      sideEffectEvidence: executionStarted && !mutation.replaySafe,
+    };
   };
 }
+
+export { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 
 /** Positional naked-client injection contract confined to tests. */
 export type CodexTestAppServerClientFactory = (

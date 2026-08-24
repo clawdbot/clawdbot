@@ -2,20 +2,20 @@
 // Merges auth overrides, resolves secret refs, validates weak secrets, and generates fallbacks.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  copyConfigResolutionFactsExcept,
+  getConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  hasConfiguredGatewayAuthSecretInput,
   resolveGatewayPasswordSecretRefValue,
   resolveGatewayTokenSecretRefValue,
 } from "./auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
-import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
-import {
-  hasGatewayPasswordEnvCandidate,
-  hasGatewayTokenEnvCandidate,
-  trimToUndefined,
-} from "./credentials.js";
+import { resolveGatewayAuthForConfig, type ResolvedGatewayAuth } from "./auth-resolve.js";
+import { createGatewayCredentialPlan } from "./credential-planner.js";
+import { trimToUndefined } from "./credentials.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
 const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
@@ -63,12 +63,6 @@ export function mergeGatewayTailscaleConfig(
   if (override.mode !== undefined) {
     merged.mode = override.mode;
   }
-  if (override.resetOnExit !== undefined) {
-    merged.resetOnExit = override.resetOnExit;
-  }
-  if (override.serviceName !== undefined) {
-    merged.serviceName = override.serviceName;
-  }
   if (override.preserveFunnel !== undefined) {
     merged.preserveFunnel = override.preserveFunnel;
   }
@@ -85,8 +79,8 @@ function resolveGatewayAuthFromConfig(params: {
     params.cfg.gateway?.tailscale,
     params.tailscaleOverride,
   );
-  return resolveGatewayAuth({
-    authConfig: params.cfg.gateway?.auth,
+  return resolveGatewayAuthForConfig({
+    config: params.cfg,
     authOverride: params.authOverride,
     env: params.env,
     tailscaleMode: tailscaleConfig.mode ?? "off",
@@ -134,7 +128,11 @@ function hasGatewayTokenCandidate(params: {
   ) {
     return true;
   }
-  return hasConfiguredGatewayAuthSecretInput(params.cfg, "gateway.auth.token");
+  const token = createGatewayCredentialPlan({
+    config: params.cfg,
+    env: params.env,
+  }).localToken;
+  return token.hasSecretRef || Boolean(token.value);
 }
 
 function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthConfig }): boolean {
@@ -144,12 +142,8 @@ function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthCo
 }
 
 function hasGatewayPasswordOverrideCandidate(params: {
-  env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  if (hasGatewayPasswordEnvCandidate(params.env)) {
-    return true;
-  }
   return (
     typeof params.authOverride?.password === "string" &&
     params.authOverride.password.trim().length > 0
@@ -171,13 +165,19 @@ export async function ensureGatewayStartupAuth(params: {
   baseHash?: string;
 }): Promise<{
   cfg: OpenClawConfig;
-  auth: ReturnType<typeof resolveGatewayAuth>;
+  auth: ResolvedGatewayAuth;
   generatedToken?: string;
   persistedGeneratedToken: boolean;
 }> {
   assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
   const env = params.env ?? process.env;
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
+  const credentialPlan = createGatewayCredentialPlan({ config: params.cfg, env });
+  const resolutionEvaluated = getConfigResolutionFacts(params.cfg) !== null;
+  const tokenAlreadySubstituted =
+    resolutionEvaluated && typeof params.cfg.gateway?.auth?.token === "string";
+  const passwordAlreadySubstituted =
+    resolutionEvaluated && typeof params.cfg.gateway?.auth?.password === "string";
   // Resolve only refs that can satisfy the effective mode; inactive refs stay
   // as refs so startup does not require unrelated secret providers.
   const [resolvedTokenRefValue, resolvedPasswordRefValue] = await Promise.all([
@@ -185,22 +185,31 @@ export async function ensureGatewayStartupAuth(params: {
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasTokenCandidate:
+      hasTokenOverride:
         hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }) ||
-        hasGatewayTokenEnvCandidate(env),
-      hasPasswordCandidate:
-        hasGatewayPasswordOverrideCandidate({ env, authOverride: params.authOverride }) ||
-        hasConfiguredGatewayAuthSecretInput(params.cfg, "gateway.auth.password"),
+        tokenAlreadySubstituted,
+      hasPasswordOverride:
+        hasGatewayPasswordOverrideCandidate({ authOverride: params.authOverride }) ||
+        passwordAlreadySubstituted,
+      hasTokenFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN)),
+      hasPasswordFallback: Boolean(
+        credentialPlan.envPassword ||
+        credentialPlan.localPassword.value ||
+        credentialPlan.localPassword.hasSecretRef,
+      ),
     }),
     resolveGatewayPasswordSecretRefValue({
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasPasswordCandidate: hasGatewayPasswordOverrideCandidate({
-        env,
-        authOverride: params.authOverride,
-      }),
-      hasTokenCandidate: hasGatewayTokenCandidate({
+      hasPasswordOverride:
+        hasGatewayPasswordOverrideCandidate({ authOverride: params.authOverride }) ||
+        passwordAlreadySubstituted,
+      hasTokenOverride:
+        hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }) ||
+        tokenAlreadySubstituted,
+      hasPasswordFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)),
+      hasTokenFallback: hasGatewayTokenCandidate({
         cfg: params.cfg,
         env,
         authOverride: params.authOverride,
@@ -215,8 +224,25 @@ export async function ensureGatewayStartupAuth(params: {
           ...(resolvedPasswordRefValue ? { password: resolvedPasswordRefValue } : {}),
         }
       : undefined;
-  const resolved = resolveGatewayAuthFromConfig({
+  const tokenCandidate = hasGatewayTokenCandidate({
     cfg: params.cfg,
+    env,
+    authOverride,
+  });
+  const resolutionConfig = tokenCandidate
+    ? params.cfg
+    : {
+        ...params.cfg,
+        gateway: {
+          ...params.cfg.gateway,
+          auth: { ...params.cfg.gateway?.auth, token: undefined },
+        },
+      };
+  if (resolutionConfig !== params.cfg) {
+    copyConfigResolutionFactsExcept(params.cfg, resolutionConfig, ["gateway.auth.token"]);
+  }
+  const resolved = resolveGatewayAuthFromConfig({
+    cfg: resolutionConfig,
     env,
     authOverride,
     tailscaleOverride: params.tailscaleOverride,
@@ -239,6 +265,7 @@ export async function ensureGatewayStartupAuth(params: {
       },
     },
   };
+  copyConfigResolutionFactsExcept(params.cfg, nextCfg, ["gateway.auth.token"]);
   const nextAuth = resolveGatewayAuthFromConfig({
     cfg: nextCfg,
     env,

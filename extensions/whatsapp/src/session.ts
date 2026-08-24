@@ -8,15 +8,14 @@ import type {
   WAMessageKey,
   proto,
 } from "baileys";
-import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { formatCliCommand, VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   createNodeProxyAgent,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { danger, success } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, success, getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readCredsJsonRaw,
@@ -213,6 +212,24 @@ export async function createWaSocket(
     waWebSocketUrl?: string | URL;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
+  return await createWaSocketInternal(printQr, verbose, opts, "normal");
+}
+
+async function createWaSocketInternal(
+  printQr: boolean,
+  verbose: boolean,
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+    beforeCredentialPersistence?: () => Promise<void>;
+    onCredentialPersistenceError?: (error: unknown) => void;
+    onCredentialPersistenceTask?: (task: Promise<unknown>) => void;
+    getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
+    waWebSocketUrl?: string | URL;
+  } & WhatsAppSocketTimingOptions,
+  receiveMode: "normal" | "directory",
+): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
     {
@@ -324,6 +341,7 @@ export async function createWaSocket(
     printQRInTerminal: false,
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
+    fireInitQueries: receiveMode !== "directory",
     markOnlineOnConnect: false,
     ...socketTiming,
     agent,
@@ -335,6 +353,25 @@ export async function createWaSocket(
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });
+  if (receiveMode === "directory") {
+    // A standalone directory lookup must not consume, acknowledge, or react to user
+    // traffic. Keep only Baileys connection/query machinery for the group IQ request.
+    for (const event of [
+      "CB:message",
+      "CB:call",
+      "CB:receipt",
+      "CB:notification",
+      "CB:ack,class:message",
+      "CB:presence",
+      "CB:chatstate",
+      "CB:ib,,dirty",
+      "CB:ib,,offline_preview",
+      "CB:ib,,offline",
+      "CB:ib,,edge_routing",
+    ]) {
+      sock.ws.removeAllListeners(event);
+    }
+  }
   socketRef.current = sock;
   if (pendingSocketAbort) {
     abortSocketAfterCredentialPersistenceFailure(sock, pendingSocketAbort.error);
@@ -386,6 +423,12 @@ export async function createWaSocket(
   }
 
   return sock;
+}
+
+export async function createWaDirectorySocket(
+  authDir: string,
+): Promise<ReturnType<typeof makeWASocket>> {
+  return await createWaSocketInternal(false, false, { authDir }, "directory");
 }
 
 async function resolveEnvProxyAgent(
@@ -506,10 +549,7 @@ export async function waitForWaConnection(
         cleanup();
         const disconnectError = update.lastDisconnect?.error ?? update.lastDisconnect;
         reject(
-          toLintErrorObject(
-            disconnectError ?? new Error("Connection closed"),
-            "Non-Error rejection",
-          ),
+          toErrorObject(disconnectError ?? new Error("Connection closed"), "Non-Error rejection"),
         );
       }
     };
@@ -529,20 +569,6 @@ export async function waitForWaConnection(
 
 export function newConnectionId() {
   return randomUUID();
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 function createConnectionTimeoutError(timeoutMs: number): Error {

@@ -2,7 +2,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
-import { normalizeHealthCheck } from "./health-check-adapter.js";
+import { defineSplitHealthCheckInput, normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import type {
   HealthCheckInput,
@@ -42,9 +42,8 @@ export async function runDoctorHealthRepairs(
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions = {},
 ): Promise<DoctorRepairRunResult> {
-  const checks: readonly RegisteredHealthCheck[] = (opts.checks ?? listHealthChecks()).map(
-    normalizeHealthCheck,
-  );
+  const inputs = opts.checks ?? listHealthChecks().map(defineSplitHealthCheckInput);
+  const checks: readonly RegisteredHealthCheck[] = inputs.map(normalizeHealthCheck);
   const findings: HealthFinding[] = [];
   const remainingFindings: HealthFinding[] = [];
   const changes: string[] = [];
@@ -60,7 +59,11 @@ export async function runDoctorHealthRepairs(
     const runResult = await runHealthCheck(check, detectCtx, opts);
     cfg = runResult.config;
     findings.push(...runResult.findings);
-    remainingFindings.push(...runResult.remainingFindings);
+    // Only a completed validation can replace this check's original findings;
+    // skipped, failed, and unvalidated siblings must remain visible in mixed batches.
+    remainingFindings.push(
+      ...(runResult.checksValidated > 0 ? runResult.remainingFindings : runResult.findings),
+    );
     changes.push(...runResult.changes);
     warnings.push(...runResult.warnings);
     diffs.push(...runResult.diffs);

@@ -2,6 +2,7 @@
 import { Command, CommanderError } from "commander";
 import { VERSION } from "../version.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { isSimpleCommandHelpInvocation } from "./argv.js";
 import type { ProgramContext } from "./program/context.js";
 import { configureProgramHelp } from "./program/help.js";
 
@@ -17,7 +18,10 @@ function resolveSetupOnboardConfigureHelpCommand(
   argv: string[],
 ): SetupOnboardConfigureHelpCommand | null {
   const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.commandPath.length !== 1 || !invocation.hasHelpOrVersion) {
+  if (
+    invocation.commandPath.length !== 1 ||
+    !isSimpleCommandHelpInvocation(argv, SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS)
+  ) {
     return null;
   }
   const command = invocation.commandPath[0];

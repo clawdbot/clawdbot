@@ -12,6 +12,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isRecord,
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -42,10 +43,6 @@ type OpenRouterVideoModel = {
   supported_sizes?: unknown;
 };
 
-type OpenRouterVideoModelsResponse = {
-  data?: OpenRouterVideoModel[];
-};
-
 type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabilities & {
   allowedPassthroughParameters?: readonly string[];
   canonicalSlug?: string;
@@ -60,10 +57,6 @@ type OpenRouterVideoRequestPolicyCacheKey = ReturnType<
 
 type OpenRouterVideoRequestConfig = Parameters<typeof sanitizeConfiguredModelProviderRequest>[0];
 
-function normalizeStringArray(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
-
 function normalizeNumberArray(value: unknown): number[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry))
@@ -71,14 +64,14 @@ function normalizeNumberArray(value: unknown): number[] {
 }
 
 function normalizeResolutionArray(value: unknown): VideoGenerationResolution[] {
-  return normalizeStringArray(value).map(
+  return normalizeTrimmedStringList(value).map(
     (entry) => entry.toUpperCase() as VideoGenerationResolution,
   );
 }
 
 function normalizeFrameImageRoles(value: unknown): Array<"first_frame" | "last_frame"> {
   const seen = new Set<"first_frame" | "last_frame">();
-  for (const entry of normalizeStringArray(value)) {
+  for (const entry of normalizeTrimmedStringList(value)) {
     if (entry === "first_frame" || entry === "last_frame") {
       seen.add(entry);
     }
@@ -98,6 +91,10 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
     }
   }
   return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function isOpenRouterVideoModel(value: unknown): value is OpenRouterVideoModel {
+  return isRecord(value);
 }
 
 function buildOpenRouterVideoModeCapabilities(params: {
@@ -135,12 +132,14 @@ function buildOpenRouterVideoModeCapabilities(params: {
 function buildOpenRouterVideoModelCapabilities(
   model: OpenRouterVideoModel,
 ): OpenRouterVideoModelCatalogCapabilities {
-  const aspectRatios = normalizeStringArray(model.supported_aspect_ratios);
+  const aspectRatios = normalizeTrimmedStringList(model.supported_aspect_ratios);
   const durations = normalizeNumberArray(model.supported_durations);
   const frameImages = normalizeFrameImageRoles(model.supported_frame_images);
   const resolutions = normalizeResolutionArray(model.supported_resolutions);
-  const sizes = normalizeStringArray(model.supported_sizes);
-  const allowedPassthroughParameters = normalizeStringArray(model.allowed_passthrough_parameters);
+  const sizes = normalizeTrimmedStringList(model.supported_sizes);
+  const allowedPassthroughParameters = normalizeTrimmedStringList(
+    model.allowed_passthrough_parameters,
+  );
   const supportsAudio =
     typeof model.generate_audio === "boolean" ? model.generate_audio : undefined;
   const modeCapabilities = buildOpenRouterVideoModeCapabilities({
@@ -190,11 +189,15 @@ function buildOpenRouterVideoModelCapabilities(
 }
 
 function projectOpenRouterVideoModelsToCatalogEntries(
-  payload: OpenRouterVideoModelsResponse,
+  payload: unknown,
 ): Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> {
   const entries: Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> = [];
   const seen = new Set<string>();
-  for (const model of payload.data ?? []) {
+  const models = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+  for (const model of models) {
+    if (!isOpenRouterVideoModel(model)) {
+      continue;
+    }
     const id = normalizeOptionalString(model.id);
     if (!id || seen.has(id)) {
       continue;
@@ -266,7 +269,7 @@ async function fetchOpenRouterVideoModels(params: {
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
-}): Promise<OpenRouterVideoModelsResponse> {
+}): Promise<unknown> {
   return await getCachedLiveCatalogValue({
     keyParts: [
       "openrouter",
@@ -287,7 +290,7 @@ async function fetchOpenRouterVideoModels(params: {
       });
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video models request failed");
-        return await readProviderJsonResponse<OpenRouterVideoModelsResponse>(
+        return await readProviderJsonResponse<unknown>(
           response,
           "OpenRouter video models request failed",
         );

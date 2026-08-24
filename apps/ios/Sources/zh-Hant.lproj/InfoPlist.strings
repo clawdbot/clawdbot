@@ -1,4 +1,3 @@
-"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw 會在你啟用行事曆存取權限時，使用你的行事曆來顯示事件與排程情境。";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
@@ -19,10 +18,10 @@
 "NSMicrophoneUsageDescription" = "OpenClaw 使用麥克風進行即時聊天、語音喚醒、按住說話和語音備忘。";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClaw 可能會使用動作資料，以支援裝置感知的互動與自動化。";
-/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthShareUsageDescription" = "啟用健康摘要後，OpenClaw 會讀取步數、睡眠、靜止心率和體能訓練，以便與您設定的 AI 供應商分享要求的彙整資料。";
-/* OpenClaw source: "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthUpdateUsageDescription" = "OpenClaw 不會寫入或變更健康資料。健康摘要會讀取步數、睡眠、靜止心率和運動記錄，以將所要求的彙總資料分享給您設定的 AI 供應商。";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClaw 會從 Apple 健康 App 讀取您的步數、睡眠、靜止心率和體能訓練資料，以建立您要求的摘要，並透過您的 Gateway 傳送至您設定的 AI 供應商。";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw 不會將資料寫入 Apple 健康 App。它會使用唯讀資料建立您要求的摘要，並透過您的 Gateway 傳送至您設定的 AI 供應商。";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw 可讓您的助理讀取您允許的照片，並讓您選擇要分享的照片。";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

@@ -5,10 +5,10 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.dm
-      - channels.group-messages
+      - channels.inbound-routing-dm
+      - channels.runtime-conversation-routing
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify direct and group replies stay on their originating conversation routes.
   successCriteria:
     - A direct message receives its marker only on the direct conversation.

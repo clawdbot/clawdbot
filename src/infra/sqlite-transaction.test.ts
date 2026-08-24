@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -191,6 +192,34 @@ describe("runSqliteImmediateTransactionSync", () => {
     expect(execCalls).toEqual(["BEGIN IMMEDIATE", "COMMIT", "ROLLBACK"]);
   });
 
+  it("clears cached state before closing after a rollback failure", () => {
+    const execCalls: string[] = [];
+    const operationError = new Error("operation failed");
+    const rollbackError = new Error("rollback failed");
+    let facadeAtClose: unknown;
+    const db = {
+      exec(sql: string) {
+        execCalls.push(sql);
+        if (sql === "ROLLBACK") {
+          throw rollbackError;
+        }
+      },
+      close() {
+        facadeAtClose = getNodeSqliteKysely(db);
+      },
+    } as import("node:sqlite").DatabaseSync;
+    const facadeBeforeClose = getNodeSqliteKysely(db);
+
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => {
+        throw operationError;
+      }),
+    ).toThrow(operationError);
+    expect(execCalls).toEqual(["BEGIN IMMEDIATE", "ROLLBACK"]);
+    expect(facadeAtClose).toBeDefined();
+    expect(facadeAtClose).not.toBe(facadeBeforeClose);
+  });
+
   it("logs one structured warning for a terminal lock failure", () => {
     const execCalls: string[] = [];
     const logger = { warn: vi.fn() };
@@ -231,6 +260,60 @@ describe("runSqliteImmediateTransactionSync", () => {
         sqlitePrimaryCode: 5,
         step: "begin",
       }),
+    );
+  });
+
+  it("does not warn for busyTimeoutMs: 0 with fast successful transactions (regression)", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 5; // Fast: 5ms per step, well under the 1000ms default threshold
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as unknown as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 0,
+      databaseLabel: "agent.sqlite",
+      logger,
+      slowTransactionHoldMs: 0,
+    });
+
+    // busyTimeoutMs: 0 should NOT collapse threshold to 1ms.
+    // With the default 1000ms threshold, 5ms steps are not slow.
+    // Before the fix, this would have produced false-positive warnings.
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.anything(),
+    );
+  });
+
+  it("still warns for busyTimeoutMs: 0 when transaction crosses the default 1000ms threshold", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 1_500; // Genuinely slow: 1500ms per step
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as unknown as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 0,
+      databaseLabel: "agent.sqlite",
+      logger,
+      slowTransactionHoldMs: 0,
+    });
+
+    // The 1000ms default threshold still catches genuinely slow transactions.
+    expect(logger.warn).toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.anything(),
     );
   });
 

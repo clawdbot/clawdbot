@@ -7,6 +7,7 @@ import type { WhatsAppQaGateway } from "./whatsapp-live.contracts.js";
 
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
+const WHATSAPP_QA_AUTH_ARCHIVE_TIMEOUT_MS = 60_000;
 const WHATSAPP_QA_SIGNAL_SESSION_FILE_RE = /^session-[^/\\]+\.json$/u;
 
 type WhatsAppChannelStatus = {
@@ -20,7 +21,7 @@ type WhatsAppChannelStatus = {
   running?: boolean;
 };
 
-export function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
+function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
   return (
     status?.running === true &&
     status.connected === true &&
@@ -114,11 +115,14 @@ export async function waitForWhatsAppChannelStable(gateway: WhatsAppQaGateway, a
 }
 
 async function listTarEntries(archivePath: string): Promise<string[]> {
-  const { stdout } = await runExec("tar", ["-tzf", archivePath], { logOutput: false });
+  const { stdout } = await runExec("tar", ["-tzf", archivePath], {
+    logOutput: false,
+    timeoutMs: WHATSAPP_QA_AUTH_ARCHIVE_TIMEOUT_MS,
+  });
   return normalizeStringEntries(stdout.split("\n"));
 }
 
-export function assertSafeArchiveEntries(entries: string[]) {
+function assertSafeArchiveEntries(entries: string[]) {
   if (entries.length === 0) {
     throw new Error("WhatsApp auth archive is empty.");
   }
@@ -141,7 +145,10 @@ export async function unpackWhatsAppAuthArchive(params: {
   await fs.writeFile(archivePath, Buffer.from(params.archiveBase64, "base64"), { mode: 0o600 });
   const entries = await listTarEntries(archivePath);
   assertSafeArchiveEntries(entries);
-  await runExec("tar", ["-xzf", archivePath, "-C", authDir], { logOutput: false });
+  await runExec("tar", ["-xzf", archivePath, "-C", authDir], {
+    logOutput: false,
+    timeoutMs: WHATSAPP_QA_AUTH_ARCHIVE_TIMEOUT_MS,
+  });
   await fs.rm(archivePath, { force: true });
   if (params.clearSignalSessions === true) {
     await clearWhatsAppAuthSignalSessions(authDir);

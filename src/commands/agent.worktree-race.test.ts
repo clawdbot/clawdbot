@@ -6,14 +6,14 @@ import { promisify } from "node:util";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
+import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { upsertSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -74,7 +74,7 @@ async function seedSession(
   spawnedCwd: string,
   worktree?: { id: string; branch: string; repoRoot: string },
 ): Promise<void> {
-  await upsertSqliteSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey, storePath },
     {
       sessionId: "session-worktree-race",
@@ -132,7 +132,7 @@ describe("agent command worktree admission", () => {
         return { dir: params?.dir ?? "" };
       });
 
-      const preparing = agentCommandTesting.prepareAgentCommandExecution(
+      const preparing = prepareAgentCommandExecution(
         { message: "resume in worktree", sessionKey },
         runtime,
       );
@@ -173,15 +173,16 @@ describe("agent command worktree admission", () => {
         branch: created.branch,
         repoRoot: created.repoRoot,
       });
-      await managedWorktrees.remove({ id: created.id, reason: "manual-delete", force: true });
+      await managedWorktrees.remove({
+        id: created.id,
+        reason: "manual-delete",
+        allowSnapshotLoss: true,
+      });
       expect(getRegistryWorktree(process.env, created.id)?.removedAt).toBeDefined();
 
       let preparationResult: string;
       try {
-        await agentCommandTesting.prepareAgentCommandExecution(
-          { message: "resume in worktree", sessionKey },
-          runtime,
-        );
+        await prepareAgentCommandExecution({ message: "resume in worktree", sessionKey }, runtime);
         preparationResult = "preparation proceeded without its checkout";
       } catch (error) {
         preparationResult = `preparation fails: ${(error as Error).message}`;

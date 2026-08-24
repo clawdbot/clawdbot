@@ -1,12 +1,12 @@
 // Classifies acceptable live-provider drift for optional validation lanes.
 import { describe, expect, it } from "vitest";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
   isLiveAuthDrift,
   isLiveBillingDrift,
   isLiveProviderUnavailableDrift,
   isLiveRateLimitDrift,
-  shouldSkipLiveProviderDrift,
-} from "./live-test-provider-drift.js";
+} from "./live-test-provider-drift.test-support.js";
 
 describe("live test provider drift", () => {
   it("classifies provider account drift", () => {

@@ -1,9 +1,9 @@
 // Resolves native module require paths for plugin runtime loading.
 import fs from "node:fs";
-import { createRequire } from "node:module";
-import Module from "node:module";
+import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
 type ResolveFilename = (
@@ -53,6 +53,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
   return (
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
+    code === "ERR_REQUIRE_ESM_RACE_CONDITION" ||
     isMissingTargetModuleError(candidate, modulePath)
   );
 }
@@ -130,17 +131,12 @@ function clearRequireCacheSubtree(
   const cached = nodeRequire.cache[resolvedPath];
   if (cached) {
     for (const child of cached.children) {
-      if (isPathInsideOrSame(dependencyRoot, child.id)) {
+      if (isPathInside(dependencyRoot, child.id)) {
         clearRequireCacheSubtree(child.id, dependencyRoot, seen);
       }
     }
   }
   delete nodeRequire.cache[resolvedPath];
-}
-
-function isPathInsideOrSame(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function requireWithOptionalAliases(

@@ -7,17 +7,17 @@
     <uses-permission android:name="${applicationId}.permission.RUN_VOICE_E2E" />
 
     <application>
+        <!-- Compose/Robolectric needs a generic host; the app theme keeps AppCompat dialog tests valid. -->
         <activity
-            android:name=".ui.CanvasLifecycleTestActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation"
+            android:name="androidx.activity.ComponentActivity"
             android:exported="false"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+            android:theme="@style/Theme.OpenClawNode" />
         <receiver
             android:name=".VoiceE2eReceiver"
             android:permission="${applicationId}.permission.RUN_VOICE_E2E"
             android:exported="false">
             <intent-filter>
-                <action android:name="ai.openclaw.app.debug.RUN_VOICE_E2E" />
+                <action android:name="${applicationId}.RUN_VOICE_E2E" />
             </intent-filter>
         </receiver>
         <service

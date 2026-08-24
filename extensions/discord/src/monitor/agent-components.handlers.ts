@@ -12,6 +12,7 @@ import {
   ensureComponentUserAllowed,
   mapSelectValues,
   parseDiscordComponentData,
+  replyUnavailableComponentInteraction,
   resolveAuthorizedComponentInteraction,
   resolveInteractionCustomId,
 } from "./agent-components-helpers.js";
@@ -35,14 +36,10 @@ async function handleDiscordComponentEvent(params: {
   );
   if (!parsed) {
     logError(`${params.label}: failed to parse component data`);
-    try {
-      await params.interaction.reply({
-        content: "This component is no longer valid.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "This component is no longer valid.",
+    );
     return;
   }
 
@@ -51,14 +48,7 @@ async function handleDiscordComponentEvent(params: {
     consume: false,
   });
   if (!entry) {
-    try {
-      await params.interaction.reply({
-        content: "This component has expired.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, "This component has expired.");
     return;
   }
 
@@ -101,26 +91,15 @@ async function handleDiscordComponentEvent(params: {
     consume: !entry.reusable,
   });
   if (!consumed) {
-    try {
-      await params.interaction.reply({
-        content: "This component has expired.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, "This component has expired.");
     return;
   }
 
   if (consumed.kind === "modal-trigger") {
-    try {
-      await params.interaction.reply({
-        content: "This form is no longer available.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "This form is no longer available.",
+    );
     return;
   }
 
@@ -203,14 +182,10 @@ async function handleDiscordModalTrigger(params: {
   );
   if (!parsed) {
     logError(`${params.label}: failed to parse modal trigger data`);
-    try {
-      await params.interaction.reply({
-        content: "This button is no longer valid.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "This button is no longer valid.",
+    );
     return;
   }
   const entry = await resolveDiscordComponentEntryWithPersistence({
@@ -218,27 +193,16 @@ async function handleDiscordModalTrigger(params: {
     consume: false,
   });
   if (!entry || entry.kind !== "modal-trigger") {
-    try {
-      await params.interaction.reply({
-        content: "This button has expired.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, "This button has expired.");
     return;
   }
 
   const modalId = entry.modalId ?? parsed.modalId;
   if (!modalId) {
-    try {
-      await params.interaction.reply({
-        content: "This form is no longer available.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "This form is no longer available.",
+    );
     return;
   }
 
@@ -274,14 +238,7 @@ async function handleDiscordModalTrigger(params: {
     consume: !entry.reusable,
   });
   if (!consumed) {
-    try {
-      await params.interaction.reply({
-        content: "This form has expired.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, "This form has expired.");
     return;
   }
 
@@ -291,14 +248,7 @@ async function handleDiscordModalTrigger(params: {
     consume: false,
   });
   if (!modalEntry) {
-    try {
-      await params.interaction.reply({
-        content: "This form has expired.",
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, "This form has expired.");
     return;
   }
 
@@ -308,6 +258,10 @@ async function handleDiscordModalTrigger(params: {
     );
   } catch (err) {
     logError(`${params.label}: failed to show modal: ${String(err)}`);
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "Could not open this form. Request a new form and try again.",
+    );
   }
 }
 

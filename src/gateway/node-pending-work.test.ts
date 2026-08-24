@@ -2,7 +2,12 @@
  * Node pending-work tracking tests.
  */
 import { describe, expect, it, vi } from "vitest";
-import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
+import {
+  clearNodePendingWork,
+  drainNodePendingWork,
+  enqueueNodePendingWork,
+  removeNodePendingWorkItem,
+} from "./node-pending-work.js";
 
 describe("node pending work", () => {
   it("returns a baseline status request even when no explicit work is queued", () => {
@@ -31,6 +36,97 @@ describe("node pending work", () => {
     expect(afterDrain.deduped).toBe(false);
     expect(afterDrain.item.id).not.toBe(first.item.id);
     drainNodePendingWork("node-2");
+  });
+
+  it("clears explicit work when a pairing is removed", () => {
+    enqueueNodePendingWork({ nodeId: "node-removed", type: "location.request" });
+
+    expect(clearNodePendingWork(" node-removed ")).toBe(true);
+    expect(drainNodePendingWork("node-removed").items.map((item) => item.id)).toEqual([
+      "baseline-status",
+    ]);
+    expect(clearNodePendingWork("node-removed")).toBe(false);
+  });
+
+  it("keeps explicit work isolated from a replacement pairing generation", () => {
+    enqueueNodePendingWork({
+      nodeId: "node-replaced",
+      type: "location.request",
+      pairingGeneration: "generation-1",
+    });
+
+    const drained = drainNodePendingWork("node-replaced", {
+      pairingGeneration: "generation-2",
+    });
+
+    expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
+    expect(
+      drainNodePendingWork("node-replaced", { pairingGeneration: "generation-1" }).items.map(
+        (item) => item.type,
+      ),
+    ).toEqual(["location.request", "status.request"]);
+  });
+
+  it("prunes expired work from retired generations on current-generation access", () => {
+    enqueueNodePendingWork({
+      nodeId: "node-retired-generation",
+      type: "location.request",
+      expiresInMs: 1_000,
+      pairingGeneration: "generation-1",
+    });
+
+    drainNodePendingWork("node-retired-generation", {
+      pairingGeneration: "generation-2",
+      nowMs: Date.now() + 2_000,
+    });
+
+    expect(clearNodePendingWork("node-retired-generation", "generation-1")).toBe(false);
+  });
+
+  it("does not let a stale drain delete replacement-generation work", () => {
+    enqueueNodePendingWork({
+      nodeId: "node-stale-drain",
+      type: "location.request",
+      pairingGeneration: "generation-2",
+    });
+
+    expect(
+      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-1" }).items.map(
+        (item) => item.id,
+      ),
+    ).toEqual(["baseline-status"]);
+    expect(
+      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-2" }).items.map(
+        (item) => item.type,
+      ),
+    ).toEqual(["location.request", "status.request"]);
+  });
+
+  it("rolls back only the exact item owned by one enqueue", () => {
+    const location = enqueueNodePendingWork({
+      nodeId: "node-item-rollback",
+      type: "location.request",
+      pairingGeneration: "generation-1",
+    });
+    enqueueNodePendingWork({
+      nodeId: "node-item-rollback",
+      type: "status.request",
+      pairingGeneration: "generation-1",
+    });
+
+    expect(
+      removeNodePendingWorkItem({
+        nodeId: "node-item-rollback",
+        itemId: location.item.id,
+        pairingGeneration: "generation-1",
+      }),
+    ).toBe(true);
+    expect(
+      drainNodePendingWork("node-item-rollback", {
+        pairingGeneration: "generation-1",
+        includeDefaultStatus: false,
+      }).items.map((item) => item.type),
+    ).toEqual(["status.request"]);
   });
 
   it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {

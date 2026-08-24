@@ -1,13 +1,16 @@
 // Discord tests cover threading.starter plugin behavior.
 import { StickerFormatType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client } from "../internal/discord.js";
-import { resetDiscordThreadStarterCacheForTest, resolveDiscordThreadStarter } from "./threading.js";
+import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
+import { resolveDiscordThreadStarter } from "./threading.js";
 
 type ResolvedThreadStarter = NonNullable<Awaited<ReturnType<typeof resolveDiscordThreadStarter>>>;
+let threadIdIndex = 0;
 
 type ThreadStarterRestMessage = {
   content?: string | null;
+  attachments?: unknown[];
   embeds?: Array<{ title?: string | null; description?: string | null }>;
   message_snapshots?: Array<{
     message?: {
@@ -17,6 +20,7 @@ type ThreadStarterRestMessage = {
       sticker_items?: unknown[];
     };
   }>;
+  sticker_items?: unknown[];
   author?: {
     id?: string | null;
     username?: string | null;
@@ -90,21 +94,81 @@ async function resolveStarter(params: {
 }) {
   const get = vi.fn().mockResolvedValue(params.message);
   const client = { rest: { get } } as unknown as Client;
+  const threadId = `thread-${++threadIdIndex}`;
 
   const result = await resolveDiscordThreadStarter({
-    channel: { id: "thread-1" },
+    channel: { id: threadId },
     client,
     parentId: params.parentId ?? "parent-1",
     parentType: params.parentType ?? ChannelType.GuildText,
     resolveTimestampMs: params.resolveTimestampMs ?? (() => undefined),
   });
 
-  return { get, result };
+  return { get, result, threadId };
 }
 
 describe("resolveDiscordThreadStarter", () => {
-  beforeEach(() => {
-    resetDiscordThreadStarterCacheForTest();
+  it("refreshes edited starter content in threads that stay active for a full day", async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = new Date("2026-08-23T00:00:00.000Z");
+      vi.setSystemTime(startedAt);
+      let content = "Original assignment";
+      const get = vi.fn(async () => createStarterMessage({ content }));
+      const client = { rest: { get } } as unknown as Client;
+      const params = {
+        channel: { id: `active-thread-${++threadIdIndex}` },
+        client,
+        parentId: "parent-1",
+        parentType: ChannelType.GuildText,
+        resolveTimestampMs: () => undefined,
+      };
+
+      expect(requireThreadStarter(await resolveDiscordThreadStarter(params)).text).toBe(
+        "Original assignment",
+      );
+      content = "Updated assignment";
+
+      for (let minute = 4; minute <= 24 * 60; minute += 4) {
+        vi.setSystemTime(startedAt.getTime() + minute * 60_000);
+        await resolveDiscordThreadStarter(params);
+      }
+
+      expect(requireThreadStarter(await resolveDiscordThreadStarter(params)).text).toBe(
+        "Updated assignment",
+      );
+      expect(get.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { name: "the exact five-minute freshness boundary", now: 1_300_000 },
+    { name: "a clock rollback before the starter was fetched", now: 999_999 },
+  ])("invalidates cached thread starters at $name", ({ now }) => {
+    const key = `expired-thread-${++threadIdIndex}`;
+    setCachedThreadStarter(key, { text: "stale", author: "Alice" }, 1_000_000);
+
+    expect(getCachedThreadStarter(key, now)).toBeUndefined();
+  });
+
+  it("retains recently used thread starters when the 500-entry cache reaches capacity", () => {
+    const prefix = `lru-thread-${++threadIdIndex}-`;
+    for (let index = 0; index < 500; index += 1) {
+      setCachedThreadStarter(
+        `${prefix}${index}`,
+        { text: `starter-${index}`, author: "Alice" },
+        1_000_000,
+      );
+    }
+
+    expect(getCachedThreadStarter(`${prefix}0`, 1_000_001)?.text).toBe("starter-0");
+    setCachedThreadStarter(`${prefix}500`, { text: "new starter", author: "Alice" }, 1_000_002);
+
+    expect(getCachedThreadStarter(`${prefix}0`, 1_000_003)?.text).toBe("starter-0");
+    expect(getCachedThreadStarter(`${prefix}1`, 1_000_003)).toBeUndefined();
+    expect(getCachedThreadStarter(`${prefix}500`, 1_000_003)?.text).toBe("new starter");
   });
 
   it("falls back to joined embed title and description when content is empty", async () => {
@@ -126,6 +190,16 @@ describe("resolveDiscordThreadStarter", () => {
       memberRoleIds: undefined,
       timestamp: 123,
     });
+  });
+
+  it("preserves ordered text from later embeds in REST-fetched thread starters", async () => {
+    const { result } = await resolveStarter({
+      message: createStarterMessage({
+        embeds: [{}, { title: "Alert", description: "Details" }, { description: "Follow-up" }],
+      }),
+    });
+
+    expect(requireThreadStarter(result).text).toBe("Alert\nDetails\nFollow-up");
   });
 
   it("prefers starter content over embed fallback text", async () => {
@@ -229,7 +303,8 @@ describe("resolveDiscordThreadStarter", () => {
 
     const starter = requireThreadStarter(result);
     expect(starter.text).toContain("[Forwarded message]");
-    expect(starter.text).toContain("<media:image> (1 image)");
+    expect(starter.text).toContain("<media:image>");
+    expect(starter.text).not.toContain("(1 image)");
   });
 
   it("preserves forwarded sticker placeholders in thread starter context", async () => {
@@ -252,11 +327,29 @@ describe("resolveDiscordThreadStarter", () => {
 
     const starter = requireThreadStarter(result);
     expect(starter.text).toContain("[Forwarded message]");
-    expect(starter.text).toContain("<media:sticker> (1 sticker)");
+    expect(starter.text).toContain("<media:sticker>");
+    expect(starter.text).not.toContain("(1 sticker)");
+  });
+
+  it("renders native media for attachment-only thread starters", async () => {
+    const { result } = await resolveStarter({
+      message: createStarterMessage({
+        attachments: [
+          {
+            id: "a1",
+            filename: "starter.png",
+            content_type: "image/png",
+            url: "https://cdn.discordapp.com/starter.png",
+          },
+        ],
+      }),
+    });
+
+    expect(requireThreadStarter(result).text).toBe("<media:image>");
   });
 
   it("uses the thread id as the message channel id for forum parents", async () => {
-    const { get, result } = await resolveStarter({
+    const { get, result, threadId } = await resolveStarter({
       message: createStarterMessage({ content: "starter content" }),
       parentId: undefined,
       parentType: ChannelType.GuildForum,
@@ -264,7 +357,7 @@ describe("resolveDiscordThreadStarter", () => {
 
     expect(requireThreadStarter(result).text).toBe("starter content");
     expect(get).toHaveBeenCalledTimes(1);
-    expect(firstRestGetPath(get)).toBe("/channels/thread-1/messages/thread-1");
+    expect(firstRestGetPath(get)).toBe(`/channels/${threadId}/messages/${threadId}`);
   });
 
   it("returns null when content, embeds, and snapshots are all empty", async () => {

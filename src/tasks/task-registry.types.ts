@@ -10,23 +10,27 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** Runtime family that owns a task run lifecycle. */
-export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
+/** Runtime families that own task run lifecycles. */
+export const TASK_RUNTIMES = ["subagent", "acp", "cron", "cli"] as const;
+export const TASK_STATUSES = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "lost",
+] as const;
 
-export type TaskStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "timed_out"
-  | "cancelled"
-  | "lost";
+export type TaskRuntime = (typeof TASK_RUNTIMES)[number];
+export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export type TaskDeliveryStatus =
   | "pending"
   | "delivered"
   | "session_queued"
   | "failed"
+  | "dismissed"
   | "parent_missing"
   | "not_applicable";
 
@@ -39,21 +43,14 @@ export type TaskScopeKind = "session" | "system";
 export type TaskStatusCounts = Record<TaskStatus, number>;
 export type TaskRuntimeCounts = Record<TaskRuntime, number>;
 
-const TASK_RUNTIMES = new Set<TaskRuntime>(["subagent", "acp", "cli", "cron"]);
-const TASK_STATUSES = new Set<TaskStatus>([
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "timed_out",
-  "cancelled",
-  "lost",
-]);
+const TASK_RUNTIME_SET = new Set<TaskRuntime>(TASK_RUNTIMES);
+const TASK_STATUS_SET = new Set<TaskStatus>(TASK_STATUSES);
 const TASK_DELIVERY_STATUSES = new Set<TaskDeliveryStatus>([
   "pending",
   "delivered",
   "session_queued",
   "failed",
+  "dismissed",
   "parent_missing",
   "not_applicable",
 ]);
@@ -73,11 +70,11 @@ function parsePersistedTaskValue<T extends string>(
 }
 
 export function parseTaskRuntime(value: unknown): TaskRuntime {
-  return parsePersistedTaskValue(value, TASK_RUNTIMES, "runtime");
+  return parsePersistedTaskValue(value, TASK_RUNTIME_SET, "runtime");
 }
 
 export function parseTaskStatus(value: unknown): TaskStatus {
-  return parsePersistedTaskValue(value, TASK_STATUSES, "status");
+  return parsePersistedTaskValue(value, TASK_STATUS_SET, "status");
 }
 
 export function parseTaskDeliveryStatus(value: unknown): TaskDeliveryStatus {
@@ -106,6 +103,7 @@ export type TaskRegistrySummary = {
   failures: number;
   byStatus: TaskStatusCounts;
   byRuntime: TaskRuntimeCounts;
+  warning?: string;
 };
 
 export type TaskEventKind = TaskStatus | "progress";

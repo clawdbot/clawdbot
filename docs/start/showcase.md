@@ -119,7 +119,7 @@ Desktop app to manage skills and commands across Agents, Claude, Codex, and Open
   <img src="/assets/showcase/agents-ui.jpg" alt="Agents UI app" />
 </Card>
 
-<Card title="Telegram voice notes (papla.media)" icon="microphone" href="https://papla.media/docs">
+<Card title="Telegram voice notes (papla.media)" icon="microphone">
   **Community** • `voice` `tts` `telegram`
 
 Wraps papla.media TTS and sends results as Telegram voice notes (no annoying autoplay).

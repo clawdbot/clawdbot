@@ -2,6 +2,27 @@
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { CronServiceState } from "./state.js";
 
+export function enqueueCronSystemEvent(
+  state: CronServiceState,
+  text: string,
+  opts?: Parameters<CronServiceState["deps"]["enqueueSystemEvent"]>[1],
+) {
+  return state.deps.enqueueSystemEvent(text, opts);
+}
+
+export function requestCronHeartbeat(
+  state: CronServiceState,
+  opts: {
+    intent: "immediate" | "event";
+    reason: string;
+    agentId?: string;
+    sessionKey?: string;
+    heartbeat?: { target?: "last" };
+  },
+) {
+  state.deps.requestHeartbeat({ source: "cron", ...opts });
+}
+
 /** Enqueues a manual cron wake event and optionally pokes the targeted heartbeat loop. */
 export function wake(
   state: CronServiceState,
@@ -10,7 +31,7 @@ export function wake(
     text: string;
     /**
      * Internal session key to enqueue the system event against. When omitted,
-     * the dep's default (heartbeat / main) is used — wakes from a non-main
+     * the dep resolves the configured system-agent target — wakes from a non-main
      * session would otherwise route to the wrong place. Callers wiring an
      * agent-tool `wake` should thread the resolved session key (e.g. from
      * `cron-tool`'s `resolveInternalSessionKey`) so the event lands on the
@@ -38,8 +59,8 @@ export function wake(
   // Carry the originating session's channel-correct delivery context (e.g. the
   // bound Telegram topic/thread) so a wake routes back into that thread instead
   // of the chat root. Only attempt this when an origin session is targeted; a
-  // no-origin wake keeps the exact pre-fix `enqueueSystemEvent(text, undefined)`
-  // shape so its default-sessionKey binding still kicks in.
+  // A no-origin wake keeps the empty option shape so the Gateway adapter can
+  // resolve the current system-agent owner and session atomically.
   const originDeliveryContext =
     sessionKey || agentId
       ? state.deps.resolveOriginDeliveryContext?.({ sessionKey, agentId })

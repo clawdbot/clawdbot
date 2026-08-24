@@ -77,6 +77,113 @@ class AndroidAudioInputSessionTest {
   }
 
   @Test
+  fun presentPreferredInputResolvesByStableKey() {
+    val sco = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+
+    val resolved = resolvePreferredAudioInput(listOf(ble, sco), audioInputDeviceKey(sco))
+
+    assertEquals(sco.id, resolved?.id)
+    assertEquals(sco.type, resolved?.type)
+  }
+
+  @Test
+  fun rejectedPreferredInputRestoresAutomaticBluetoothRouting() {
+    val sco = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    val scoOutput = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val bleOutput = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    shadowAudioManager.setInputDevices(listOf(sco, ble))
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(scoOutput, bleOutput))
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        preferredDeviceKey = audioInputDeviceKey(sco),
+      )
+
+    assertEquals(ble.type, session.requestedInputType)
+    assertNull(session.appliedPreferredDeviceKey)
+    assertEquals(AudioDeviceInfo.TYPE_BLE_HEADSET, audioManager.communicationDevice?.type)
+    session.close()
+  }
+
+  @Test
+  fun unresolvedPreferredInputKeepsAutomaticBluetoothRouting() {
+    val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    val bleOutput = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    shadowAudioManager.setInputDevices(listOf(ble))
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(bleOutput))
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        preferredDeviceKey = "missing",
+      )
+
+    assertEquals(AudioDeviceInfo.TYPE_BLE_HEADSET, session.requestedInputType)
+    assertEquals(AudioDeviceInfo.TYPE_BLE_HEADSET, audioManager.communicationDevice?.type)
+    session.close()
+  }
+
+  @Test
+  fun stableInputKeyUsesDeviceAttributesInsteadOfRuntimeId() {
+    val key = audioInputDeviceKey(type = 26, address = "usb:1", productName = "Desk Mic")
+
+    assertEquals("26|usb%3A1|Desk+Mic", key)
+    assertEquals(AudioInputDeviceOption(key, "Desk Mic", 26), audioInputDeviceOptionFromKey(key))
+  }
+
+  @Test
+  fun unavailablePreferredInputIsRetainedWhenItAppearsLater() {
+    val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    val bleOutput = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    val wired = audioDevice(AudioDeviceInfo.TYPE_WIRED_HEADSET)
+    val preferredDeviceKey = audioInputDeviceKey(wired)
+    shadowAudioManager.setInputDevices(listOf(ble))
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(bleOutput))
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        preferredDeviceKey = preferredDeviceKey,
+        setPreferredDevice = { true },
+      )
+
+    shadowAudioManager.addInputDevice(wired, true)
+    shadowOf(Looper.getMainLooper()).idle()
+
+    assertEquals(wired.type, session.requestedInputType)
+    session.close()
+  }
+
+  @Test
+  fun deviceObserverTracksHotPlugAndStopsAfterClose() {
+    val builtIn = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_MIC)
+    shadowAudioManager.setInputDevices(listOf(builtIn))
+    val snapshots = mutableListOf<List<AudioInputDeviceOption>>()
+
+    val observer = AndroidAudioInputSession.observeAvailableDevices(context, snapshots::add)
+    assertEquals(listOf(builtIn.type), snapshots.last().map(AudioInputDeviceOption::type))
+
+    val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    shadowAudioManager.addInputDevice(ble, true)
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals(setOf(builtIn.type, ble.type), snapshots.last().mapTo(mutableSetOf(), AudioInputDeviceOption::type))
+
+    observer.close()
+    val snapshotCount = snapshots.size
+    shadowAudioManager.addInputDevice(audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO), true)
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals(snapshotCount, snapshots.size)
+  }
+
+  @Test
   fun closeRestoresDefaultInputAndUnregistersDeviceCallback() {
     val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
     val bleOutput = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)

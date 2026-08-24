@@ -2,9 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   invokeRegisteredNodeHostCommand,
   listRegisteredNodeHostCapsAndCommands,
+  notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 
@@ -96,6 +98,42 @@ describe("plugin node-host registry", () => {
     ]);
   });
 
+  it("publishes a validated Computer Use descriptor beside its command pair", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "computer",
+        pluginName: "Computer",
+        command: {
+          command: "computer.act",
+          cap: "computer",
+          computerUse: () => ({
+            contractVersion: 2,
+            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+            actions: ["screenshot", "left_click"],
+            targets: ["screen"],
+            deliveryModes: ["foreground"],
+            observations: ["image"],
+            features: { recording: false, agentCursor: false, multiDisplay: false },
+          }),
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toMatchObject({
+      caps: ["computer"],
+      commands: ["computer.act"],
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", generation: "generation-1" },
+        actions: ["screenshot", "left_click"],
+      },
+    });
+  });
+
   it("skips agent tool descriptors with provider-unsafe names", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
@@ -166,6 +204,7 @@ describe("plugin node-host registry", () => {
     let notify: (() => void) | undefined;
     const cleanup = vi.fn();
     const onChange = vi.fn();
+    const scopedRegistry = vi.fn();
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
       {
@@ -176,7 +215,11 @@ describe("plugin node-host registry", () => {
           cap: "browser",
           watchAvailability: (_context, callback) => {
             notify = callback;
-            return cleanup;
+            scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+            return () => {
+              scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+              cleanup();
+            };
           },
           handle: vi.fn(async () => "{}"),
         },
@@ -185,15 +228,41 @@ describe("plugin node-host registry", () => {
     ];
     setActivePluginRegistry(registry);
 
-    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, onChange);
+    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, () => {
+      scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+      onChange();
+    });
     notify?.();
     expect(onChange).toHaveBeenCalledOnce();
     stop();
     expect(cleanup).toHaveBeenCalledOnce();
+    expect(scopedRegistry).toHaveBeenCalledTimes(3);
+    expect(scopedRegistry).toHaveBeenNthCalledWith(1, registry);
+    expect(scopedRegistry).toHaveBeenNthCalledWith(2, registry);
+    expect(scopedRegistry).toHaveBeenNthCalledWith(3, registry);
+  });
+
+  it("notifies each shared plugin disconnect owner once", async () => {
+    const onDisconnect = vi.fn(async () => {});
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = ["screen.snapshot", "computer.act"].map((command) => ({
+      pluginId: "computer",
+      pluginName: "Computer",
+      command: { command, onDisconnect, handle: vi.fn(async () => "{}") },
+      source: "test",
+    }));
+    setActivePluginRegistry(registry);
+
+    await notifyRegisteredNodeHostCommandDisconnect();
+
+    expect(onDisconnect).toHaveBeenCalledOnce();
   });
 
   it("dispatches plugin-declared node-host commands", async () => {
-    const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
+    const handle = vi.fn(async (paramsJSON?: string | null) => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+      return paramsJSON ?? "";
+    });
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
       {

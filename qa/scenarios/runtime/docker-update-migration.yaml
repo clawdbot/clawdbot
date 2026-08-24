@@ -2,8 +2,8 @@ title: Docker update migration
 
 scenario:
   id: docker-update-migration
-  surface: cli-install-update-onboard-doctor
-  category: cli-install-update-onboard-doctor.updates-and-upgrades
+  surface: cli
+  category: cli.updates-and-upgrades
   coverage:
     primary:
       - cli.plugin-convergence

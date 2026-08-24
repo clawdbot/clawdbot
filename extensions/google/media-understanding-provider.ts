@@ -35,6 +35,7 @@ async function generateGeminiInlineDataText(params: {
   model?: string;
   prompt?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
   defaultBaseUrl: string;
   defaultModel: string;
@@ -90,6 +91,7 @@ async function generateGeminiInlineDataText(params: {
     headers,
     body,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

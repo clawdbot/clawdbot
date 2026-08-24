@@ -1,7 +1,8 @@
 // Discord tests cover components plugin behavior.
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDiscordComponentEntriesForTest } from "./components-registry.test-support.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
@@ -17,6 +18,13 @@ let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js"
 let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
 let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
+let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
+type DiscordRuntime = Parameters<typeof import("./runtime.js").setDiscordRuntime>[0];
+
+const { clearRuntime: clearDiscordRuntime } = createPluginRuntimeStore<DiscordRuntime>({
+  pluginId: "discord",
+  errorMessage: "Discord runtime not initialized",
+});
 
 beforeAll(async () => {
   ({
@@ -35,6 +43,7 @@ beforeAll(async () => {
     parseDiscordModalCustomIdForInteraction,
     readDiscordComponentSpec,
   } = await import("./components.js"));
+  ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
 describe("discord components", () => {
@@ -309,11 +318,22 @@ describe("discord components", () => {
 
 describe("discord component registry", () => {
   beforeEach(() => {
+    // The runtime slot is global across Vitest files; discard sibling mocks
+    // before this suite opens its persistent registry stores.
+    clearDiscordRuntime();
     clearDiscordComponentEntriesForTest();
     vi.restoreAllMocks();
   });
 
+  afterEach(() => {
+    clearDiscordRuntime();
+  });
+
   const componentsRegistryModuleUrl = new URL("./components-registry.ts", import.meta.url).href;
+  const componentsRegistryStateModuleUrl = new URL(
+    "./components-registry-state.ts",
+    import.meta.url,
+  ).href;
 
   it("registers and consumes component entries", async () => {
     registerDiscordComponentEntries({
@@ -410,6 +430,21 @@ describe("discord component registry", () => {
     clearDiscordComponentEntriesForTest();
   });
 
+  it("shares persistent registry state across duplicate state modules", async () => {
+    const first = (await import(
+      `${componentsRegistryStateModuleUrl}?t=first-${Date.now()}`
+    )) as typeof import("./components-registry-state.js");
+    const second = (await import(
+      `${componentsRegistryStateModuleUrl}?t=second-${Date.now()}`
+    )) as typeof import("./components-registry-state.js");
+
+    first.discordComponentRegistryState.persistentRegistryDisabled = true;
+
+    expect(second.discordComponentRegistryState).toBe(first.discordComponentRegistryState);
+    expect(second.discordComponentRegistryState.persistentRegistryDisabled).toBe(true);
+    clearDiscordComponentEntriesForTest();
+  });
+
   it("expires component entries registered while the process clock is invalid", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
@@ -477,7 +512,6 @@ describe("discord component registry", () => {
     const openKeyedStore = vi.fn((opts: { namespace: string }) =>
       opts.namespace === "discord.components" ? componentStore : modalStore,
     );
-    const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
@@ -559,7 +593,6 @@ describe("discord component registry", () => {
     const openKeyedStore = vi.fn((opts: { namespace: string }) =>
       opts.namespace === "discord.components" ? componentStore : modalStore,
     );
-    const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
@@ -652,7 +685,6 @@ describe("discord component registry", () => {
     const openKeyedStore = vi.fn((opts: { namespace: string }) =>
       opts.namespace === "discord.components" ? componentStore : modalStore,
     );
-    const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
@@ -676,7 +708,6 @@ describe("discord component registry", () => {
   it("falls back to the in-memory registry when persistent state cannot open", async () => {
     const warn = vi.fn();
     const cause = new TypeError("disk busy");
-    const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: {
         openKeyedStore: vi.fn(() => {

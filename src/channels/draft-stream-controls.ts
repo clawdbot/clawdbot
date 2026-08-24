@@ -34,39 +34,45 @@ type DeleteFinalizableDraftMessageParams<T> = Omit<
   "isValidMessageId" | "onDeleteFailure" | "stopForClear"
 >;
 
-type FinalizableDraftLifecycleParams<T> = Omit<
-  ClearFinalizableDraftMessageParams<T>,
+type FinalizableDraftLifecycleParams<TMessageId, TUpdate = string> = Omit<
+  ClearFinalizableDraftMessageParams<TMessageId>,
   "onDeleteFailure" | "stopForClear"
 > & {
   throttleMs: number;
   state: FinalizableDraftStreamState;
-  sendOrEditStreamMessage: (text: string) => Promise<boolean>;
+  sendOrEditStreamMessage: (value: TUpdate) => Promise<void | boolean>;
+  emptyValue?: TUpdate;
+  isEmpty?: (value: TUpdate) => boolean;
 };
 
 /**
  * Creates controls for streaming preview messages that can be finalized, sealed, or cleared.
  */
-export function createFinalizableDraftStreamControls(params: {
+export function createFinalizableDraftStreamControls<T = string>(params: {
   throttleMs: number;
   isStopped: () => boolean;
   isFinal: () => boolean;
   markStopped: () => void;
   markFinal: () => void;
-  sendOrEditStreamMessage: (text: string) => Promise<boolean>;
+  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
+  emptyValue?: T;
+  isEmpty?: (value: T) => boolean;
 }) {
-  const loop = createDraftStreamLoop({
+  const loop = createDraftStreamLoop<T>({
     throttleMs: params.throttleMs,
     isStopped: params.isStopped,
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
+    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
+    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
   });
 
-  const update = (text: string) => {
+  const update = (value: T) => {
     // Finalized or stopped streams must ignore late model deltas so a deleted/posted draft is
     // not recreated by an in-flight throttle tick.
     if (params.isStopped() || params.isFinal()) {
       return;
     }
-    loop.update(text);
+    loop.update(value);
   };
 
   const stop = async (): Promise<void> => {
@@ -102,12 +108,14 @@ export function createFinalizableDraftStreamControls(params: {
 /**
  * Creates finalizable draft controls backed by a shared mutable state object.
  */
-export function createFinalizableDraftStreamControlsForState(params: {
+export function createFinalizableDraftStreamControlsForState<T = string>(params: {
   throttleMs: number;
   state: FinalizableDraftStreamState;
-  sendOrEditStreamMessage: (text: string) => Promise<boolean>;
+  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
+  emptyValue?: T;
+  isEmpty?: (value: T) => boolean;
 }) {
-  return createFinalizableDraftStreamControls({
+  return createFinalizableDraftStreamControls<T>({
     throttleMs: params.throttleMs,
     isStopped: () => params.state.stopped,
     isFinal: () => params.state.final,
@@ -118,6 +126,8 @@ export function createFinalizableDraftStreamControlsForState(params: {
       params.state.final = true;
     },
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
+    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
+    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
   });
 }
 
@@ -178,14 +188,18 @@ export async function clearFinalizableDraftMessage<T>(
 /**
  * Builds the standard draft lifecycle used by channel streaming preview implementations.
  */
-export function createFinalizableDraftLifecycle<T>(params: FinalizableDraftLifecycleParams<T>) {
-  const controls = createFinalizableDraftStreamControlsForState({
+export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
+  params: FinalizableDraftLifecycleParams<TMessageId, TUpdate>,
+) {
+  const controls = createFinalizableDraftStreamControlsForState<TUpdate>({
     throttleMs: params.throttleMs,
     state: params.state,
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
+    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
+    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
   });
 
-  let pendingDeleteIds: T[] = [];
+  let pendingDeleteIds: TMessageId[] = [];
   let clearTail = Promise.resolve();
 
   const clearOnce = async (stopForClear: () => Promise<void>) => {

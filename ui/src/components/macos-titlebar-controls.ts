@@ -11,6 +11,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) historyOnly = false;
   @property({ attribute: false }) canGoBack = false;
   @property({ attribute: false }) canGoForward = false;
+  @property({ attribute: false }) newSessionDisabledReason?: string;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onOpenNewSession?: () => void;
@@ -42,7 +43,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
           onClick: () => globalThis.history.forward(),
           className: "macos-titlebar-controls__forward",
         })}
-        ${this.navCollapsed && !this.historyOnly
+        ${!this.historyOnly
           ? html`
               ${this.renderButton({
                 label: t("chat.openCommandPalette"),
@@ -51,12 +52,18 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                 onClick: this.onOpenPalette,
                 className: "macos-titlebar-controls__search",
               })}
-              ${this.renderButton({
-                label: t("chat.runControls.newSession"),
-                icon: icons.plus,
-                onClick: this.onOpenNewSession,
-                className: "macos-titlebar-controls__new-session",
-              })}
+              ${this.navCollapsed
+                ? this.renderButton({
+                    // While the sidebar rail is collapsed, this mirrors the native
+                    // new-session item and its current Gateway authorization.
+                    label: t("chat.runControls.newSession"),
+                    tooltip: this.newSessionDisabledReason,
+                    icon: icons.plus,
+                    disabled: Boolean(this.newSessionDisabledReason),
+                    onClick: this.onOpenNewSession,
+                    className: "macos-titlebar-controls__new-session",
+                  })
+                : nothing}
             `
           : nothing}
       </nav>

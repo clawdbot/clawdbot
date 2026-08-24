@@ -1,4 +1,4 @@
-// Covers config backup rotation limits and cleanup behavior.
+// Covers config backup rotation limits and snapshot behavior.
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { createPreUpdateConfigSnapshot, maintainConfigBackups } from "./backup-rotation.js";
@@ -24,7 +24,7 @@ async function expectPathMissing(filePath: string): Promise<void> {
 }
 
 describe("config backup rotation", () => {
-  it("keeps five recovery points while preserving the pre-update snapshot", async () => {
+  it("keeps five recovery points while preserving manual and pre-update backups", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
       const writeVersion = (version: number) =>
@@ -34,8 +34,11 @@ describe("config backup rotation", () => {
         return (JSON.parse(raw) as { version: number }).version;
       };
       const { existsSync } = await import("node:fs");
+      const manualBackupPath = `${configPath}.bak.20260808`;
+      const manualBackupContent = JSON.stringify({ version: "manual" });
 
       await writeVersion(0);
+      await fs.writeFile(manualBackupPath, manualBackupContent, "utf-8");
       await createPreUpdateConfigSnapshot({
         configPath,
         fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
@@ -53,15 +56,15 @@ describe("config backup rotation", () => {
       await expect(readVersion(".bak.4")).resolves.toBe(1);
       await expectPathMissing(`${configPath}.bak.5`);
       await expect(readVersion(".pre-update")).resolves.toBe(0);
+      await expect(fs.readFile(manualBackupPath, "utf-8")).resolves.toBe(manualBackupContent);
     });
   });
 
-  it("maintainConfigBackups composes rotate/copy/harden/prune flow", async () => {
+  it("maintainConfigBackups composes rotate/copy/harden flow", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
       await fs.writeFile(configPath, JSON.stringify({ token: "secret" }), { mode: 0o600 });
       await fs.writeFile(`${configPath}.bak`, "previous", { mode: 0o644 });
-      await fs.writeFile(`${configPath}.bak.orphan`, "old");
 
       await maintainConfigBackups(configPath, fs);
 
@@ -77,8 +80,6 @@ describe("config backup rotation", () => {
         const primaryBackupStat = await fs.stat(`${configPath}.bak`);
         expectPosixMode(primaryBackupStat.mode, 0o600);
       }
-      // Out-of-ring orphan gets pruned.
-      await expectPathMissing(`${configPath}.bak.orphan`);
     });
   });
 

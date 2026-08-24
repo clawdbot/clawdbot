@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import OpenClawKit
 import SwiftUI
 
 struct SettingsRootView: View {
@@ -16,7 +17,7 @@ struct SettingsRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
-    private let isPreview = ProcessInfo.processInfo.isPreview
+    private let isPreview = ProcessInfo.processInfo.isPreview || ProcessInfo.processInfo.isRunningTests
     private let isNixMode = ProcessInfo.processInfo.isNixMode
 
     init(
@@ -28,13 +29,13 @@ struct SettingsRootView: View {
         let initial = initialTab ?? .general
         self.state = state
         self.updater = updater
-        self._selectedTab = State(initialValue: initial)
-        self._cachedTabs = State(initialValue: [initial])
-        self._inferenceConfiguration = State(initialValue: configuredInferenceModel.map {
+        _selectedTab = State(initialValue: initial)
+        _cachedTabs = State(initialValue: [initial])
+        _inferenceConfiguration = State(initialValue: configuredInferenceModel.map {
             .loaded($0)
         } ?? .loading)
-        self._trackedInferenceGatewayID = State(initialValue: nil)
-        self._deferredTab = State(initialValue: nil)
+        _trackedInferenceGatewayID = State(initialValue: nil)
+        _deferredTab = State(initialValue: nil)
     }
 
     var body: some View {
@@ -55,6 +56,7 @@ struct SettingsRootView: View {
             self.detailContainer
         }
         .navigationSplitViewStyle(.balanced)
+        .defaultAppStorage(AppDefaults.standard)
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
@@ -202,6 +204,10 @@ struct SettingsRootView: View {
             ForEach(self.cachedDetailTabs) { tab in
                 self.detailView(for: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // Keep inactive native scroll views mounted but zero-area; full-size overlaps steal wheel events.
+                    .frame(
+                        width: tab == self.selectedTab ? nil : 0,
+                        height: tab == self.selectedTab ? nil : 0)
                     .opacity(tab == self.selectedTab ? 1 : 0)
                     .allowsHitTesting(tab == self.selectedTab)
                     .disabled(tab != self.selectedTab)
@@ -212,13 +218,29 @@ struct SettingsRootView: View {
     }
 
     private func detailView(for tab: SettingsTab) -> AnyView {
+        guard let dashboardRoute = tab.dashboardRoute else {
+            return self.nativeDetailView(for: tab)
+        }
+        guard self.state.nativeSettingsPanesEnabled else {
+            return AnyView(DashboardHandoffSettingsView(tab: tab, dashboardRoute: dashboardRoute))
+        }
+        return AnyView(VStack(alignment: .leading, spacing: 10) {
+            self.legacyDashboardBanner(route: dashboardRoute)
+            self.nativeDetailView(for: tab)
+        })
+    }
+
+    private func nativeDetailView(for tab: SettingsTab) -> AnyView {
         switch tab {
         case .general:
             AnyView(GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab))
         case .connection:
             AnyView(GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab))
+        case .gateways:
+            AnyView(GatewaySettings())
         case .permissions:
             AnyView(PermissionsSettings(
+                state: self.state,
                 status: self.permissionMonitor.status,
                 refresh: self.refreshPerms,
                 showOnboarding: { DebugActions.restartOnboarding() }))
@@ -250,6 +272,25 @@ struct SettingsRootView: View {
         case .about:
             AnyView(AboutSettings(updater: self.updater))
         }
+    }
+
+    private func legacyDashboardBanner(route: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.secondary)
+            Text("Legacy pane — this now lives in the Dashboard")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("Open in Dashboard") {
+                Task { await DashboardManager.shared.show(atPath: route) }
+            }
+            .buttonStyle(.link)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(Color.gray.opacity(0.12))
+        .cornerRadius(10)
     }
 
     private func selectRequestedTab(_ requested: SettingsTab) {
@@ -321,7 +362,7 @@ struct SettingsRootView: View {
             self.inferenceConfiguration = Self.configurationAfterInferenceRefresh(
                 current: self.inferenceConfiguration,
                 result: .confirmed(model))
-            if let deferredTab = self.deferredTab {
+            if let deferredTab {
                 self.selectRequestedTab(deferredTab)
             }
         } catch is CancellationError {
@@ -441,8 +482,8 @@ struct SettingsTabGroup: Identifiable {
 
     static func defaultGroups(showDebug: Bool, showSystemAgent: Bool) -> [SettingsTabGroup] {
         let basicTabs: [SettingsTab] = showSystemAgent
-            ? [.general, .connection, .permissions, .voiceWake, .systemAgent]
-            : [.general, .connection, .permissions, .voiceWake]
+            ? [.general, .connection, .gateways, .permissions, .voiceWake, .systemAgent]
+            : [.general, .connection, .gateways, .permissions, .voiceWake]
         var groups = [
             SettingsTabGroup(title: "Basics", tabs: basicTabs),
             SettingsTabGroup(title: "Automation", tabs: [.channels, .skills, .cron, .execApprovals]),
@@ -460,7 +501,7 @@ struct SettingsTabGroup: Identifiable {
 }
 
 enum SettingsTab: CaseIterable, Identifiable, Hashable {
-    case general, connection, permissions, voiceWake, systemAgent, channels, skills, cron
+    case general, connection, gateways, permissions, voiceWake, systemAgent, channels, skills, cron
     case execApprovals, sessions, instances, config, debug, about
     static let windowWidth: CGFloat = 1120
     static let windowHeight: CGFloat = 790
@@ -473,6 +514,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         switch self {
         case .general: "General"
         case .connection: "Connection"
+        case .gateways: "Gateways"
         case .permissions: "Permissions"
         case .voiceWake: "Voice & Talk"
         case .systemAgent: "OpenClaw"
@@ -480,7 +522,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .skills: "Skills"
         case .cron: "Cron Jobs"
         case .execApprovals: "Exec Approvals"
-        case .sessions: "Sessions"
+        case .sessions: "Threads"
         case .instances: "Instances"
         case .config: "Config"
         case .debug: "Debug"
@@ -492,6 +534,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         switch self {
         case .general: "gearshape"
         case .connection: "point.3.connected.trianglepath.dotted"
+        case .gateways: "server.rack"
         case .permissions: "lock.shield"
         case .voiceWake: "waveform.circle"
         case .systemAgent: "lifepreserver"
@@ -504,6 +547,18 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .config: "slider.horizontal.3"
         case .debug: "ant"
         case .about: "info.circle"
+        }
+    }
+
+    var dashboardRoute: String? {
+        switch self {
+        case .channels: DashboardRouteMap.channelsSettingsPath
+        case .skills: DashboardRouteMap.skillsPagePath
+        case .cron: DashboardRouteMap.cronJobsPagePath
+        case .sessions: DashboardRouteMap.sessionsPagePath
+        case .instances: DashboardRouteMap.devicesSettingsPath
+        case .general, .connection, .gateways, .permissions, .voiceWake, .systemAgent,
+             .execApprovals, .config, .debug, .about: nil
         }
     }
 }

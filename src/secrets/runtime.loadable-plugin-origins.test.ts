@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
+import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js";
 
 const manifestMocks = vi.hoisted(() => ({
   listPluginOriginsFromMetadataSnapshot: vi.fn(
@@ -20,7 +21,7 @@ const manifestMocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-manifest.runtime.js", () => ({
   listPluginOriginsFromMetadataSnapshot: manifestMocks.listPluginOriginsFromMetadataSnapshot,
-  loadPluginMetadataSnapshot: manifestMocks.loadPluginMetadataSnapshot,
+  resolveConfigWidePluginManifestRegistry: manifestMocks.loadPluginMetadataSnapshot,
 }));
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
@@ -80,7 +81,6 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
           config: {
             plugins?: unknown;
           };
-          workspaceDir: unknown;
           env: Record<string, unknown>;
         },
       ]
@@ -95,7 +95,6 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
         },
       },
     });
-    expect(typeof snapshotParams?.workspaceDir).toBe("string");
     expect(snapshotParams?.env.HOME).toBe("/home/demo");
     expect(snapshotParams?.env.DEMO_API_KEY).toBe("sk-demo");
     expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(snapshot);
@@ -183,22 +182,24 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
           },
         },
       });
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config,
-        assignmentConfig: asConfig({
-          models: config.models,
-          secrets: config.secrets,
+      const snapshot = await withSecureTestNodeExecPath(async () =>
+        prepareSecretsRuntimeSnapshot({
+          config,
+          assignmentConfig: asConfig({
+            models: config.models,
+            secrets: config.secrets,
+          }),
+          env: { HOME: rootDir },
+          includeAuthStoreRefs: false,
+          pluginMetadataSnapshot,
         }),
-        env: { HOME: rootDir },
-        includeAuthStoreRefs: false,
-        pluginMetadataSnapshot,
-      });
+      );
 
       expect(snapshot.config.gateway).toBeUndefined();
       expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("value:models/openai");
       expect(manifestMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
       expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(
-        pluginMetadataSnapshot,
+        pluginMetadataSnapshot.manifestRegistry,
       );
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });

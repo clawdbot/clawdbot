@@ -15,9 +15,15 @@ import {
   deliverSubagentAnnouncement,
   isInternalAnnounceRequesterSession,
   loadRequesterSessionEntry,
+} from "../agents/subagents/announce/subagent-announce-delivery.js";
+import {
+  resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
-} from "../agents/subagent-announce-delivery.js";
-import { resolveAnnounceOrigin } from "../agents/subagent-announce-origin.js";
+} from "../agents/subagents/announce/subagent-announce-origin.js";
+import {
+  getGatewayContextResolver,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
@@ -42,11 +48,21 @@ type SetDeliveryStatusParams = Parameters<typeof setDetachedTaskDeliveryStatusBy
 
 /** Scope and naming options used to bind task operations to one requester session. */
 export type AgentHarnessTaskRuntimeScopeParams = {
-  runtime: AgentHarnessTaskRuntimeId;
   scope: AgentHarnessTaskRuntimeScope;
-  taskKind?: string;
   runIdPrefix?: string;
-};
+} & (
+  | {
+      // Core identifies harness-owned subagent rows by the taskKind stamped here
+      // (isHarnessOwnedSubagentTask); a subagent row created without one would be
+      // read as an OpenClaw-owned child session and reclaimed on the short grace.
+      runtime: Extract<AgentHarnessTaskRuntimeId, "subagent">;
+      taskKind: string;
+    }
+  | {
+      runtime: Exclude<AgentHarnessTaskRuntimeId, "subagent">;
+      taskKind?: string;
+    }
+);
 
 /** Create-task params with runtime and requester scope supplied by the scoped task runtime. */
 export type AgentHarnessScopedCreateRunningTaskRunParams = Omit<
@@ -221,27 +237,32 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     },
   ];
   const prompt = formatAgentInternalEventsForPrompt(internalEvents);
-  return await deliverSubagentAnnouncement({
-    requesterSessionKey,
-    announceId: params.announceId,
-    triggerMessage: prompt,
-    steerMessage: prompt,
-    internalEvents,
-    summaryLine: taskLabel,
-    requesterSessionOrigin: scope.requesterOrigin,
-    requesterOrigin: completionDirectOrigin ?? directOrigin,
-    completionDirectOrigin: completionDirectOrigin ?? directOrigin,
-    directOrigin,
-    sourceSessionKey: childSessionKey,
-    sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-    sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
-    targetRequesterSessionKey: requesterSessionKey,
-    requesterIsSubagent,
-    expectsCompletionMessage: true,
-    bestEffortDeliver: true,
-    directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
-    signal: params.signal,
-  });
+  const deliver = () =>
+    deliverSubagentAnnouncement({
+      requesterSessionKey,
+      announceId: params.announceId,
+      triggerMessage: prompt,
+      steerMessage: prompt,
+      internalEvents,
+      summaryLine: taskLabel,
+      requesterSessionOrigin: scope.requesterOrigin,
+      requesterOrigin: completionDirectOrigin ?? directOrigin,
+      completionDirectOrigin: completionDirectOrigin ?? directOrigin,
+      directOrigin,
+      sourceSessionKey: childSessionKey,
+      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+      sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
+      targetRequesterSessionKey: requesterSessionKey,
+      requesterIsSubagent,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
+      signal: params.signal,
+    });
+  const resolveGatewayContext = getGatewayContextResolver(scope);
+  return resolveGatewayContext
+    ? await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
+    : await deliver();
 }
 
 function mapHarnessCompletionStatus(

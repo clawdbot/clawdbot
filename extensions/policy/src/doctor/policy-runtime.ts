@@ -1,17 +1,25 @@
-import os from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
+import {
+  readExecApprovalsSnapshot,
+  resolveExecApprovalsDisplayPath,
+} from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
 import type { PolicyAuthProfileEvidence } from "../policy-state.js";
-import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 import { CHECK_IDS } from "./check-ids.js";
 import {
   SUPPORTED_AUTH_PROFILE_METADATA,
   SUPPORTED_AUTH_PROFILE_MODES,
 } from "./policy-constants.js";
 import { readPolicyStringArray } from "./utils.js";
+
+export const normalizePolicyChannelId: (value: string) => string = normalizeLowercaseStringOrEmpty;
 
 const loadFsPromisesModule = createLazyRuntimeModule(() => import("node:fs/promises"));
 
@@ -29,7 +37,7 @@ export async function readPolicyFile(
       ocDocName: basename(displayName),
     };
   } catch (err) {
-    if (isNotFound(err)) {
+    if (isNotFoundPathError(err)) {
       return null;
     }
     throw err;
@@ -37,23 +45,18 @@ export async function readPolicyFile(
 }
 
 export async function readExecApprovalsFile(
-  ctx: HealthCheckContext,
+  _ctx: HealthCheckContext,
 ): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
-  const artifact = execApprovalsArtifactLocation(ctx);
-  try {
-    const fs = await loadFsPromisesModule();
-    return {
-      raw: await fs.readFile(artifact.path, "utf-8"),
-      path: artifact.path,
-      displayName: artifact.displayName,
-      ocDocName: "exec-approvals.json",
-    };
-  } catch (err) {
-    if (isNotFound(err)) {
-      return null;
-    }
-    throw err;
+  const snapshot = readExecApprovalsSnapshot();
+  if (!snapshot.exists || snapshot.raw === null) {
+    return null;
   }
+  return {
+    raw: snapshot.raw,
+    path: snapshot.path,
+    displayName: snapshot.path,
+    ocDocName: EXEC_APPROVALS_POLICY_DOCUMENT_NAME,
+  };
 }
 
 export async function readWorkspaceFile(
@@ -65,62 +68,11 @@ export async function readWorkspaceFile(
     const fs = await loadFsPromisesModule();
     return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
-    if (isNotFound(err)) {
+    if (isNotFoundPathError(err)) {
       return null;
     }
     throw err;
   }
-}
-
-function resolvePolicyArtifactPath(ctx: HealthCheckContext, fileName: string): string {
-  if (fileName.startsWith("~/") || fileName.startsWith("~\\")) {
-    const home = resolvePolicyArtifactHomeDir();
-    if (home !== undefined) {
-      return resolve(home, fileName.slice(2));
-    }
-  }
-  return resolveWorkspacePath(ctx, fileName);
-}
-
-function resolvePolicyArtifactHomeDir(): string | undefined {
-  const explicitHome = normalizedEnvValue(process.env.OPENCLAW_HOME);
-  if (explicitHome !== undefined) {
-    if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-      return resolvePolicyHomeRelativePath(explicitHome);
-    }
-    return resolve(explicitHome);
-  }
-  return resolveOsPolicyHomeDir();
-}
-
-function resolvePolicyHomeRelativePath(value: string): string {
-  const fallbackHome = resolveOsPolicyHomeDir();
-  return fallbackHome === undefined
-    ? resolve(value)
-    : resolve(value.replace(/^~(?=$|[\\/])/, fallbackHome));
-}
-
-function resolveOsPolicyHomeDir(): string | undefined {
-  return (
-    normalizedEnvValue(process.env.HOME) ??
-    normalizedEnvValue(process.env.USERPROFILE) ??
-    safeOsHomeDir()
-  );
-}
-
-function safeOsHomeDir(): string | undefined {
-  try {
-    return normalizedEnvValue(os.homedir());
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizedEnvValue(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed === undefined || trimmed === "" || trimmed === "undefined" || trimmed === "null"
-    ? undefined
-    : trimmed;
 }
 
 function resolveWorkspacePath(ctx: HealthCheckContext, fileName: string): string {
@@ -130,7 +82,7 @@ function resolveWorkspacePath(ctx: HealthCheckContext, fileName: string): string
   return resolve(ctx.cwd ?? process.cwd(), fileName);
 }
 
-function isNotFound(err: unknown): boolean {
+function isNotFoundPathError(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
 }
 
@@ -340,76 +292,8 @@ export function authProfileHasMetadata(
   );
 }
 
-function policyToolGlobMatches(tool: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
-}
-
-export function toolListCoversTool(list: readonly string[], tool: string): boolean {
-  for (const entry of list) {
-    const normalized = normalizePolicyToolName(entry);
-    if (normalized === "*" || normalized === tool) {
-      return true;
-    }
-    if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
-      return true;
-    }
-    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function expandPolicyToolRequirement(value: string): readonly string[] {
-  const normalized = normalizePolicyToolName(value);
-  return POLICY_TOOL_GROUPS[normalized] ?? [normalized];
-}
-
-function normalizePolicyToolName(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "bash") {
-    return "exec";
-  }
-  if (normalized === "apply-patch") {
-    return "apply_patch";
-  }
-  return normalized;
-}
-
-export function normalizePolicyChannelId(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function canonicalExecApprovalsPath(): string {
-  return "~/.openclaw/exec-approvals.json";
-}
-
-function execApprovalsArtifactLocation(ctx: HealthCheckContext): {
-  readonly path: string;
-  readonly displayName: string;
-} {
-  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
-  if (stateDir !== undefined) {
-    const path = resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
-    return { path, displayName: path };
-  }
-  return {
-    path: resolvePolicyArtifactPath(ctx, canonicalExecApprovalsPath()),
-    displayName: canonicalExecApprovalsPath(),
-  };
-}
-
 export function execApprovalsDisplayName(): string {
-  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
-  if (stateDir === undefined) {
-    return canonicalExecApprovalsPath();
-  }
-  return resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
-}
-
-function resolvePolicyStateDir(stateDir: string): string {
-  return stateDir.startsWith("~") ? resolvePolicyHomeRelativePath(stateDir) : resolve(stateDir);
+  return resolveExecApprovalsDisplayPath();
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

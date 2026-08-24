@@ -62,20 +62,32 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 
 ## Storage (where tokens live)
 
-Secrets live per agent, keyed by the logical name `auth-profiles.json` (the
-underlying store is the agent's SQLite database; the JSON name is kept for
-compatibility and tooling display):
+Secrets and auth-routing state live in each agent's canonical SQLite database:
 
-- Auth profiles (OAuth + API keys + optional value-level refs):
-  `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-- Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
-  (static `api_key` entries are scrubbed when discovered)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Credential rows: `auth_profile_store`
+- Order, last-good, cooldown, and usage rows: `auth_profile_state`
 
-Legacy import-only file (still supported, but not the main store):
+Older installations may still contain `auth-profiles.json`, `auth-state.json`,
+per-agent `auth.json`, or shared `credentials/oauth.json`. Run
+`openclaw doctor --fix` once after upgrading. Doctor imports verified values,
+records a migration receipt, and renames the original file to a timestamped
+archive.
 
-- `~/.openclaw/credentials/oauth.json` (imported into the auth profile store on first use)
+Runtime never reads these retired files. What happens when one is still present
+depends on whether the SQLite store can already serve credentials for that
+agent:
 
-All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
+- The store holds profiles: the retired file is leftover bytes. Runtime logs a
+  one-time warning naming the file and keeps working; Doctor archives it on the
+  next `--fix`. Doctor never overwrites a usable stored credential with imported
+  values, so the file cannot resurrect a stale token.
+- The store is empty: the credentials still live only in that file, so runtime
+  fails closed for that agent with `AUTH_PROFILE_MIGRATION_REQUIRED` rather than
+  falling through to environment auth. Gateway startup degrades this owner to
+  configured-unavailable instead of refusing to start.
+
+The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
@@ -121,7 +133,7 @@ OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm.t
 
 Flow shape:
 
-1. start Anthropic setup-token or paste-token from OpenClaw
+1. create the token by running `claude setup-token` on any machine with Claude Code, then start Anthropic setup-token or paste-token from OpenClaw
 2. OpenClaw stores the resulting Anthropic credential in an auth profile
 3. model selection stays on `anthropic/...`
 4. existing Anthropic auth profiles remain available for rollback/order control
@@ -197,11 +209,11 @@ The auth profile store supports multiple profile IDs for the same provider.
 Pick which one is used:
 
 - globally via config ordering (`auth.order`)
-- per-session via `/model ...@<profileId>`
+- per-session via `/model ...@<profileId> -s`
 
 Example (session override):
 
-- `/model Opus@anthropic:work`
+- `/model Opus@anthropic:work -s`
 
 List existing profile IDs with:
 

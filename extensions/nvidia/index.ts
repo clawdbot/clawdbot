@@ -1,6 +1,7 @@
 // Nvidia plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyNvidiaConfig, NVIDIA_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildLiveNvidiaProvider,
   buildSelectableNvidiaProvider,
@@ -39,24 +40,15 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "NVIDIA Provider",
   description: "Bundled NVIDIA provider plugin",
+  manifest,
   provider: {
     label: "NVIDIA",
     docsPath: "/providers/nvidia",
-    envVars: ["NVIDIA_API_KEY"],
     preserveLiteralProviderPrefix: true,
-    auth: [
-      {
-        methodId: "api-key",
-        label: "NVIDIA API key",
-        hint: "Direct API key",
-        optionKey: "nvidiaApiKey",
-        flagName: "--nvidia-api-key",
-        envVar: "NVIDIA_API_KEY",
-        promptMessage: "Enter NVIDIA API key",
-        defaultModel: NVIDIA_DEFAULT_MODEL_REF,
-        applyConfig: applyNvidiaConfig,
-      },
-    ],
+    manifestAuth: {
+      defaultModel: NVIDIA_DEFAULT_MODEL_REF,
+      applyConfig: applyNvidiaConfig,
+    },
     catalog: {
       buildProvider: buildSelectableLiveNvidiaProvider,
       buildStaticProvider: buildSelectableNvidiaProvider,

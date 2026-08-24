@@ -1,37 +1,24 @@
 // Shared media-understanding types for attachments, provider hooks, request
 // auth, decisions, and structured extraction inputs.
+import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
+/** Agent-owned runtime handle carried opaquely through media provider requests. */
+type MediaPreparedModelRuntime = Readonly<{
+  agentDir: string;
+  workspaceDir?: string;
+  config: OpenClawConfig;
+  createStores: () => unknown;
+}>;
 
-export type MediaUnderstandingCapability = "image" | "audio" | "video";
-
-export type MediaUnderstandingCapabilityRegistry = Map<
-  string,
-  {
-    capabilities?: MediaUnderstandingCapability[];
-  }
->;
-
-export type MediaAttachment = {
-  path?: string;
-  url?: string;
-  mime?: string;
-  index: number;
-  alreadyTranscribed?: boolean;
-};
-
-export type MediaUnderstandingOutput = {
-  kind: MediaUnderstandingKind;
-  attachmentIndex: number;
-  text: string;
-  provider: string;
-  model?: string;
-  requestedBackend?: string;
-  observedBackend?: string;
-};
+export type {
+  MediaAttachment,
+  MediaUnderstandingCapability,
+  MediaUnderstandingCapabilityRegistry,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 
 type MediaUnderstandingDecisionOutcome =
   | "success"
@@ -57,10 +44,25 @@ type MediaUnderstandingAttachmentDecision = {
   chosen?: MediaUnderstandingModelDecision;
 };
 
+export type MediaAttachmentDisposition =
+  | { kind: "handled" }
+  | { kind: "handed-to-native-vision" }
+  | { kind: "not-selected" }
+  | { kind: "capability-disabled" }
+  | { kind: "no-model" }
+  | { kind: "scope-denied" }
+  | { kind: "failed"; reason?: string };
+
 export type MediaUnderstandingDecision = {
   capability: MediaUnderstandingCapability;
   outcome: MediaUnderstandingDecisionOutcome;
   attachments: MediaUnderstandingAttachmentDecision[];
+  // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
+  // inbound-reply dispatch and may hold legacy decision literals. Core producers
+  // (runner, apply-capability, runtime) always populate it; absence renders no
+  // markers rather than breaking plugin compilation.
+  attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
+  nativeVisionActive?: boolean;
 };
 
 type MediaUnderstandingProviderRequestAuthOverride =
@@ -109,6 +111,7 @@ export type AudioTranscriptionRequest = {
   prompt?: string;
   query?: Record<string, string | number | boolean>;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -130,6 +133,7 @@ export type VideoDescriptionRequest = {
   model?: string;
   prompt?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -145,11 +149,14 @@ export type ImageDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
   model: string;
   provider: string;
@@ -168,11 +175,14 @@ export type ImagesDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
 };
 
@@ -210,6 +220,7 @@ export type StructuredExtractionRequest = {
   jsonSchema?: unknown;
   jsonMode?: boolean;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;

@@ -6,9 +6,11 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  readJsonBodyWithLimit,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
-
-const DEFAULT_RPC_BODY_BYTES = 1024 * 1024;
 
 const ErrorCodes = {
   AGENT_TIMEOUT: "AGENT_TIMEOUT",
@@ -42,6 +44,20 @@ type ParsedRequest = {
   method: string;
   params?: unknown;
 };
+
+type RequestBodyLimitFailureCode =
+  | "PAYLOAD_TOO_LARGE"
+  | "REQUEST_BODY_TIMEOUT"
+  | "CONNECTION_CLOSED";
+
+type ReadJsonBodyResult =
+  | { ok: true; value: unknown }
+  | {
+      ok: false;
+      status: number;
+      message: string;
+      closeAfterResponse?: boolean;
+    };
 
 function createError(code: string, message: string): RpcError {
   return { code, message };
@@ -79,34 +95,59 @@ function sendError(res: ServerResponse, status: number, error: { type: string; m
   sendJson(res, status, { ok: false, error });
 }
 
-async function readJsonBody(
-  req: IncomingMessage,
-  maxBytes: number,
-): Promise<{ ok: true; value: unknown } | { ok: false; status: number; message: string }> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  try {
-    for await (const chunk of req) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      totalBytes += buffer.byteLength;
-      if (totalBytes > maxBytes) {
-        return { ok: false, status: 413, message: "Payload too large" };
-      }
-      chunks.push(buffer);
-    }
-  } catch {
-    return { ok: false, status: 400, message: "failed to read request body" };
+function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
+  switch (code) {
+    case "PAYLOAD_TOO_LARGE":
+      return 413;
+    case "REQUEST_BODY_TIMEOUT":
+      return 408;
+    case "CONNECTION_CLOSED":
+      return 400;
   }
+  return 400;
+}
 
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw.trim()) {
-    return { ok: false, status: 400, message: "request body must be JSON" };
+async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
+  const body = await readJsonBodyWithLimit(req, {
+    // Admin responses are part of the client contract. The response-first profile
+    // defers destruction so closeRequestAfterResponse can flush the JSON error.
+    ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
+    emptyObjectOnEmpty: false,
+  });
+  if (body.ok) {
+    return body;
   }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, status: 400, message: "request body must be valid JSON" };
+  if (body.code === "INVALID_JSON") {
+    return {
+      ok: false,
+      status: 400,
+      message:
+        body.error === "empty payload"
+          ? "request body must be JSON"
+          : "request body must be valid JSON",
+    };
   }
+  return {
+    ok: false,
+    status: statusForBodyErrorCode(body.code),
+    message: body.error,
+    closeAfterResponse: body.code !== "CONNECTION_CLOSED",
+  };
+}
+
+function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
+  const once = (res as { once?: ServerResponse["once"] }).once;
+  if (typeof once !== "function") {
+    return;
+  }
+  res.setHeader("Connection", "close");
+  once.call(res, "finish", () => {
+    // Timeout/size failures must flush JSON first; destroying before finish drops
+    // the HTTP response on real partial-body sockets.
+    if (!req.destroyed) {
+      req.destroy();
+    }
+  });
 }
 
 function readRpcRequestBody(body: unknown):
@@ -202,8 +243,11 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
-  const body = await readJsonBody(req, DEFAULT_RPC_BODY_BYTES);
+  const body = await readAdminJsonBody(req);
   if (!body.ok) {
+    if (body.closeAfterResponse) {
+      closeRequestAfterResponse(req, res);
+    }
     sendError(res, body.status, {
       type: "invalid_request",
       message: body.message,

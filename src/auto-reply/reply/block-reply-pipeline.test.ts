@@ -55,6 +55,22 @@ describe("createBlockReplyContentKey", () => {
 });
 
 describe("createBlockReplyPipeline dedup with threading", () => {
+  it("keeps an un-aborted delivery signal when timeouts are disabled", async () => {
+    let deliverySignal: AbortSignal | undefined;
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (_payload, options) => {
+        deliverySignal = options?.abortSignal;
+      },
+      timeoutMs: 0,
+    });
+
+    pipeline.enqueue({ text: "response text" });
+    await pipeline.flush({ force: true });
+
+    expect(deliverySignal).toBeDefined();
+    expect(deliverySignal?.aborted).toBe(false);
+  });
+
   it("does not count reasoning or commentary as a terminal reply", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},

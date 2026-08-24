@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createQaPosixCommandSettlement } from "../../../posix-command-settlement.js";
 import {
   killMatrixQaCliChild,
   resolveMatrixQaOpenClawCliEntryPath,
@@ -100,20 +101,6 @@ function formatMatrixQaCliTimeoutError(result: MatrixQaCliRunResult, timeoutMs: 
     .join("\n");
 }
 
-function isMatrixQaCliChildProcessGroupRunning(
-  child: ReturnType<typeof startOpenClawCliProcess>,
-): boolean {
-  if (process.platform === "win32" || !child.pid) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function startMatrixQaOpenClawCli(params: {
   allowNonZero?: boolean;
   args: string[];
@@ -129,10 +116,6 @@ export function startMatrixQaOpenClawCli(params: {
   let closed = false;
   let closeError: Error | undefined;
   let closeResult: MatrixQaCliRunResult | undefined;
-  let killRequested = false;
-  let timedOut = false;
-  let forceKillTimeout: NodeJS.Timeout | undefined;
-  let forceSettleTimeout: NodeJS.Timeout | undefined;
   let settleWait:
     | {
         reject: (error: Error) => void;
@@ -166,95 +149,66 @@ export function startMatrixQaOpenClawCli(params: {
       settleWait.resolve(result);
     }
   };
-  const finishTimeout = (result: MatrixQaCliRunResult) => {
-    finish(result, new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs)));
-  };
-  const finishResult = (result: MatrixQaCliRunResult) => {
-    if (result.exitCode !== 0 && params.allowNonZero !== true) {
-      finish(result, new Error(formatMatrixQaCliExitError(result)));
-      return;
-    }
-    finish(result);
-  };
-  const clearForcedTimeouts = () => {
-    if (forceKillTimeout) {
-      clearTimeout(forceKillTimeout);
-      forceKillTimeout = undefined;
-    }
-    if (forceSettleTimeout) {
-      clearTimeout(forceSettleTimeout);
-      forceSettleTimeout = undefined;
-    }
-  };
-  const finishForcedCleanup = (result: MatrixQaCliRunResult) => {
-    if (timedOut) {
-      finishTimeout(result);
-      return;
-    }
-    finishResult(result);
-  };
-  const scheduleForcedCleanup = () => {
-    if (forceKillTimeout || forceSettleTimeout) {
-      return;
-    }
-    forceKillTimeout = setTimeout(() => {
-      forceKillTimeout = undefined;
-      killMatrixQaCliChild(child, "SIGKILL");
-      forceSettleTimeout = setTimeout(() => {
-        forceSettleTimeout = undefined;
-        finishForcedCleanup(
-          buildMatrixQaCliResult({
-            args: params.args,
-            exitCode: 1,
-            output: readOutput(),
-          }),
-        );
-      }, MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS);
-    }, MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS);
-  };
-
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    killMatrixQaCliChild(child, "SIGTERM");
-    scheduleForcedCleanup();
-  }, params.timeoutMs);
-
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  const isWindows = process.platform === "win32";
+  const settlement = createQaPosixCommandSettlement({
+    child,
+    settlementFailureMessage: `${formatMatrixQaCliCommand(params.args)} settlement failed`,
+    forceKillAfterMs: MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS,
+    initialSignal: "SIGTERM",
+    ...(isWindows
+      ? {
+          windowsCleanup: {
+            closeCompletesCleanup: true,
+            signal: (signal: NodeJS.Signals) => {
+              try {
+                killMatrixQaCliChild(child, signal);
+                return undefined;
+              } catch (error) {
+                return error instanceof Error ? error : new Error(String(error));
+              }
+            },
+          },
+        }
+      : {}),
+    executionTimeoutMs: params.timeoutMs,
+    onSettled: (outcome) => {
+      const primary = outcome.primary;
+      const result = buildMatrixQaCliResult({
+        args: params.args,
+        exitCode: primary.type === "exit" ? (primary.exitCode ?? 1) : 1,
+        output: readOutput(),
+      });
+      const primaryError =
+        primary.type === "spawn-error"
+          ? primary.error
+          : primary.type === "stream-error"
+            ? new Error(`${primary.stream} stream error: ${formatErrorMessage(primary.error)}`, {
+                cause: primary.error,
+              })
+            : primary.type === "timeout"
+              ? new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs))
+              : result.exitCode !== 0 && params.allowNonZero !== true
+                ? new Error(formatMatrixQaCliExitError(result))
+                : undefined;
+      finish(
+        result,
+        outcome.settlementFailure
+          ? primaryError
+            ? new AggregateError([primaryError, outcome.settlementFailure], primaryError.message, {
+                cause: primaryError,
+              })
+            : outcome.settlementFailure
+          : primaryError,
+      );
+    },
+    onStderrData: (chunk) => stderr.push(Buffer.from(chunk)),
+    onStdoutData: (chunk) => stdout.push(Buffer.from(chunk)),
+    processGroupId: isWindows ? undefined : child.pid,
+    verifyAfterMs: MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS,
+  });
   if (params.stdin !== undefined) {
     child.stdin.end(params.stdin);
   }
-  child.on("error", (error) => {
-    clearTimeout(timeout);
-    clearForcedTimeouts();
-    finish(
-      buildMatrixQaCliResult({
-        args: params.args,
-        exitCode: 1,
-        output: readOutput(),
-      }),
-      error,
-    );
-  });
-  child.on("close", (exitCode) => {
-    clearTimeout(timeout);
-    const result = buildMatrixQaCliResult({
-      args: params.args,
-      exitCode: exitCode ?? 1,
-      output: readOutput(),
-    });
-    if (timedOut || killRequested) {
-      // A closed parent is not proof that detached, ignored-stdio descendants are gone.
-      if (isMatrixQaCliChildProcessGroupRunning(child)) {
-        return;
-      }
-      clearForcedTimeouts();
-      finishForcedCleanup(result);
-      return;
-    }
-    clearForcedTimeouts();
-    finishResult(result);
-  });
 
   return {
     args: params.args,
@@ -280,6 +234,7 @@ export function startMatrixQaOpenClawCli(params: {
       }).catch((error: unknown) => {
         throw new Error(
           `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
+          { cause: error },
         );
       }),
     waitForOutput: async (predicate, label, timeoutMs) => {
@@ -309,10 +264,7 @@ export function startMatrixQaOpenClawCli(params: {
     },
     kill: () => {
       if (!closed) {
-        clearTimeout(timeout);
-        killRequested = true;
-        killMatrixQaCliChild(child, "SIGTERM");
-        scheduleForcedCleanup();
+        settlement.requestCleanup();
       }
     },
   };
@@ -410,7 +362,7 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_DISABLE_AUTO_UPDATE: "1",
+    OPENCLAW_NO_AUTO_UPDATE: "1",
     OPENCLAW_STATE_DIR: stateDir,
   };
   return {

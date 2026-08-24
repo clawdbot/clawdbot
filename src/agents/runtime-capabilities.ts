@@ -12,6 +12,7 @@ import {
 } from "../channels/thread-bindings-policy.js";
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { resolveChannelPromptCapabilities } from "./channel-tools.js";
 
 const THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY = "threadbound-subagent-spawn";
@@ -45,6 +46,10 @@ export function collectRuntimeChannelCapabilities(params: {
   if (!params.channel) {
     return undefined;
   }
+  // Control UI renders disclosures natively in its markdown pipeline.
+  // This capability is core-owned because webchat has no channel plugin.
+  const internalChannelCapabilities =
+    params.channel === INTERNAL_MESSAGE_CHANNEL ? ["markdownDetails"] : [];
   const threadSpawnCapabilities: string[] = [];
   if (params.cfg && supportsAutomaticThreadBindingSpawn(params.channel)) {
     for (const [kind, capability] of [
@@ -63,10 +68,10 @@ export function collectRuntimeChannelCapabilities(params: {
       }
     }
   }
-  return mergeRuntimeCapabilities(
-    resolveChannelCapabilities(params),
-    params.cfg
-      ? [...resolveChannelPromptCapabilities(params), ...threadSpawnCapabilities]
-      : threadSpawnCapabilities,
-  );
+  const channelPromptCapabilities = params.cfg ? resolveChannelPromptCapabilities(params) : [];
+  return mergeRuntimeCapabilities(resolveChannelCapabilities(params), [
+    ...channelPromptCapabilities,
+    ...internalChannelCapabilities,
+    ...threadSpawnCapabilities,
+  ]);
 }

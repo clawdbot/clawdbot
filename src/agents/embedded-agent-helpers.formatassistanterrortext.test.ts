@@ -13,6 +13,7 @@ import {
   isRawApiErrorPayload,
 } from "./embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
@@ -63,37 +64,71 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError('messages: roles must alternate between "user" and "assistant"');
     expect(formatAssistantErrorText(msg)).toContain("Message ordering conflict");
   });
-  it("returns a friendly message for Anthropic overload errors", () => {
-    const msg = makeAssistantError(
-      '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
-  });
-  it("preserves overload wording for Z.AI rate-limit errors", () => {
-    const msg = makeAssistantError(
-      '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
-  });
-  it("rewrites generic provider internal errors without support request ids", () => {
-    const msg = makeAssistantError(
-      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service returned an internal error. Please try again in a moment.",
-    );
-  });
-  it("rewrites request-id-only generic provider internal errors without exposing the id", () => {
-    const msg = makeAssistantError(
-      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service returned an internal error. Please try again in a moment.",
-    );
+  it.each([
+    {
+      title: "returns a friendly message for Anthropic overload errors",
+      errorText:
+        '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
+      expected: "The AI service is temporarily overloaded. Please try again in a moment.",
+    },
+    {
+      title: "uses classified rate-limit copy for Z.AI rate-limit errors",
+      errorText:
+        '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
+      expected: "⚠️ API rate limit reached. Please try again later.",
+    },
+    {
+      title: "rewrites generic provider internal errors without support request ids",
+      errorText:
+        "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
+      expected: "The AI service returned an internal error. Please try again in a moment.",
+    },
+    {
+      title: "rewrites request-id-only generic provider internal errors without exposing the id",
+      errorText:
+        "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.",
+      expected: "The AI service returned an internal error. Please try again in a moment.",
+    },
+    {
+      title: "returns upstream HTML copy for HTML quota pages",
+      errorText: "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
+      expected:
+        "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+    },
+    {
+      title: "returns upstream HTML copy for prefixed 521 HTML rate-limit pages",
+      errorText: "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
+      expected:
+        "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+    },
+    {
+      title: "returns an explicit re-authentication message for OAuth refresh failures",
+      errorText:
+        "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
+      expected: "Authentication refresh failed. Re-authenticate this provider and try again.",
+    },
+    {
+      title: "returns an explicit re-authentication message for Codex app-server refresh failures",
+      errorText:
+        "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+      expected: "Authentication refresh failed. Re-authenticate this provider and try again.",
+    },
+    {
+      title: "returns a timeout-specific message for OAuth refresh hard timeouts",
+      errorText:
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
+      expected:
+        "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
+    },
+    {
+      title: "sanitizes invalid streaming event order errors",
+      errorText: 'Unexpected event order, got message_start before receiving "message_stop"',
+      expected:
+        "LLM request failed: provider returned an invalid streaming response. Please try again.",
+    },
+  ])("$title", ({ errorText, expected }) => {
+    const msg = makeAssistantError(errorText);
+    expect(formatAssistantErrorText(msg)).toBe(expected);
   });
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
     const msg = makeAssistantError("Selected model is at capacity. Please try a different model.");
@@ -112,6 +147,17 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("Session history or replay state is invalid");
     expect(result).toContain("/new");
+  });
+  it("prioritizes thinking-signature replay recovery over invalid-request formatting", () => {
+    // Thinking-signature failures are also invalid_request_error, so the
+    // replay-invalid copy must win before the generic invalid-request path.
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+    );
+    const replayCopy =
+      "Session history or replay state is invalid. Use /new to start a fresh session and try again.";
+    expect(formatAssistantErrorText(msg)).toBe(replayCopy);
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(replayCopy);
   });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
@@ -146,7 +192,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "LLM request failed: provider rejected the request schema or tool payload.",
     );
@@ -185,21 +231,79 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
     expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
   });
+  it("uses prepared provider ownership for billing classification", () => {
+    const provider = "custom-openrouter";
+    const model = "anthropic/claude-sonnet-4";
+    const result = formatAssistantErrorText(
+      makeAssistantError("HTTP 403: API key budget limit exceeded"),
+      {
+        provider,
+        providerOwner: {
+          id: "openrouter",
+          classifyFailoverReason: ({ provider: owner, errorMessage }) =>
+            owner === "openrouter" && errorMessage.includes("budget limit") ? "billing" : undefined,
+        },
+        model,
+      },
+    );
+    expect(result).toBe(formatBillingErrorMessage(provider, model));
+  });
   it("returns generic billing message when provider is not given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
-  it("returns a friendly billing message for flat JSON insufficient_balance payloads (#74079)", () => {
-    const msg = makeAssistantError(
-      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}',
-    );
-    const result = formatAssistantErrorText(msg, {
+  it.each([
+    {
+      title:
+        "returns a friendly billing message for flat JSON insufficient_balance payloads (#74079)",
+      errorText:
+        '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}',
       provider: "google",
       model: "gemini-3.1-pro-preview",
+    },
+    {
+      title: "keeps known Moonshot 429 balance failures on billing copy",
+      errorText:
+        '429 {"error":{"message":"Your account has insufficient balance. Please recharge to continue.","type":"rate_limit_reached"}}',
+      provider: "moonshot",
+      model: "kimi-k2",
+    },
+    {
+      title: "keeps high-confidence 429 insufficient quota failures on billing copy",
+      errorText:
+        '429 {"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}',
+      provider: "openai",
+      model: "gpt-5.5",
+    },
+    {
+      title: "keeps high-confidence 429 insufficient balance failures on billing copy",
+      errorText: '429 {"error":"insufficient_balance","message":"Your credit balance is too low."}',
+      provider: "openai-compatible",
+      model: "custom-model",
+    },
+    {
+      title: "keeps structured 429 insufficient balance codes on billing copy",
+      errorText:
+        'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
+      provider: "openai-compatible",
+      model: "custom-model",
+    },
+    {
+      title: "returns billing guidance for Volcengine Coding Plan subscription failures",
+      errorText:
+        'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
+      provider: "volcengine-plan",
+      model: "ark-code-latest",
+    },
+  ])("$title", ({ errorText, provider, model }) => {
+    const msg = makeAssistantError(errorText);
+    const result = formatAssistantErrorText(msg, {
+      provider,
+      model,
     });
-    expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
+    expect(result).toBe(formatBillingErrorMessage(provider, model));
   });
   it("returns a billing message for xAI 429 credit exhaustion before rate-limit copy", () => {
     // Some providers report billing exhaustion as 429; billing copy should win
@@ -213,46 +317,6 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("xai", "grok-4.3"));
   });
-  it("keeps known Moonshot 429 balance failures on billing copy", () => {
-    const msg = makeAssistantError(
-      '429 {"error":{"message":"Your account has insufficient balance. Please recharge to continue.","type":"rate_limit_reached"}}',
-    );
-    const result = formatAssistantErrorText(msg, {
-      provider: "moonshot",
-      model: "kimi-k2",
-    });
-    expect(result).toBe(formatBillingErrorMessage("moonshot", "kimi-k2"));
-  });
-  it("keeps high-confidence 429 insufficient quota failures on billing copy", () => {
-    const msg = makeAssistantError(
-      '429 {"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}',
-    );
-    const result = formatAssistantErrorText(msg, {
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-    expect(result).toBe(formatBillingErrorMessage("openai", "gpt-5.5"));
-  });
-  it("keeps high-confidence 429 insufficient balance failures on billing copy", () => {
-    const msg = makeAssistantError(
-      '429 {"error":"insufficient_balance","message":"Your credit balance is too low."}',
-    );
-    const result = formatAssistantErrorText(msg, {
-      provider: "openai-compatible",
-      model: "custom-model",
-    });
-    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
-  });
-  it("keeps structured 429 insufficient balance codes on billing copy", () => {
-    const msg = makeAssistantError(
-      'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
-    );
-    const result = formatAssistantErrorText(msg, {
-      provider: "openai-compatible",
-      model: "custom-model",
-    });
-    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
-  });
   it("keeps 429 more-credits failures on billing copy", () => {
     const msg = makeAssistantError("429 This model requires more credits to use");
     const result = formatAssistantErrorText(msg, {
@@ -260,24 +324,6 @@ describe("formatAssistantErrorText", () => {
       model: "custom-model",
     });
     expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
-  });
-  it("keeps OpenRouter 429 key budget failures on billing copy", () => {
-    const msg = makeAssistantError("429 API key budget limit exceeded");
-    const result = formatAssistantErrorText(msg, {
-      provider: "openrouter",
-      model: "openai/gpt-5.5",
-    });
-    expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
-  });
-  it("returns billing guidance for Volcengine Coding Plan subscription failures", () => {
-    const msg = makeAssistantError(
-      'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
-    );
-    const result = formatAssistantErrorText(msg, {
-      provider: "volcengine-plan",
-      model: "ark-code-latest",
-    });
-    expect(result).toBe(formatBillingErrorMessage("volcengine-plan", "ark-code-latest"));
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
@@ -324,24 +370,6 @@ describe("formatAssistantErrorText", () => {
     expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
   });
 
-  it("returns upstream HTML copy for HTML quota pages", () => {
-    const msg = makeAssistantError(
-      "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
-    );
-  });
-
-  it("returns upstream HTML copy for prefixed 521 HTML rate-limit pages", () => {
-    const msg = makeAssistantError(
-      "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
-    );
-  });
-
   it("does not misdiagnose standalone Cloudflare challenge HTML as DNS", () => {
     const msg = makeAssistantError(`<!DOCTYPE html>
 <html>
@@ -362,6 +390,13 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
+  });
+
+  it("does not rewrite Provider finish_reason: error into a timeout (#109218)", () => {
+    const msg = makeAssistantError("Provider finish_reason: error");
+    // Keep provider signal; do not rewrite to the timeout string (formatAssistantErrorText
+    // may return undefined for some paths — assert the concrete copy we preserve).
+    expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
   });
 
   it("returns a connection-refused message for ECONNREFUSED failures", () => {
@@ -395,37 +430,10 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("returns an explicit re-authentication message for OAuth refresh failures", () => {
-    const msg = makeAssistantError(
-      "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "Authentication refresh failed. Re-authenticate this provider and try again.",
-    );
-  });
-
-  it("returns an explicit re-authentication message for Codex app-server refresh failures", () => {
-    const msg = makeAssistantError(
-      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "Authentication refresh failed. Re-authenticate this provider and try again.",
-    );
-  });
-
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
     const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
-    );
-  });
-
-  it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
-    const msg = makeAssistantError(
-      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
     );
   });
 
@@ -544,6 +552,16 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns a certificate-specific message for TLS validation failures", () => {
+    const msg = makeAssistantError(
+      "Hostname/IP does not match certificate's altnames: Host: api.example.com",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
+        "Check the endpoint hostname, proxy, and local certificate trust.",
+    );
+  });
+
   it("keeps non-transport config errors that mention proxy settings actionable", () => {
     const msg = makeAssistantError(
       'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
@@ -553,22 +571,6 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).not.toBe(
       "LLM request failed: proxy or tunnel configuration blocked the provider request.",
-    );
-  });
-
-  it("sanitizes invalid streaming event order errors", () => {
-    const msg = makeAssistantError(
-      'Unexpected event order, got message_start before receiving "message_stop"',
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM request failed: provider returned an invalid streaming response. Please try again.",
-    );
-  });
-
-  it("sanitizes transport-classified malformed streaming fragments (#59076)", () => {
-    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM streaming response contained a malformed fragment. Please try again.",
     );
   });
 
@@ -758,7 +760,7 @@ describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
 
 describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () => {
   it("rewrites transport-classified malformed streaming fragments in error context", () => {
-    const result = sanitizeUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+    const result = renderUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
       errorContext: true,
     });
     expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");

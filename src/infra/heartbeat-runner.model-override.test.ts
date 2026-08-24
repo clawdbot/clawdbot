@@ -100,7 +100,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     every?: string;
     defaultTimeoutSeconds?: number;
     model?: string;
-    suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
     lightContext?: boolean;
     isolatedSession?: boolean;
@@ -115,7 +114,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: params.every ?? "5m",
               target: "whatsapp",
               model: params.model,
-              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
               timeoutSeconds: params.timeoutSeconds,
               lightContext: params.lightContext,
               isolatedSession: params.isolatedSession,
@@ -197,11 +195,11 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
-  it("passes suppressToolErrorWarnings when configured", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
+  it("keeps heartbeat tool-error warnings enabled", async () => {
+    const replyOpts = await runDefaultsHeartbeat({});
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
-      suppressToolErrorWarnings: true,
+      suppressToolErrorWarnings: false,
     });
   });
 
@@ -229,13 +227,16 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
-  it("preserves explicit default agent timeout for heartbeat runs", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ defaultTimeoutSeconds: 60, every: "30m" });
-    expectReplyOptions(replyOpts, {
-      isHeartbeat: true,
-      timeoutOverrideSeconds: 60,
-    });
-  });
+  it.each([0, 60])(
+    "preserves explicit default agent timeout %d for heartbeat runs",
+    async (defaultTimeoutSeconds) => {
+      const replyOpts = await runDefaultsHeartbeat({ defaultTimeoutSeconds, every: "30m" });
+      expectReplyOptions(replyOpts, {
+        isHeartbeat: true,
+        timeoutOverrideSeconds: defaultTimeoutSeconds,
+      });
+    },
+  );
 
   it("passes bootstrapContextMode when heartbeat lightContext is enabled", async () => {
     const replyOpts = await runDefaultsHeartbeat({ lightContext: true });

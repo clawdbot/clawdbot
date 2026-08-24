@@ -5,6 +5,7 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 
 type UpdateBannerProps = {
   statusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
+  action?: { label: string; onClick: () => void };
 };
 
 class UpdateBanner extends OpenClawLightDomContentsElement {
@@ -17,8 +18,16 @@ class UpdateBanner extends OpenClawLightDomContentsElement {
     }
     return html`
       ${props.statusBanner
-        ? html`<div class="callout ${props.statusBanner.tone}" role="alert">
-            ${props.statusBanner.text}
+        ? html`<div
+            class="callout ${props.statusBanner.tone} ${props.action ? "callout--action" : ""}"
+            role=${props.action ? "status" : "alert"}
+          >
+            <span class="callout__content">${props.statusBanner.text}</span>
+            ${props.action
+              ? html`<button class="btn btn--sm" type="button" @click=${props.action.onClick}>
+                  ${props.action.label}
+                </button>`
+              : nothing}
           </div>`
         : nothing}
     `;

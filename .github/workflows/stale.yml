@@ -50,16 +50,22 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token-fallback
         continue-on-error: true
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
       - name: Mark stale unassigned issues and pull requests (primary)
         id: stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -68,7 +74,7 @@ jobs:
           days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -92,7 +98,7 @@ jobs:
       - name: Mark stale assigned issues (primary)
         id: assigned-issue-stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -100,7 +106,7 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           stale-issue-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           operations-per-run: 2000
           ascending: true
           include-only-assigned: true
@@ -116,7 +122,7 @@ jobs:
       - name: Mark stale assigned pull requests (primary)
         id: assigned-stale-primary
         continue-on-error: true
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1
@@ -163,7 +169,7 @@ jobs:
             }
       - name: Mark stale unassigned issues and pull requests (fallback)
         if: (steps.stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
@@ -172,7 +178,7 @@ jobs:
           days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -195,7 +201,7 @@ jobs:
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (fallback)
         if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 30
@@ -203,7 +209,7 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           stale-issue-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           operations-per-run: 2000
           ascending: true
           include-only-assigned: true
@@ -218,7 +224,7 @@ jobs:
           close-issue-reason: not_planned
       - name: Mark stale assigned pull requests (fallback)
         if: (steps.assigned-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
+        uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: -1
@@ -240,6 +246,190 @@ jobs:
             If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
 
+  stale-bug-verification:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    permissions:
+      issues: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-metadata: read
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-metadata: read
+      - name: Mark inactive bugs for ClawSweeper verification
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          retries: 3
+          script: |
+            const dayMs = 24 * 60 * 60 * 1000;
+            const nowMs = Date.now();
+            const maxMarks = 25;
+            const barnacleActorIds = new Set([257215752, 264559031]);
+            const exemptLabels = new Set([
+              "enhancement",
+              "maintainer",
+              "pinned",
+              "security",
+              "no-stale",
+              "bad-barnacle",
+              "clawsweeper:queueable-fix",
+              "clawsweeper:source-repro",
+              "clawsweeper:fix-shape-clear",
+            ]);
+            const { owner, repo } = context.repo;
+            const marked = [];
+            const unmarked = [];
+
+            const labelNames = item =>
+              new Set(
+                (item.labels || []).map(label =>
+                  (typeof label === "string" ? label : label.name).toLowerCase(),
+                ),
+              );
+            const eventTimestamp = event =>
+              Date.parse(event.created_at || event.submitted_at || "");
+            const isBarnacleStaleComment = event =>
+              event.event === "commented" &&
+              barnacleActorIds.has(event.actor?.id || event.user?.id || 0) &&
+              String(event.body || "").includes("marked as stale");
+            const hasSubstantiveUpdateSinceStale = (item, timeline) => {
+              const orderedTimeline = timeline
+                .map((event, index) => ({ event, index, timestamp: eventTimestamp(event) }))
+                .filter(entry => Number.isFinite(entry.timestamp))
+                .toSorted(
+                  (left, right) => left.timestamp - right.timestamp || left.index - right.index,
+                );
+              const staleEventIndex = orderedTimeline.findLastIndex(
+                entry =>
+                  entry.event.event === "labeled" &&
+                  String(entry.event.label?.name || "").toLowerCase() === "stale",
+              );
+              if (staleEventIndex < 0) return false;
+              const staleAtMs = orderedTimeline[staleEventIndex].timestamp;
+              const updatedAtMs = Date.parse(item.updated_at);
+              if (!Number.isFinite(updatedAtMs)) return false;
+              const laterEvents = orderedTimeline
+                .slice(staleEventIndex + 1)
+                .map(entry => entry.event);
+              if (laterEvents.some(event => !isBarnacleStaleComment(event))) return true;
+              const lastAutomationAtMs = Math.max(staleAtMs, ...laterEvents.map(eventTimestamp));
+              return updatedAtMs > lastAutomationAtMs;
+            };
+            const removeStale = async item => {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: item.number,
+                  name: "stale",
+                });
+                unmarked.push(item);
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            };
+
+            for await (const response of github.paginate.iterator(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              labels: "bug",
+              sort: "updated",
+              direction: "asc",
+              per_page: 100,
+            })) {
+              for (const listedItem of response.data) {
+                if (listedItem.pull_request) continue;
+                const listedLabels = labelNames(listedItem);
+                const isExempt = [...listedLabels].some(label => exemptLabels.has(label));
+
+                if (listedLabels.has("stale")) {
+                  if (isExempt) {
+                    await removeStale(listedItem);
+                    continue;
+                  }
+                  const timeline = await github.paginate(
+                    github.rest.issues.listEventsForTimeline,
+                    { owner, repo, issue_number: listedItem.number, per_page: 100 },
+                  );
+                  if (hasSubstantiveUpdateSinceStale(listedItem, timeline)) {
+                    await removeStale(listedItem);
+                  }
+                  // Existing stale bugs are intentionally not re-labeled or
+                  // dispatched; #114238 requires separate backfill approval.
+                  continue;
+                }
+
+                if (isExempt || marked.length >= maxMarks) continue;
+                const assigned = (listedItem.assignees || []).length > 0;
+                const staleAfterDays = assigned ? 30 : 14;
+                if (Date.parse(listedItem.updated_at) >= nowMs - staleAfterDays * dayMs) continue;
+
+                // Re-read immediately before mutation so a recent comment,
+                // assignment, or exemption cannot be raced by the scan.
+                const { data: item } = await github.rest.issues.get({
+                  owner,
+                  repo,
+                  issue_number: listedItem.number,
+                });
+                const currentLabels = labelNames(item);
+                const currentlyExempt = [...currentLabels].some(label => exemptLabels.has(label));
+                const currentlyAssigned = (item.assignees || []).length > 0;
+                const currentStaleAfterDays = currentlyAssigned ? 30 : 14;
+                if (
+                  item.state !== "open" ||
+                  currentLabels.has("stale") ||
+                  !currentLabels.has("bug") ||
+                  currentlyExempt ||
+                  Date.parse(item.updated_at) >= nowMs - currentStaleAfterDays * dayMs
+                ) {
+                  continue;
+                }
+
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: item.number,
+                  labels: ["stale"],
+                });
+                const body = [
+                  currentlyAssigned
+                    ? "This assigned bug report has been automatically marked as stale after 30 days of inactivity."
+                    : "This bug report has been automatically marked as stale due to inactivity.",
+                  "ClawSweeper is checking whether current `main` already fixes the reported behavior.",
+                  "Inactivity alone will not close a bug report.",
+                ].join("\n");
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: item.number,
+                  body,
+                });
+                marked.push(item);
+              }
+            }
+
+            core.info(`Marked ${marked.length} bug issue(s) for ClawSweeper verification.`);
+            core.info(`Removed stale from ${unmarked.length} updated or exempt bug issue(s).`);
+            await core.summary
+              .addHeading("Bug stale verification")
+              .addRaw(`Marked for ClawSweeper review: ${marked.length}\n\n`)
+              .addRaw(`Returned to active/exempt state: ${unmarked.length}\n\n`)
+              .write();
+
   backfill-stale-closures:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_stale_closures == true }}
     permissions:
@@ -252,6 +442,9 @@ jobs:
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-metadata: read
+          permission-pull-requests: write
       - name: Backfill stale closures
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
@@ -277,6 +470,7 @@ jobs:
               "security",
               "no-stale",
               "bad-barnacle",
+              "bug",
               "clawsweeper:queueable-fix",
               "clawsweeper:source-repro",
               "clawsweeper:fix-shape-clear",
@@ -488,6 +682,106 @@ jobs:
               }
             }
 
+  audit-bug-closure-reasons:
+    needs: stale
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    permissions:
+      issues: read
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Reject Barnacle NOT_PLANNED bug closures
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const auditWindowMs = 48 * 60 * 60 * 1000;
+            const cutoffMs = Date.now() - auditWindowMs;
+            // Immutable GitHub bot account ids for openclaw-barnacle[bot] and
+            // barnacle-openclaw[bot]. Logins are display-only and spoofable.
+            const barnacleActorIds = new Set([257215752, 264559031]);
+            const { owner, repo } = context.repo;
+            const violations = [];
+            const escapeSummaryCell = value =>
+              String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+
+            pages: for await (const response of github.paginate.iterator(
+              github.rest.issues.listForRepo,
+              {
+                owner,
+                repo,
+                state: "closed",
+                sort: "updated",
+                direction: "desc",
+                per_page: 100,
+              },
+            )) {
+              const items = response.data;
+
+              for (const item of items) {
+                const updatedAtMs = Date.parse(item.updated_at);
+                if (Number.isFinite(updatedAtMs) && updatedAtMs < cutoffMs) break pages;
+                if (item.pull_request || item.state_reason !== "not_planned") continue;
+                const closedAtMs = Date.parse(item.closed_at || "");
+                if (!Number.isFinite(closedAtMs) || closedAtMs < cutoffMs) continue;
+                const labels = (item.labels || []).map(label =>
+                  typeof label === "string" ? label : label.name,
+                );
+                if (!labels.includes("bug")) continue;
+
+                const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, {
+                  owner,
+                  repo,
+                  issue_number: item.number,
+                  per_page: 100,
+                });
+                const closeEvent = timeline
+                  .filter(event => event.event === "closed")
+                  .toSorted((left, right) =>
+                    Date.parse(left.created_at || "") - Date.parse(right.created_at || ""),
+                  )
+                  .at(-1);
+                if (!closeEvent || !barnacleActorIds.has(closeEvent.actor?.id || 0)) continue;
+                violations.push({
+                  number: item.number,
+                  title: item.title,
+                  actor: closeEvent.actor.login,
+                  url: item.html_url,
+                });
+              }
+            }
+
+            if (violations.length === 0) {
+              core.info("No Barnacle NOT_PLANNED bug closures found in the last 48 hours.");
+              return;
+            }
+
+            await core.summary
+              .addHeading("Barnacle bug closure invariant failed")
+              .addRaw(
+                "Bug-labeled issues must be verified by ClawSweeper instead of closed by Barnacle as not planned.\n\n",
+              )
+              .addTable([
+                [
+                  { data: "Issue", header: true },
+                  { data: "Title", header: true },
+                  { data: "Actor", header: true },
+                ],
+                ...violations.map(violation => [
+                  `[#${violation.number}](${violation.url})`,
+                  escapeSummaryCell(violation.title),
+                  violation.actor,
+                ]),
+              ])
+              .write();
+            core.setFailed(
+              `Found ${violations.length} Barnacle NOT_PLANNED bug closure(s) in the last 48 hours.`,
+            );
+
   lock-closed-issues:
     needs: stale
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
@@ -500,6 +794,8 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-metadata: read
       - name: Lock closed issues after 48h of no activity
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:

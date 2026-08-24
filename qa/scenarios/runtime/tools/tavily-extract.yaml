@@ -3,10 +3,10 @@ title: "Runtime tool fixture — tavily_extract"
 scenario:
   id: runtime-tool-tavily-extract
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
-      - tools.tavily-extract
+      - web-search.html-extraction
   objective: Track tavily_extract parity once the tool is present in the runtime surface.
   successCriteria:
     - If tavily_extract is present, the fixture exercises happy and failure paths.

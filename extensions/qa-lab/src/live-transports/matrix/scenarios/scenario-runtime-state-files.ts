@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
@@ -183,46 +184,41 @@ async function readMatrixSyncCacheCursorsFromSqlite(params: {
     maxDepth: 10,
   });
   const cursors: Array<MatrixSyncStoreCursor & { score: number }> = [];
-  try {
-    const sqlite = await import("node:sqlite");
-    for (const databasePath of databasePaths) {
+  for (const databasePath of databasePaths) {
+    try {
+      const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        const db = new sqlite.DatabaseSync(databasePath, { readOnly: true });
-        try {
-          const rows = db
-            .prepare(
-              `SELECT entry_key AS entryKey, value_json AS valueJson
+        const rows = db
+          .prepare(
+            `SELECT entry_key AS entryKey, value_json AS valueJson
                  FROM plugin_state_entries
                 WHERE plugin_id = ?
                   AND namespace = ?
                   AND (expires_at IS NULL OR expires_at > ?)`,
-            )
-            .all(MATRIX_PLUGIN_ID, MATRIX_SYNC_CACHE_NAMESPACE, Date.now()) as Array<{
-            entryKey?: unknown;
-            valueJson?: unknown;
-          }>;
-          for (const cursor of readMatrixSyncCacheCursorFromRows(rows)) {
-            const storageRootDir = path.dirname(path.dirname(databasePath));
-            cursors.push({
-              ...cursor,
-              pathname: databasePath,
-              score: await scoreMatrixStateFile({
-                context: params.context,
-                pathname: path.join(storageRootDir, MATRIX_SYNC_STORE_FILENAME),
-                ...(params.accountId ? { accountId: params.accountId } : {}),
-                ...(params.userId ? { userId: params.userId } : {}),
-              }),
-            });
-          }
-        } finally {
-          db.close();
+          )
+          .all(MATRIX_PLUGIN_ID, MATRIX_SYNC_CACHE_NAMESPACE, Date.now()) as Array<{
+          entryKey?: unknown;
+          valueJson?: unknown;
+        }>;
+        for (const cursor of readMatrixSyncCacheCursorFromRows(rows)) {
+          const storageRootDir = path.dirname(path.dirname(databasePath));
+          cursors.push({
+            ...cursor,
+            pathname: databasePath,
+            score: await scoreMatrixStateFile({
+              context: params.context,
+              pathname: path.join(storageRootDir, MATRIX_SYNC_STORE_FILENAME),
+              ...(params.accountId ? { accountId: params.accountId } : {}),
+              ...(params.userId ? { userId: params.userId } : {}),
+            }),
+          });
         }
-      } catch {
-        continue;
+      } finally {
+        db.close();
       }
+    } catch {
+      continue;
     }
-  } catch {
-    return [];
   }
   return cursors
     .toSorted((a, b) => b.score - a.score || a.pathname.localeCompare(b.pathname))
@@ -258,8 +254,7 @@ async function rewriteMatrixSyncCacheRows(params: {
   pathname: string;
   stateKey: string;
 }) {
-  const sqlite = await import("node:sqlite");
-  const db = new sqlite.DatabaseSync(params.pathname);
+  const db = openNodeSqliteDatabase(params.pathname);
   try {
     const rows = db
       .prepare(
@@ -377,8 +372,7 @@ export async function deleteMatrixSyncStoreCursor(params: MatrixSyncStoreCursor)
     await fs.rm(params.pathname, { force: true });
     return;
   }
-  const sqlite = await import("node:sqlite");
-  const db = new sqlite.DatabaseSync(params.pathname);
+  const db = openNodeSqliteDatabase(params.pathname);
   try {
     db.prepare(
       `DELETE FROM plugin_state_entries
@@ -507,15 +501,9 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
     rootDir: params.stateDir,
     maxDepth: 10,
   });
-  let sqlite: typeof import("node:sqlite");
-  try {
-    sqlite = await import("node:sqlite");
-  } catch {
-    return null;
-  }
   for (const databasePath of databasePaths) {
     try {
-      const db = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+      const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
         const rows = db
           .prepare(

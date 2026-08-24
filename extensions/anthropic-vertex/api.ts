@@ -11,6 +11,10 @@ export {
   buildAnthropicVertexProvider,
 } from "./provider-catalog.js";
 export {
+  mergeImplicitAnthropicVertexProvider,
+  resolveImplicitAnthropicVertexProvider,
+} from "./provider-catalog-runtime.js";
+export {
   hasAnthropicVertexAvailableAuth,
   hasAnthropicVertexCredentials,
   resolveAnthropicVertexClientRegion,
@@ -19,39 +23,8 @@ export {
   resolveAnthropicVertexRegion,
   resolveAnthropicVertexRegionFromBaseUrl,
 } from "./region.js";
-import { buildAnthropicVertexProvider } from "./provider-catalog.js";
-import { hasAnthropicVertexAvailableAuth } from "./region.js";
 
 const loadStreamRuntimeModule = createLazyRuntimeModule(() => import("./stream-runtime.js"));
-
-/** Merge an implicit Anthropic Vertex provider with explicit user config. */
-export function mergeImplicitAnthropicVertexProvider(params: {
-  existing?: ReturnType<typeof buildAnthropicVertexProvider>;
-  implicit: ReturnType<typeof buildAnthropicVertexProvider>;
-}) {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
-  };
-}
-
-/** Resolve an implicit Anthropic Vertex provider when ADC credentials are available. */
-export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.ProcessEnv }) {
-  const env = params?.env ?? process.env;
-  if (!hasAnthropicVertexAvailableAuth(env)) {
-    return null;
-  }
-
-  return buildAnthropicVertexProvider({ env });
-}
 
 /** Create a lazy Anthropic Vertex stream function for a known project/region/base URL. */
 export function createAnthropicVertexStreamFn(

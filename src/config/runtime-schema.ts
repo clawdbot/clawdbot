@@ -1,41 +1,47 @@
 // Builds runtime config schema defaults from agent and workspace state.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  collectChannelSchemaMetadata,
-  collectPluginSchemaMetadata,
+  collectChannelSchemaMetadataCore,
+  collectPluginSchemaMetadataCore,
 } from "./channel-config-metadata.js";
 import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
 import type { OpenClawConfig } from "./config.js";
-import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
+import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
 function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-  return resolvePluginMetadataSnapshot({
+  return resolveConfigWidePluginManifestRegistry({
     config,
     env: env ?? process.env,
-    workspaceDir,
-    allowWorkspaceScopedCurrent: true,
-  }).manifestRegistry;
+  });
+}
+
+/** Builds one config schema from an exact manifest registry. */
+export function buildRuntimeConfigSchemaFromRegistry(
+  registry: PluginManifestRegistry,
+): ConfigSchemaResponse {
+  return buildConfigSchemaCore({
+    plugins: collectPluginSchemaMetadataCore(registry),
+    channels: collectChannelSchemaMetadataCore(registry),
+  });
 }
 
 /** Builds the config schema from the active runtime config and plugin metadata. */
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const config = getRuntimeConfig();
   const registry = loadManifestRegistry(config);
-  return buildConfigSchema({
-    plugins: collectPluginSchemaMetadata(registry),
-    channels: collectChannelSchemaMetadata(registry),
-  });
+  return buildRuntimeConfigSchemaFromRegistry(registry);
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
-  const snapshot = await readConfigFileSnapshot();
-  const config = snapshot.valid ? snapshot.config : { plugins: { enabled: true } };
+  const snapshot = await readConfigFileSnapshot({ observe: false });
+  const config = snapshot.valid
+    ? snapshot.config
+    : { agents: { list: [{ id: "main" }] }, plugins: { enabled: true } };
   const registry = loadManifestRegistry(config);
-  return buildConfigSchema({
-    plugins: snapshot.valid ? collectPluginSchemaMetadata(registry) : [],
-    channels: collectChannelSchemaMetadata(registry),
+  return buildConfigSchemaCore({
+    plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
+    channels: collectChannelSchemaMetadataCore(registry),
   });
 }

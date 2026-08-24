@@ -7,6 +7,8 @@ function createSuccessfulMediaDecision(
   return {
     capability,
     outcome: "success",
+    attachmentDispositions: { 0: { kind: "handled" } },
+    ...(capability === "image" ? { nativeVisionActive: false } : {}),
     attachments: [
       {
         attachmentIndex: 0,

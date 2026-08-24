@@ -1,13 +1,12 @@
 // QA Lab Matrix plugin module implements scenario runtime reaction behavior.
+
+import { createMatrixQaClient } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   advanceMatrixQaActorCursor,
   assertNoSutReplyWindow,
-  createMatrixQaDriverScenarioClient,
-  primeMatrixQaActorCursor,
   type MatrixQaActorId,
   type MatrixQaScenarioContext,
-  type MatrixQaSyncState,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
@@ -47,18 +46,21 @@ export async function observeReactionScenario(params: {
   reactionEmoji?: string;
   reactionTargetEventId: string;
   roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaScenarioContext["syncStreams"];
   timeoutMs: number;
 }) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
+  // A shared actor stream may observe the sender's remote echo between the send
+  // response and predicate registration. Prime a scenario-owned cursor so the
+  // reaction and any follow-up observation share one deterministic boundary.
+  const client = createMatrixQaClient({
     accessToken: params.accessToken,
-    actorId: params.actorId,
     baseUrl: params.baseUrl,
-    observedEvents: params.observedEvents,
-    syncState: params.syncState,
-    syncStreams: params.syncStreams,
   });
+  const startSince = await client.primeRoom();
+  if (!startSince) {
+    throw new Error(
+      `Matrix ${params.actorId} reaction observer did not return a next_batch cursor`,
+    );
+  }
   const reactionEmoji = params.reactionEmoji ?? "👍";
   const reactionEventId = await client.sendReaction({
     emoji: reactionEmoji,
@@ -81,6 +83,7 @@ export async function observeReactionScenario(params: {
   return {
     actorId: params.actorId,
     actorUserId: params.actorUserId,
+    client,
     event: matched.event,
     reactionEmoji,
     reactionEventId,
@@ -119,8 +122,6 @@ export async function runReactionNotificationScenario(context: MatrixQaScenarioC
     observedEvents: context.observedEvents,
     reactionTargetEventId,
     roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
   return {
@@ -148,14 +149,11 @@ export async function runReactionNotAReplyScenario(context: MatrixQaScenarioCont
     observedEvents: context.observedEvents,
     reactionTargetEventId,
     roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
-  const client = createMatrixQaDriverScenarioClient(context);
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
     actorId: reaction.actorId,
-    client,
+    client: reaction.client,
     context,
     roomId: context.roomId,
     since: reaction.since,
@@ -196,17 +194,14 @@ export async function runReactionRedactionObservedScenario(context: MatrixQaScen
     observedEvents: context.observedEvents,
     reactionTargetEventId,
     roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
-  const client = createMatrixQaDriverScenarioClient(context);
-  const redactionEventId = await client.redactEvent({
+  const redactionEventId = await reaction.client.redactEvent({
     eventId: reaction.reactionEventId,
     reason: "matrix qa reaction removal",
     roomId: context.roomId,
   });
-  const redaction = await client.waitForRoomEvent({
+  const redaction = await reaction.client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
       event.roomId === context.roomId &&

@@ -64,7 +64,6 @@ export {
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
 } from "openclaw/plugin-sdk/reply-payload";
-export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 export { waitForAbortSignal } from "openclaw/plugin-sdk/runtime";
 export {
   applyBasicWebhookRequestGuards,

@@ -4,6 +4,7 @@ import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
+  resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
 
 const cleanup: Array<() => void> = [];
@@ -39,6 +40,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "  msg-1  ",
       messageSeq: 2,
+      runId: "  run-1  ",
     });
 
     expect(publicListener).toHaveBeenCalledWith({
@@ -53,6 +55,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
+      runId: "run-1",
     });
     expect(internalListener).toHaveBeenCalledWith({
       sessionFile: "/tmp/session.jsonl",
@@ -67,6 +70,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
+      runId: "run-1",
     });
   });
 
@@ -120,6 +124,97 @@ describe("transcript events", () => {
       sessionKey: "agent:main:main",
       messageId: "msg-1",
     });
+  });
+
+  it("keeps normalized committed lifecycle and store ownership on internal events only", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+
+    emitSessionTranscriptUpdate({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: "  /tmp/custom-sessions.json  ",
+      },
+      lifecycleRevision: "  committed-revision  ",
+      messageId: "msg-1",
+    });
+
+    expect(internalListener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/custom-sessions.json",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      lifecycleRevision: "committed-revision",
+      messageId: "msg-1",
+    });
+    expect(publicListener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      messageId: "msg-1",
+    });
+  });
+
+  it("omits provider replay only from the shallow public message projection", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+    const content = [{ type: "text", text: "visible" }];
+    const metadata = { nested: true };
+    const providerReplay = { type: "opaque", data: "private" };
+    const message = {
+      role: "assistant",
+      content,
+      metadata,
+      providerReplay,
+    };
+
+    emitSessionTranscriptUpdate({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      message,
+      messageId: "msg-1",
+    });
+
+    const publicUpdate = publicListener.mock.calls[0]?.[0];
+    const internalUpdate = internalListener.mock.calls[0]?.[0];
+    expect(publicUpdate?.message).toEqual({ role: "assistant", content, metadata });
+    expect(publicUpdate?.message).not.toBe(message);
+    expect(publicUpdate?.message.content).toBe(content);
+    expect(publicUpdate?.message.metadata).toBe(metadata);
+    expect(internalUpdate?.message).toBe(message);
+    expect(internalUpdate?.message.providerReplay).toBe(providerReplay);
+    expect(message.providerReplay).toBe(providerReplay);
+  });
+
+  it("discards blank lifecycle ownership without changing legacy events", () => {
+    const listener = vi.fn();
+    cleanup.push(onInternalSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      lifecycleRevision: "  ",
+    });
+
+    expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
   });
 
   it("derives public target identity from legacy-shaped internal updates", () => {
@@ -196,5 +291,36 @@ describe("transcript events", () => {
     expect(emitSessionTranscriptUpdate({ sessionFile: "/tmp/session.jsonl" })).toBeUndefined();
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "user", message: { role: "user", content: "prompt" }, expected: undefined },
+    {
+      name: "tool result",
+      message: { role: "toolResult", content: [{ type: "text", text: "result" }] },
+      expected: undefined,
+    },
+    {
+      name: "intermediate tool turn without a call block",
+      message: { role: "assistant", content: [], stopReason: "toolUse" },
+      expected: undefined,
+    },
+    ...["toolCall", "toolUse", "functionCall"].map((type) => ({
+      name: `incomplete ${type} block`,
+      message: { role: "assistant", content: [{ type }], stopReason: "error" },
+      expected: undefined,
+    })),
+    ...["stop", "length", "error", "aborted"].map((stopReason) => ({
+      name: `${stopReason} terminal assistant`,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        stopReason,
+      },
+      expected: "run-owned",
+    })),
+  ])("attributes run ownership only to terminal assistants: $name", ({ message, expected }) => {
+    expect(resolveTerminalAssistantTranscriptRunId(message, "  run-owned  ")).toBe(expected);
+    expect(resolveTerminalAssistantTranscriptRunId(message, "  ")).toBeUndefined();
   });
 });

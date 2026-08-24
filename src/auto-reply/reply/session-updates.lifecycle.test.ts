@@ -205,18 +205,97 @@ describe("session-updates lifecycle hooks", () => {
 
     const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
-    expect(sessionStore[sessionKey]?.sessionFile).toContain("s2.jsonl");
+    expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
     expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
     expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual(["s1", "s2"]);
     expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
     expect(sessionStore[sessionKey]?.totalTokens).toBe(123);
     expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
     expect(persisted?.sessionId).toBe("s2");
-    expect(persisted?.sessionFile).toContain("s2.jsonl");
+    expect(persisted).not.toHaveProperty("sessionFile");
     expect(persisted?.usageFamilyKey).toBe(sessionKey);
     expect(persisted?.usageFamilySessionIds).toEqual(["s1", "s2"]);
     expect(persisted?.compactionCount).toBe(1);
     expect(persisted?.totalTokens).toBe(123);
     expect(persisted?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
+  });
+
+  it("does not account compaction against a replaced session", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    const replacement = { ...entry, sessionId: "s2", lifecycleRevision: "revision-2" };
+    await replaceSessionEntry({ storePath, sessionKey }, replacement);
+
+    const result = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: 123,
+      expectedSession: { sessionId: "s1", lifecycleRevision: undefined },
+    });
+
+    expect(result).toBeUndefined();
+    expect(sessionStore[sessionKey]).toBe(entry);
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      sessionId: "s2",
+      lifecycleRevision: "revision-2",
+      compactionCount: 0,
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })).not.toHaveProperty("totalTokens");
+  });
+
+  it("does not account compaction after invocation authority closes", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+
+    const result = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: 123,
+      expectedSession: entry,
+      authorize: () => false,
+    });
+
+    expect(result).toBeUndefined();
+    expect(sessionStore[sessionKey]).toBe(entry);
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      sessionId: "s1",
+      compactionCount: 0,
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })).not.toHaveProperty("totalTokens");
+  });
+
+  it("does not commit accounting when authority closes after the queued updater", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    let authorized = true;
+    let authorizeCalls = 0;
+
+    const result = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: 123,
+      expectedSession: entry,
+      authorize: () => {
+        authorizeCalls += 1;
+        if (authorizeCalls === 2) {
+          queueMicrotask(() => {
+            authorized = false;
+          });
+        }
+        return authorized;
+      },
+    });
+
+    expect(result).toBeUndefined();
+    expect(authorizeCalls).toBe(3);
+    expect(sessionStore[sessionKey]).toBe(entry);
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      sessionId: "s1",
+      compactionCount: 0,
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })).not.toHaveProperty("totalTokens");
   });
 });

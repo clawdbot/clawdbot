@@ -137,7 +137,7 @@ struct AppStateRemoteConfigTests {
             remoteIdentity: "",
             remoteUrl: "not a gateway URL",
             remoteToken: "",
-            remoteTokenDirty: false)
+            dirtyFields: [])
 
         #expect(!AppState._testGatewayDraftCanPersist(base))
         #expect(AppState._testGatewayDraftCanPersist(.init(
@@ -147,7 +147,7 @@ struct AppStateRemoteConfigTests {
             remoteIdentity: "",
             remoteUrl: "wss://gateway.example.test",
             remoteToken: "",
-            remoteTokenDirty: false)))
+            dirtyFields: [])))
         #expect(!AppState._testGatewayDraftCanPersist(.init(
             connectionMode: .remote,
             remoteTransport: .ssh,
@@ -155,7 +155,7 @@ struct AppStateRemoteConfigTests {
             remoteIdentity: "",
             remoteUrl: "ws://127.0.0.1:18789",
             remoteToken: "",
-            remoteTokenDirty: false)))
+            dirtyFields: [])))
     }
 
     @Test
@@ -227,6 +227,294 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `successful gateway config sync clears dirty fields`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway.example.test",
+                        "token": "disk-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+
+            state.remoteToken = "app-token"
+            #expect(state.remoteTokenDirty)
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(!state.remoteTokenDirty)
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+            let remote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(remote?["token"] as? String == "app-token")
+
+            state.remoteToken = " app-token "
+            #expect(state.remoteTokenDirty)
+            await state._testAwaitGatewayConfigSync()
+            #expect(!state.remoteTokenDirty)
+        }
+    }
+
+    @Test
+    func `failed gateway config sync retains dirty fields`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway.example.test",
+                        "token": "disk-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true, gatewayConfigSaver: { _ in false })
+            state._testEnableGatewayConfigSync()
+
+            state.remoteToken = "app-token"
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(state.remoteTokenDirty)
+            #expect(state._testDirtyGatewayConfigFields == ["gateway.remote.token"])
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+            let remote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(remote?["token"] as? String == "disk-token")
+        }
+    }
+
+    @Test
+    func `config watcher adopts non-dirty remote gateway fields`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://old-gateway.example.test",
+                        "token": "old-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "ssh",
+                        "url": "ws://127.0.0.1:19999",
+                        "sshTarget": "alice@new-gateway.example.test",
+                        "sshIdentity": "/tmp/new-identity",
+                        "token": "new-token",
+                    ],
+                ],
+            ]))
+            state._testApplyConfigFromDisk()
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:19999")
+            #expect(state.remoteTarget == "alice@new-gateway.example.test")
+            #expect(state.remoteIdentity == "/tmp/new-identity")
+            #expect(state.remoteToken == "new-token")
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state._testConflictedGatewayConfigFields.isEmpty)
+        }
+    }
+
+    @Test
+    func `external token edit after successful sync is not reverted`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway.example.test",
+                        "token": "initial-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+
+            state.remoteToken = "app-token"
+            await state._testAwaitGatewayConfigSync()
+            #expect(!state.remoteTokenDirty)
+
+            var externalRoot = OpenClawConfigFile.loadDict()
+            var gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["token"] = "external-token"
+            gateway["remote"] = remote
+            externalRoot["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
+
+            #expect(state.syncGatewayConfigNow())
+            #expect(state.remoteToken == "external-token")
+            let persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["token"] as? String == "external-token")
+        }
+    }
+
+    @Test
+    func `dirty external token conflict offers both recovery choices`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "ssh",
+                        "url": "ws://127.0.0.1:18789",
+                        "sshTarget": "alice@gateway.example.test",
+                        "sshIdentity": "/tmp/initial-identity",
+                        "token": "initial-token",
+                    ],
+                ],
+            ]))
+            var rejectSaves = false
+            let state = AppState(
+                preview: true,
+                gatewayConfigSaver: { root in
+                    rejectSaves ? false : OpenClawConfigFile.saveDict(root)
+                })
+            state.remoteIdentity = "/tmp/app-identity"
+            state.remoteToken = "app-token"
+
+            var externalRoot = OpenClawConfigFile.loadDict()
+            var gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote.removeValue(forKey: "sshIdentity")
+            remote["token"] = "external-token"
+            gateway["remote"] = remote
+            externalRoot["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
+            state._testApplyConfigFromDisk()
+
+            #expect(state.remoteIdentity == "/tmp/app-identity")
+            #expect(state.remoteToken == "app-token")
+            #expect(state.remoteTokenDirty)
+            #expect(state._testConflictedGatewayConfigFields == [
+                "gateway.remote.sshIdentity",
+                "gateway.remote.token",
+            ])
+            #expect(state.gatewayConfigConflict?.fields == [.remoteIdentity, .remoteToken])
+            #expect(state.gatewayConfigConflict?.fieldNames == ["Identity file", "Gateway token"])
+            #expect(state.gatewayConfigConflict?.message ==
+                "These settings changed outside the app while you were editing: " +
+                    "Identity file and Gateway token. " +
+                    "Choose which version to keep.")
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+
+            state._testEnableGatewayConfigSync()
+            #expect(!state.syncGatewayConfigNow())
+            var persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["token"] as? String == "external-token")
+            #expect(state.remoteToken == "app-token")
+
+            #expect(state.useFileGatewayConfigConflict())
+            #expect(state.remoteIdentity.isEmpty)
+            #expect(state.remoteToken == "external-token")
+            #expect(!state.remoteTokenDirty)
+            #expect(state.gatewayConfigConflict == nil)
+            #expect(state._testConflictedGatewayConfigFields.isEmpty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+
+            state.remoteToken = "kept-token"
+            externalRoot = OpenClawConfigFile.loadDict()
+            gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["token"] = "second-external-token"
+            gateway["remote"] = remote
+            externalRoot["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
+            state._testApplyConfigFromDisk()
+
+            #expect(state.gatewayConfigConflict?.fields == [.remoteToken])
+            #expect(state.keepGatewayConfigEdits())
+            persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["token"] as? String == "kept-token")
+            #expect(state.remoteToken == "kept-token")
+            #expect(!state.remoteTokenDirty)
+            #expect(state.gatewayConfigConflict == nil)
+            #expect(state._testConflictedGatewayConfigFields.isEmpty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+
+            state.remoteToken = "unsaved-token"
+            externalRoot = OpenClawConfigFile.loadDict()
+            gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["token"] = "third-external-token"
+            gateway["remote"] = remote
+            externalRoot["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
+            state._testApplyConfigFromDisk()
+
+            rejectSaves = true
+            #expect(!state.keepGatewayConfigEdits())
+            persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["token"] as? String == "third-external-token")
+            #expect(state.remoteToken == "unsaved-token")
+            #expect(state.gatewayConfigConflict?.fields == [.remoteToken])
+            #expect(state._testConflictedGatewayConfigFields == ["gateway.remote.token"])
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+        }
+    }
+
+    @Test
+    func `dirty token does not claim an externally changed remote URL`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://old-gateway.example.test",
+                        "token": "initial-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state.remoteToken = "app-token"
+
+            var externalRoot = OpenClawConfigFile.loadDict()
+            var gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["url"] = "wss://new-gateway.example.test"
+            gateway["remote"] = remote
+            externalRoot["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
+            state._testApplyConfigFromDisk()
+
+            #expect(state.remoteToken == "app-token")
+            #expect(state.remoteUrl == "wss://new-gateway.example.test")
+            #expect(state._testConflictedGatewayConfigFields.isEmpty)
+
+            state._testEnableGatewayConfigSync()
+            #expect(state.syncGatewayConfigNow())
+            let persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["token"] as? String == "app-token")
+            #expect(persistedRemote?["url"] as? String == "wss://new-gateway.example.test")
+        }
+    }
+
+    @Test
     func `config watcher endpoint replacement clears and ignores stale discovery identity`() {
         let previousGatewayPreference = captureGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingSystemAgentPendingKey)
@@ -239,9 +527,15 @@ struct AppStateRemoteConfigTests {
             }
         }
         let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .direct
-        state.remoteUrl = "wss://gateway-a.example.test"
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://gateway-a.example.test",
+                ],
+            ],
+        ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         OnboardingSystemAgentResumeStore.markPending(routeIdentity: "remote:id:gateway-a")
         let view = OnboardingView(state: state)
@@ -274,10 +568,16 @@ struct AppStateRemoteConfigTests {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
         let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .ssh
-        state.remoteUrl = "ws://127.0.0.1:18789"
-        state.remoteTarget = "alice@gateway-a.example.test"
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "alice@gateway-a.example.test",
+                ],
+            ],
+        ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         let view = OnboardingView(state: state)
         view.preferredGatewayID = "gateway-a"
@@ -303,11 +603,17 @@ struct AppStateRemoteConfigTests {
         let previousGatewayPreference = captureGatewayPreference()
         defer { restoreGatewayPreference(previousGatewayPreference) }
         let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .ssh
-        state.remoteUrl = "ws://127.0.0.1:18789"
-        state.remoteTarget = "alice@gateway-a.example.test"
-        state.remoteIdentity = "/tmp/gateway-a-id"
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "alice@gateway-a.example.test",
+                    "sshIdentity": "/tmp/gateway-a-id",
+                ],
+            ],
+        ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
 
         state._testApplyConfigOverrides([
@@ -456,7 +762,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "/tmp/id_ed25519",
                 remoteToken: "  secret-token  ",
-                remoteTokenDirty: true))
+                dirtyFields: [.remoteToken]))
 
         #expect(remote["token"] as? String == "secret-token")
     }
@@ -472,7 +778,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "   ",
-                remoteTokenDirty: true))
+                dirtyFields: [.remoteToken]))
 
         #expect((remote["token"] as? String) == nil)
     }
@@ -488,7 +794,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.remoteTransport, .remoteUrl, .remoteTarget, .remoteHostKeyPolicy]))
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
         #expect(remote["transport"] as? String == "ssh")
@@ -509,7 +815,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.remoteTarget, .remoteHostKeyPolicy]))
         let changedTarget = AppState._testUpdatedRemoteGatewayConfig(
             current: [
                 "sshHostKeyPolicy": "openssh",
@@ -522,7 +828,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "new-gateway-alias",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.remoteTarget, .remoteHostKeyPolicy]))
 
         #expect(sameTarget["sshHostKeyPolicy"] as? String == "openssh")
         #expect(changedTarget["sshHostKeyPolicy"] as? String == "strict")
@@ -539,7 +845,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.remoteUrl]))
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:29876")
     }
@@ -555,7 +861,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.remoteUrl]))
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:19999")
     }
@@ -571,7 +877,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "alice@gateway.example",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.remoteUrl]))
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
     }
@@ -587,7 +893,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "alice@example.com",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.remoteUrl]))
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
     }
@@ -681,7 +987,13 @@ struct AppStateRemoteConfigTests {
                 remoteIdentity: "",
                 remoteUrl: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [
+                    .remoteTransport,
+                    .remoteUrl,
+                    .remoteTarget,
+                    .remoteIdentity,
+                    .remoteHostKeyPolicy,
+                ]))
         let sshRemote = (sshRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         #expect((sshRemote?["token"] as? [String: String])?["$secretRef"] ==
             "gateway-token") // pragma: allowlist secret
@@ -695,7 +1007,7 @@ struct AppStateRemoteConfigTests {
                 remoteIdentity: "",
                 remoteUrl: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.mode]))
         let localGateway = localRoot["gateway"] as? [String: Any]
         let localRemote = localGateway?["remote"] as? [String: Any]
         #expect(localGateway?["mode"] as? String == "local")
@@ -718,7 +1030,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "  fresh-token  ",
-                remoteTokenDirty: true))
+                dirtyFields: [.remoteToken]))
 
         #expect(remote["token"] as? String == "fresh-token")
     }
@@ -740,7 +1052,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: []))
         #expect((preserved["token"] as? [String: String])?["$secretRef"] == "gateway-token") // pragma: allowlist secret
 
         let cleared = AppState._testUpdatedRemoteGatewayConfig(
@@ -752,7 +1064,7 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "",
                 remoteIdentity: "",
                 remoteToken: "   ",
-                remoteTokenDirty: true))
+                dirtyFields: [.remoteToken]))
         #expect((cleared["token"] as? String) == nil)
     }
 
@@ -781,7 +1093,7 @@ struct AppStateRemoteConfigTests {
                 remoteIdentity: "",
                 remoteUrl: "",
                 remoteToken: "",
-                remoteTokenDirty: false))
+                dirtyFields: [.mode]))
         let localGateway = localRoot["gateway"] as? [String: Any]
         let auth = localGateway?["auth"] as? [String: Any]
         #expect(localGateway?["mode"] as? String == "local")

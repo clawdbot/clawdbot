@@ -1,18 +1,12 @@
-// Realtime telephony audio pacing and speech-start detection for mulaw streams.
+// Realtime telephony audio pacing for mulaw streams.
 
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
-const TELEPHONY_CHUNK_MS = 20;
-const DEFAULT_SPEECH_RMS_THRESHOLD = 0.035;
-const DEFAULT_REQUIRED_LOUD_CHUNKS = 4;
-const DEFAULT_REQUIRED_QUIET_CHUNKS = 12;
+// The lead absorbs event-loop timer lateness and network jitter in the telephony edge buffer.
+// Barge-in clear flushes both queues, so this cushion does not add interruption latency.
+const LEAD_MS = 160;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
-const PCM16_MAX_AMPLITUDE = 32768;
-const MULAW_LINEAR_SAMPLES = new Int16Array(256);
-
-for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
-  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
-}
+const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 
 /** Queue item sent over the realtime provider media stream. */
 type RealtimeAudioQueueItem =
@@ -39,9 +33,11 @@ interface RealtimeAudioSerializer {
 /** Paces outgoing mulaw audio frames at telephony cadence. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
+  private queueHead = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
+  private streamClockMs: number | null = null;
 
   constructor(
     private readonly params: {
@@ -67,7 +63,7 @@ export class RealtimeAudioPacer {
       this.queue.push({
         type: "audio",
         chunk,
-        durationMs: Math.max(1, Math.round((chunk.length / TELEPHONY_SAMPLE_RATE) * 1000)),
+        durationMs: chunk.length / 8,
       });
       this.queuedAudioBytes += chunk.length;
     }
@@ -90,8 +86,9 @@ export class RealtimeAudioPacer {
     }
     const clearedAudioBytes = this.queuedAudioBytes;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
+    this.streamClockMs = null;
     this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
   }
@@ -105,8 +102,9 @@ export class RealtimeAudioPacer {
   close(): void {
     this.closed = true;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
+    this.streamClockMs = null;
   }
 
   /** Clear the scheduled pump timer. */
@@ -131,97 +129,74 @@ export class RealtimeAudioPacer {
     this.params.onBackpressure?.();
   }
 
-  /** Send one queued item and schedule the next send based on audio duration. */
+  private get pendingQueueSize(): number {
+    return Math.max(0, this.queue.length - this.queueHead);
+  }
+
+  /** Take one queued item without shifting the remaining paced-audio backlog. */
+  private takeNextItem(): RealtimeAudioQueueItem | undefined {
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+      return undefined;
+    }
+    const item = this.queue[this.queueHead];
+    this.queueHead += 1;
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+    } else if (
+      this.queueHead > QUEUE_COMPACT_HEAD_THRESHOLD &&
+      this.queueHead * 2 > this.queue.length
+    ) {
+      this.queue.splice(0, this.queueHead);
+      this.queueHead = 0;
+    }
+    return item;
+  }
+
+  private resetQueue(): void {
+    this.queue.length = 0;
+    this.queueHead = 0;
+  }
+
+  /** Fill the provider playout cushion, then wake at the next timeline boundary. */
   private pump(): void {
     this.timer = null;
     if (this.closed) {
       return;
     }
-    const item = this.queue.shift();
-    if (!item) {
-      return;
-    }
+    const now = performance.now();
+    this.streamClockMs ??= now;
 
-    let delayMs = 0;
-    let sent;
-    if (item.type === "audio") {
-      this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
-      delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
-    } else {
-      sent = this.params.send(this.params.serializer.mark(item.name));
-    }
-
-    if (!sent) {
-      this.queue = [];
-      this.queuedAudioBytes = 0;
-      return;
-    }
-    if (this.queue.length > 0) {
-      this.timer = setTimeout(() => this.pump(), delayMs);
-    }
-  }
-}
-
-/** Calculate normalized RMS from mulaw bytes. */
-function calculateMulawRms(muLaw: Buffer): number {
-  if (muLaw.length === 0) {
-    return 0;
-  }
-  let sum = 0;
-  for (const sample of muLaw) {
-    const normalized = (MULAW_LINEAR_SAMPLES[sample] ?? 0) / PCM16_MAX_AMPLITUDE;
-    sum += normalized * normalized;
-  }
-  return Math.sqrt(sum / muLaw.length);
-}
-
-/** Detect likely speech start from consecutive loud mulaw chunks. */
-export class RealtimeMulawSpeechStartDetector {
-  private loudChunks = 0;
-  private quietChunks = DEFAULT_REQUIRED_QUIET_CHUNKS;
-  private speaking = false;
-
-  constructor(
-    private readonly params: {
-      requiredLoudChunks?: number;
-      requiredQuietChunks?: number;
-      rmsThreshold?: number;
-    } = {},
-  ) {}
-
-  /** Accept one mulaw chunk and return true only on transition into speaking. */
-  accept(muLaw: Buffer): boolean {
-    const rms = calculateMulawRms(muLaw);
-    const threshold = this.params.rmsThreshold ?? DEFAULT_SPEECH_RMS_THRESHOLD;
-    if (rms >= threshold) {
-      this.quietChunks = 0;
-      this.loudChunks += 1;
-      const requiredLoudChunks = this.params.requiredLoudChunks ?? DEFAULT_REQUIRED_LOUD_CHUNKS;
-      if (!this.speaking && this.loudChunks >= requiredLoudChunks) {
-        this.speaking = true;
-        return true;
+    while (this.pendingQueueSize > 0 && this.streamClockMs < now + LEAD_MS) {
+      const item = this.takeNextItem();
+      if (!item) {
+        break;
       }
-      return false;
+
+      const sent =
+        item.type === "audio"
+          ? this.sendAudioItem(item)
+          : this.params.send(this.params.serializer.mark(item.name));
+      if (!sent) {
+        this.resetQueue();
+        this.queuedAudioBytes = 0;
+        this.streamClockMs = null;
+        return;
+      }
     }
 
-    this.loudChunks = 0;
-    this.quietChunks += 1;
-    const requiredQuietChunks = this.params.requiredQuietChunks ?? DEFAULT_REQUIRED_QUIET_CHUNKS;
-    if (this.quietChunks >= requiredQuietChunks) {
-      this.speaking = false;
+    if (this.pendingQueueSize === 0) {
+      this.streamClockMs = null;
+      return;
     }
-    return false;
+    const delayMs = Math.max(1, this.streamClockMs - LEAD_MS - performance.now());
+    this.timer = setTimeout(() => this.pump(), delayMs);
   }
-}
 
-/** Decode one G.711 mulaw byte to a linear PCM sample. */
-function decodeMulawSample(value: number): number {
-  const muLaw = ~value & 0xff;
-  const sign = muLaw & 0x80;
-  const exponent = (muLaw >> 4) & 0x07;
-  const mantissa = muLaw & 0x0f;
-  let sample = ((mantissa << 3) + 132) << exponent;
-  sample -= 132;
-  return sign ? -sample : sample;
+  private sendAudioItem(item: Extract<RealtimeAudioQueueItem, { type: "audio" }>): boolean {
+    this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
+    const sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
+    this.streamClockMs = (this.streamClockMs ?? performance.now()) + item.durationMs;
+    return sent;
+  }
 }

@@ -1,11 +1,9 @@
 // Verifies metadata-backed setup registry descriptor lookup.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -41,7 +39,7 @@ vi.mock("./plugin-metadata-snapshot.js", async () => {
 });
 
 afterEach(() => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   resetPluginRuntimeStateForTest();
   loadPluginRegistrySnapshotMock.mockReset();
   loadPluginManifestRegistryForInstalledIndexMock.mockReset();
@@ -74,7 +72,6 @@ function createCurrentSnapshot(params: {
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -152,7 +149,7 @@ describe("setup-registry descriptor lookup", () => {
     expect(resolvePluginSetupCliBackendDescriptor({ backend: "disabled-cli" })).toBeUndefined();
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(3);
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: {},
+      allowWorkspaceScopedCurrent: true,
       env: process.env,
     });
   });
@@ -235,7 +232,7 @@ describe("setup-registry descriptor lookup", () => {
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
-  it("does not reuse workspace-scoped current metadata without a workspace context", async () => {
+  it("reuses the lifecycle-owned workspace when no runtime workspace is active", async () => {
     loadPluginMetadataSnapshotMock.mockReturnValue({
       index: {
         diagnostics: [],
@@ -255,12 +252,10 @@ describe("setup-registry descriptor lookup", () => {
       { config: {}, env: process.env },
     );
 
-    expect(
-      resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli", config: {} }),
-    ).toBeUndefined();
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli", config: {} })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Codex-CLI" },
     });
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 });

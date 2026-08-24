@@ -1,7 +1,7 @@
 // Mattermost plugin module implements directory behavior.
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
+import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostMe,
@@ -9,6 +9,7 @@ import {
   type MattermostClient,
   type MattermostUser,
 } from "./client.js";
+import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
 import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
 type MattermostDirectoryParams = {
@@ -23,7 +24,7 @@ function buildClient(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): MattermostClient | null {
-  const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled || !account.botToken || !account.baseUrl) {
     return null;
   }
@@ -34,17 +35,12 @@ function buildClient(params: {
   });
 }
 
-/**
- * Build clients from ALL enabled accounts (deduplicated by token).
- *
- * We always scan every account because:
- * - Private channels are only visible to bots that are members
- * - The requesting agent's account may have an expired/invalid token
- *
- * This means a single healthy bot token is enough for directory discovery.
- */
+/** Build the requested account client, or aggregate accounts for an explicitly unscoped lookup. */
 function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
-  const accountIds = listMattermostAccountIds(params.cfg);
+  const requestedAccountId = params.accountId?.trim();
+  const accountIds = requestedAccountId
+    ? [requestedAccountId]
+    : listMattermostAccountIds(params.cfg);
   const seen = new Set<string>();
   const clients: MattermostClient[] = [];
   for (const id of accountIds) {
@@ -97,7 +93,15 @@ export async function listMattermostDirectoryGroups(
         }
         seenIds.add(ch.id);
         entries.push({
-          kind: "group" as const,
+          // Authoritative per-channel kind: a public `O` channel is a `channel`;
+          // only private `P` / group `G` map to `group`. Emitting a blanket
+          // `group` here mislabels public channels, so a name-resolved public
+          // channel would fork a phantom `group:<id>` session on outbound
+          // routing (#95646).
+          kind:
+            resolveMattermostTrustedChatKind({ channelType: ch.type }) === "group"
+              ? ("group" as const)
+              : ("channel" as const),
           id: `channel:${ch.id}`,
           name: ch.name ?? undefined,
           handle: ch.display_name ?? undefined,

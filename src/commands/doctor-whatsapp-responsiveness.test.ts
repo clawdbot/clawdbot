@@ -50,6 +50,11 @@ describe("doctor WhatsApp responsiveness", () => {
         { pid: 104, command: "openclaw tui --local" },
         { pid: 105, command: "/usr/bin/openclaw chat" },
       ]);
+      expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 1_000,
+      });
     }
   });
 
@@ -97,6 +102,7 @@ describe("doctor WhatsApp responsiveness", () => {
       status: {
         eventLoop: {
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["event_loop_delay"],
           intervalMs: 30_000,
           delayP99Ms: 42,
@@ -133,6 +139,7 @@ describe("doctor WhatsApp responsiveness", () => {
       status: {
         eventLoop: {
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["event_loop_delay"],
           intervalMs: 30_000,
           delayP99Ms: 42,
@@ -165,6 +172,7 @@ describe("doctor WhatsApp responsiveness", () => {
         status: {
           eventLoop: {
             degraded: false,
+            degradedSinceMs: null,
             reasons: [],
             intervalMs: 1,
             delayP99Ms: 0,
@@ -182,6 +190,7 @@ describe("doctor WhatsApp responsiveness", () => {
         status: {
           eventLoop: {
             degraded: true,
+            degradedSinceMs: 61_000,
             reasons: ["event_loop_delay"],
             intervalMs: 30_000,
             delayP99Ms: 42,
@@ -199,6 +208,7 @@ describe("doctor WhatsApp responsiveness", () => {
         status: {
           eventLoop: {
             degraded: true,
+            degradedSinceMs: 61_000,
             reasons: ["event_loop_delay"],
             intervalMs: 30_000,
             delayP99Ms: 42,
@@ -223,6 +233,7 @@ describe("doctor WhatsApp responsiveness", () => {
       status: {
         eventLoop: {
           degraded: false,
+          degradedSinceMs: null,
           reasons: [],
           intervalMs: 1,
           delayP99Ms: 0,

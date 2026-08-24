@@ -8,7 +8,7 @@ import {
   findForbiddenChangelogThanks,
   isForbiddenChangelogThanksHandle,
   requiresExplicitHumanChangelogThanks,
-} from "../../scripts/check-changelog-attributions.mjs";
+} from "../../scripts/check-changelog-attributions.mts";
 
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
@@ -25,7 +25,7 @@ function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessE
 
 function commandOutput(error: unknown): string {
   const result = error as { stderr?: unknown; stdout?: unknown };
-  return `${String(result.stdout ?? "")}${String(result.stderr ?? "")}`;
+  return `${(result.stdout ?? "") as string}${(result.stderr ?? "") as string}`;
 }
 
 function createRepoWithPrChangelogDiff(entry: string): string {
@@ -238,6 +238,7 @@ source "$OPENCLAW_PR_GATES_SH"
 
 enter_worktree() { :; }
 checkout_prep_branch() { :; }
+refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
 normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
@@ -289,6 +290,7 @@ source "$OPENCLAW_PR_GATES_SH"
 
 enter_worktree() { :; }
 checkout_prep_branch() { :; }
+refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
 normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }

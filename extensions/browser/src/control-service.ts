@@ -44,15 +44,14 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
-  // Ensure the host-local relay secret exists before profiles are consumed so
-  // the extension cdpUrl carries auth. Works identically on the gateway host
-  // and on a browser node host — each owns its own secret.
+  // Ensure the host-local HMAC key exists before relay startup. Gateway hosts
+  // and browser node hosts each own an independent key.
   const hasExtensionProfiles = Object.values(resolved.profiles).some(
     (profile) => profile.driver === "extension",
   );
   if (hasExtensionProfiles) {
     const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
-    ensureExtensionRelayToken();
+    await ensureExtensionRelayToken();
     const refreshed = loadBrowserConfigForRuntimeRefresh();
     resolved = resolveBrowserConfig(refreshed.browser, refreshed);
   }
@@ -89,10 +88,18 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
 
 /** Stops the in-process Browser control service runtime. */
 export async function stopBrowserControlService(): Promise<void> {
-  await stopBrowserControlRuntime({
-    requestedBy: "service",
-    onWarn: (message) => logService.warn(message),
-  });
+  try {
+    await stopBrowserControlRuntime({
+      requestedBy: "service",
+      onWarn: (message) => logService.warn(message),
+    });
+  } finally {
+    // Direct Gateway auth sockets can exist before Browser control lazy-starts,
+    // so plugin shutdown must close them even when there is no runtime state.
+    const { disposeGatewayExtensionRelay } =
+      await import("./browser/extension-relay/gateway-relay-route.js");
+    disposeGatewayExtensionRelay();
+  }
 }
 
 /** Re-export Browser control context accessors for gateway-local dispatch. */

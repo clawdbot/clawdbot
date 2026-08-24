@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
   controlUiCodeSplitting,
@@ -22,10 +23,17 @@ describe("Control UI build chunking", () => {
     expect(controlUiStableChunkName("/tmp/openclaw-pnpm-node-modules/json5/dist/index.js")).toBe(
       "config-runtime",
     );
-    expect(controlUiStableChunkName("/repo/ui/src/components/config-form.shared.ts")).toBe(
-      "control-ui-shared",
-    );
-    expect(controlUiStableChunkName("/repo/ui/src/lib/clipboard.ts")).toBe("control-ui-shared");
+    expect(
+      controlUiStableChunkName(
+        "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
+      ),
+    ).toBe("config-runtime");
+    expect(
+      controlUiStableChunkName("/repo/ui/src/components/config-form.shared.ts"),
+    ).toBeUndefined();
+    expect(controlUiStableChunkName("/repo/ui/src/lib/clipboard.ts")).toBeUndefined();
+    expect(controlUiStableChunkName("/repo/ui/src/build-info.ts")).toBeUndefined();
+    expect(controlUiStableChunkName("/repo/ui/src/build-info-normalizers.ts")).toBeUndefined();
     expect(
       controlUiStableChunkName("/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js"),
     ).toBe("gateway-runtime");
@@ -37,7 +45,7 @@ describe("Control UI build chunking", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({
       tags: ["$initial"],
-      maxSize: 400 * 1024,
+      maxSize: 576 * 1024,
     });
   });
 

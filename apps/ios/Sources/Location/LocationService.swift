@@ -16,7 +16,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
-    private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
+    private var cachedAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
+    private var authorizationChangeHandler: (@MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)?
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
     private var isMonitoringSignificantChanges = false
 
@@ -36,10 +37,22 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         self.configureLocationManager()
     }
 
+    func authorizationStatus() -> CLAuthorizationStatus {
+        self.cachedAuthorizationSnapshot.authorizationStatus
+    }
+
+    func accuracyAuthorization() -> CLAccuracyAuthorization {
+        self.cachedAuthorizationSnapshot.accuracyAuthorization
+    }
+
+    func authorizationSnapshot() -> LocationAuthorizationSnapshot {
+        self.cachedAuthorizationSnapshot
+    }
+
     func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
         guard CLLocationManager.locationServicesEnabled() else { return .denied }
 
-        let status = self.manager.authorizationStatus
+        let status = self.authorizationStatus()
         if status == .notDetermined {
             let updated = await self.requestAuthorization(requiresDeterminedStatus: true) {
                 self.manager.requestWhenInUseAuthorization()
@@ -48,7 +61,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         }
 
         if mode == .always {
-            let current = self.manager.authorizationStatus
+            let current = self.authorizationStatus()
             if current == .authorizedWhenInUse {
                 return await self.requestAuthorization(requiresDeterminedStatus: false) {
                     self.manager.requestAlwaysAuthorization()
@@ -57,7 +70,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
             return current
         }
 
-        return self.manager.authorizationStatus
+        return self.authorizationStatus()
     }
 
     func currentLocation(
@@ -105,7 +118,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
                         continue
                     }
                     guard observedPrompt || clock.now >= noPromptDeadline else { continue }
-                    let status = self.manager.authorizationStatus
+                    let status = self.authorizationStatus()
                     if Self.shouldCompleteAuthorizationWait(
                         status: status,
                         requiresDeterminedStatus: requiresDeterminedStatus)
@@ -171,7 +184,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     func setAuthorizationChangeHandler(
-        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
+        _ handler: @escaping @MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)
     {
         self.authorizationChangeHandler = handler
     }
@@ -183,11 +196,16 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let status = manager.authorizationStatus
+        // Apple guarantees this callback for the initial state and every authorization
+        // change. Cache both values here so UI construction never performs synchronous XPC.
+        let snapshot = LocationAuthorizationSnapshot(
+            authorizationStatus: manager.authorizationStatus,
+            accuracyAuthorization: manager.accuracyAuthorization)
         Task { @MainActor in
-            self.authorizationChangeHandler?(status)
+            self.cachedAuthorizationSnapshot = snapshot
+            self.authorizationChangeHandler?(snapshot)
             guard let waitID = self.authWaitID else { return }
-            self.finishAuthorizationWait(waitID: waitID, status: status)
+            self.finishAuthorizationWait(waitID: waitID, status: snapshot.authorizationStatus)
         }
     }
 

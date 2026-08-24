@@ -37,9 +37,7 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
 }
 
 /** Collects bundled runtime sidecar paths that should ship with the root package. */
-export function collectBundledRuntimeSidecarPaths(params?: {
-  rootDir?: string;
-}): readonly string[] {
+function collectBundledRuntimeSidecarPaths(params?: { rootDir?: string }): readonly string[] {
   const rootDir = params?.rootDir ?? process.cwd();
   const excludedRuntimeSidecarPluginDirs = new Set([
     ...NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS,
@@ -69,7 +67,11 @@ export async function writeBundledRuntimeSidecarPathBaseline(params: {
     "lib",
     "bundled-runtime-sidecar-paths.json",
   );
-  const expectedJson = `${JSON.stringify(collectBundledRuntimeSidecarPaths(), null, 2)}\n`;
+  const expectedJson = `${JSON.stringify(
+    collectBundledRuntimeSidecarPaths({ rootDir: params.repoRoot }),
+    null,
+    2,
+  )}\n`;
   const currentJson = fs.existsSync(jsonPath) ? fs.readFileSync(jsonPath, "utf8") : "";
   const changed = currentJson !== expectedJson;
 

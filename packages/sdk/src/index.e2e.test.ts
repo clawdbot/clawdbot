@@ -1,11 +1,12 @@
 // OpenClaw SDK tests cover index behavior.
 import type { AddressInfo } from "node:net";
 import net from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
-import { rawDataToString } from "../../../src/infra/ws.js";
+import { emitAgentEvent } from "../../../src/infra/agent-events.js";
+import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
@@ -58,7 +59,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       type: "event",
       event: "connect.challenge",
       seq: seq++,
-      payload: { nonce: "sdk-e2e-nonce" },
+      payload: { nonce: "sdk-e2e-nonce", ts: Date.now() },
     });
 
     socket.on("message", (raw) => {
@@ -425,6 +426,10 @@ describe("OpenClaw SDK websocket e2e", () => {
       );
       expect(updateAgent.method).toBe("agents.update");
       expect(updateAgent.params).toEqual({ agentId: "sdk-agent", name: "Renamed SDK Agent" });
+      const clearAgentModel = expectJsonObject(
+        await oc.agents.update({ agentId: "sdk-agent", model: null }),
+      );
+      expect(clearAgentModel.params).toEqual({ agentId: "sdk-agent", model: null });
       const deleteAgent = expectJsonObject(await oc.agents.delete({ agentId: "sdk-agent" }));
       expect(deleteAgent.method).toBe("agents.delete");
       expect(deleteAgent.params).toEqual({ agentId: "sdk-agent" });
@@ -492,6 +497,7 @@ describe("OpenClaw SDK websocket e2e", () => {
         "agents.list",
         "agent.identity.get",
         "agents.create",
+        "agents.update",
         "agents.update",
         "agents.delete",
         "sessions.list",

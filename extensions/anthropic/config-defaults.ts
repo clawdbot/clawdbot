@@ -1,3 +1,4 @@
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
  * Anthropic config defaulting helpers. They seed default Anthropic/Claude CLI
  * model refs and cache-retention params based on configured auth mode.
@@ -208,61 +209,35 @@ function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown>
   return base;
 }
 
-function collectClaudeCliRuntimeRefs(
-  model: string | { primary?: string; fallbacks?: string[] } | undefined,
-): string[] {
-  const refs = new Set<string>();
-  if (typeof model === "string") {
-    for (const ref of resolveClaudeCliAnthropicModelRefs(model)?.runtimeRefs ?? []) {
-      refs.add(ref);
-    }
-    return [...refs];
-  }
-  if (typeof model?.primary === "string") {
-    for (const ref of resolveClaudeCliAnthropicModelRefs(model.primary)?.runtimeRefs ?? []) {
-      refs.add(ref);
-    }
-  }
-  for (const fallback of model?.fallbacks ?? []) {
-    for (const ref of resolveClaudeCliAnthropicModelRefs(fallback)?.runtimeRefs ?? []) {
-      refs.add(ref);
-    }
-  }
-  return [...refs];
-}
-
-function collectClaudeCliRuntimeRefsFromModelMap(
-  models: Record<string, unknown> | undefined,
-): string[] {
-  const refs = new Set<string>();
-  for (const key of Object.keys(models ?? {})) {
-    for (const ref of resolveClaudeCliAnthropicModelRefs(key)?.runtimeRefs ?? []) {
-      refs.add(ref);
-    }
-  }
-  return [...refs];
-}
-
 function collectClaudeCliRuntimeRefsFromConfig(config: OpenClawConfig): string[] {
-  const refs = new Set<string>(
-    collectClaudeCliRuntimeRefs(
-      config.agents?.defaults?.model as
-        | string
-        | { primary?: string; fallbacks?: string[] }
-        | undefined,
-    ),
-  );
-  for (const ref of collectClaudeCliRuntimeRefsFromModelMap(config.agents?.defaults?.models)) {
-    refs.add(ref);
-  }
-  for (const agent of config.agents?.list ?? []) {
-    for (const ref of collectClaudeCliRuntimeRefs(
-      agent.model as string | { primary?: string; fallbacks?: string[] } | undefined,
-    )) {
-      refs.add(ref);
-    }
-    for (const ref of collectClaudeCliRuntimeRefsFromModelMap(agent.models)) {
-      refs.add(ref);
+  type ClaudeCliModelSelection = string | { primary?: string; fallbacks?: string[] } | undefined;
+  const selections: Array<{
+    model: ClaudeCliModelSelection;
+    models: Record<string, unknown> | undefined;
+  }> = [
+    {
+      model: config.agents?.defaults?.model as ClaudeCliModelSelection,
+      models: config.agents?.defaults?.models,
+    },
+    ...listAgentIds(config).map((agentId) => {
+      const agent = resolveAgentConfig(config, agentId);
+      return {
+        model: agent?.model as ClaudeCliModelSelection,
+        models: agent?.models,
+      };
+    }),
+  ];
+  const refs = new Set<string>();
+  for (const { model, models } of selections) {
+    const selected =
+      typeof model === "string" ? [model] : [model?.primary, ...(model?.fallbacks ?? [])];
+    for (const rawRef of [...selected, ...Object.keys(models ?? {})]) {
+      if (typeof rawRef !== "string") {
+        continue;
+      }
+      for (const ref of resolveClaudeCliAnthropicModelRefs(rawRef)?.runtimeRefs ?? []) {
+        refs.add(ref);
+      }
     }
   }
   return [...refs];

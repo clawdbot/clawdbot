@@ -83,15 +83,5 @@ export function resolveDiagnosticModelContentCapturePolicy(
       toolDefinitions: true,
     });
   }
-  if (!isRecord(captureContent) || captureContent.enabled !== true) {
-    return NO_MODEL_CONTENT_CAPTURE;
-  }
-  return withDerivedFields({
-    inputMessages: captureContent.inputMessages === true,
-    outputMessages: captureContent.outputMessages === true,
-    toolInputs: captureContent.toolInputs === true,
-    toolOutputs: captureContent.toolOutputs === true,
-    systemPrompt: captureContent.systemPrompt === true,
-    toolDefinitions: captureContent.toolDefinitions === true,
-  });
+  return NO_MODEL_CONTENT_CAPTURE;
 }

@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import {
   buildTuiLastSessionScopeKey,
   clearTuiLastSessionPointers,
+  createRememberSessionKeyWriter,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
@@ -26,6 +27,15 @@ afterEach(async () => {
 });
 
 describe("tui last session state", () => {
+  it("returns no remembered session without creating state on a fresh install", async () => {
+    const stateDir = await makeTempStateDir();
+
+    await expect(readTuiLastSessionKey({ scopeKey: "missing", stateDir })).resolves.toBeNull();
+    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("persists the last session under a scoped hashed key", async () => {
     const stateDir = await makeTempStateDir();
     const scopeKey = buildTuiLastSessionScopeKey({
@@ -164,5 +174,49 @@ describe("tui last session state", () => {
     await expect(readTuiLastSessionKey({ scopeKey: "remote", stateDir })).resolves.toBe(
       "agent:main:telegram:thread",
     );
+  });
+});
+
+describe("createRememberSessionKeyWriter", () => {
+  it("reports the first write failure once and keeps later writes silent", async () => {
+    const failures: string[] = [];
+    const write = async () => {
+      throw new Error("SQLITE_CORRUPT: database disk image is malformed");
+    };
+    const remember = createRememberSessionKeyWriter({
+      buildScopeKey: (sessionKey) => `scope:${sessionKey}`,
+      reportFailure: (message) => failures.push(message),
+      write,
+    });
+
+    remember("agent:main:one");
+    remember("agent:main:two");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(failures).toEqual(["SQLITE_CORRUPT: database disk image is malformed"]);
+  });
+
+  it("skips empty and unknown session keys without touching the writer", async () => {
+    let writes = 0;
+    const remember = createRememberSessionKeyWriter({
+      buildScopeKey: (sessionKey) => sessionKey,
+      reportFailure: () => {
+        throw new Error("must not report");
+      },
+      write: async () => {
+        writes += 1;
+      },
+    });
+
+    remember("  ");
+    remember("unknown");
+    remember("agent:main:kept");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(writes).toBe(1);
   });
 });

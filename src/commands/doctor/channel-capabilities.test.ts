@@ -1,5 +1,6 @@
 // Doctor channel capability tests cover channel capability inspection and diagnostics.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { collectChannelDmPolicyDependencyWarnings } from "../../config/validation-channel-rules.js";
 import {
   getDoctorChannelCapabilities,
   resolveDoctorChannelAccountIds,
@@ -24,13 +25,59 @@ describe("doctor channel capabilities", () => {
     channelPluginMocks.getChannelPlugin.mockReset().mockReturnValue(undefined);
   });
 
-  it("returns nested route semantics from googlechat plugin metadata", () => {
+  it("returns canonical top-level route semantics from googlechat plugin metadata", () => {
     expect(getDoctorChannelCapabilities("googlechat")).toEqual({
-      dmAllowFromMode: "nestedOnly",
+      dmAllowFromMode: "topOnly",
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
     });
+  });
+
+  it("retains root and account Google Chat DM-policy safety warnings", () => {
+    const dmAllowFromMode = getDoctorChannelCapabilities("googlechat").dmAllowFromMode;
+    const warnings = collectChannelDmPolicyDependencyWarnings(
+      {
+        channels: {
+          googlechat: {
+            dmPolicy: "open",
+            allowFrom: ["users/123"],
+            accounts: {
+              work: {
+                dmPolicy: "open",
+                allowFrom: ["users/456"],
+              },
+            },
+          },
+        },
+      },
+      { dmAllowFromModes: new Map([["googlechat", dmAllowFromMode]]) },
+    );
+
+    expect(warnings.map(({ path }) => path)).toEqual([
+      "channels.googlechat.allowFrom",
+      "channels.googlechat.accounts.work.allowFrom",
+    ]);
+  });
+
+  it("returns Slack route semantics without loading its channel plugin", () => {
+    expect(getDoctorChannelCapabilities("slack")).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    });
+  });
+
+  it("returns Discord route semantics without loading its channel plugin", () => {
+    expect(getDoctorChannelCapabilities("discord")).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    });
+    expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
   it("returns capability overrides from matrix plugin metadata", () => {

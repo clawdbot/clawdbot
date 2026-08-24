@@ -1,7 +1,10 @@
+import {
+  clampTimerTimeoutMs,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 // Gateway discovery runtime.
 // Starts local mDNS plugin discovery and optional wide-area DNS-SD publishing.
 import { isTruthyEnvValue } from "../infra/env.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
@@ -23,7 +26,7 @@ function resolveDiscoveryAdvertiseTimeoutMs(env: NodeJS.ProcessEnv): number {
   if (parsed === undefined) {
     return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
   }
-  return parsed;
+  return clampTimerTimeoutMs(parsed) ?? DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
 }
 
 /** Start configured Gateway discovery publishers and return their shutdown hook. */
@@ -32,7 +35,6 @@ export async function startGatewayDiscovery(params: {
   port: number;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
   gatewayDirectReachable?: boolean;
-  canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   wideAreaDiscoveryDomain?: string | null;
   tailscaleMode: "off" | "serve" | "funnel";
@@ -76,7 +78,6 @@ export async function startGatewayDiscovery(params: {
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
           gatewayDirectReachable: params.gatewayDirectReachable === true,
-          canvasPort: params.canvasPort,
           sshPort,
           tailnetDns,
           cliPath,
@@ -154,14 +155,14 @@ export async function startGatewayDiscovery(params: {
     });
     if (!wideAreaDomain) {
       params.logDiscovery.warn(
-        "discovery.wideArea.enabled is true, but no domain was configured; set discovery.wideArea.domain to enable unicast DNS-SD",
+        "wide-area discovery was requested without a domain; set discovery.wideArea.domain to enable unicast DNS-SD",
       );
       return { bonjourStop };
     }
     const tailnetIPv4 = pickPrimaryTailnetIPv4();
     if (!tailnetIPv4) {
       params.logDiscovery.warn(
-        "discovery.wideArea.enabled is true, but no Tailscale IPv4 address was found; skipping unicast DNS-SD zone update",
+        "discovery.wideArea.domain is set, but no Tailscale IPv4 address was found; skipping unicast DNS-SD zone update",
       );
     } else {
       try {

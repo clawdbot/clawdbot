@@ -1,18 +1,22 @@
 // Mattermost tests cover target resolution plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveMattermostAccount = vi.fn();
 const createMattermostClient = vi.fn();
 const fetchMattermostUser = vi.fn();
+const fetchMattermostChannel = vi.fn();
 const normalizeMattermostBaseUrl = vi.fn((value: string | undefined) => value?.trim());
 
 vi.mock("./accounts.js", () => ({
   resolveMattermostAccount,
 }));
 
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async () => ({
+  parseMattermostApiStatus: (await vi.importActual<typeof import("./client.js")>("./client.js"))
+    .parseMattermostApiStatus,
   createMattermostClient,
   fetchMattermostUser,
+  fetchMattermostChannel,
   normalizeMattermostBaseUrl,
 }));
 
@@ -29,7 +33,12 @@ describe("mattermost target resolution", () => {
     resolveMattermostAccount.mockReset();
     createMattermostClient.mockReset();
     fetchMattermostUser.mockReset();
+    fetchMattermostChannel.mockReset();
     normalizeMattermostBaseUrl.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("recognizes ID-shaped values", () => {
@@ -96,9 +105,10 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to channel targets on 404 lookups and caches the result", async () => {
+  it("resolves public channels (type O) as channel and caches the result", async () => {
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({ id: "bcde1234abcd1234abcd1234ab", type: "O" });
     const input = "bcde1234abcd1234abcd1234ab";
     const params = {
       input,
@@ -144,8 +154,92 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
+  it("refreshes an authoritative classification after its cache TTL expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockResolvedValue({ id: "ttl-user" });
+    const params = {
+      input: "ttll1234abcd1234abcd1234ab",
+      token: "ttl-token",
+      baseUrl: "https://mm.example.com",
+    };
+
+    await resolveMattermostOpaqueTarget(params);
+    await resolveMattermostOpaqueTarget(params);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+    await resolveMattermostOpaqueTarget(params);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves private channels (type P) as group, keeping a channel:<id> wire target", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({ id: "priv1234abcd1234abcd1234ab", type: "P" });
+    const input = "priv1234abcd1234abcd1234ab";
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({
+      kind: "group",
+      id: input,
+      to: `channel:${input}`,
+    });
+
+    // Second call is served from cache (no extra channel lookup).
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({ kind: "group", id: input, to: `channel:${input}` });
+    expect(fetchMattermostChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to channel when the channel lookup fails", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockRejectedValue(new Error("Mattermost API 500"));
+    const input = "fail1234abcd1234abcd1234ab";
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({
+      kind: "channel",
+      id: input,
+      to: `channel:${input}`,
+    });
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({
+      kind: "channel",
+      id: input,
+      to: `channel:${input}`,
+    });
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
+    expect(fetchMattermostChannel).toHaveBeenCalledTimes(2);
+  });
+
   it("uses account resolution when token/base url are not passed", async () => {
     resolveMattermostAccount.mockReturnValue({
+      accountId: "acct-1",
+      enabled: true,
       baseUrl: "https://mm.example.com",
       botToken: "token",
     });
@@ -163,5 +257,26 @@ describe("mattermost target resolution", () => {
       cfg: { channels: { mattermost: {} } },
       accountId: "acct-1",
     });
+  });
+
+  it("rejects disabled accounts before cache or provider access", async () => {
+    resolveMattermostAccount.mockReturnValue({
+      accountId: "disabled",
+      enabled: false,
+      baseUrl: "https://mm.example.com",
+      botToken: "token",
+    });
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input: "disabled12abcd1234abcd1234",
+        cfg: { channels: { mattermost: {} } },
+        accountId: "disabled",
+      }),
+    ).rejects.toThrow('Mattermost account "disabled" is disabled');
+
+    expect(normalizeMattermostBaseUrl).not.toHaveBeenCalled();
+    expect(createMattermostClient).not.toHaveBeenCalled();
+    expect(fetchMattermostUser).not.toHaveBeenCalled();
   });
 });

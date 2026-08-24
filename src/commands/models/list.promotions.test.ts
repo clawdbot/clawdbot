@@ -8,7 +8,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { applyPromotionClaimTags, printAvailablePromotionsSection } from "./list.promotions.js";
+import {
+  applyPromotionClaimTags,
+  printAvailablePromotionsSection,
+  startPromotionsFeedRefresh,
+} from "./list.promotions.js";
 import type { ModelRow } from "./list.types.js";
 
 const NOW = Date.parse("2026-07-05T12:00:00.000Z");
@@ -116,8 +120,8 @@ describe("models list promotion decorations", () => {
     const { runtime, lines } = makeRuntime();
     await printAvailablePromotionsSection({
       configuredKeys: new Set(["other/model"]),
+      refresh: startPromotionsFeedRefresh(NOW),
       runtime,
-      nowMs: NOW,
     });
     const text = lines.join("\n");
     expect(text).toContain("Available via promotion:");
@@ -133,8 +137,8 @@ describe("models list promotion decorations", () => {
     const first = makeRuntime();
     await printAvailablePromotionsSection({
       configuredKeys: configured,
+      refresh: startPromotionsFeedRefresh(NOW),
       runtime: first.runtime,
-      nowMs: NOW,
     });
     const firstText = first.lines.join("\n");
     expect(firstText).not.toContain("Available via promotion:");
@@ -143,8 +147,8 @@ describe("models list promotion decorations", () => {
     const second = makeRuntime();
     await printAvailablePromotionsSection({
       configuredKeys: configured,
+      refresh: startPromotionsFeedRefresh(NOW),
       runtime: second.runtime,
-      nowMs: NOW,
     });
     expect(second.lines.join("\n")).toBe("");
   });
@@ -152,7 +156,11 @@ describe("models list promotion decorations", () => {
   it("renders the section for an empty model list (fresh install)", async () => {
     await seedFeedCache([liveEntry]);
     const { runtime, lines } = makeRuntime();
-    await printAvailablePromotionsSection({ configuredKeys: new Set(), runtime, nowMs: NOW });
+    await printAvailablePromotionsSection({
+      configuredKeys: new Set(),
+      refresh: startPromotionsFeedRefresh(NOW),
+      runtime,
+    });
     const text = lines.join("\n");
     expect(text).toContain("Available via promotion:");
     expect(text).toContain("openclaw promos claim example-models-launch");
@@ -163,8 +171,8 @@ describe("models list promotion decorations", () => {
     const { runtime, lines } = makeRuntime();
     await printAvailablePromotionsSection({
       configuredKeys: new Set(["other/model"]),
+      refresh: startPromotionsFeedRefresh(NOW),
       runtime,
-      nowMs: NOW,
     });
     expect(lines.join("\n")).toBe("");
   });

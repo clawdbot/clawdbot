@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Imessage tests cover targets plugin behavior.
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   resolveIMessageGroupRequireMention,
@@ -184,10 +185,15 @@ describe("imessage targets", () => {
   it.each(["7d5297154d5f436d83dbbdf03fcc8fd", "7d5297154d5f436d83dbbdf03fcc8fdg"])(
     "keeps non-hex or wrong-length value %s on the handle path",
     (value) => {
-      expect(normalizeIMessageHandle(value)).not.toMatch(/^chat_identifier:/);
+      expect(normalizeIMessageHandle(value)).toBe(value);
       expect(parseIMessageTarget(value)).toEqual({ kind: "handle", to: value, service: "auto" });
     },
   );
+
+  it("normalizes tel URIs without treating arbitrary prefixed identifiers as phone numbers", () => {
+    expect(normalizeIMessageHandle("tel:+1 (555) 222-3333")).toBe("+15552223333");
+    expect(normalizeIMessageHandle("tel:C0AG22RN7L3")).toBe("tel:C0AG22RN7L3");
+  });
 
   it("accepts the all-digit edge of the 32-hex identifier contract", () => {
     const identifier = "1".repeat(32);
@@ -254,86 +260,20 @@ describe("parseIMessageAllowFromEntries", () => {
     });
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      imessageDmPolicy.getCurrent(
-        {
-          channels: {
-            imessage: {
-              dmPolicy: "disabled",
-              accounts: {
-                work: {
-                  cliPath: "imsg",
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        },
-        "work",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(imessageDmPolicy.resolveConfigKeys?.({ channels: { imessage: {} } }, "work")).toEqual({
-      policyKey: "channels.imessage.accounts.work.dmPolicy",
-      allowFromKey: "channels.imessage.accounts.work.allowFrom",
-    });
-  });
-
-  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
-    const next = imessageDmPolicy.setPolicy(
+  installChannelDmPolicyContractSuite({
+    dmPolicy: imessageDmPolicy,
+    cases: [
       {
-        channels: {
-          imessage: {
-            allowFrom: ["+15555550123"],
-            accounts: {
-              work: {
-                cliPath: "imsg",
-              },
-            },
-          },
+        name: "iMessage named accounts",
+        channel: "imessage",
+        accountId: "work",
+        accountConfig: { cliPath: "imsg" },
+        inheritedAllowFrom: ["+15555550123"],
+        defaultAccount: {
+          rootAllowFrom: ["+15555550123"],
+          accountAllowFrom: ["chat_id:123"],
         },
       },
-      "open",
-      "work",
-    );
-
-    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
-    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
-  });
-
-  it("uses the configured default account for omitted-account DM policy reads, keys, and writes", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          allowFrom: ["+15555550123"],
-          defaultAccount: "work",
-          accounts: {
-            work: {
-              cliPath: "imsg",
-              dmPolicy: "allowlist" as const,
-              allowFrom: ["chat_id:123"],
-            },
-          },
-        },
-      },
-    };
-
-    expect(imessageDmPolicy.getCurrent(cfg)).toBe("allowlist");
-    expect(imessageDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.imessage.accounts.work.dmPolicy",
-      allowFromKey: "channels.imessage.accounts.work.allowFrom",
-    });
-
-    const next = imessageDmPolicy.setPolicy(cfg, "open");
-
-    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
-    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["chat_id:123", "*"]);
+    ],
   });
 });

@@ -2,6 +2,7 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
 
@@ -27,18 +28,32 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
+  /** Client id verified against the server-approved device pairing record. */
+  pairedClientId?: string;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
+  authenticatedUserId?: string;
+  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
+  authenticatedUserIsTailscaleProvider?: boolean;
+  authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    avatarRevision: string;
+    hasAvatar: boolean;
+    updatedAt: number;
+  };
   clientIp?: string;
   internal?: {
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
   };
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
-  invalidated?: boolean;
   invalidatedReason?: string;
 };
 

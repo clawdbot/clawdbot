@@ -1,6 +1,10 @@
 // Migration output tests cover preview and apply result formatting plus conflict validation.
 import { describe, expect, it } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import {
+  createMigrationConfigPatchItem,
+  summarizeMigrationItems,
+} from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { formatMigrationPreview, formatMigrationResult } from "./output.js";
 
@@ -30,13 +34,18 @@ function pluginItem(name: string): MigrationItem {
   };
 }
 
-function configItem(): MigrationItem {
-  return {
+function configItem(
+  options: { conflict?: boolean; sensitive?: boolean; value?: unknown } = {},
+): MigrationItem {
+  return createMigrationConfigPatchItem({
     id: "config:codex-plugins-root",
-    kind: "config",
-    action: "update",
-    status: "planned",
-  };
+    target: "plugins.entries.codex.config.codexPlugins",
+    path: ["plugins", "entries", "codex", "config", "codexPlugins"],
+    value: options.value ?? { enabled: true },
+    message: "Update the Codex plugin configuration.",
+    conflict: options.conflict,
+    sensitive: options.sensitive,
+  });
 }
 
 function fakeSecret(label: string): string {
@@ -47,15 +56,7 @@ function plan(items: MigrationItem[]): MigrationPlan {
   return {
     providerId: "codex",
     source: "/tmp/codex",
-    summary: {
-      total: items.length,
-      planned: items.length,
-      migrated: 0,
-      skipped: 0,
-      conflicts: 0,
-      errors: 0,
-      sensitive: 0,
-    },
+    summary: summarizeMigrationItems(items),
     items,
   };
 }
@@ -76,35 +77,46 @@ describe("formatMigrationPreview", () => {
     expect(output).toContain("• gmail");
   });
 
-  it("hides config items from display and excludes them from the count", () => {
+  it("shows config items in the preview and includes them in the count", () => {
     const output = formatMigrationPreview(plan([skillItem(1), configItem()]))
       .map(stripAnsi)
       .join("\n");
 
-    expect(output).toContain("1 item, 0 conflicts, 0 sensitive items");
-    expect(output).not.toContain("Config:");
-    expect(output).not.toContain("codex-plugins-root");
+    expect(output).toContain("2 items, 0 conflicts, 0 sensitive items");
+    expect(output).toContain("Config:");
+    expect(output).toContain("codex-plugins-root");
   });
 
-  it("counts hidden config conflicts in the preview header", () => {
-    const output = formatMigrationPreview({
-      ...plan([skillItem(1), { ...configItem(), status: "conflict", sensitive: true }]),
-      summary: {
-        total: 2,
-        planned: 1,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 1,
-        errors: 0,
-        sensitive: 1,
-      },
-    })
+  it("shows config conflicts in the preview header and config section", () => {
+    const output = formatMigrationPreview(
+      plan([skillItem(1), configItem({ conflict: true, sensitive: true })]),
+    )
       .map(stripAnsi)
       .join("\n");
 
-    expect(output).toContain("1 item, 1 conflict, 1 sensitive item");
-    expect(output).not.toContain("Config:");
-    expect(output).not.toContain("codex-plugins-root");
+    expect(output).toContain("2 items, 1 conflict, 1 sensitive item");
+    expect(output).toContain("Config:");
+    expect(output).toContain("codex-plugins-root");
+  });
+
+  it("never exposes sensitive config mutation values", () => {
+    const hiddenValueOne = fakeSecret("config-preview");
+    const hiddenValueTwo = fakeSecret("config-argument");
+    const output = formatMigrationPreview(
+      plan([
+        configItem({
+          sensitive: true,
+          value: { first: hiddenValueOne, args: ["--value", hiddenValueTwo] },
+        }),
+      ]),
+    )
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain("1 item, 0 conflicts, 1 sensitive item");
+    expect(output).toContain("codex-plugins-root [sensitive]");
+    expect(output).not.toContain(hiddenValueOne);
+    expect(output).not.toContain(hiddenValueTwo);
   });
 
   it("renders migration warnings with a warning glyph", () => {
@@ -183,6 +195,16 @@ describe("formatMigrationResult", () => {
     expect(output).toContain(
       'google-calendar (Codex plugin "google-calendar" could not be migrated automatically)',
     );
+  });
+
+  it("renders config items in the migration result", () => {
+    const output = formatMigrationResult(plan([{ ...configItem(), status: "migrated" }]))
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain("Config:");
+    expect(output).toContain("codex-plugins-root");
+    expect(output).toContain("✅");
   });
 
   it("renders warning-backed next steps with a warning glyph", () => {

@@ -1,13 +1,19 @@
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../../../plugins/tools.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   toClientToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
+import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
+import {
+  collectReplaySafeToolNames,
+  collectSideEffectToolOwners,
+  isAgentToolReplaySafe,
+} from "../../tool-replay-safety.js";
 import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import {
@@ -35,12 +41,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
   uncompactedEffectiveTools: AgentTool[];
   clientTools: EmbeddedRunAttemptParams["clientTools"];
 }) {
-  const { customTools } = splitSdkTools({
-    tools: params.effectiveTools,
-    sandboxEnabled: params.sandboxEnabled,
-    toolHookContext: params.catalogToolHookContext,
-  });
-
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
   const clientToolCallSlotIndexes = new Map<string, number>();
@@ -70,6 +70,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
     isPluginTool: (tool) =>
       Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
   });
+  const coreReadAuthorized = params.uncompactedEffectiveTools.some(
+    (tool) =>
+      normalizeToolPolicyName(tool.name ?? "") === "read" &&
+      !getPluginToolMeta(tool) &&
+      !getChannelAgentToolMeta(tool),
+  );
   const isReplaySafeTool = (tool: { name?: string }) =>
     isAgentToolReplaySafe(tool, params.replaySafetyOptions);
   const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -131,25 +137,33 @@ export function prepareEmbeddedAttemptClientTools(params: {
         },
       )
     : [];
-  const clientToolSearch = params.codeModeControlsEnabledForRun
-    ? addClientToolsToCodeModeCatalog({
-        tools: clientToolDefs,
-        config: params.attempt.config,
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.sandboxSessionKey,
-        agentId: params.sessionAgentId,
-        runId: params.attempt.runId,
-        catalogRef: params.toolSearchCatalogRef,
-      })
-    : addClientToolsToToolSearchCatalog({
-        tools: clientToolDefs,
-        config: params.toolSearchRuntimeConfig,
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.sandboxSessionKey,
-        agentId: params.sessionAgentId,
-        runId: params.attempt.runId,
-        catalogRef: params.toolSearchCatalogRef,
-      });
+  // Terminal observations are name-only, so ownership is valid only when one
+  // concrete OpenClaw or client tool owns the normalized name.
+  const sideEffectToolOwners = collectSideEffectToolOwners(
+    [...params.uncompactedEffectiveTools, ...clientToolDefs],
+    {
+      declaredOwner: (tool) =>
+        getPluginToolSideEffectOwnerKey(
+          tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
+        ),
+    },
+  );
+  const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
+    ? addClientToolsToCodeModeCatalog
+    : addClientToolsToToolSearchCatalog;
+  const clientToolSearch = addClientToolsToCatalog({
+    tools: clientToolDefs,
+    // Mirrors applyAgentToolSurfaceCatalog: code mode reads the base config,
+    // tool search reads the run's resolved tool-search runtime config.
+    config: params.codeModeControlsEnabledForRun
+      ? params.attempt.config
+      : params.toolSearchRuntimeConfig,
+    sessionId: params.attempt.sessionId,
+    sessionKey: params.sandboxSessionKey,
+    agentId: params.sessionAgentId,
+    runId: params.attempt.runId,
+    catalogRef: params.toolSearchCatalogRef,
+  });
   clientToolDefs = clientToolSearch.tools;
   if (clientToolSearch.compacted) {
     log.info(
@@ -159,16 +173,24 @@ export function prepareEmbeddedAttemptClientTools(params: {
     );
   }
 
+  const { customTools } = splitSdkTools({
+    tools: params.effectiveTools,
+    sandboxEnabled: params.sandboxEnabled,
+    toolHookContext: params.catalogToolHookContext,
+  });
   const allCustomTools = [...customTools, ...clientToolDefs];
   const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
   return {
     allCustomTools,
     builtinToolNames,
+    coreBuiltinToolNames,
+    coreReadAuthorized,
     clientToolCallSlots,
     clientToolDefs,
     clientToolLoopDetection,
     replaySafeToolNames,
     replaySafeTools,
+    sideEffectToolOwners,
     sessionToolAllowlist,
   };
 }

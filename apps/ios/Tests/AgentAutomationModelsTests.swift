@@ -182,7 +182,11 @@ struct AgentAutomationModelsTests {
         #expect(source.contains("pendingRunRegistry"))
         #expect(!source.contains("self.pendingRunID = nil"))
         #expect(source.contains("self.pendingRunRegistry.release(jobID: self.job.id, runID: runID)"))
-        #expect(source.contains("\"expectedProcessInstanceId\": processInstanceID"))
+        #expect(Self.containsDictionaryAssignment(
+            dictionary: "runParams",
+            key: "expectedProcessInstanceId",
+            value: "processInstanceID",
+            in: source))
         #expect(source.contains("guard self.pendingRunID == runID else { return }"))
         #expect(models.contains("expectedConfigRevision"))
         #expect(source.contains("Delete Automation"))
@@ -202,7 +206,11 @@ struct AgentAutomationModelsTests {
         #expect(cronSource.contains("self.pendingCronRuns.reserve(jobID: jobID, runID: runID)"))
         #expect(cronSource.contains("entries.contains(where: { $0.runid == runID })"))
         #expect(cronSource.contains("method: \"system.info\""))
-        #expect(cronSource.contains("\"expectedProcessInstanceId\": processInstanceID"))
+        #expect(Self.containsDictionaryAssignment(
+            dictionary: "runParams",
+            key: "expectedProcessInstanceId",
+            value: "processInstanceID",
+            in: cronSource))
         #expect(cronSource.contains("guard currentInstanceID == processInstanceID else"))
         #expect(cronSource
             .contains(
@@ -245,5 +253,23 @@ struct AgentAutomationModelsTests {
             .deletingLastPathComponent()
             .appendingPathComponent("Sources")
             .appendingPathComponent(path)
+    }
+
+    private static func containsDictionaryAssignment(
+        dictionary: String,
+        key: String,
+        value: String,
+        in source: String) -> Bool
+    {
+        let pattern = [
+            #"\b"#,
+            NSRegularExpression.escapedPattern(for: dictionary),
+            #"\s*\[\s*""#,
+            NSRegularExpression.escapedPattern(for: key),
+            #""\s*\]\s*=\s*"#,
+            NSRegularExpression.escapedPattern(for: value),
+            #"\b"#,
+        ].joined()
+        return source.range(of: pattern, options: .regularExpression) != nil
     }
 }

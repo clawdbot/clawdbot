@@ -42,6 +42,44 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     ).toBeUndefined();
   });
 
+  it("projects session server and tool overrides into user MCP config", () => {
+    const cfg = {
+      mcp: {
+        servers: {
+          disabledDocs: {
+            enabled: false,
+            url: "https://disabled-docs.example.com/mcp",
+          },
+          constructor: {
+            url: "https://constructor.example.com/mcp",
+          },
+          search: {
+            url: "https://search.example.com/mcp",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const patch = buildCodexUserMcpServersThreadConfigPatch(cfg, {
+      toolOverrides: {
+        mcpServers: { disabledDocs: true, search: false },
+        mcpToolsDeny: { disabledDocs: ["delete_page"] },
+      },
+    });
+
+    expect(patch).toEqual({
+      mcp_servers: {
+        constructor: {
+          url: "https://constructor.example.com/mcp",
+        },
+        disabledDocs: {
+          url: "https://disabled-docs.example.com/mcp",
+          disabled_tools: ["delete_page"],
+        },
+      },
+    });
+  });
+
   it("projects a stdio user MCP server entry into mcp_servers (regression: #80814)", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch({
       mcp: {

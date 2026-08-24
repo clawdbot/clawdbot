@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildModelCatalogMergeKey,
   buildModelCatalogRef,
+  isCloudModelRef,
   parseModelCatalogRef,
   parseProviderModelRef,
 } from "./model-catalog-refs.js";
@@ -33,4 +34,18 @@ describe("model catalog refs", () => {
       expect(parseModelCatalogRef(value)).toBeNull();
     },
   );
+
+  it.each([
+    ["glm-5.2:cloud", true],
+    ["ollama/gpt-oss:120b-cloud", true],
+    [" OLLAMA/KIMI-K2.5:CLOUD ", true],
+    ["local-cloud", false],
+    ["invalid:cloud-cloud", false],
+    ["invalid:local:cloud", false],
+    ["invalid:local-cloud", false],
+    ["invalid:cloud:local", false],
+    [undefined, false],
+  ])("classifies hosted model source %j", (modelRef, expected) => {
+    expect(isCloudModelRef(modelRef)).toBe(expected);
+  });
 });

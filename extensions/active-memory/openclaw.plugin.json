@@ -1,15 +1,23 @@
 {
   "id": "active-memory",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },
   "name": "Active Memory",
-  "description": "Runs a bounded blocking memory sub-agent before eligible conversational replies and injects relevant memory into prompt context.",
+  "description": "Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "enabled": { "type": "boolean" },
+      "mode": {
+        "type": "string",
+        "enum": ["escalate", "always", "off"]
+      },
       "agents": {
         "type": "array",
         "items": { "type": "string" }
@@ -37,7 +45,7 @@
       },
       "thinking": {
         "type": "string",
-        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
+        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
       },
       "fastMode": {
         "anyOf": [
@@ -82,27 +90,21 @@
       "transcriptDir": { "type": "string" },
       "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
       "circuitBreakerMaxTimeouts": { "type": "integer", "minimum": 1, "maximum": 20 },
-      "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 },
-      "qmd": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "searchMode": {
-            "type": "string",
-            "enum": ["inherit", "search", "vsearch", "query"]
-          }
-        }
-      }
+      "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 }
     }
   },
   "uiHints": {
     "enabled": {
       "label": "Active Memory Recall",
-      "help": "Globally enable or pause Active Memory recall while keeping the plugin command available."
+      "help": "Globally enable or pause Active Memory recall while keeping the plugin command available. Remember across conversations requires this plugin to remain enabled."
+    },
+    "mode": {
+      "label": "Recall Mode",
+      "help": "Escalate runs deep recall only for recall-intent messages without a strong deterministic hit. Always preserves blocking recall on every eligible turn. Off disables deep recall while keeping deterministic trigger recall available."
     },
     "agents": {
       "label": "Target Agents",
-      "help": "Explicit agent ids that may use active memory."
+      "help": "Advanced: explicit agent IDs that may use configured Active Memory recall. Agents with Remember across conversations enabled are automatically targeted for private-conversation transcript recall."
     },
     "model": {
       "label": "Memory Model",
@@ -118,7 +120,7 @@
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
-      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only, but explicit portal/webchat sessions can also be enabled."
+      "help": "Advanced: choose which conversation types may run configured Active Memory. Remember across conversations remains limited to private direct and explicit UI conversations regardless of this setting."
     },
     "allowedChatIds": {
       "label": "Allowed Chat IDs",
@@ -130,7 +132,7 @@
     },
     "timeoutMs": {
       "label": "Timeout (ms)",
-      "help": "Recall work budget on the main lane. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
+      "help": "Recall work budget on the main lane. Defaults to 15000 ms, or 45000 ms when the recall is eligible for CLI-backend dispatch on subscription-only claude-cli auth (CLI-backed recalls include process startup); API-key routes keep 15000 ms. Explicit values always win. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
     },
     "setupGraceTimeoutMs": {
       "label": "Setup Grace Timeout (ms)",
@@ -146,7 +148,7 @@
     },
     "toolsAllow": {
       "label": "Allowed Memory Tools",
-      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get, or memory_recall when plugins.slots.memory selects memory-lancedb; configure this for other non-core memory providers. Wildcards, group entries, and core agent tools are ignored."
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get for built-in memory, or memory_recall for LanceDB; configure this for other memory providers. Wildcards, group entries, and core agent tools are ignored."
     },
     "thinking": {
       "label": "Thinking Override",
@@ -187,10 +189,6 @@
     "transcriptDir": {
       "label": "Transcript Directory",
       "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
-    },
-    "qmd.searchMode": {
-      "label": "QMD Search Mode",
-      "help": "Override the QMD search mode used by the blocking memory sub-agent. Defaults to fast lexical search; use inherit to match the main memory backend setting."
     }
   }
 }

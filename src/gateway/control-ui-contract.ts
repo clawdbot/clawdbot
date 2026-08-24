@@ -1,16 +1,17 @@
-// Control UI bootstrap contract served by the gateway and consumed by the
-// browser app before it knows runtime branding, media roots, or embed policy.
-/** HTTP path for the Control UI bootstrap config payload. */
-export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
+// Stable Control UI contract barrel for Gateway callers. Browser code imports
+// narrow browser-safe modules directly so lazy route owners stay out of startup.
+export * from "./control-ui-bootstrap-contract.js";
+export * from "./control-ui-plugin-frame-contract.js";
+export * from "./control-ui-resource-routes.js";
+export * from "./control-ui-root-assets.js";
+export * from "./control-ui-user-avatar-route.js";
 
-/** Carries the gateway-configured Control UI mount path into browser bootstrap. */
-export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-path";
+/** Targeted pushed PR snapshot event for subscribed Control UI connections. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
+  "controlUi.sessionPullRequests.changed";
 
-/** Marks whether the served document CSP permits the terminal WASM runtime. */
-export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
-
-/** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
-export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
+/** Maximum session keys retained by one Control UI PR subscription. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
 /** Public GitHub metadata rendered by Control UI link hover cards. */
 export type ControlUiGitHubPreview = {
@@ -33,6 +34,22 @@ export type ControlUiGitHubPreview = {
   title: string;
   updatedAt: string;
 };
+
+/** Bounded session metadata rendered by Control UI session-link hover cards. */
+export type ControlUiSessionPreview =
+  | {
+      status: "ok";
+      sessionKey: string;
+      title?: string;
+      derivedTitle?: string;
+      agentId: string;
+      kind?: string;
+      channel?: string;
+      updatedAt?: number;
+      lastMessagePreview?: string;
+      archived?: boolean;
+    }
+  | { status: "unavailable" };
 
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
@@ -57,6 +74,7 @@ export type ControlUiSessionPullRequest = {
   state: "open" | "draft" | "merged" | "closed";
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
   checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
@@ -73,6 +91,7 @@ export type ControlUiSessionBranch = {
   /** Working-tree diff vs the merge base with the remote default branch. */
   additions?: number;
   deletions?: number;
+  changedFiles?: number;
   /**
    * GitHub "open a pull request for this branch" page. Absent while the
    * branch is unpushed or has nothing to compare — the row then only reports
@@ -93,33 +112,12 @@ export type ControlUiSessionPullRequests = {
   rateLimited: boolean;
 };
 
-/** Runtime config consumed by the browser Control UI during bootstrap. */
-export type ControlUiBootstrapConfig = {
-  basePath: string;
-  assistantName: string;
-  assistantAvatar: string;
-  assistantAvatarSource?: string | null;
-  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
-  assistantAvatarReason?: string | null;
-  assistantAgentId: string;
-  serverVersion?: string;
-  /**
-   * Git branch of a source-checkout (non-release) gateway install. Omitted for
-   * package installs and mainline (main/master) checkouts so the UI only flags
-   * gateways running unreleased branch code.
-   */
-  devGitBranch?: string;
-  localMediaPreviewRoots?: string[];
-  embedSandbox?: ControlUiEmbedSandboxMode;
-  allowExternalEmbedUrls?: boolean;
-  chatMessageMaxWidth?: string;
-  seamColor?: string;
-  /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
-  timeFormat?: "auto" | "12" | "24";
-  /**
-   * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
-   * The Control UI hides the terminal entirely when false so a disabled kill
-   * switch removes the surface rather than showing a button that errors on open.
-   */
-  terminalEnabled?: boolean;
+/** Per-session pushed state; unavailable snapshots preserve prior UI state. */
+export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
+  status: "ready" | "rate-limited" | "unavailable";
+};
+
+/** Targeted delta event for sessions watched by one Control UI connection. */
+export type ControlUiSessionPullRequestsChanged = {
+  sessions: Record<string, ControlUiSessionPullRequestSnapshot>;
 };

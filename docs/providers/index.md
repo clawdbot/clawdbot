@@ -30,6 +30,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Arcee AI (Trinity models)](/providers/arcee)
 - [Azure Speech](/providers/azure-speech)
+- [Baseten (Inkling + Model APIs)](/providers/baseten)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Cerebras](/providers/cerebras)
 - [Chutes](/providers/chutes)
@@ -52,6 +53,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [inferrs (local models)](/providers/inferrs)
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
+- [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [LM Studio (local models)](/providers/lmstudio)
 - [LongCat](/providers/longcat)
 - [MiniMax](/providers/minimax)
@@ -68,7 +70,6 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
-- [Qwen OAuth / Portal](/providers/qwen-oauth)
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
@@ -87,7 +88,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Shared overview pages
 
-- [Additional provider variants](/providers/models#additional-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
+- [Additional provider variants](/providers/models#additional-provider-variants) - Anthropic Vertex, Copilot Proxy, and the optional Gemini CLI runtime
 - [Image Generation](/tools/image-generation) - Shared `image_generate` tool, provider selection, and failover
 - [Music Generation](/tools/music-generation) - Shared `music_generate` tool, provider selection, and failover
 - [Video Generation](/tools/video-generation) - Shared `video_generate` tool, provider selection, and failover

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   deleteSessionEntry,
+  normalizeSessionDeliveryState,
   getSessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -86,7 +87,7 @@ describe("Telegram direct session recreation after delete", () => {
         sessionId: "old-session",
         updatedAt: 1_700_000_000_000,
         chatType: "direct",
-        channel: "telegram",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       },
     });
     await deleteSessionEntry({ storePath, sessionKey: TELEGRAM_DIRECT_KEY });
@@ -113,10 +114,13 @@ describe("Telegram direct session recreation after delete", () => {
 
     const entry = getSessionEntry({ storePath, sessionKey: TELEGRAM_DIRECT_KEY });
     expect(context?.ctxPayload?.SessionKey).toBe(TELEGRAM_DIRECT_KEY);
-    expect(entry).toEqual(
+    expect(entry?.delivery).toEqual(
       expect.objectContaining({
-        lastChannel: "telegram",
-        lastTo: "telegram:7463849194",
+        kind: "external",
+        context: expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:7463849194",
+        }),
         origin: expect.objectContaining({
           provider: "telegram",
           chatType: "direct",

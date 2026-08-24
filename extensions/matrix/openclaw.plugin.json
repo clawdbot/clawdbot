@@ -1,7 +1,18 @@
 {
   "id": "matrix",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "Matrix",
   "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
+  "cliCommands": [
+    {
+      "name": "matrix",
+      "description": "Manage Matrix accounts, verification, devices, and profile state",
+      "hasSubcommands": true
+    }
+  ],
   "icon": "https://cdn.simpleicons.org/matrix",
   "commandAliases": [{ "name": "matrix" }],
   "activation": {
@@ -9,20 +20,6 @@
     "onCommands": ["matrix"]
   },
   "channels": ["matrix"],
-  "channelEnvVars": {
-    "matrix": [
-      "MATRIX_HOMESERVER",
-      "MATRIX_USER_ID",
-      "MATRIX_ACCESS_TOKEN",
-      "MATRIX_PASSWORD",
-      "MATRIX_DEVICE_ID",
-      "MATRIX_DEVICE_NAME",
-      "MATRIX_OPS_HOMESERVER",
-      "MATRIX_OPS_ACCESS_TOKEN",
-      "MATRIX_OPS_DEVICE_ID",
-      "MATRIX_OPS_DEVICE_NAME"
-    ]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

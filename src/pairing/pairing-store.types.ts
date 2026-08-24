@@ -21,6 +21,15 @@ export type ReadChannelAllowFromStoreForAccount = (params: {
   env?: NodeJS.ProcessEnv;
 }) => Promise<string[]>;
 
+/** Deletes one approved id from a channel/account allowFrom store. */
+export type RemoveChannelAllowFromStoreEntryForAccount = (params: {
+  channel: PairingChannel;
+  entry: string | number;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+  pairingAdapter?: ChannelPairingAdapter;
+}) => Promise<{ changed: boolean; allowFrom: string[] }>;
+
 /** Creates or reuses a pending pairing request for one channel account. */
 export type UpsertChannelPairingRequestForAccount = (params: {
   channel: PairingChannel;

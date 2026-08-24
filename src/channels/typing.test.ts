@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Typing tests cover typing indicator start, update, and cleanup behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
@@ -109,28 +109,105 @@ describe("createTypingCallbacks", () => {
     }
   });
 
-  it("does not block reply start on a pending typing request", async () => {
+  it("coalesces concurrent starts without blocking and allows a later start", async () => {
     let resolveStart: (() => void) | undefined;
     const { start, callbacks } = createTypingHarness({
-      start: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveStart = resolve;
-          }),
-      ),
+      start: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveStart = resolve;
+            }),
+        )
+        .mockResolvedValue(undefined),
     });
 
     try {
-      await callbacks.onReplyStart();
+      await Promise.all(Array.from({ length: 100 }, () => callbacks.onReplyStart()));
 
       expect(start).toHaveBeenCalledTimes(1);
       if (!resolveStart) {
         throw new Error("Expected typing start resolver to be initialized");
       }
       resolveStart();
+      await flushMicrotasks();
+
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(2);
     } finally {
       callbacks.onCleanup?.();
     }
+  });
+
+  it("coalesces explicit starts with a pending keepalive without shifting cadence", async () => {
+    await withFakeTimers(async () => {
+      let resolvePendingStart: (() => void) | undefined;
+      const { start, callbacks } = createTypingHarness({
+        start: vi
+          .fn()
+          .mockResolvedValueOnce(undefined)
+          .mockImplementationOnce(
+            () =>
+              new Promise<void>((resolve) => {
+                resolvePendingStart = resolve;
+              }),
+          )
+          .mockResolvedValue(undefined),
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      if (!resolvePendingStart) {
+        throw new Error("Expected pending keepalive resolver to be initialized");
+      }
+      resolvePendingStart();
+      await flushMicrotasks();
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(start).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(start).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("does not arm timers or restart after cleanup while a start settles late", async () => {
+    await withFakeTimers(async () => {
+      let resolveStart: (() => void) | undefined;
+      const { start, stop, callbacks } = createTypingHarness({
+        maxDurationMs: 10_000,
+        start: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveStart = resolve;
+            }),
+        ),
+      });
+
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+
+      callbacks.onCleanup?.();
+      if (!resolveStart) {
+        throw new Error("Expected typing start resolver to be initialized");
+      }
+      resolveStart();
+      await flushMicrotasks();
+
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("invokes stop on idle and reports stop errors", async () => {
@@ -169,12 +246,62 @@ describe("createTypingCallbacks", () => {
     });
   });
 
-  it("stops keepalive after consecutive start failures", async () => {
+  it("preserves the existing keepalive cadence when an active reply starts again", async () => {
+    await withFakeTimers(async () => {
+      const { start, callbacks } = createTypingHarness({ keepaliveIntervalMs: 4_000 });
+
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(start).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("keeps coalesced typing alive beyond 60 seconds while the same task refreshes it", async () => {
+    await withFakeTimers(async () => {
+      vi.setSystemTime(0);
+      const acceptedStarts: number[] = [];
+      const { callbacks } = createTypingHarness({
+        keepaliveIntervalMs: 4_000,
+        maxDurationMs: 0,
+        start: async () => {
+          const now = Date.now();
+          const previous = acceptedStarts.at(-1);
+          if (previous !== undefined && now - previous < 4_000) {
+            return;
+          }
+          acceptedStarts.push(now);
+        },
+      });
+
+      await callbacks.onReplyStart();
+      for (let elapsedMs = 6_000; elapsedMs <= 132_000; elapsedMs += 6_000) {
+        await vi.advanceTimersByTimeAsync(6_000);
+        await callbacks.onReplyStart();
+      }
+
+      expect(acceptedStarts.at(-1)).toBeGreaterThan(120_000);
+      for (let index = 1; index < acceptedStarts.length; index += 1) {
+        expect(acceptedStarts[index]! - acceptedStarts[index - 1]!).toBeLessThanOrEqual(4_000);
+      }
+
+      callbacks.onIdle?.();
+      const countAtTaskCompletion = acceptedStarts.length;
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(acceptedStarts).toHaveLength(countAtTaskCompletion);
+    });
+  });
+
+  it("counts a coalesced rejection once and stops keepalive at the failure breaker", async () => {
     await withFakeTimers(async () => {
       const { start, onStartError, callbacks } = createTypingHarness({
         start: vi.fn().mockRejectedValue(new Error("gone")),
       });
-      await callbacks.onReplyStart();
+      await Promise.all(Array.from({ length: 100 }, () => callbacks.onReplyStart()));
       await flushMicrotasks();
       expect(start).toHaveBeenCalledTimes(1);
       expect(onStartError).toHaveBeenCalledTimes(1);

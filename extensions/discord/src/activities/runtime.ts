@@ -5,6 +5,7 @@ import {
   resolveDiscordAccount,
 } from "../accounts.js";
 import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
+import { selectDiscordActivitiesRuntimeConfig } from "../runtime-config.js";
 import { resolveDiscordActivitiesConfig } from "./config.js";
 import type { DiscordActivityStore } from "./store.js";
 
@@ -13,7 +14,6 @@ type ResolvedDiscordActivityAccount = {
   applicationId: string;
   botAuth: string;
   clientSecret: string;
-  config: ReturnType<typeof resolveDiscordAccount>["config"];
   proxyFetch?: typeof fetch;
 };
 
@@ -28,7 +28,7 @@ export class DiscordActivitiesRuntime {
   ) {}
 
   currentConfig(): OpenClawConfig {
-    return this.getCurrentConfig?.() ?? this.startupConfig;
+    return selectDiscordActivitiesRuntimeConfig(this.getCurrentConfig?.() ?? this.startupConfig);
   }
 
   registerApplicationId(accountId: string, applicationId: string): void {
@@ -43,7 +43,11 @@ export class DiscordActivitiesRuntime {
     cfg = this.currentConfig(),
   ): ResolvedDiscordActivityAccount | null {
     const account = resolveDiscordAccount({ cfg, accountId });
-    if (!isDiscordAccountEnabledForRuntime(account, cfg)) {
+    if (
+      !listDiscordAccountIds(cfg).includes(account.accountId) ||
+      !isDiscordAccountEnabledForRuntime(account, cfg) ||
+      account.tokenStatus !== "available"
+    ) {
       return null;
     }
     const activities = resolveDiscordActivitiesConfig(account.config, this.env);
@@ -64,7 +68,6 @@ export class DiscordActivitiesRuntime {
       applicationId,
       botAuth: bot,
       clientSecret,
-      config: account.config,
       proxyFetch: resolveDiscordProxyFetchForAccount(account, cfg),
     };
   }
@@ -80,12 +83,14 @@ export class DiscordActivitiesRuntime {
     return accounts.length === 1 ? (accounts[0] ?? null) : null;
   }
 
-  isAccountEnabled(accountId: string, cfg = this.currentConfig()): boolean {
-    const account = resolveDiscordAccount({ cfg, accountId });
-    return (
-      isDiscordAccountEnabledForRuntime(account, cfg) &&
-      resolveDiscordActivitiesConfig(account.config, this.env).enabled
+  hasEnabledAccounts(cfg = this.currentConfig()): boolean {
+    return listDiscordAccountIds(cfg).some(
+      (accountId) => this.resolveAccount(accountId, cfg) !== null,
     );
+  }
+
+  isAccountEnabled(accountId: string, cfg = this.currentConfig()): boolean {
+    return this.resolveAccount(accountId, cfg) !== null;
   }
 }
 

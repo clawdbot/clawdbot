@@ -139,4 +139,18 @@ describe("summarizeTokenConfig", () => {
     expect(summary.state).toBe("ok");
     expect(summary.detail).toContain("token config");
   });
+
+  it.each([
+    ["sk-1234567890", "sk-1…7890 · len 13"],
+    [`abc😀${"x".repeat(10)}`, "abc…xxxx · len 15"],
+    [`${"x".repeat(10)}😀abc`, "xxxx…abc · len 15"],
+    ["a😀b", "a😀b · len 4"],
+  ])("formats a visible token hint without splitting %p", (token, expectedHint) => {
+    const summary = summarizeTokenConfig({
+      accounts: [tokenRow({ account: { token }, snapshot: { tokenSource: "config" } })],
+      showSecrets: true,
+    });
+
+    expect(summary.detail).toContain(`token config (${expectedHint})`);
+  });
 });

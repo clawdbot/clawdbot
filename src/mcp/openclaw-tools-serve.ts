@@ -6,11 +6,18 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
+import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
+  resolveToolsMcpAgentSessionKey,
+} from "./agent-session-env.js";
 import {
   resolveOpenClawToolsMcpSystemAgentApproval,
   resolveOpenClawToolsMcpSystemAgentSurface,
@@ -24,12 +31,12 @@ export {
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "./openclaw-tools-serve-config.js";
 
-export const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
+export { OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV } from "./agent-session-env.js";
 
 export function resolveOpenClawToolsMcpAgentSessionKey(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return env[OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV]?.trim() || undefined;
+  return resolveToolsMcpAgentSessionKey(env);
 }
 
 export function resolveOpenClawToolsForMcp(
@@ -37,6 +44,7 @@ export function resolveOpenClawToolsForMcp(
     agentSessionKey?: string;
     tools?: OpenClawToolsMcpToolId[];
     systemAgentSurface?: SystemAgentToolOptions["surface"];
+    config?: OpenClawConfig;
   } = {},
 ): AnyAgentTool[] {
   const selection = params.tools ?? resolveOpenClawToolsMcpToolSelection();
@@ -53,7 +61,13 @@ export function resolveOpenClawToolsForMcp(
     if (!agentSessionKey) {
       throw new Error(`${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} is required`);
     }
-    return createCronTool({ agentSessionKey, creatorToolAllowlist: [{ name: "cron" }] });
+    return createCronTool({
+      agentSessionKey,
+      // Same host-config resolution as plugin-tools-serve: the advertised cron
+      // surface must reflect this deployment's cron.triggers.enabled gate.
+      config: params.config ?? getRuntimeConfig(),
+      creatorToolAllowlist: [{ name: AUTOMATIONS_TOOL_NAME }],
+    });
   });
 }
 

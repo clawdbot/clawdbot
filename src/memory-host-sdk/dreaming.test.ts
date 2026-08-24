@@ -31,6 +31,7 @@ describe("memory dreaming host helpers", () => {
               minUniqueQueries: "2",
               recencyHalfLifeDays: "21",
               maxAgeDays: "30",
+              maxPriorEntryLossFraction: 0.1,
             },
           },
         },
@@ -55,6 +56,46 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.deep.minUniqueQueries).toBe(2);
     expect(resolved.phases.deep.recencyHalfLifeDays).toBe(21);
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
+    expect(resolved.phases.deep.maxPriorEntryLossFraction).toBe(0.1);
+  });
+
+  it("rejects hex and exponent integer strings for dreaming phase counts", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          phases: {
+            deep: {
+              limit: "0x10",
+              minRecallCount: "1e3",
+              minUniqueQueries: "2.5",
+              recencyHalfLifeDays: "1.5",
+              maxAgeDays: "0x20",
+              maxPromotedSnippetTokens: "1e2",
+              execution: {
+                maxOutputTokens: "0x40",
+                timeoutMs: "1e4",
+              },
+            },
+            light: {
+              lookbackDays: "0x0a",
+              limit: "1e2",
+            },
+          },
+        },
+      },
+    });
+
+    // Non-decimal forms fall back to shipped defaults / omit optional fields.
+    expect(resolved.phases.deep.limit).toBe(10);
+    expect(resolved.phases.deep.minRecallCount).toBe(3);
+    expect(resolved.phases.deep.minUniqueQueries).toBe(3);
+    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
+    expect(resolved.phases.deep.maxAgeDays).toBe(30);
+    expect(resolved.phases.deep.maxPromotedSnippetTokens).toBe(160);
+    expect(resolved.phases.deep.execution.maxOutputTokens).toBeUndefined();
+    expect(resolved.phases.deep.execution.timeoutMs).toBeUndefined();
+    expect(resolved.phases.light.lookbackDays).toBe(2);
+    expect(resolved.phases.light.limit).toBe(100);
   });
 
   it("parses true/false strings while keeping invalid-value defaults local", () => {
@@ -102,7 +143,7 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.rem.execution.model).toBe("xai/grok-4.1-fast");
   });
 
-  it("falls back to cfg timezone and deep defaults", () => {
+  it("enables dreaming by default and falls back to cfg timezone and deep defaults", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -116,12 +157,12 @@ describe("memory dreaming host helpers", () => {
       cfg,
     });
 
-    expect(resolved.enabled).toBe(false);
+    expect(resolved.enabled).toBe(true);
     expect(resolved.frequency).toBe("0 3 * * *");
     expect(resolved.timezone).toBe("America/Los_Angeles");
     expect(resolved.phases.deep.cron).toBe("0 3 * * *");
     expect(resolved.phases.deep.limit).toBe(10);
-    expect(resolved.phases.deep.minScore).toBe(0.8);
+    expect(resolved.phases.deep.minScore).toBe(0.75);
     expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
@@ -171,7 +212,7 @@ describe("memory dreaming host helpers", () => {
     const cfg = {
       agents: {
         list: [
-          { id: "alpha", workspace: "/workspace/shared" },
+          { id: "alpha", default: true, workspace: "/workspace/shared" },
           { id: "beta", workspace: "/workspace/beta" },
           { id: "gamma", workspace: "/workspace/shared" },
         ],
@@ -190,11 +231,34 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("does not require a default owner when no primary workspace is supplied", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        list: [
+          { id: "alpha", workspace: "/workspace/alpha" },
+          { id: "beta", workspace: "/workspace/beta" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      {
+        workspaceDir: "/workspace/alpha",
+        agentIds: ["alpha"],
+      },
+      {
+        workspaceDir: "/workspace/beta",
+        agentIds: ["beta"],
+      },
+    ]);
+  });
+
   it("includes the runtime primary workspace alongside configured subagent workspaces", () => {
     const cfg = {
       agents: {
         list: [
-          { id: "agi-ceo", workspace: "/workspace/agi-ceo" },
+          { id: "agi-ceo", default: true, workspace: "/workspace/agi-ceo" },
           { id: "agi-cdo", workspace: "/workspace/agi-cdo" },
         ],
       },
@@ -227,6 +291,7 @@ describe("memory dreaming host helpers", () => {
         defaults: {
           workspace: "/workspace",
         },
+        entries: { main: { default: true } },
       },
     } as OpenClawConfig;
 

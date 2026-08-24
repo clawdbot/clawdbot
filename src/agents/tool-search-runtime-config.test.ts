@@ -6,7 +6,10 @@ import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-confi
 
 function createRuntimeConfigPair() {
   const sourceConfig = {
-    agents: { defaults: { experimental: { localModelLean: true } } },
+    agents: {
+      defaults: { experimental: { localModelLean: true } },
+      entries: { main: { default: true } },
+    },
     plugins: {
       entries: {
         "example-plugin": {
@@ -80,6 +83,7 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
     const { runtimeConfig, sourceConfig } = createRuntimeConfigPair();
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const explicitConfig = {
+      agents: { entries: { main: { default: true } } },
       plugins: {
         entries: {
           "example-plugin": { config: { marker: "explicit" } },
@@ -92,7 +96,10 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
   });
 
   it("uses the input config when no runtime snapshot exists", () => {
-    const config = { tools: { toolSearch: false } } as OpenClawConfig;
+    const config = {
+      agents: { entries: { main: { default: true } } },
+      tools: { toolSearch: false },
+    } as OpenClawConfig;
 
     expect(resolveAgentRuntimeToolConfig(config)).toBe(config);
     expect(resolveAgentToolSearchRuntimeConfig({ config })).toBe(config);

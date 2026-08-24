@@ -3,7 +3,6 @@ export {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 export { resolveCronStyleNow } from "../../agents/current-time.js";
 export { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -16,7 +15,6 @@ export { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js
 export { ensureAgentWorkspace } from "../../agents/workspace.js";
 export {
   isThinkingLevelSupported,
-  normalizeThinkLevel,
   resolveSupportedThinkingLevel,
 } from "../../auto-reply/thinking.js";
 export { setSessionRuntimeModel } from "../../config/sessions/types.js";

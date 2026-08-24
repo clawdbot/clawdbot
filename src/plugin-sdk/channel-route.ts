@@ -68,22 +68,6 @@ export type ChannelRouteTargetInput = Pick<
 /** Route input accepted by compact-key helpers after legacy and normalized callers converge. */
 export type ChannelRouteKeyInput = ChannelRouteRef | ChannelRouteTargetInput;
 
-/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
-export type ChannelRouteExplicitTarget = {
-  /** Canonical destination id parsed from the provider-specific target string. */
-  to: string;
-  /** Optional provider thread/topic/root id parsed from the target string. */
-  threadId?: string | number;
-  /** Coarse destination shape parsed from the target string. */
-  chatType?: ChannelRouteChatType;
-};
-
-/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
-export type ChannelRouteExplicitTargetParser = (
-  channel: string,
-  rawTarget: string,
-) => ChannelRouteExplicitTarget | null;
-
 /** Normalizes a route thread id while preserving provider string ids. */
 export function normalizeRouteThreadId(value: unknown): string | number | undefined {
   return normalizeOptionalThreadValue(value);
@@ -152,47 +136,6 @@ export function normalizeChannelRouteTarget(
   return input ? normalizeChannelRouteRef(input) : undefined;
 }
 
-/** Parsed target shape retained for deprecated explicit-target parser adapters. */
-export type ChannelRouteParsedTarget = ChannelRouteTargetInput & {
-  /** Normalized lowercase channel id. */
-  channel: string;
-  /** Trimmed provider-specific target text originally supplied by the caller. */
-  rawTo: string;
-  /** Canonical destination id used by route equality and delivery. */
-  to: string;
-  /** Optional thread/topic/root id from the parser or fallback value. */
-  threadId?: string | number;
-  /** Coarse destination shape parsed from the provider-specific target. */
-  chatType?: ChannelRouteChatType;
-};
-
-/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
-export function resolveChannelRouteTargetWithParser(params: {
-  /** Channel id used for normalization and parser dispatch. */
-  channel: string;
-  /** Provider-specific target text to parse. */
-  rawTarget?: string | null;
-  /** Thread id to use when the parsed target omits one. */
-  fallbackThreadId?: string | number | null;
-  /** Legacy parser that understands the channel's explicit-target grammar. */
-  parseExplicitTarget: ChannelRouteExplicitTargetParser;
-}): ChannelRouteParsedTarget | null {
-  const channel = normalizeLowercaseStringOrEmpty(params.channel);
-  const rawTo = normalizeOptionalString(params.rawTarget);
-  if (!channel || !rawTo) {
-    return null;
-  }
-  const parsed = params.parseExplicitTarget(channel, rawTo);
-  const fallbackThreadId = normalizeOptionalThreadValue(params.fallbackThreadId);
-  return {
-    channel,
-    rawTo,
-    to: parsed?.to ?? rawTo,
-    threadId: normalizeOptionalThreadValue(parsed?.threadId ?? fallbackThreadId),
-    chatType: parsed?.chatType,
-  };
-}
-
 /** Builds a JSON route dedupe key that remains unambiguous when route parts contain separators. */
 export function channelRouteDedupeKey(input?: ChannelRouteTargetInput | null): string {
   const route = normalizeChannelRouteTarget(input);
@@ -202,11 +145,6 @@ export function channelRouteDedupeKey(input?: ChannelRouteTargetInput | null): s
     route?.accountId ?? "",
     stringifyRouteThreadId(route?.thread?.id) ?? "",
   ]);
-}
-
-/** @deprecated Use `channelRouteDedupeKey`. */
-export function channelRouteIdentityKey(input?: ChannelRouteTargetInput | null): string {
-  return channelRouteDedupeKey(input);
 }
 
 function threadIdsEqual(left?: string | number, right?: string | number): boolean {
@@ -322,9 +260,4 @@ export function channelRouteCompactKey(route?: ChannelRouteKeyInput | null): str
     normalized.accountId ?? "",
     stringifyRouteThreadId(normalized.thread?.id) ?? "",
   ].join("|");
-}
-
-/** @deprecated Use `channelRouteCompactKey`. */
-export function channelRouteKey(route?: ChannelRouteRef): string | undefined {
-  return channelRouteCompactKey(route);
 }

@@ -3,22 +3,25 @@ import path from "node:path";
 import { syncIosVersioning } from "./lib/ios-version.ts";
 import { parseVersionSyncArgs } from "./lib/version-script-args.ts";
 
-export { parseVersionSyncArgs as parseArgs } from "./lib/version-script-args.ts";
+export function parseArgs(argv: string[]) {
+  return parseVersionSyncArgs(argv, { allowAppStoreRevision: true });
+}
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/ios-sync-versioning.ts [--write|--check] [--version YYYY.M.D] [--root dir]\n\nValidates that iOS versioning inputs can produce generated local artifacts.\n",
+    "Usage: node --import tsx scripts/ios-sync-versioning.ts [--write|--check] [--version YYYY.M.D] [--revision 0-9] [--root dir]\n\nValidates that iOS versioning inputs can produce generated local artifacts.\n",
   );
 }
 
 function main(argv = process.argv.slice(2)): number {
-  const options = parseVersionSyncArgs(argv);
+  const options = parseArgs(argv);
   if (options.help) {
     printUsage();
     return 0;
   }
 
   const result = syncIosVersioning({
+    appStoreRevision: options.appStoreRevision,
     mode: options.mode,
     releaseVersion: options.releaseVersion,
     rootDir: options.rootDir,

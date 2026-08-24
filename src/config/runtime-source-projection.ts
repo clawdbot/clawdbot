@@ -1,5 +1,5 @@
-import { createMergePatch, projectSourceOntoRuntimeShape } from "./io.write-prepare.js";
-import { applyMergePatch } from "./merge-patch.js";
+import { projectSourceOntoRuntimeShape } from "./io.write-prepare.js";
+import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 

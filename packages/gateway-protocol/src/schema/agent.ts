@@ -20,9 +20,10 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
   "music_generation",
 ] as const;
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
+const CONVERSATION_REF_PATTERN = "^conv_[a-f0-9]{32}$";
 
 /** Generated media/file attachment metadata carried by internal agent events. */
-export const AgentGeneratedAttachmentSchema = closedObject({
+const AgentGeneratedAttachmentSchema = closedObject({
   type: Type.Optional(Type.String({ enum: ["image", "audio", "video", "file"] })),
   path: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
@@ -30,10 +31,14 @@ export const AgentGeneratedAttachmentSchema = closedObject({
   filePath: Type.Optional(Type.String()),
   mimeType: Type.Optional(Type.String()),
   name: Type.Optional(Type.String()),
+  sizeBytes: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number()),
+  width: Type.Optional(Type.Number()),
+  height: Type.Optional(Type.Number()),
 });
 
 /** Internal completion event surfaced when child automation reports back to a parent run. */
-export const AgentInternalEventSchema = closedObject({
+const AgentInternalEventSchema = closedObject({
   type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
   source: Type.String({ enum: [...AGENT_INTERNAL_EVENT_SOURCES] }),
   childSessionKey: Type.String(),
@@ -60,22 +65,22 @@ export const AgentEventSchema = closedObject({
   data: Type.Record(Type.String(), Type.Unknown()),
 });
 
+const MessageActionReplyModeSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("first"),
+  Type.Literal("all"),
+  Type.Literal("batched"),
+]);
+
 /** Caller-supplied routing hints. Authorization must use trusted runtime context. */
-export const MessageActionToolContextSchema = closedObject({
+const MessageActionToolContextSchema = closedObject({
   currentChannelId: Type.Optional(Type.String()),
   currentMessagingTarget: Type.Optional(Type.String()),
   currentGraphChannelId: Type.Optional(Type.String()),
   currentChannelProvider: Type.Optional(Type.String()),
   currentThreadTs: Type.Optional(Type.String()),
   currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  replyToMode: Type.Optional(
-    Type.Union([
-      Type.Literal("off"),
-      Type.Literal("first"),
-      Type.Literal("all"),
-      Type.Literal("batched"),
-    ]),
-  ),
+  replyToMode: Type.Optional(MessageActionReplyModeSchema),
   hasRepliedRef: Type.Optional(
     closedObject({
       value: Type.Boolean(),
@@ -85,11 +90,21 @@ export const MessageActionToolContextSchema = closedObject({
   skipCrossContextDecoration: Type.Optional(Type.Boolean()),
 });
 
+const MessageActionReplyFactsSchema = Type.Union([
+  closedObject({ replyToId: NonEmptyString, source: Type.Literal("explicit") }),
+  closedObject({
+    replyToId: NonEmptyString,
+    source: Type.Literal("implicit"),
+    mode: Type.Union([Type.Literal("first"), Type.Literal("all")]),
+  }),
+]);
+
 /** Request to execute a channel message action through a configured adapter. */
 export const MessageActionParamsSchema = closedObject({
   channel: NonEmptyString,
   action: NonEmptyString,
   params: Type.Record(Type.String(), Type.Unknown()),
+  reply: Type.Optional(MessageActionReplyFactsSchema),
   accountId: Type.Optional(Type.String()),
   requesterAccountId: Type.Optional(Type.String()),
   requesterSenderId: Type.Optional(Type.String()),
@@ -143,6 +158,114 @@ export const SendParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
 });
+
+/** Gateway-owned request that lists persisted and channel-directory addresses. */
+export const ConversationListParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  channel: Type.Optional(NonEmptyString),
+  query: Type.Optional(NonEmptyString),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+});
+
+export const ConversationListItemSchema = closedObject({
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  kind: Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
+  target: NonEmptyString,
+  threadId: Type.Optional(NonEmptyString),
+  label: Type.Optional(NonEmptyString),
+  firstSeenAt: Type.Integer({ minimum: 0 }),
+  lastSeenAt: Type.Integer({ minimum: 0 }),
+});
+
+export const ConversationListResultSchema = closedObject({
+  conversations: Type.Array(ConversationListItemSchema),
+});
+
+/** Gateway-owned request that sends to one durable external conversation. */
+export const ConversationSendParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  sourceSessionKey: Type.Optional(NonEmptyString),
+  operationId: NonEmptyString,
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  message: NonEmptyString,
+});
+
+export const ConversationSendResultSchema = closedObject({
+  status: Type.Union([
+    Type.Literal("sent"),
+    Type.Literal("queued"),
+    Type.Literal("suppressed"),
+    Type.Literal("unknown"),
+  ]),
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  channel: NonEmptyString,
+  messageId: Type.Optional(NonEmptyString),
+  queueId: Type.Optional(NonEmptyString),
+});
+
+/** Gateway-owned request that sends and consumes one correlated external reply inline. */
+export const ConversationTurnParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  sourceSessionKey: Type.Optional(NonEmptyString),
+  turnId: NonEmptyString,
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  message: NonEmptyString,
+  timeoutMs: Type.Integer({ minimum: 1, maximum: 300_000 }),
+});
+
+export const ConversationTurnCancelParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  turnId: NonEmptyString,
+});
+
+export const ConversationTurnCancelResultSchema = closedObject({
+  cancelled: Type.Boolean(),
+});
+
+export const ConversationTurnReplySchema = closedObject({
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  messageId: NonEmptyString,
+  replyToId: Type.Optional(NonEmptyString),
+  threadId: Type.Optional(NonEmptyString),
+  text: Type.String(),
+  timestamp: Type.Integer({ minimum: 0 }),
+  transcriptArtifactId: Type.Optional(NonEmptyString),
+  transcriptMessageId: Type.Optional(NonEmptyString),
+});
+
+const ConversationTurnBaseResultSchema = {
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  channel: NonEmptyString,
+  messageId: NonEmptyString,
+  correlationPersisted: Type.Boolean(),
+};
+
+export const ConversationTurnResultSchema = Type.Union([
+  closedObject({
+    ...ConversationTurnBaseResultSchema,
+    status: Type.Literal("replied"),
+    reply: ConversationTurnReplySchema,
+  }),
+  closedObject({
+    ...ConversationTurnBaseResultSchema,
+    status: Type.Literal("timeout"),
+  }),
+  closedObject({
+    conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+    channel: NonEmptyString,
+    messageId: Type.Optional(NonEmptyString),
+    correlationPersisted: Type.Boolean(),
+    status: Type.Union([
+      Type.Literal("sent"),
+      Type.Literal("queued"),
+      Type.Literal("suppressed"),
+      Type.Literal("unknown"),
+    ]),
+    error: NonEmptyString,
+  }),
+]);
 
 /** Poll creation request for adapters that support native polls. */
 export const PollParamsSchema = closedObject({
@@ -202,12 +325,16 @@ export const AgentParamsSchema = closedObject({
   bootstrapContextMode: Type.Optional(
     Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
   ),
-  // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
   bootstrapContextRunKind: Type.Optional(
     Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
   ),
   acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
   internalRuntimeHandoffId: Type.Optional(NonEmptyString),
+  // Enabled backend recovery supplies only capture/retry mode. Disabled collection omits it;
+  // the private token, when present, remains in durable session state.
+  internalExecutionIdentityRetry: Type.Optional(Type.Boolean()),
+  /** Exact durable recovery attempt that owns any post-admission identity bind. */
+  internalExecutionIdentityRecoveryAttempt: Type.Optional(Type.Integer({ minimum: 1 })),
   execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
   internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
   inputProvenance: Type.Optional(InputProvenanceSchema),
@@ -217,9 +344,12 @@ export const AgentParamsSchema = closedObject({
     Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
   ),
   disableMessageTool: Type.Optional(Type.Boolean()),
+  swarmCollector: Type.Optional(Type.Boolean()),
+  swarmOutputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   // Host-owned recovery turns can force every Code Mode exec onto the
   // restart-safe path even if the model omits or clears the tool argument.
   forceRestartSafeTools: Type.Optional(Type.Boolean()),
+  forceCodeModeTools: Type.Optional(Type.Boolean()),
   voiceWakeTrigger: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),
@@ -235,6 +365,7 @@ export const AgentIdentityParamsSchema = closedObject({
 export const AgentIdentityResultSchema = closedObject({
   agentId: NonEmptyString,
   name: Type.Optional(NonEmptyString),
+  nameSource: Type.Optional(Type.String({ enum: ["config", "agent", "workspace", "default"] })),
   avatar: Type.Optional(NonEmptyString),
   avatarSource: Type.Optional(NonEmptyString),
   avatarStatus: Type.Optional(Type.String({ enum: ["none", "local", "remote", "data"] })),
@@ -271,6 +402,16 @@ export const WakeParamsSchema = Type.Object(
 export type AgentEvent = Static<typeof AgentEventSchema>;
 export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
 export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type ConversationListParams = Static<typeof ConversationListParamsSchema>;
+export type ConversationListItem = Static<typeof ConversationListItemSchema>;
+export type ConversationListResult = Static<typeof ConversationListResultSchema>;
+export type ConversationSendParams = Static<typeof ConversationSendParamsSchema>;
+export type ConversationSendResult = Static<typeof ConversationSendResultSchema>;
+export type ConversationTurnParams = Static<typeof ConversationTurnParamsSchema>;
+export type ConversationTurnCancelParams = Static<typeof ConversationTurnCancelParamsSchema>;
+export type ConversationTurnCancelResult = Static<typeof ConversationTurnCancelResultSchema>;
+export type ConversationTurnReply = Static<typeof ConversationTurnReplySchema>;
+export type ConversationTurnResult = Static<typeof ConversationTurnResultSchema>;
 export type MessageActionParams = Static<typeof MessageActionParamsSchema>;
 export type PollParams = Static<typeof PollParamsSchema>;
 export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;

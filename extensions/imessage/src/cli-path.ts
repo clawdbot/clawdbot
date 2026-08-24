@@ -15,23 +15,26 @@ const MACH_O_MAGICS = new Set([
   "bfbafeca",
 ]);
 
-function safeHomeDir(): string | undefined {
-  const home = process.env.HOME?.trim();
+export function resolveIMessageHomeDir(): string | undefined {
+  const configuredHome = process.env.HOME;
+  const home = configuredHome?.trim();
   if (home) {
     return home;
   }
   try {
-    return os.homedir().trim() || undefined;
+    // On POSIX, os.homedir() echoes a defined blank HOME instead of querying the account.
+    const systemHome = configuredHome === undefined ? os.homedir() : os.userInfo().homedir;
+    return systemHome.trim() || undefined;
   } catch {
     return undefined;
   }
 }
 
-function expandIMessageUserPath(value: string): string {
+export function expandIMessageUserPath(value: string): string {
   if (!value.startsWith("~")) {
     return value;
   }
-  const home = safeHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? value.replace(/^~(?=$|[\\/])/, home) : value;
 }
 
@@ -111,7 +114,7 @@ function isLikelyLocalIMessageCliPath(params: { cliPath: string; remoteHost?: st
 }
 
 function defaultMessagesDbPath(): string | undefined {
-  const home = safeHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
 }
 
@@ -120,9 +123,12 @@ export function resolveIMessageChatDbLookupPath(params: {
   dbPath?: string;
   remoteHost?: string;
 }): string | undefined {
+  if (params.remoteHost?.trim()) {
+    return undefined;
+  }
   const configured = params.dbPath?.trim();
   if (configured) {
-    return configured;
+    return expandIMessageUserPath(configured);
   }
   // Receipt recovery is best effort and preserves the shipped wrapper heuristic.
   if (!isLikelyLocalIMessageCliPath({ cliPath: params.cliPath, remoteHost: params.remoteHost })) {

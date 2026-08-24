@@ -54,3 +54,14 @@ test("process send-keys still sends non-cursor keys while mode is unknown", asyn
 
   expect((result.details as { status?: string }).status).toBe("running");
 });
+
+test("process send-keys reports the UTF-8 byte count", async () => {
+  const result = await handleProcessSendKeys({
+    sessionId: "sess-literal-bytes",
+    session: createProcessSessionFixture({ id: "sess-literal-bytes", command: "cat" }),
+    stdin: createWritableStdinStub(),
+    literal: "你好😀",
+  });
+
+  expectTextContent(result.content[0], "Sent 10 bytes to session sess-literal-bytes");
+});

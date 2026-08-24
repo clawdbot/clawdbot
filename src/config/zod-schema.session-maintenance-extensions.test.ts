@@ -3,52 +3,47 @@ import { describe, expect, it } from "vitest";
 import { SessionSchema } from "./zod-schema.session.js";
 
 describe("SessionSchema maintenance extensions", () => {
-  it("accepts session write-lock acquire timeout", () => {
-    const result = SessionSchema.safeParse({
-      writeLock: {
-        acquireTimeoutMs: 60_000,
-        staleMs: 1_800_000,
-        maxHoldMs: 300_000,
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects invalid session write-lock timeout values", () => {
-    expect(() =>
-      SessionSchema.parse({
-        writeLock: {
-          acquireTimeoutMs: 0,
-        },
-      }),
-    ).toThrow(/acquireTimeoutMs|number/i);
-
-    expect(() =>
-      SessionSchema.parse({
-        writeLock: {
-          staleMs: 0,
-        },
-      }),
-    ).toThrow(/staleMs|number/i);
-
-    expect(() =>
-      SessionSchema.parse({
-        writeLock: {
-          maxHoldMs: 0,
-        },
-      }),
-    ).toThrow(/maxHoldMs|number/i);
-  });
-
   it("accepts valid maintenance extensions", () => {
     const result = SessionSchema.safeParse({
       maintenance: {
+        preserveRecent: "7d",
         resetArchiveRetention: "14d",
         maxDiskBytes: "500mb",
         highWaterBytes: "350mb",
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts disabling recent-session preservation", () => {
+    expect(SessionSchema.safeParse({ maintenance: { preserveRecent: false } }).success).toBe(true);
+  });
+
+  it.each([false, 0] as const)("accepts disabling dashboard archiving with %s", (value) => {
+    expect(SessionSchema.safeParse({ maintenance: { archiveDashboardAfter: value } }).success).toBe(
+      true,
+    );
+  });
+
+  it("accepts a positive dashboard archive duration", () => {
+    expect(SessionSchema.safeParse({ maintenance: { archiveDashboardAfter: "7d" } }).success).toBe(
+      true,
+    );
+  });
+
+  it.each(["0", "0d", -1, "never"])(
+    "rejects invalid dashboard archive duration: %s",
+    (archiveDashboardAfter) => {
+      const result = SessionSchema.safeParse({ maintenance: { archiveDashboardAfter } });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toContain("archiveDashboardAfter");
+    },
+  );
+
+  it("rejects an invalid recent-session preservation duration", () => {
+    const result = SessionSchema.safeParse({ maintenance: { preserveRecent: "forever" } });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toContain("preserveRecent");
   });
 
   it("accepts disabling reset archive cleanup", () => {
@@ -108,6 +103,16 @@ describe("SessionSchema maintenance extensions", () => {
     expect(
       SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "500ms" } }).success,
     ).toBe(true);
+  });
+
+  it.each([0, "0", "0b", "0.4b"])("accepts zero-resolving highWaterBytes: %s", (highWaterBytes) => {
+    expect(SessionSchema.safeParse({ maintenance: { highWaterBytes } }).success).toBe(true);
+  });
+
+  it.each([-1, "-1", "-1b", "-0.4b"])("rejects negative highWaterBytes: %s", (highWaterBytes) => {
+    const result = SessionSchema.safeParse({ maintenance: { highWaterBytes } });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toContain("highWaterBytes");
   });
 
   it("accepts resetArchiveRetention: false (documented disable)", () => {

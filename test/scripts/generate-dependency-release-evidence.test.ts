@@ -14,7 +14,7 @@ import {
   renderDependencyEvidenceSummary,
   resolvePreviousReleaseTag,
   resolveReleaseTag,
-} from "../../scripts/generate-dependency-release-evidence.mjs";
+} from "../../scripts/generate-dependency-release-evidence.mts";
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -23,7 +23,7 @@ async function writeJson(dir: string, fileName: string, value: unknown) {
 function runCli(...args: string[]) {
   return spawnSync(
     process.execPath,
-    ["scripts/generate-dependency-release-evidence.mjs", ...args],
+    ["--import", "tsx", "scripts/generate-dependency-release-evidence.mts", ...args],
     {
       cwd: path.resolve("."),
       encoding: "utf8",
@@ -201,17 +201,21 @@ describe("generate-dependency-release-evidence", () => {
     const result = runCli("--help");
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node scripts/generate-dependency-release-evidence.mjs");
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/generate-dependency-release-evidence.mts",
+    );
     expect(result.stderr).toBe("");
   });
 
   it("reports CLI argument errors without a Node stack trace", () => {
-    const result = runCli("--wat");
+    for (const args of [["--wat"], ["wat", "--help"]]) {
+      const result = runCli(...args);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unsupported argument: --wat");
-    expectNoNodeStack(result.stderr);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(`Unsupported argument: ${args[0]}`);
+      expectNoNodeStack(result.stderr);
+    }
   });
 
   it("falls back to fetching tags when local previous-release resolution misses", () => {

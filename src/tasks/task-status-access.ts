@@ -1,14 +1,17 @@
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import {
+  getAllActiveGeneratedMediaSessionKeys,
   getLatestGeneratedMediaTaskAdmissionIdForSessionKey,
   listActiveGeneratedMediaTaskIdsForSessionKey,
 } from "./generated-media-task-activity.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { getTasksByRunScope, pickPreferredRunIdTask } from "./task-registry-state.js";
 // Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
   getTaskById,
   listTaskRecords,
+  listTaskRecordsUnsorted,
   listTasksForAgentId,
   listTasksForSessionKey,
 } from "./task-registry.js";
@@ -56,6 +59,30 @@ export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined 
   return findTaskByRunId(runId);
 }
 
+export function findTaskByRunIdForChildSessionForStatus(
+  runId: string,
+  childSessionKey: string,
+): Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined {
+  const normalizedChildSessionKey = childSessionKey.trim();
+  if (!normalizedChildSessionKey) {
+    return undefined;
+  }
+  // A run id can span multiple task scopes. Terminal ownership must stay on
+  // the exact child session instead of adopting the registry's global preference.
+  const task = pickPreferredRunIdTask(
+    getTasksByRunScope({ runId, sessionKey: normalizedChildSessionKey }).filter(
+      (candidate) => candidate.childSessionKey?.trim() === normalizedChildSessionKey,
+    ),
+  );
+  return task
+    ? {
+        taskId: task.taskId,
+        status: task.status,
+        childSessionKey: task.childSessionKey,
+      }
+    : undefined;
+}
+
 /** Snapshots generated-media task ids so replay guards stay attempt-local. */
 export function getGeneratedMediaTaskIdsForSessionKey(
   sessionKey: string | undefined,
@@ -95,4 +122,24 @@ export function hasPendingGeneratedMediaTaskForSessionKey(sessionKey: string): b
     (task) =>
       GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status),
   );
+}
+
+/**
+ * Builds a one-shot snapshot of all session keys with pending generated-media
+ * work. Consume this once per reaper sweep for O(1) per-row lookups instead of
+ * repeating global task and activity scans for every cron continuation row.
+ */
+export function buildPendingGeneratedMediaSessionKeySet(): Set<string> {
+  const keys = getAllActiveGeneratedMediaSessionKeys();
+  for (const task of listTaskRecordsUnsorted()) {
+    if (GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status)) {
+      if (task.requesterSessionKey) {
+        keys.add(task.requesterSessionKey);
+      }
+      if (task.ownerKey) {
+        keys.add(task.ownerKey);
+      }
+    }
+  }
+  return keys;
 }

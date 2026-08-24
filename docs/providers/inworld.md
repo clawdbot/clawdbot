@@ -41,18 +41,16 @@ openclaw gateway restart
     ```
 
   </Step>
-  <Step title="Select Inworld in messages.tts">
+  <Step title="Select Inworld in tts">
     ```json5
     {
-      messages: {
-        tts: {
-          auto: "always",
-          provider: "inworld",
-          providers: {
-            inworld: {
-              voiceId: "Sarah",
-              modelId: "inworld-tts-1.5-max",
-            },
+      tts: {
+        auto: "always",
+        provider: "inworld",
+        providers: {
+          inworld: {
+            voiceId: "Sarah",
+            modelId: "inworld-tts-1.5-max",
           },
         },
       },
@@ -66,13 +64,13 @@ openclaw gateway restart
 
 ## Configuration options
 
-| Option        | Path                                         | Description                                                         |
-| ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
-| `apiKey`      | `messages.tts.providers.inworld.apiKey`      | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.       |
-| `baseUrl`     | `messages.tts.providers.inworld.baseUrl`     | Override Inworld API base URL (default `https://api.inworld.ai`).   |
-| `voiceId`     | `messages.tts.providers.inworld.voiceId`     | Voice identifier (default `Sarah`). Legacy alias: `speakerVoiceId`. |
-| `modelId`     | `messages.tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-1.5-max`).                       |
-| `temperature` | `messages.tts.providers.inworld.temperature` | Sampling temperature, `0` (exclusive) to `2` (optional).            |
+| Option        | Path                                | Description                                                         |
+| ------------- | ----------------------------------- | ------------------------------------------------------------------- |
+| `apiKey`      | `tts.providers.inworld.apiKey`      | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.       |
+| `baseUrl`     | `tts.providers.inworld.baseUrl`     | Override Inworld API base URL (default `https://api.inworld.ai`).   |
+| `voiceId`     | `tts.providers.inworld.voiceId`     | Voice identifier (default `Sarah`). Legacy alias: `speakerVoiceId`. |
+| `modelId`     | `tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-1.5-max`).                       |
+| `temperature` | `tts.providers.inworld.temperature` | Sampling temperature, `0` (exclusive) to `2` (optional).            |
 
 ## Notes
 
@@ -87,7 +85,7 @@ openclaw gateway restart
     Replies use MP3 by default. When the channel target is `voice-note`, OpenClaw asks Inworld for `OGG_OPUS` so the audio plays as a native voice bubble. Telephony synthesis uses raw `PCM` at 22050 Hz to feed the telephony bridge.
   </Accordion>
   <Accordion title="Custom endpoints">
-    Override the API host with `messages.tts.providers.inworld.baseUrl`. Trailing slashes are stripped before requests are sent.
+    Override the API host with `tts.providers.inworld.baseUrl`. Trailing slashes are stripped before requests are sent.
   </Accordion>
 </AccordionGroup>
 
@@ -95,10 +93,10 @@ openclaw gateway restart
 
 <CardGroup cols={2}>
   <Card title="Text-to-speech" href="/tools/tts" icon="waveform-lines">
-    TTS overview, providers, and `messages.tts` config.
+    TTS overview, providers, and `tts` config.
   </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="gear">
-    Full config reference including `messages.tts` settings.
+    Full config reference including `tts` settings.
   </Card>
   <Card title="Providers" href="/providers" icon="grid">
     All supported OpenClaw providers.

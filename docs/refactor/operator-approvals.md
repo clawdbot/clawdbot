@@ -50,7 +50,7 @@ This table records the implementation state when #103505 was opened. The rollout
 | Portable actions  | `src/interactive/payload.ts`, `src/plugin-sdk/interactive-runtime.ts`, `src/plugin-sdk/approval-reply-runtime.ts`                                               | Approval buttons are command actions containing `/approve ...`; URL and Web App targets are untyped button fields.                                                                           |
 | Telegram          | `extensions/telegram/src/approval-handler.runtime.ts`, `extensions/telegram/src/button-types.ts`                                                                | The renderer parses command text to recognize approval semantics before producing private callback data.                                                                                     |
 | Control UI        | `ui/src/app/exec-approval.ts`, `ui/src/app/overlays.ts`, `ui/src/components/exec-approval.ts`                                                                   | Approval UI is a global modal. `ui/src/app-route-paths.ts` and `ui/src/app-routes.ts` use exact routes and rewrite unknown paths to Chat.                                                    |
-| Session ownership | `src/agents/subagent-registry.types.ts`, `src/agents/subagent-registry-read.ts`, `src/config/sessions/types.ts`                                                 | Controller, requester, explicit parent, and legacy spawn ownership exist, but approval events are not projected to those session streams.                                                    |
+| Session ownership | `src/agents/subagents/registry/subagent-registry.types.ts`, `src/agents/subagents/registry/subagent-registry-read.ts`, `src/config/sessions/types.ts`           | Controller, requester, explicit parent, and legacy spawn ownership exist, but approval events are not projected to those session streams.                                                    |
 | Shared state      | `src/state/openclaw-state-schema.sql`, `src/state/openclaw-state-db.ts`                                                                                         | Existing immediate transactions and Kysely conditional updates support durable compare-and-set in `state/openclaw.sqlite`.                                                                   |
 
 Representative current tests include `src/gateway/exec-approval-manager.test.ts`, `src/gateway/server-methods/approval-shared.test.ts`, `src/agents/bash-tools.exec-gateway-approval.e2e.test.ts`, `extensions/telegram/src/approval-handler.runtime.test.ts`, and `ui/src/e2e/approval-flow.e2e.test.ts`.
@@ -115,10 +115,12 @@ Add one `operator_approvals` table to the shared state database.
 
 Required indexes:
 
-- unique `(resolution_ref)`; inserts also reject cross-column `approval_id`/`resolution_ref` ambiguity
-- `(status, expires_at_ms)`
-- `(source_session_key, created_at_ms DESC)`
-- `(resolved_at_ms)` for retention pruning
+| Index                                      | Purpose                                                                     |
+| ------------------------------------------ | --------------------------------------------------------------------------- |
+| unique `(resolution_ref)`                  | Reject cross-column `approval_id`/`resolution_ref` ambiguity during insert. |
+| `(status, expires_at_ms)`                  | Find pending approvals and reconcile authoritative deadlines.               |
+| `(source_session_key, created_at_ms DESC)` | Replay recent approvals for one source session.                             |
+| `(resolved_at_ms)`                         | Prune retained terminal approvals according to the fixed retention policy.  |
 
 Audience arrays are small and bounded. Session-filtered replay first selects visible pending rows through Kysely, then decodes and filters the bounded audience arrays in application code; it does not use string matching or raw SQL JSON queries.
 
@@ -292,7 +294,7 @@ Use a deterministic breadth-first walk:
 4. Normalize and de-duplicate on enqueue so the first, shortest path wins.
 5. Stop at 64 unique keys; this audience-size cap also bounds traversal depth.
 
-The registry source is `src/agents/subagent-registry-read.ts`; ownership fields are defined in `src/agents/subagent-registry.types.ts`. Session fallback fields are defined in `src/config/sessions/types.ts`.
+The registry source is `src/agents/subagents/registry/subagent-registry-read.ts`; ownership fields are defined in `src/agents/subagents/registry/subagent-registry.types.ts`. Session fallback fields are defined in `src/config/sessions/types.ts`.
 
 Requested and terminal projections use the same persisted audience even if focus/controller ownership changes while the approval is pending. This guarantees terminal cleanup for every audience session stream that received the request projection. Resolution always targets the source approval ID; audience sessions never receive cloned approval state. Forwarded channel-message cleanup remains the separate delivery-locator follow-up below.
 

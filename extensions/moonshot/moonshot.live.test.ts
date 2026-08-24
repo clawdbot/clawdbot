@@ -1,13 +1,15 @@
 // Moonshot tests cover moonshot plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   streamSimple,
   type AssistantMessage,
   type Context,
   type Model,
+  type ProviderContext,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
@@ -17,10 +19,31 @@ import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 const KIMI_SEARCH_KEY =
   process.env.KIMI_API_KEY?.trim() || process.env.MOONSHOT_API_KEY?.trim() || "";
 const MOONSHOT_API_KEY = process.env.MOONSHOT_API_KEY?.trim() || "";
+const MOONSHOT_CN_API_KEY = process.env.MOONSHOT_CN_API_KEY?.trim() || "";
 const describeLive = isLiveTestEnabled() && KIMI_SEARCH_KEY.length > 0 ? describe : describe.skip;
 const describeModelLive =
   isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? describe : describe.skip;
 const KIMI_LIVE_SEARCH_TIMEOUT_SECONDS = 60;
+const itInternationalVideoLive = isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? it : it.skip;
+const itChinaVideoLive = isLiveTestEnabled() && MOONSHOT_CN_API_KEY.length > 0 ? it : it.skip;
+// Two 64x64 solid-red H.264 frames keep regional native-video proof deterministic.
+const KIMI_K3_LIVE_RED_VIDEO_BASE64 = [
+  "AAAAJGZ0eXBpc29tAAACAGlzb21pc282aXNvMmF2YzFtcDQxAAAC5m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAA",
+  "AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "AAAAAAAAAAIAAAHodHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA",
+  "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABhG1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAAQAAAAAAA",
+  "VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAS9taW5mAAAAFHZtaGQAAAABAAAA",
+  "AAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADvc3RibAAAAKNzdHNkAAAAAAAAAAEAAACTYXZj",
+  "MQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAARVMYXZjNjIuMjguMTAyIGxpYngyNjQAAAAAAAAA",
+  "AAAAABj//wAAAC1hdmNDAULACv/hABZnQsAK2hCbARAAAAMAEAAAAwAo8SJqAQAEaM4PyAAAABBwYXNwAAAAAQAAAAEAAAAQ",
+  "c3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4",
+  "AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGly",
+  "YXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEyLjEwMgAAAHhtb29mAAAAEG1m",
+  "aGQAAAAAAAAAAQAAAGB0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAAMKAABAAAAAACMBAQAAAAAAFHRmZHQBAAAAAAAAAAAA",
+  "AAAAAAAgdHJ1bgAAAgUAAAACAAAAgAIAAAAAAAAjAAAACgAAADVtZGF0AAAAH2WIhDoRigACGPHAAED2OAAIeUnJyddddddd",
+  "dddddeAAAAAGQZogF6CMAAAAQ21mcmEAAAArdGZyYQEAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAMKAQEBAAAAEG1m",
+  "cm8AAAAAAAAAQw==",
+].join("");
 
 function isTransientKimiSearchError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -139,6 +162,75 @@ async function collectDoneMessage(
   }
   return doneMessage;
 }
+
+async function proveK3NativeVideoRegion(baseUrl: string, apiKey: string) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const catalog = buildMoonshotProvider();
+  const definition = catalog.models.find((model) => model.id === "kimi-k3");
+  if (!definition) {
+    throw new Error("Moonshot catalog does not include kimi-k3");
+  }
+  const model = provider.normalizeResolvedModel?.({
+    provider: "moonshot",
+    modelId: "kimi-k3",
+    model: {
+      ...definition,
+      provider: "moonshot",
+      api: "openai-completions",
+      baseUrl,
+    },
+  } as never) as Model<"openai-completions"> | undefined;
+  const wrapped = provider.wrapStreamFn?.({
+    provider: "moonshot",
+    modelId: "kimi-k3",
+    thinkingLevel: "max",
+    streamFn: streamSimple,
+  } as never);
+  if (!model?.input.includes("video" as never) || !wrapped) {
+    throw new Error("registered Moonshot provider did not prepare K3 native video");
+  }
+  const context: ProviderContext = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "What single color fills this video? Reply with exactly RED, BLUE, or GREEN.",
+          },
+          { type: "video", mimeType: "video/mp4", data: KIMI_K3_LIVE_RED_VIDEO_BASE64 },
+        ],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+  const response = await collectDoneMessage(
+    (await wrapped(model, context as never, { apiKey, maxTokens: 128 })) as AsyncIterable<{
+      type: string;
+      message?: AssistantMessage;
+      error?: AssistantMessage;
+    }>,
+  );
+  const answer = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join(" ");
+  expect(answer).toMatch(/\bRED\b/iu);
+}
+
+describe("moonshot K3 native video live", () => {
+  itInternationalVideoLive(
+    "independently understands red video on api.moonshot.ai",
+    async () => await proveK3NativeVideoRegion("https://api.moonshot.ai/v1", MOONSHOT_API_KEY),
+    120_000,
+  );
+
+  itChinaVideoLive(
+    "independently understands red video on api.moonshot.cn",
+    async () => await proveK3NativeVideoRegion(MOONSHOT_CN_BASE_URL, MOONSHOT_CN_API_KEY),
+    120_000,
+  );
+});
 
 describeModelLive("moonshot K2.6 replay live", () => {
   it("accepts a cross-model tool-call replay after backfilling reasoning_content", async () => {
@@ -349,16 +441,92 @@ describeModelLive("moonshot K2.7 Code live", () => {
   }, 180_000);
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
+describeModelLive("moonshot K3 live", () => {
+  it("forces max reasoning and completes a required tool call", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const wrappedStream = provider.wrapStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k3",
+      thinkingLevel: "off",
+      extraParams: { thinking: { type: "disabled", keep: "all" } },
+      streamFn: streamSimple,
+    } as never);
+    if (!wrappedStream) {
+      throw new Error("Moonshot provider did not register a stream wrapper");
+    }
+
+    const runScenario = async (model: Model<"openai-completions">, liveValue: string) => {
+      let capturedPayload: Record<string, unknown> | undefined;
+      const response = await collectDoneMessage(
+        wrappedStream(
+          model,
+          {
+            messages: [
+              {
+                role: "user",
+                content: "Call the noop tool with {}. Do not answer directly.",
+                timestamp: Date.now(),
+              },
+            ],
+            tools: [createNoopTool()],
+          },
+          {
+            apiKey: liveValue,
+            maxTokens: 4096,
+            onPayload: (value) => {
+              const payload = value as Record<string, unknown>;
+              capturedPayload = payload;
+              payload.thinking = { type: "disabled", keep: "all" };
+              payload.reasoning_effort = "low";
+              payload.reasoningEffort = "low";
+              payload.temperature = 0;
+              payload.top_p = 0.5;
+              payload.n = 2;
+              payload.presence_penalty = 1;
+              payload.frequency_penalty = 1;
+              payload.tool_choice = "required";
+            },
+          },
+        ) as AsyncIterable<{
+          type: string;
+          message?: AssistantMessage;
+          error?: AssistantMessage;
+        }>,
+      );
+
+      expect(capturedPayload).toBeDefined();
+      expect(capturedPayload).not.toHaveProperty("thinking");
+      expect(capturedPayload).not.toHaveProperty("reasoningEffort");
+      expect(capturedPayload?.reasoning_effort).toBe("max");
+      expect(capturedPayload?.tool_choice).toBe("required");
+      expect(capturedPayload).not.toHaveProperty("temperature");
+      expect(capturedPayload).not.toHaveProperty("top_p");
+      expect(capturedPayload).not.toHaveProperty("n");
+      expect(capturedPayload).not.toHaveProperty("presence_penalty");
+      expect(capturedPayload).not.toHaveProperty("frequency_penalty");
+      const reasoning = response.content.find((block) => block.type === "thinking");
+      if (!reasoning || reasoning.type !== "thinking" || reasoning.thinking.length === 0) {
+        throw new Error("Moonshot K3 did not return captured reasoning");
+      }
+      const toolCall = response.content.find((block) => block.type === "toolCall");
+      if (!toolCall || toolCall.type !== "toolCall") {
+        throw new Error(`Moonshot K3 did not call noop: ${response.stopReason}`);
+      }
+      expect(toolCall.name).toBe("noop");
+    };
+
+    let lastAuthError: unknown;
+    for (const model of resolveMoonshotModels("kimi-k3")) {
+      try {
+        await runScenario(model, MOONSHOT_API_KEY);
+        return;
+      } catch (error) {
+        if (!isMoonshotAuthDrift(error)) {
+          throw error;
+        }
+        lastAuthError = error;
+      }
+    }
+    throw toLintErrorObject(lastAuthError, "Moonshot K3 rejected the API key in both regions");
+  }, 180_000);
+});

@@ -14,6 +14,7 @@ function job(schedule: CronJob["schedule"]): CronJob {
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
+    state: {},
   };
 }
 
