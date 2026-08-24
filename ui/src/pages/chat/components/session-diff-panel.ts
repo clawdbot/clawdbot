@@ -27,6 +27,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
+import { localEditorFilePath } from "./chat-sidebar-file-view.ts";
 import type {
   SessionDiffMenuAction,
   SessionDiffMenuData,
@@ -125,10 +126,6 @@ function splitPath(filePath: string): { directory: string; name: string } {
     : { directory: normalized.slice(0, separator), name: normalized.slice(separator + 1) };
 }
 
-function absolutePath(root: string, filePath: string): string {
-  return `${root.replace(/[\\/]+$/, "")}/${filePath.replace(/^[\\/]+/, "")}`;
-}
-
 function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
@@ -154,6 +151,8 @@ function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
 }
 
 class SessionDiffPanel extends OpenClawLightDomElement {
+  @property({ attribute: false }) gatewayUrl: string | null = null;
+  @property({ attribute: false }) execNode: string | null = null;
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
   @property({ attribute: false }) loadFileText: SessionDiffFileTextLoader | null = null;
   @property({ attribute: false }) openFile: ((path: string) => void) | null = null;
@@ -477,7 +476,13 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const { file } = view;
     const collapsed = this.collapsedPaths.has(file.path);
     const { directory, name } = splitPath(file.path);
-    const absPath = result.root ? absolutePath(result.root, file.path) : undefined;
+    const absPath = result.root
+      ? (localEditorFilePath(
+          { root: result.root, path: file.path },
+          this.gatewayUrl,
+          this.execNode,
+        ) ?? undefined)
+      : undefined;
     const pathTitle = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
     return html`
       <section class="session-diff__file" data-status=${file.status}>

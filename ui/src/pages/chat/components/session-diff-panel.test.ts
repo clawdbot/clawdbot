@@ -6,6 +6,8 @@ import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-dif
 import "./session-diff-panel.ts";
 
 type SessionDiffElement = HTMLElement & {
+  gatewayUrl: string | null;
+  execNode: string | null;
   loadFileText: SessionDiffFileTextLoader | null;
   loader: SessionDiffLoader | null;
   readonly updateComplete: Promise<boolean>;
@@ -72,6 +74,26 @@ afterEach(() => {
 });
 
 describe("SessionDiffPanel", () => {
+  it.each([
+    { gatewayUrl: "ws://localhost:18789", offered: true },
+    { gatewayUrl: "wss://gateway.example.test", offered: false },
+    { gatewayUrl: "ws://localhost:18789", execNode: "build-mac", offered: false },
+  ])("offers file editors only for viewer-local checkouts: $gatewayUrl", async (testCase) => {
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    panel.gatewayUrl = testCase.gatewayUrl;
+    panel.execNode = testCase.execNode ?? null;
+    panel.loader = vi.fn(async () => ({ ...fileResult(SNAPSHOT_PATCH), root: "/workspace" }));
+    document.body.append(panel);
+
+    await vi.waitFor(() => expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull());
+    panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
+    await panel.updateComplete;
+
+    const menu = panel.querySelector("openclaw-session-diff-menu");
+    expect(menu?.textContent?.includes("Open in Editor")).toBe(testCase.offered);
+    expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
+  });
+
   it("commits only the latest loader result after a rapid loader change", async () => {
     const first = deferred<SessionsDiffResult>();
     const second = deferred<SessionsDiffResult>();

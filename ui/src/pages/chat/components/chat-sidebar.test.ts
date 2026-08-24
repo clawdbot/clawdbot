@@ -58,6 +58,46 @@ describe("openEditor", () => {
   });
 });
 
+describe("file sidebar editor locality", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.replaceChildren();
+  });
+
+  it.each([
+    { gatewayUrl: "ws://localhost:18789", offered: true },
+    { gatewayUrl: "wss://gateway.example.test", offered: false },
+    { gatewayUrl: "ws://localhost:18789", execNode: "build-mac", offered: false },
+  ])("offers editors only when the file belongs to this viewer: $gatewayUrl", async (testCase) => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      gatewayUrl: string;
+      execNode: string | null;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    panel.gatewayUrl = testCase.gatewayUrl;
+    panel.execNode = testCase.execNode ?? null;
+    panel.content = {
+      kind: "file",
+      path: "src/example.ts",
+      name: "example.ts",
+      root: "/workspace",
+      content: "const answer = 42;",
+    };
+    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector('[aria-label="Open in editor"]') !== null).toBe(testCase.offered);
+    expect(panel.querySelectorAll(".sidebar-file-view__editor-item")).toHaveLength(
+      testCase.offered ? 4 : 0,
+    );
+    // Absent, not merely disabled: a dead control cannot explain why it is dead.
+    expect(panel.querySelector(".sidebar-file-view__editor") !== null).toBe(testCase.offered);
+  });
+});
+
 describe("markdown sidebar", () => {
   it("opens workspace files from markdown preview clicks", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {

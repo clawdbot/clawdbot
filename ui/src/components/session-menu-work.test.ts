@@ -18,8 +18,12 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
   };
 }
 
-function sessionMenuClient(request: (method: string, params: unknown) => Promise<unknown>) {
+function sessionMenuClient(
+  request: (method: string, params: unknown) => Promise<unknown>,
+  gatewayUrl = "ws://localhost:18789",
+) {
   return {
+    gatewayUrl,
     request: request as never,
   };
 }
@@ -50,6 +54,51 @@ describe("session pull request indicators", () => {
 });
 
 describe("fetchSessionMenuWork", () => {
+  it.each([
+    { name: "localhost", gatewayUrl: "ws://localhost:18789", expectedPath: "/work/trees/demo" },
+    { name: "same-origin relative URL", gatewayUrl: "/gateway", expectedPath: "/work/trees/demo" },
+    {
+      name: "IPv4 loopback block",
+      gatewayUrl: "ws://127.0.0.5:18789",
+      expectedPath: "/work/trees/demo",
+    },
+    { name: "IPv6 loopback", gatewayUrl: "ws://[::1]:18789", expectedPath: "/work/trees/demo" },
+    { name: "remote gateway", gatewayUrl: "wss://gateway.example.test", expectedPath: null },
+    { name: "gateway LAN address", gatewayUrl: "ws://192.168.1.5:18789", expectedPath: null },
+    {
+      name: "deceptive loopback hostname",
+      gatewayUrl: "wss://127.0.0.1.evil.com",
+      expectedPath: null,
+    },
+    {
+      name: "remote execution node",
+      gatewayUrl: "ws://localhost:18789",
+      execNode: "build-mac",
+      expectedPath: null,
+    },
+  ])("exposes editor paths only for viewer-local files: $name", async (testCase) => {
+    const request = vi.fn(async () => ({
+      worktrees: [{ id: "wt-1", path: "/work/trees/demo" }],
+    }));
+
+    await expect(
+      fetchSessionMenuWork({
+        client: sessionMenuClient(request, testCase.gatewayUrl),
+        loadPullRequests: async () => ({
+          pullRequests: [pullRequest({ url: "https://example.test/pr" })],
+          rateLimited: false,
+          status: "ready",
+        }),
+        worktreeId: "wt-1",
+        execNode: testCase.execNode,
+      }),
+    ).resolves.toEqual({
+      pullRequestUrl: "https://example.test/pr",
+      worktreePath: testCase.expectedPath,
+    });
+    expect(request).toHaveBeenCalledTimes(testCase.expectedPath ? 1 : 0);
+  });
+
   it("resolves the PR URL and worktree path in one pass", async () => {
     const request = vi.fn((_method: string) => {
       return Promise.resolve({
@@ -71,9 +120,6 @@ describe("fetchSessionMenuWork", () => {
     await expect(
       fetchSessionMenuWork({
         client: sessionMenuClient(request),
-        pullRequestsAvailable: true,
-        sessionKey: "agent:main:demo",
-        agentId: "main",
         loadPullRequests: async () => ({
           pullRequests: [pullRequest({ url: "https://example.test/pr" })],
           rateLimited: false,
@@ -93,8 +139,6 @@ describe("fetchSessionMenuWork", () => {
     await expect(
       fetchSessionMenuWork({
         client: sessionMenuClient(failing),
-        pullRequestsAvailable: true,
-        sessionKey: "agent:main:demo",
         loadPullRequests: async () => {
           throw new Error("offline");
         },
@@ -108,8 +152,6 @@ describe("fetchSessionMenuWork", () => {
     await expect(
       fetchSessionMenuWork({
         client: sessionMenuClient(request),
-        pullRequestsAvailable: false,
-        sessionKey: "agent:main:demo",
         worktreeId: "wt-1",
       }),
     ).resolves.toEqual({ pullRequestUrl: null, worktreePath: null });

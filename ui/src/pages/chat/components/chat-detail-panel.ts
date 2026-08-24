@@ -15,7 +15,7 @@ import {
   renderSidebarPanel,
 } from "./chat-sidebar-content.ts";
 import {
-  absoluteFilePath,
+  localEditorFilePath,
   computeFileMatches,
   emptyCopyFeedback,
   readFileDraft,
@@ -29,6 +29,8 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
+  @property({ attribute: false }) gatewayUrl: string | null = null;
+  @property({ attribute: false }) execNode: string | null = null;
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -318,7 +320,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (content?.kind !== "file") {
       return;
     }
-    const absPath = absoluteFilePath(content);
+    const absPath = localEditorFilePath(content, this.gatewayUrl, this.execNode);
     if (!absPath) {
       return;
     }
@@ -593,8 +595,10 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         copyFeedback: this.fileCopyFeedback,
         currentMatchIndex,
         dirty: this.fileDirty,
+        execNode: this.execNode,
         editorMenuOpen: this.fileEditorMenuOpen,
         editing: this.fileEditing,
+        gatewayUrl: this.gatewayUrl,
         loadingEditor: this.fileEditorLoading,
         mountKey: this.fileOperationVersion,
         matches,

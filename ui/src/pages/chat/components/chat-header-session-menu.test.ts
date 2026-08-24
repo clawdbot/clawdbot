@@ -2,9 +2,14 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
+import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import { createTestChatPane } from "../chat-pane.test-support.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import "./chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
@@ -12,6 +17,7 @@ import type {
   HeaderMenuQuickAction,
   HeaderMenuStatusAction,
 } from "./chat-header-session-menu.ts";
+import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -130,6 +136,42 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it.each([
+    { gatewayUrl: "ws://localhost:18789", offered: true },
+    { gatewayUrl: "wss://gateway.example.test", offered: false },
+    { gatewayUrl: "ws://localhost:18789", execNode: "build-mac", offered: false },
+  ])("offers session editors only for viewer-local workspaces: $gatewayUrl", async (testCase) => {
+    const client = { gatewayUrl: testCase.gatewayUrl } as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const session = {
+      key: state.sessionKey,
+      kind: "direct" as const,
+      updatedAt: 0,
+      spawnedWorkspaceDir: "/workspace",
+      ...(testCase.execNode ? { execNode: testCase.execNode, execCwd: "/remote/workspace" } : {}),
+    };
+    state.settings = {} as ChatPageHost["settings"];
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state),
+        session,
+        false,
+        undefined,
+        false,
+      ),
+      container,
+    );
+    const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+    await menu?.updateComplete;
+
+    expect(menu?.textContent?.includes("Open in")).toBe(testCase.offered);
+    expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
+  });
+
   it("renders the curated session actions in order", async () => {
     const menu = await mountMenu();
     const labels = Array.from(

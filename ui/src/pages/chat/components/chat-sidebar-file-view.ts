@@ -4,6 +4,7 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
+import { isLoopbackGatewayUrl } from "../../../lib/gateway-locality.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
@@ -52,18 +53,25 @@ export function computeFileMatches(content: string, query: string): number[] {
     );
 }
 
-export function absoluteFilePath(content: FileSidebarContent): string | null {
-  if (
-    content.path.startsWith("/") ||
-    /^[a-z]:[\\/]/i.test(content.path) ||
-    content.path.startsWith("\\\\")
-  ) {
-    return content.path;
-  }
-  if (!content.root) {
+/**
+ * Absolute path only when an editor on this machine could actually open it.
+ * Null for a remote gateway or exec node even though the path itself is known,
+ * so callers must not reuse this for display or copy affordances.
+ */
+export function localEditorFilePath(
+  content: Pick<FileSidebarContent, "path" | "root">,
+  gatewayUrl: string | null | undefined,
+  execNode: string | null | undefined,
+): string | null {
+  if (execNode || !isLoopbackGatewayUrl(gatewayUrl)) {
     return null;
   }
-  return `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`;
+  if (/^(?:\/|[a-z]:[\\/]|\\\\)/i.test(content.path)) {
+    return content.path;
+  }
+  return content.root
+    ? `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`
+    : null;
 }
 
 export type FileCopyAction = "path" | "contents";
@@ -74,8 +82,10 @@ export type FileViewControls = {
   copyFeedback: FileCopyFeedback;
   currentMatchIndex: number;
   dirty: boolean;
+  execNode: string | null;
   editorMenuOpen: boolean;
   editing: boolean;
+  gatewayUrl: string | null;
   loadingEditor: boolean;
   mountKey: number;
   matches: number[];
@@ -129,7 +139,7 @@ export function renderSidebarFile(
   onViewRawText: () => void,
   controls?: FileViewControls,
 ) {
-  const absolutePath = absoluteFilePath(content);
+  const absolutePath = localEditorFilePath(content, controls?.gatewayUrl, controls?.execNode);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
   return html`
     <section class="sidebar-file-view">
