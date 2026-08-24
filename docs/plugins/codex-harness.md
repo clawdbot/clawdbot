@@ -91,11 +91,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.149.0`. The plugin ships and manages `@openai/codex`
-  `0.149.0` by default, so a `codex` command on `PATH` does not affect normal
-  startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report a parseable semantic version of `0.149.0` or newer. Newer versions
-  continue with a compatibility warning and normal runtime validation.
+- Managed Codex app-server `0.149.1`. The plugin ships and manages
+  `@openai/codex` `0.149.1` by default, so a `codex` command on `PATH` does not
+  affect normal startup. Explicit custom, remote, and macOS desktop-owned
+  app-servers must report a parseable semantic version of `0.149.0` or newer.
+  Newer versions continue with a compatibility warning and normal runtime
+  validation.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
