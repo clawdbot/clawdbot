@@ -885,7 +885,7 @@ function materializeConfiguredPluginEntryAllowlist(params: {
     const entry = entries[pluginId];
     if (
       !hasMaterialPluginEntryConfig(entry) ||
-      isPluginPolicyDisabled(next, pluginId, resolveAliasForEntries) ||
+      isPluginPolicyDisabled(next, pluginId, resolveAliasForEntries, params.manifestRegistry) ||
       allow.includes(pluginId) ||
       !isKnownPluginId(pluginId, params.manifestRegistry)
     ) {
@@ -986,7 +986,14 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       entry,
       manifestRegistry: params.manifestRegistry,
     });
-    if (isPluginPolicyDisabled(next, entry.pluginId, resolveAliasForCandidates)) {
+    if (
+      isPluginPolicyDisabled(
+        next,
+        entry.pluginId,
+        resolveAliasForCandidates,
+        params.manifestRegistry,
+      )
+    ) {
       continue;
     }
     if (

@@ -33,6 +33,54 @@ describe("isPluginPolicyDisabled", () => {
     expect(isPluginPolicyDisabled(config, "telegram")).toBe(true);
   });
 
+  // `channels.<id>.enabled` is a policy switch only for the bundled owner of the built-in channel:
+  // activation has no channel-level disable arm for any other origin. Reading it wide disabled an
+  // installed plugin whose id (or an alias of it) is a built-in channel id, and ownership flipped
+  // every channel it claims away from the plugin the runtime keeps running.
+  it.each([
+    { label: "its exact id", pluginId: "telegram", channelKey: "telegram" },
+    { label: "a channel alias of its id", pluginId: "lark", channelKey: "feishu" },
+  ])(
+    "does not read the channel flag as policy for an external plugin matching $label",
+    ({ pluginId, channelKey }) => {
+      const externalRegistry = {
+        diagnostics: [],
+        plugins: [{ id: pluginId, origin: "workspace", channels: ["zzgamma"] }],
+      } as unknown as PluginManifestRegistry;
+      const config = {
+        channels: { [channelKey]: { enabled: false } },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        isPluginPolicyDisabled(
+          config,
+          pluginId,
+          createManifestPluginAliasResolver(externalRegistry),
+          externalRegistry,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  // The registry narrows the arm to the bundled owner; it must not lose that owner's own flag.
+  // The registry-less caller above keeps the wide reading because it cannot see origin.
+  it("still reads the channel flag for the bundled owner when a registry is supplied", () => {
+    const bundledRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "telegram", origin: "bundled", channels: ["telegram"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = { channels: { telegram: { enabled: false } } } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginPolicyDisabled(
+        config,
+        "telegram",
+        createManifestPluginAliasResolver(bundledRegistry),
+        bundledRegistry,
+      ),
+    ).toBe(true);
+  });
+
   // Codex review P2 on #123209: the global switch stops all plugin discovery and load work, so no
   // plugin is active enough to take a channel from another. Auto-enable returns early on it.
   it("treats every plugin as disabled when plugins are switched off globally", () => {
@@ -323,6 +371,49 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     expect(
       isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId, registry),
     ).toBe(false);
+  });
+
+  // The memory activation cause is the same exact match on the authored spelling: normalization
+  // hands activation `resolveSlotSelection`'s reading untouched (`config-normalization-shared.ts`)
+  // and `config-activation-shared.ts` compares `slots.memory === params.id`. A slot authored as a
+  // legacy alias therefore selects nothing at startup; resolving the alias here marked the plugin
+  // hand-picked while the allowlist gate keeps it disabled.
+  it("does not resolve aliases for the memory slot startup matches exactly", () => {
+    const memoryRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "recall-plus", origin: "global", legacyPluginIds: ["recall-legacy"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      plugins: { slots: { memory: "recall-legacy" } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "recall-plus",
+        createManifestPluginAliasResolver(memoryRegistry),
+        memoryRegistry,
+      ),
+    ).toBe(false);
+  });
+
+  // An unset slot resolves to the default owner on both sides: `resolveSlotSelection` answers
+  // "memory-core" here and normalization feeds activation the same resolved default, so the exact
+  // compare still selects it.
+  it("still selects the default memory owner when the slot is unset", () => {
+    const memoryRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "memory-core", origin: "bundled" }],
+    } as unknown as PluginManifestRegistry;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        {} as OpenClawConfig,
+        "memory-core",
+        createManifestPluginAliasResolver(memoryRegistry),
+        memoryRegistry,
+      ),
+    ).toBe(true);
   });
 
   // Codex review P2 on #123209: the workspace gate in `resolvePluginActivationDecisionShared` runs

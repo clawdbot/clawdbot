@@ -3,8 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolveChannelPreferOverIds } from "./plugin-auto-enable.prefer-over.js";
+import {
+  resolveChannelPreferOverIds,
+  shouldSkipPreferredPluginAutoEnable,
+} from "./plugin-auto-enable.prefer-over.js";
+import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const tempRoots: string[] = [];
 
@@ -254,5 +260,55 @@ describe("catalog attribution by manifest plugin id", () => {
     expect(
       resolveChannelPreferOverIds({ record: recordOf({ id: "qqbot" }), channelId: "qqbot", env }),
     ).toEqual([]);
+  });
+});
+
+// The policy filter at the top of the claimant loop shares `isPluginPolicyDisabled` with schema
+// ownership and auto-enable's candidate filter, so it must read `channels.<id>.enabled` the same
+// narrowed way: the flag is policy only for the bundled owner of the built-in channel. Reading it
+// wide dropped the replacement edge of a running external claimant named after a disabled
+// built-in channel, and auto-enable kept the superseded rival on the contested channel.
+describe("shouldSkipPreferredPluginAutoEnable", () => {
+  const skipParams = (origin: string) => {
+    const entry = {
+      kind: "channel-configured",
+      pluginId: "old-thing",
+      channelId: "zzgamma",
+    } as PluginAutoEnableCandidate;
+    const other = {
+      kind: "channel-configured",
+      pluginId: "telegram",
+      channelId: "zzgamma",
+    } as PluginAutoEnableCandidate;
+    const registry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "telegram",
+          origin,
+          channels: ["zzgamma"],
+          channelConfigs: { zzgamma: { preferOver: ["old-thing"] } },
+        },
+        { id: "old-thing", origin: "workspace", channels: ["zzgamma"] },
+      ],
+    } as unknown as PluginManifestRegistry;
+    return {
+      config: { channels: { telegram: { enabled: false } } } as unknown as OpenClawConfig,
+      entry,
+      configured: [entry, other],
+      env: {},
+      registry,
+      preferOverCache: new Map<string, string[]>(),
+    };
+  };
+
+  it("keeps the edge of an external claimant named after a disabled built-in channel", () => {
+    expect(shouldSkipPreferredPluginAutoEnable(skipParams("workspace"))).toBe(true);
+  });
+
+  // The same flag on the bundled owner is that plugin's own policy switch, so its declaration
+  // still drops with it.
+  it("still drops the edge of the bundled owner disabled through its channel config", () => {
+    expect(shouldSkipPreferredPluginAutoEnable(skipParams("bundled"))).toBe(false);
   });
 });

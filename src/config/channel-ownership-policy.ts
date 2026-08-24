@@ -101,7 +101,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
 
   return {
     isPluginActive: (pluginId, channelId) => {
-      if (isPluginPolicyDisabled(params.config, pluginId, canonicalId)) {
+      if (isPluginPolicyDisabled(params.config, pluginId, canonicalId, params.registry)) {
         return false;
       }
       const alias = canonicalId(pluginId);
@@ -123,7 +123,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     isPluginExplicitlySelected: (pluginId) =>
       isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId, params.registry),
     isPluginPolicyDisabled: (pluginId) =>
-      isPluginPolicyDisabled(params.config, pluginId, canonicalId),
+      isPluginPolicyDisabled(params.config, pluginId, canonicalId, params.registry),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({
         record,

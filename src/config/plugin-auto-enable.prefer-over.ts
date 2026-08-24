@@ -356,7 +356,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     if (resolveAlias(other.pluginId) === entryPluginId) {
       continue;
     }
-    if (isPluginPolicyDisabled(params.config, other.pluginId, resolveAlias)) {
+    if (isPluginPolicyDisabled(params.config, other.pluginId, resolveAlias, params.registry)) {
       continue;
     }
     // Already canonical: `resolveChannelPreferOverIds` resolves the ids a declaration names.

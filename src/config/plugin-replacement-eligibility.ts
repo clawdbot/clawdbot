@@ -37,11 +37,14 @@ function toPolicyId(pluginId: string, resolveAlias: PluginAliasResolver | undefi
  * normalized, so a raw lookup would miss a `deny: [" MODERN "]` that the loader honors. Comparing
  * through `normalizePluginId` (and `resolveAlias` where a registry is available) keeps this on the
  * loader's policy view without materializing the whole normalized config for every plugin id.
+ * The channel-config arm additionally needs `manifestRegistry` to see plugin origin; a caller
+ * with no registry keeps the wide reading.
  */
 export function isPluginPolicyDisabled(
   cfg: OpenClawConfig,
   pluginId: string,
   resolveAlias?: PluginAliasResolver,
+  manifestRegistry?: PluginManifestRegistry,
 ): boolean {
   // The global switch stops all plugin discovery and load work, so no plugin is active enough to
   // take a channel from another. Auto-enable returns early on the same flag.
@@ -69,6 +72,20 @@ export function isPluginPolicyDisabled(
   }
   const builtInChannelId = normalizeChatChannelId(policyId);
   if (!builtInChannelId) {
+    return false;
+  }
+  // `channels.<id>.enabled` is a policy switch only for the bundled owner of the built-in channel:
+  // activation has no channel-level disable arm for any other origin
+  // (`resolvePluginActivationDecisionShared`). Reading it wide disabled an installed plugin whose
+  // exact id or alias collides with a built-in channel id, so ownership flipped every channel it
+  // claims away from a plugin the runtime keeps running. A caller with no registry cannot see
+  // origin and keeps the wide reading.
+  if (
+    manifestRegistry &&
+    !manifestRegistry.plugins.some(
+      (plugin) => plugin.origin === "bundled" && matchesPolicyId(plugin.id),
+    )
+  ) {
     return false;
   }
   const channels = asOptionalRecord(cfg.channels);
@@ -155,12 +172,15 @@ export function isPluginExplicitlySelectedByAlias(
   // Reading slot presence alone marked such a plugin selected here while the runtime never loads
   // it, which is the disagreement this predicate exists to prevent, pointing the other way.
   //
-  // This arm still resolves the authored value through the resolver, and the memory activation
-  // cause is the same exact match — the divergence fixed on the context-engine arm above is
-  // latent here, not absent. No bundled memory plugin declares `legacyPluginIds`, so firing it
-  // takes an externally installed legacy-aliased memory plugin; deferred on that basis.
+  // Matched exactly, like the context-engine arm: the activation cause is `slots.memory ===
+  // params.id` (`config-activation-shared.ts`), and normalization hands activation the authored
+  // spelling through the same `resolveSlotSelection` trim/off/default reading applied here
+  // (`config-normalization-shared.ts`). A slot authored as a legacy alias therefore selects
+  // nothing at startup; resolving it here marked that plugin hand-picked while the allowlist
+  // gate keeps it disabled. The unset slot still selects the default owner because both sides
+  // read it as the same resolved default id.
   const memorySelection = resolveSlotSelection("memory", slots?.memory);
-  if (memorySelection.kind !== "off" && canonicalId(memorySelection.pluginId) === target) {
+  if (memorySelection.kind !== "off" && memorySelection.pluginId === target) {
     const isWorkspaceOrigin =
       manifestRegistry?.plugins.some(
         (plugin) => plugin.origin === "workspace" && canonicalId(plugin.id) === target,
