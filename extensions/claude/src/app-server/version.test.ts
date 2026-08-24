@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareClaudeBridgeVersions,
   MANAGED_CLAUDE_BRIDGE_PACKAGE,
+  MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH,
   MIN_CLAUDE_BRIDGE_VERSION,
 } from "./version.js";
 
@@ -36,16 +37,36 @@ describe("compareClaudeBridgeVersions", () => {
   });
 });
 
+function declaredPin(): string {
+  const pkg = JSON.parse(readFileSync(path.resolve(HERE, "..", "..", "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  const rawPin = pkg.dependencies?.[MANAGED_CLAUDE_BRIDGE_PACKAGE];
+  expect(rawPin, `${MANAGED_CLAUDE_BRIDGE_PACKAGE} must be a declared dependency`).toBeTruthy();
+  return (rawPin ?? "").replace(/^[\^~=v]+/, "");
+}
+
 describe("MIN_CLAUDE_BRIDGE_VERSION contract", () => {
   it("never exceeds the dependency pin in package.json (floor cannot refuse a blessed binary)", () => {
-    const pkg = JSON.parse(
-      readFileSync(path.resolve(HERE, "..", "..", "package.json"), "utf8"),
-    ) as {
-      dependencies?: Record<string, string>;
-    };
-    const rawPin = pkg.dependencies?.[MANAGED_CLAUDE_BRIDGE_PACKAGE];
-    expect(rawPin, `${MANAGED_CLAUDE_BRIDGE_PACKAGE} must be a declared dependency`).toBeTruthy();
-    const pin = (rawPin ?? "").replace(/^[\^~=v]+/, "");
-    expect(compareClaudeBridgeVersions(MIN_CLAUDE_BRIDGE_VERSION, pin)).toBeLessThanOrEqual(0);
+    expect(
+      compareClaudeBridgeVersions(MIN_CLAUDE_BRIDGE_VERSION, declaredPin()),
+    ).toBeLessThanOrEqual(0);
+  });
+});
+
+describe("MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH contract", () => {
+  it("never exceeds the dependency pin (a feature gate the bundled binary can never satisfy is dead code)", () => {
+    // If the gate outran the pin, the managed install would ALWAYS be below it
+    // and the in-place refresh could never run — silently reverting every
+    // catalog change to the expensive rotation path.
+    expect(
+      compareClaudeBridgeVersions(MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH, declaredPin()),
+    ).toBeLessThanOrEqual(0);
+  });
+
+  it("is at or above the hard floor (gating below the minimum supported bridge is meaningless)", () => {
+    expect(
+      compareClaudeBridgeVersions(MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH, MIN_CLAUDE_BRIDGE_VERSION),
+    ).toBeGreaterThanOrEqual(0);
   });
 });

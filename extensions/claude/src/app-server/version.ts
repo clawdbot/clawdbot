@@ -30,6 +30,35 @@ export const MANAGED_CLAUDE_BRIDGE_PACKAGE = "@zeroaltitude/openclaw-claude-brid
 export const MIN_CLAUDE_BRIDGE_VERSION = "0.2.11";
 
 /**
+ * Minimum bridge version whose `thread/refresh_tools` may be trusted.
+ *
+ * This is a FEATURE gate, deliberately not a bump of MIN_CLAUDE_BRIDGE_VERSION:
+ * an older bridge is still perfectly usable, it just has to be routed down the
+ * rotation path instead of the in-place refresh. Raising the hard floor would
+ * refuse those working installs outright, which extensions/claude's version
+ * contract reserves for changes the extension genuinely cannot tolerate.
+ *
+ * Why a version gate is the ONLY way to detect this (openclaw-d42b): bridges
+ * before 0.7.6 answer `{ refreshed: true }` and then break the session. They
+ * forwarded our shape-only `{ type: "sdk", name: "openclaw" }` entry straight to
+ * the SDK's `Query.setMcpServers`, which uses the presence of `instance` as its
+ * desired-state signal — so the in-process MCP transport was disconnected while
+ * the CLI kept advertising and routing `mcp__openclaw__*`. Every subsequent tool
+ * call in that session failed with `SDK MCP server not found: openclaw`, for the
+ * whole life of the attempt (the bridge re-fingerprints on refresh precisely so
+ * the attempt is NOT respawned, which pinned the broken state in place). Those
+ * bridges also never applied the new catalog at all, so a policy narrowing we
+ * believed had taken effect silently hadn't.
+ *
+ * There is no capability flag, no error, and no observable difference in the
+ * response to distinguish a pre-fix bridge from a fixed one — `refreshed: true`
+ * is returned in both cases. So the reported version is the only signal, and
+ * being wrong is expensive (a wedged session that does not self-heal for 30
+ * minutes). Hence: gate, and rotate when below.
+ */
+export const MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH = "0.7.6";
+
+/**
  * Compare two semver-shaped bridge versions on their numeric major.minor.patch
  * prefix. Returns a negative number if `left` is below `right`, zero if equal,
  * positive if above. An `undefined` `left` is treated as below any concrete
