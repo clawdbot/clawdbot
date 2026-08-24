@@ -39,12 +39,19 @@ export function normalizeClaudeCliStreamJsonRecord(
       omittedRawChars += data.length;
       normalized = true;
     }
-    const file = node.file;
-    if (isRecord(file) && typeof file.base64 === "string") {
-      const base64 = file.base64;
-      delete file.base64;
-      file.omitted = true;
-      file.bytes = estimateBase64DecodedBytes(base64);
+    const directBase64Outputs = [
+      node.file,
+      ...(Array.isArray(node.images) ? node.images : []),
+      ...(Array.isArray(node.documents) ? node.documents : []),
+    ];
+    for (const output of directBase64Outputs) {
+      if (!isRecord(output) || typeof output.base64 !== "string") {
+        continue;
+      }
+      const base64 = output.base64;
+      delete output.base64;
+      output.omitted = true;
+      output.bytes = estimateBase64DecodedBytes(base64);
       omittedRawChars += base64.length;
       normalized = true;
     }

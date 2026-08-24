@@ -358,6 +358,47 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(parser.getErrorText()).toBeNull();
   });
 
+  it.each([
+    {
+      name: "image",
+      field: "images",
+      metadata: { mediaType: "image/png" },
+    },
+    {
+      name: "document",
+      field: "documents",
+      metadata: {},
+    },
+  ] as const)(
+    "omits Agent SDK REPL $name output from retained accounting",
+    ({ field, metadata }) => {
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        onAssistantDelta: () => {},
+      });
+      const base64 = "A".repeat(600_000);
+      const replLine = () =>
+        `${JSON.stringify({
+          type: "user",
+          message: { role: "user", content: [] },
+          tool_use_result: {
+            code: "return await Read({ file_path });",
+            result: {},
+            stdout: "",
+            stderr: "",
+            [field]: [{ base64, ...metadata }],
+          },
+        })}\n`;
+
+      for (let index = 0; index < 20; index += 1) {
+        parser.push(replLine());
+      }
+
+      expect(parser.getErrorText()).toBeNull();
+    },
+  );
+
   it("normalizes a deeply nested record without exhausting the stack", () => {
     const parser = createCliJsonlStreamingParser({
       backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
