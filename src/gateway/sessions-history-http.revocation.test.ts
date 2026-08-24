@@ -30,9 +30,10 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
-  const { resolveTerminalAssistantTranscriptRunId } =
+  const { attachSessionTranscriptRunId, resolveTerminalAssistantTranscriptRunId } =
     await importOriginal<typeof import("../sessions/transcript-events.js")>();
   return {
+    attachSessionTranscriptRunId,
     resolveTerminalAssistantTranscriptRunId,
     onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
       transcriptUpdateHandler = cb;
