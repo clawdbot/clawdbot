@@ -255,6 +255,60 @@ describe("cli json stdout contract", () => {
       message: "Provide at least one --bind <channel[:accountId]>.",
       tty: true,
     },
+    {
+      name: "set-identity with an unknown agent in human mode",
+      args: ["agents", "set-identity", "--agent", "ghost", "--name", "Ghost"],
+      message: 'Agent "ghost" not found. Create it with `openclaw agents add`.',
+      human: true,
+    },
+    {
+      name: "set-identity with an unknown agent in JSON mode",
+      args: ["agents", "set-identity", "--agent", "ghost", "--name", "Ghost", "--json"],
+      message: 'Agent "ghost" not found. Create it with `openclaw agents add`.',
+    },
+    {
+      name: "set-identity with an invalid agent before identity-file resolution",
+      args: ["agents", "set-identity", "--agent", "агент✨", "--from-identity", "--json"],
+      message: 'Agent "агент✨" not found. Create it with `openclaw agents add`.',
+    },
+    {
+      name: "set-identity with an unmatched workspace",
+      args: ["agents", "set-identity", "--workspace", "$WORKSPACE", "--name", "Ghost", "--json"],
+      message: "No agent workspace matches ~/workspace. Pass --agent to target a specific agent.",
+    },
+    {
+      name: "set-identity with a missing workspace identity file",
+      args: [
+        "agents",
+        "set-identity",
+        "--agent",
+        "main",
+        "--workspace",
+        "$WORKSPACE",
+        "--from-identity",
+        "--json",
+      ],
+      message: "No identity data found in ~/workspace/IDENTITY.md.",
+    },
+    {
+      name: "set-identity with a missing explicit identity file",
+      args: [
+        "agents",
+        "set-identity",
+        "--agent",
+        "main",
+        "--identity-file",
+        "$WORKSPACE",
+        "--json",
+      ],
+      message: "No identity data found in ~/workspace.",
+    },
+    {
+      name: "set-identity with an unknown agent through dual-TTY finalization",
+      args: ["agents", "set-identity", "--agent", "ghost", "--name", "Ghost", "--json"],
+      message: 'Agent "ghost" not found. Create it with `openclaw agents add`.',
+      tty: true,
+    },
   ])("renders agent management $name through the canonical failure owner", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
@@ -291,6 +345,44 @@ describe("cli json stdout contract", () => {
         await expect(fs.access(workspace)).rejects.toMatchObject({ code: "ENOENT" });
       },
       { prefix: "openclaw-agent-management-json-failure-e2e-" },
+    );
+  });
+
+  it("leaves existing config and IDENTITY.md untouched when set-identity rejects an agent", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        const workspace = path.join(tempHome, "workspace");
+        const identityPath = path.join(workspace, "IDENTITY.md");
+        const originalConfig = `${JSON.stringify({
+          agents: { entries: { main: { workspace, identity: { name: "Original" } } } },
+        })}\n`;
+        const originalIdentity = "- Name: Original workspace identity\n";
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(configPath, originalConfig, "utf8");
+        await fs.writeFile(identityPath, originalIdentity, "utf8");
+
+        const result = runBuiltCli(
+          tempHome,
+          ["agents", "set-identity", "--agent", "ghost", "--name", "Ghost", "--json"],
+          {
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: configPath,
+          },
+        );
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: 'Agent "ghost" not found. Create it with `openclaw agents add`.',
+          },
+        });
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(originalConfig);
+        await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
+      },
+      { prefix: "openclaw-agent-identity-json-failure-e2e-" },
     );
   });
 
