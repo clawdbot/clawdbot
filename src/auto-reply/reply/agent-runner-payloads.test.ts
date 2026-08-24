@@ -685,6 +685,20 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("dedupes duplicate text when the reply only has a blank singular media entry", async () => {
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [{ text: "hello world!", mediaUrl: "   " }],
+      messageProvider: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", text: "hello world!" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("keeps real media when the caption matches a message-tool send", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
       payloads: [{ text: "hello world!", mediaUrls: ["file:///tmp/photo.jpg"] }],
@@ -700,6 +714,30 @@ describe("buildReplyPayloads media filter integration", () => {
     expectFields(replyPayloads[0], {
       text: "hello world!",
       mediaUrls: ["file:///tmp/photo.jpg"],
+    });
+  });
+
+  it("keeps singular media when plural media entries are blank", async () => {
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [
+        {
+          text: "hello world!",
+          mediaUrl: "file:///tmp/photo.jpg",
+          mediaUrls: ["   "],
+        },
+      ],
+      messageProvider: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", text: "hello world!" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "hello world!",
+      mediaUrl: "file:///tmp/photo.jpg",
     });
   });
 
