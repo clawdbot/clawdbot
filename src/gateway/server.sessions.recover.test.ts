@@ -1,14 +1,31 @@
-import { expect, test } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, expect, test, vi } from "vitest";
+import { managedWorktrees } from "../agents/worktrees/service.js";
+import {
+  initializeManagedWorktreeTestRepository,
+  materializeManagedWorktreeFixture,
+} from "../agents/worktrees/service.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
+import {
+  resolveCanonicalSessionEntryFromStoreKeys,
+  resolveGatewaySessionStoreTargetWithStore,
+} from "./session-utils.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -16,8 +33,363 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
+
+function recoveryWorkerPlacement(params: {
+  sessionId: string;
+  sessionKey: string;
+  state: WorkerSessionPlacementRecord["state"];
+  generation?: number;
+}): WorkerSessionPlacementRecord {
+  return {
+    ...params,
+    agentId: "main",
+    generation: params.generation ?? 2,
+    turnClaim: null,
+    environmentId: params.state === "local" || params.state === "requested" ? null : "worker-env",
+  } as WorkerSessionPlacementRecord;
+}
+
+function recoveryPlacementReader(current: () => WorkerSessionPlacementRecord | undefined) {
+  return {
+    getMany(sessionIds: readonly string[]) {
+      const placement = current();
+      return new Map(
+        placement && sessionIds.includes(placement.sessionId)
+          ? [[placement.sessionId, placement]]
+          : [],
+      );
+    },
+  };
+}
+
+async function seedRecoverableSession(params: {
+  sourceKey: string;
+  sourceSessionId: string;
+  storePath: string;
+  overrides?: Parameters<typeof sessionStoreEntry>[1];
+}) {
+  await writeSessionStore({
+    entries: {
+      [params.sourceKey]: sessionStoreEntry(params.sourceSessionId, {
+        status: "failed",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: `cycle-${params.sourceSessionId}`,
+          revision: 1,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+        ...params.overrides,
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    agentId: "main",
+    sessionId: params.sourceSessionId,
+    sessionKey: params.sourceKey,
+    storePath: params.storePath,
+    messages: [{ role: "user", content: "recover the interrupted cloud workspace" }],
+  });
+}
+
+test("sessions.recover settles its active placement before archiving a real session-owned worktree", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const sourceKey = "agent:main:dashboard:recovery-cloud-active";
+  const sourceSessionId = "recovery-cloud-active-source";
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("gateway test state directory is unavailable");
+  }
+  const repoRoot = await initializeManagedWorktreeTestRepository(dir);
+  const worktree = await materializeManagedWorktreeFixture({
+    env: process.env,
+    name: "recovery-cloud-active",
+    now: Date.now(),
+    ownerKind: "session",
+    ownerId: sourceKey,
+    repoRoot,
+    stateDir,
+  });
+  const unsyncedPath = path.join(worktree.path, "unsynced.txt");
+  await fs.writeFile(unsyncedPath, "preserve local work\n");
+  await seedRecoverableSession({
+    sourceKey,
+    sourceSessionId,
+    storePath,
+    overrides: {
+      spawnedCwd: worktree.path,
+      worktree: {
+        id: worktree.id,
+        branch: worktree.branch,
+        repoRoot: worktree.repoRoot,
+        canonicalWorkspaceDir: repoRoot,
+      },
+    },
+  });
+
+  let placement = recoveryWorkerPlacement({
+    sessionId: sourceSessionId,
+    sessionKey: sourceKey,
+    state: "active",
+  });
+  const reclaimStarted = createDeferredCore();
+  const reclaimGate = createDeferredCore();
+  const barriers = createGatewayWorkerPlacementReclaimBarriers({
+    placements: {
+      get: () => placement,
+      waitForTurnClaimRelease: vi.fn(async () => {}),
+    },
+    loadSessionRuntime: async () => ({
+      managedWorktrees,
+      resolveCanonicalSessionEntryFromStoreKeys,
+      resolveGatewaySessionStoreTargetWithStore,
+    }),
+    revokeSessionAuthority: vi.fn(),
+  });
+  const reclaim = vi.fn(
+    async (
+      request: { agentId: string; sessionId: string; sessionKey: string },
+      authorize?: () => void,
+    ) =>
+      await barriers.runReclaimBarrier({
+        ...request,
+        ...(authorize ? { authorize } : {}),
+        begin: () => {
+          placement = recoveryWorkerPlacement({
+            sessionId: sourceSessionId,
+            sessionKey: sourceKey,
+            state: "draining",
+            generation: placement.generation + 1,
+          });
+          return placement as Extract<WorkerSessionPlacementRecord, { state: "draining" }>;
+        },
+        reclaim: async (worktreePath, _placement, reauthorize) => {
+          expect(worktreePath).toBe(worktree.path);
+          reclaimStarted.resolve();
+          await reclaimGate.promise;
+          reauthorize?.();
+          await fs.appendFile(unsyncedPath, "final worker sync\n");
+          placement = recoveryWorkerPlacement({
+            sessionId: sourceSessionId,
+            sessionKey: sourceKey,
+            state: "reclaimed",
+            generation: placement.generation + 1,
+          });
+          return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+        },
+      }),
+  );
+  const context = {
+    workerSessionPlacementService: recoveryPlacementReader(() => placement),
+    workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+  };
+
+  const recovering = directSessionReq<{ key: string; sessionId: string }>(
+    "sessions.recover",
+    { agentId: "main", key: sourceKey },
+    { context },
+  );
+  const committedBeforeReclaim = await Promise.race([
+    reclaimStarted.promise.then(() => false),
+    recovering.then(() => true),
+  ]);
+  expect(committedBeforeReclaim).toBe(false);
+  expect(reclaim).toHaveBeenCalledWith({
+    agentId: "main",
+    sessionId: sourceSessionId,
+    sessionKey: sourceKey,
+  });
+  const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+  expect(unsettledSource?.archivedAt).toBeUndefined();
+  expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
+  reclaimGate.resolve();
+
+  const recovered = await recovering;
+  expect(recovered).toMatchObject({ ok: true, payload: { key: expect.any(String) } });
+  expect(placement.state).toBe("reclaimed");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })).toMatchObject({
+    archivedAt: expect.any(Number),
+    worktree: { id: worktree.id },
+  });
+  expect(managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
+    id: worktree.id,
+    ownerId: sourceKey,
+  });
+  expect(managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? "")).toBeUndefined();
+  expect(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: recovered.payload?.key ?? "",
+      storePath,
+    })?.worktree,
+  ).toBeUndefined();
+  await expect(fs.readFile(unsyncedPath, "utf8")).resolves.toBe(
+    "preserve local work\nfinal worker sync\n",
+  );
+
+  await expect(
+    directSessionReq("sessions.recover", { agentId: "main", key: sourceKey }, { context }),
+  ).resolves.toMatchObject({ ok: true, payload: { key: recovered.payload?.key } });
+  expect(reclaim).toHaveBeenCalledOnce();
+});
+
+test.each(["rejected", "unavailable", "stale-result"] as const)(
+  "sessions.recover leaves its source and successor untouched when cloud reclaim is %s",
+  async (failure) => {
+    const { storePath } = await createSessionStoreDir();
+    const sourceKey = `agent:main:dashboard:recovery-cloud-${failure}`;
+    const sourceSessionId = `recovery-cloud-${failure}-source`;
+    await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
+    const placement = recoveryWorkerPlacement({
+      sessionId: sourceSessionId,
+      sessionKey: sourceKey,
+      state: "active",
+    });
+    const reclaim = vi.fn(async () => {
+      if (failure === "rejected") {
+        throw new Error("final workspace reconciliation rejected");
+      }
+      return recoveryWorkerPlacement({
+        sessionId: sourceSessionId,
+        sessionKey: sourceKey,
+        state: "reclaimed",
+      });
+    });
+
+    const recovered = await directSessionReq(
+      "sessions.recover",
+      { agentId: "main", key: sourceKey },
+      {
+        context: {
+          workerSessionPlacementService: recoveryPlacementReader(() => placement),
+          workerPlacementDispatchService:
+            failure === "unavailable" ? { dispatch: vi.fn() } : { dispatch: vi.fn(), reclaim },
+        },
+      },
+    );
+
+    expect(recovered).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        retryable: true,
+        message: expect.stringContaining("sessions.reclaim"),
+      },
+    });
+    const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    expect(source?.archivedAt).toBeUndefined();
+    expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
+    expect(reclaim).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
+  },
+);
+
+test.each([
+  "requested",
+  "provisioning",
+  "syncing",
+  "starting",
+  "draining",
+  "reconciling",
+  "failed",
+] as const)("sessions.recover rejects an unsettled %s cloud placement", async (state) => {
+  const { storePath } = await createSessionStoreDir();
+  const sourceKey = `agent:main:dashboard:recovery-cloud-${state}`;
+  const sourceSessionId = `recovery-cloud-${state}-source`;
+  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
+  const placement = recoveryWorkerPlacement({
+    sessionId: sourceSessionId,
+    sessionKey: sourceKey,
+    state,
+  });
+  const reclaim = vi.fn();
+
+  const recovered = await directSessionReq(
+    "sessions.recover",
+    { agentId: "main", key: sourceKey },
+    {
+      context: {
+        workerSessionPlacementService: recoveryPlacementReader(() => placement),
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+      },
+    },
+  );
+
+  expect(recovered).toMatchObject({
+    ok: false,
+    error: { code: "UNAVAILABLE", retryable: true, message: expect.stringContaining(state) },
+  });
+  expect(reclaim).not.toHaveBeenCalled();
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })?.archivedAt,
+  ).toBeUndefined();
+});
+
+test.each(["session-id", "lifecycle-revision"] as const)(
+  "sessions.recover rejects a source %s changed while its placement is reclaiming",
+  async (changedIdentity) => {
+    const { storePath } = await createSessionStoreDir();
+    const sourceKey = `agent:main:dashboard:recovery-cloud-race-${changedIdentity}`;
+    const sourceSessionId = `recovery-cloud-race-${changedIdentity}-source`;
+    await seedRecoverableSession({
+      sourceKey,
+      sourceSessionId,
+      storePath,
+      overrides: { lifecycleRevision: "original-lifecycle" },
+    });
+    let placement = recoveryWorkerPlacement({
+      sessionId: sourceSessionId,
+      sessionKey: sourceKey,
+      state: "active",
+    });
+    const reclaim = vi.fn(async () => {
+      const current = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+      if (!current) {
+        throw new Error("recovery source disappeared");
+      }
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: sourceKey, storePath },
+        {
+          ...current,
+          ...(changedIdentity === "session-id"
+            ? { sessionId: "replacement-session" }
+            : { lifecycleRevision: "replacement-lifecycle" }),
+        },
+      );
+      placement = recoveryWorkerPlacement({
+        sessionId: sourceSessionId,
+        sessionKey: sourceKey,
+        state: "reclaimed",
+      });
+      return placement;
+    });
+
+    const recovered = await directSessionReq(
+      "sessions.recover",
+      { agentId: "main", key: sourceKey },
+      {
+        context: {
+          workerSessionPlacementService: recoveryPlacementReader(() => placement),
+          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        },
+      },
+    );
+
+    expect(recovered).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("changed") },
+    });
+    const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    expect(source?.archivedAt).toBeUndefined();
+    expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
+  },
+);
 
 test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -316,6 +688,56 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   expect(source?.archivedAt).toBeUndefined();
   expect(source?.mainRestartRecovery?.tombstone).not.toHaveProperty("recoveredSessionKey");
   expect(source?.mainRestartRecovery?.tombstone).not.toHaveProperty("recoveredSessionId");
+});
+
+test("sessions.recover revalidates runtime authority after its cloud placement reclaim", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sourceKey = "agent:main:dashboard:recovery-cloud-authority-race";
+  const sourceSessionId = "recovery-cloud-authority-race-source";
+  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
+  let authorityActive = true;
+  let placement = recoveryWorkerPlacement({
+    sessionId: sourceSessionId,
+    sessionKey: sourceKey,
+    state: "active",
+  });
+  const reclaim = vi.fn(async (_request: unknown, authorize?: () => void) => {
+    authorize?.();
+    authorityActive = false;
+    placement = recoveryWorkerPlacement({
+      sessionId: sourceSessionId,
+      sessionKey: sourceKey,
+      state: "reclaimed",
+    });
+    return placement;
+  });
+
+  const recovered = await directSessionReq(
+    "sessions.recover",
+    { agentId: "main", key: sourceKey },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: { kind: "agentRuntime", agentId: "main", sessionKey: sourceKey },
+        },
+      } as never,
+      context: {
+        validateAgentRuntimeApprovalAuthority: () => authorityActive,
+        workerSessionPlacementService: recoveryPlacementReader(() => placement),
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+      },
+    },
+  );
+
+  expect(recovered).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "agent runtime authority is no longer active" },
+  });
+  expect(reclaim).toHaveBeenCalledOnce();
+  const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+  expect(source?.archivedAt).toBeUndefined();
+  expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
 });
 
 test("sessions.recover rejects continuation launch after runtime authority closes", async () => {

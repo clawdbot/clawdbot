@@ -158,9 +158,34 @@ class ScopeUpgradeSurface extends OpenClawLightDomContentsElement {
       this.reopenAfterClose = true;
       return;
     }
+    void this.openDetails();
+  };
+
+  private async openDetails(): Promise<void> {
+    if (!this.props?.mobile) {
+      await this.ensureDetailsPopoverAnchored();
+    }
     this.detailsOpen = true;
     this.requestUpdate();
-  };
+  }
+
+  private async ensureDetailsPopoverAnchored(): Promise<void> {
+    const popover = this.querySelector<
+      HTMLElement & { anchor?: Element | null; for?: string; updateComplete?: Promise<unknown> }
+    >("wa-popover.scope-upgrade-details-popover");
+    if (!popover || popover.anchor?.isConnected) {
+      return;
+    }
+    // wa-popover resolves `for` only when the property changes and never
+    // re-resolves a missing or replaced anchor. The trigger with this id can
+    // render after the popover's first update (the header trigger ships with
+    // the lazy chat chunk), which would leave the opened popover permanently
+    // invisible. Re-arm the watcher so it re-runs the id lookup now.
+    popover.for = "";
+    await popover.updateComplete;
+    popover.for = SCOPE_UPGRADE_TRIGGER_ID;
+    await popover.updateComplete;
+  }
 
   private readonly showDetailsFromTrigger = (event: Event) => {
     if (!this.props?.mobile) {

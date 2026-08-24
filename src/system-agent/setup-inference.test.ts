@@ -1289,14 +1289,13 @@ describe("detectSetupInference", () => {
     expect(probeLocalCommand).not.toHaveBeenCalledWith("agy");
   });
 
-  it("keeps lower-version capability-compatible CLI wrappers available for activation", async () => {
+  it("preserves Agent SDK runtime guidance for an available Claude CLI", async () => {
     vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
       {
         kind: "claude-cli",
         modelRef: "claude-cli/claude-opus-5",
         label: "Claude Code",
-        detail:
-          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime.",
+        detail: "logged in; Claude Agent SDK uses the installed Claude Code executable.",
         credentials: true,
       },
     ]);
@@ -1310,8 +1309,7 @@ describe("detectSetupInference", () => {
       {
         brandId: "claude",
         credentials: true,
-        detail:
-          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime.",
+        detail: "logged in; Claude Agent SDK uses the installed Claude Code executable.",
         kind: "claude-cli",
         label: "Claude Code",
         modelRef: "claude-cli/claude-opus-5",

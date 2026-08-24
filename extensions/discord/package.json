@@ -10,12 +10,12 @@
   "dependencies": {
     "@discord/embedded-app-sdk": "2.5.0",
     "@discordjs/voice": "0.19.2",
-    "discord-api-types": "0.38.52",
+    "discord-api-types": "0.38.53",
     "libopus-wasm": "0.2.0",
     "mdast-util-from-markdown": "2.0.3",
-    "typebox": "1.3.6",
-    "undici": "8.9.0",
-    "ws": "8.21.1",
+    "typebox": "1.3.14",
+    "undici": "8.10.0",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {

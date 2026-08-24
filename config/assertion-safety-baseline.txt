@@ -1747,8 +1747,6 @@ src/agents/cli-runner/bundle-mcp-codex.ts	5
 src/agents/cli-runner/bundle-mcp-gemini.ts	4
 src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	6
-src/agents/cli-runner/claude-live-registry.ts	1
-src/agents/cli-runner/claude-live-session.ts	1
 src/agents/cli-runner/cli-backend-auth-policy.ts	1
 src/agents/cli-runner/cli-run-settlement.ts	1
 src/agents/cli-runner/cli-run-transcript.ts	3
@@ -3091,7 +3089,7 @@ src/gateway/session-companion-rpc.ts	3
 src/gateway/session-history-state.ts	3
 src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-observer-rpc.ts	1
-src/gateway/session-recovery-service.ts	3
+src/gateway/session-recovery-service.ts	2
 src/gateway/session-sharing-target-input.ts	2
 src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
@@ -3391,7 +3389,7 @@ src/logging/diagnostic.ts	2
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	14
+src/logging/logger.ts	13
 src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1

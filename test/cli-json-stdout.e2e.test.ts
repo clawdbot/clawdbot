@@ -54,6 +54,183 @@ async function seedTrajectorySession(tempHome: string, sessionKey: string) {
 describe("cli json stdout contract", () => {
   it.each([
     {
+      name: "bare report with parent JSON",
+      args: ["hooks", "--agent", "retired", "--json"],
+    },
+    {
+      name: "list report with leaf JSON",
+      args: ["hooks", "list", "--agent", "retired", "--json"],
+    },
+    {
+      name: "list report with parent JSON",
+      args: ["hooks", "--json", "list", "--agent", "retired"],
+    },
+    {
+      name: "info report with leaf JSON",
+      args: ["hooks", "info", "demo", "--agent", "retired", "--json"],
+    },
+    {
+      name: "info report with parent JSON",
+      args: ["hooks", "--json", "info", "demo", "--agent", "retired"],
+    },
+    {
+      name: "check report with leaf JSON",
+      args: ["hooks", "check", "--agent", "retired", "--json"],
+    },
+    {
+      name: "check report with parent JSON",
+      args: ["hooks", "--json", "check", "--agent", "retired"],
+    },
+    {
+      name: "blank leaf agent",
+      args: ["hooks", "list", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "blank parent agent",
+      args: ["hooks", "--agent", "", "--json", "list"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "human report",
+      args: ["hooks", "list", "--agent", "retired"],
+      human: true,
+    },
+    {
+      name: "forced Commander report",
+      args: ["hooks", "list", "--agent", "retired", "--json"],
+      commander: true,
+    },
+    {
+      name: "dual-TTY report",
+      args: ["hooks", "check", "--agent", "retired", "--json"],
+      tty: true,
+    },
+    {
+      name: "injected local report failure",
+      args: ["hooks", "list", "--json"],
+      message: "injected hook report loading failure",
+      reportFailure: true,
+    },
+    {
+      name: "missing hook with leaf JSON",
+      args: ["hooks", "info", "missing-hook", "--json"],
+      message: 'Hook "missing-hook" not found.',
+      missingHook: true,
+    },
+    {
+      name: "missing hook with parent JSON",
+      args: ["hooks", "--json", "info", "missing-hook"],
+      message: 'Hook "missing-hook" not found.',
+      missingHook: true,
+    },
+    {
+      name: "missing hook through dual-TTY finalization",
+      args: ["hooks", "info", "missing-hook", "--json"],
+      message: 'Hook "missing-hook" not found.',
+      missingHook: true,
+      tty: true,
+    },
+    {
+      name: "missing hook in human mode",
+      args: ["hooks", "info", "missing-hook"],
+      message: 'Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
+      missingHook: true,
+      human: true,
+    },
+  ])("renders hooks read failures through their canonical owner for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const stateDir = path.join(tempHome, "isolated-state");
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const workspaceHooksDir = path.join(stateDir, "workspace", "hooks");
+        if ("reportFailure" in testCase) {
+          await fs.mkdir(workspaceHooksDir, { recursive: true });
+        }
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+            'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+            ...("reportFailure" in testCase
+              ? [
+                  'import fs from "node:fs";',
+                  "const originalReadDir = fs.readdirSync;",
+                  `fs.readdirSync = (target, ...args) => { if (String(target) === ${JSON.stringify(workspaceHooksDir)}) { throw new Error("injected hook report loading failure"); } return originalReadDir(target, ...args); };`,
+                ]
+              : []),
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_GATEWAY_PORT: "29791",
+          OPENCLAW_STATE_DIR: stateDir,
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+        });
+        const message =
+          testCase.message ??
+          'Unknown agent id "retired". Run openclaw agents list to see configured agents.';
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        if ("human" in testCase) {
+          if ("missingHook" in testCase) {
+            expect(result.stdout.trim()).toBe(message);
+          } else {
+            expect(result.stdout).toBe("");
+            expect(result.stderr).toContain(`Error: ${message}`);
+          }
+        } else {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message },
+            ...("missingHook" in testCase ? { hook: "missing-hook" } : {}),
+          });
+          if (!("missingHook" in testCase)) {
+            expect(result.stderr).toContain(message);
+          }
+        }
+        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-hooks-json-failure-e2e-" },
+    );
+  });
+
+  it("preserves successful hooks report JSON and offline discovery", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, ["hooks", "--json", "list"], {
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_GATEWAY_PORT: "1",
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual(
+          expect.objectContaining({ hooks: expect.any(Array) }),
+        );
+        expect(result.stderr).toBe("");
+      },
+      { prefix: "openclaw-hooks-json-success-e2e-" },
+    );
+  });
+
+  it.each([
+    {
       name: "add without an interactive terminal in human mode",
       args: ["agents", "add", "work"],
       message:
@@ -1647,6 +1824,31 @@ describe("cli json stdout contract", () => {
       name: "the default report before its agent flag",
       args: ["skills", "--json", "--agent", ""],
       message: "--agent must not be blank",
+    },
+    {
+      name: "curator mutation",
+      args: ["skills", "curator", "pin", "missing-skill", "--json"],
+      message: "Curated skill not found: missing-skill",
+    },
+    {
+      name: "curator mutation with parent JSON",
+      args: ["skills", "curator", "--json", "pin", "missing-skill"],
+      message: "Curated skill not found: missing-skill",
+    },
+    {
+      name: "workshop workspace validation with parent JSON",
+      args: ["skills", "--json", "workshop", "list", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "workshop mutation",
+      args: ["skills", "workshop", "reject", "missing-proposal", "--json"],
+      message: "Skill proposal not found: missing-proposal",
+    },
+    {
+      name: "workshop inspection",
+      args: ["skills", "workshop", "inspect", "missing-proposal", "--json"],
+      message: "Skill proposal not found: missing-proposal",
     },
   ])("returns one canonical JSON document when skills $name fails", async (testCase) => {
     await withTempHome(

@@ -108,7 +108,7 @@ describe("agent command registration", () => {
     return call;
   }
 
-  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+  it("keeps agent help aligned with supported thinking levels and auth sources", () => {
     const program = new Command();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     const agent = program.commands.find((command) => command.name() === "agent");
@@ -119,6 +119,9 @@ describe("agent command registration", () => {
     );
     expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
       "ultra",
+    );
+    expect(agent?.options.find((option) => option.long === "--local")?.description).toContain(
+      "configured provider credentials or local CLI logins",
     );
   });
 

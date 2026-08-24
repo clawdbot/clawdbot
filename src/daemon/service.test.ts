@@ -186,8 +186,10 @@ describe("readGatewayServiceState", () => {
   });
 
   it("preserves runtime probe failures as an explicit unknown state", async () => {
+    const readCommand = vi.fn(async () => null);
     const service = createService({
       isLoaded: vi.fn(async () => true),
+      readCommand,
       readRuntime: vi.fn(async () => {
         throw new Error("systemctl show timed out");
       }),
@@ -195,6 +197,7 @@ describe("readGatewayServiceState", () => {
 
     const state = await readGatewayServiceState(service, { timeoutMs: 100 });
 
+    expect(readCommand).toHaveBeenCalledWith(process.env, { timeoutMs: 100 });
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
       status: "unknown",

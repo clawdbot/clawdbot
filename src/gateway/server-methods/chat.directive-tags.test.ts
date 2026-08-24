@@ -555,9 +555,10 @@ vi.mock("../../plugins/hook-runner-global.js", () => {
 });
 
 vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
-  const { resolveTerminalAssistantTranscriptRunId } =
+  const { attachSessionTranscriptRunId, resolveTerminalAssistantTranscriptRunId } =
     await importOriginal<typeof import("../../sessions/transcript-events.js")>();
   return {
+    attachSessionTranscriptRunId,
     resolveTerminalAssistantTranscriptRunId,
     emitSessionTranscriptUpdate: vi.fn(
       (update: {

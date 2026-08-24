@@ -162,6 +162,10 @@ class OpenClawShell
     () =>
       hasStoredLazyShellAction() ? retryStaleChunkReloadWhenReachable() : Promise.resolve(false),
   );
+  // Gates lazy-action replay on the element being rendered; while the shell is
+  // still splash-gated, replaying would loop through the open handlers forever.
+  readonly queryRenderedElement = (tagName: string): Element | null =>
+    this.renderRoot?.querySelector(tagName) ?? null;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
   approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
@@ -655,6 +659,9 @@ class OpenClawShell
 
   override updated() {
     this.syncDocumentTitle();
+    // Render-gated pending lazy actions replay on the update that first
+    // renders their element, independent of further context updates.
+    this.restorePendingLazyAction();
     if (
       !customElements.get("openclaw-sidebar-update-card") &&
       this.querySelector("openclaw-sidebar-update-card")
