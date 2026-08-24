@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { SIDEBAR_SESSION_NAV_COLLAPSE_QUERY } from "../app-session-route-paths.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
@@ -49,7 +50,7 @@ suite.define(() => {
     }
   });
 
-  it("collapses the sidebar for a tab opened directly on one conversation, and Cmd+B restores it", async () => {
+  it("keeps the sidebar on an unmarked direct conversation link", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -61,6 +62,32 @@ suite.define(() => {
       await installMockGateway(page, sessionsMock());
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, RESEARCH_KEY));
       const sidebar = page.locator("openclaw-app-sidebar");
+      const composer = page.getByPlaceholder("Message OpenClaw");
+      await sidebar.waitFor({ state: "visible", timeout: 10_000 });
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("collapses the sidebar only for a session opened in a new tab, and Cmd+B restores it", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    try {
+      await installMockGateway(page, sessionsMock());
+      const sessionUrl = new URL(controlUiSessionUrl(suite.server.baseUrl, RESEARCH_KEY));
+      sessionUrl.searchParams.set(
+        SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name,
+        SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
+      );
+      await page.goto(sessionUrl.href);
+      const sidebar = page.locator("openclaw-app-sidebar");
       const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const composer = page.getByPlaceholder("Message OpenClaw");
       await expandButton.waitFor({ state: "visible", timeout: 10_000 });
@@ -69,12 +96,19 @@ suite.define(() => {
       // alone would pass against a blank page.
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebar.isVisible()).toBe(false);
+      expect(new URL(page.url()).searchParams.has(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
+        false,
+      );
       await captureUiProof(page, "per-tab-02-session-tab-collapsed.png");
 
       await page.keyboard.press("Meta+B");
       await sidebar.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebar.isVisible()).toBe(true);
       await captureUiProof(page, "per-tab-03-session-tab-after-cmd-b.png");
+
+      await page.reload();
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await sidebar.waitFor({ state: "visible", timeout: 10_000 });
     } finally {
       await context.close();
     }

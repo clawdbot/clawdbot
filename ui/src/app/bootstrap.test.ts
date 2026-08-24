@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { routeIdFromPath, type RouteId } from "../app-routes.ts";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../app-session-route-paths.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
@@ -21,6 +24,9 @@ import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
 // under a loaded CI runner that budget expires before startup reaches the step.
 const STARTUP_STEP_WAIT = { timeout: 15_000 };
+const SIDEBAR_COLLAPSE_SEARCH = new URLSearchParams({
+  [SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name]: SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
+}).toString();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -540,12 +546,32 @@ describe("normalizeInitialApplicationLocation", () => {
   });
 
   it.each([
-    { initialUrl: "/chat/research/conversation", navCollapsed: true },
-    { initialUrl: "/chat/research", navCollapsed: true },
-    { initialUrl: "/chat", navCollapsed: false },
-    { initialUrl: "/dashboard/research/conversation", navCollapsed: false },
-    { initialUrl: "/settings/appearance", navCollapsed: false },
-  ])("seeds sidebar visibility once from the initial $initialUrl conversation URL", (testCase) => {
+    {
+      initialUrl: `/chat/research/conversation?keep=yes&${SIDEBAR_COLLAPSE_SEARCH}#details`,
+      expectedUrl: "/chat/research/conversation?keep=yes#details",
+      navCollapsed: true,
+    },
+    {
+      initialUrl: `/chat/research?${SIDEBAR_COLLAPSE_SEARCH}`,
+      expectedUrl: "/chat/research",
+      navCollapsed: true,
+    },
+    {
+      initialUrl: `/chat?${SIDEBAR_COLLAPSE_SEARCH}`,
+      expectedUrl: "/chat",
+      navCollapsed: false,
+    },
+    {
+      initialUrl: `/dashboard/research/conversation?${SIDEBAR_COLLAPSE_SEARCH}`,
+      expectedUrl: "/dashboard/research/conversation",
+      navCollapsed: false,
+    },
+    {
+      initialUrl: "/settings/appearance",
+      expectedUrl: "/settings/appearance",
+      navCollapsed: false,
+    },
+  ])("seeds sidebar visibility once from explicit new-tab intent at $initialUrl", (testCase) => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     window.history.replaceState({}, "", testCase.initialUrl);
@@ -554,6 +580,25 @@ describe("normalizeInitialApplicationLocation", () => {
     try {
       runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
       expect(runtime.context.navigation.snapshot.navCollapsed).toBe(testCase.navCollapsed);
+      expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+        testCase.expectedUrl,
+      );
+    } finally {
+      runtime?.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
+  it("keeps the sidebar expanded for an unmarked chat-session deep link", () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    window.history.replaceState({}, "", "/chat/research/conversation");
+    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+
+    try {
+      runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+      expect(runtime.context.navigation.snapshot.navCollapsed).toBe(false);
     } finally {
       runtime?.stop();
       window.history.replaceState({}, "", previousUrl);

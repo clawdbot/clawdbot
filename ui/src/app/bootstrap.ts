@@ -15,7 +15,10 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { setSessionPathBuilder } from "../app-session-path-builder.ts";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -186,12 +189,10 @@ function createApplicationTheme(
 
 function createApplicationNavigationPreferences(
   initialSettings: UiSettings,
-  initialPathname: string,
-  basePath: string,
+  navCollapsed: boolean,
 ): ApplicationNavigationPreferences {
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    // Seed once from a single-conversation first-load URL; never reapply on SPA navigation or persist.
-    navCollapsed: sessionRefFromPath(initialPathname, basePath)?.namespace === "chat",
+    navCollapsed,
     navWidth: initialSettings.navWidth,
     sidebarEntries: initialSettings.sidebarEntries,
     pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
@@ -283,7 +284,17 @@ export function bootstrapApplication(
       saveSettings(startup.settings);
     }
   }
-  const applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  const startupSearchParams = new URLSearchParams(applicationLocation.search);
+  const hasSidebarCollapseIntent =
+    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
+    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
+  if (hasSidebarCollapseIntent) {
+    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
+    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
+    const search = startupSearchParams.toString();
+    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
+  }
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
@@ -383,8 +394,8 @@ export function bootstrapApplication(
   syncConfigWriteSuspension();
   const navigation = createApplicationNavigationPreferences(
     settings,
-    applicationLocation.pathname,
-    basePath,
+    hasSidebarCollapseIntent &&
+      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
   );
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();

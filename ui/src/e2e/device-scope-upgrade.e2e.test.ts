@@ -2,6 +2,7 @@ import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { SIDEBAR_SESSION_NAV_COLLAPSE_QUERY } from "../app-session-route-paths.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -505,7 +506,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
         operatorScopes: LIMITED_SCOPES,
       });
 
-      await page.goto(`${server.baseUrl}${collapsed ? "chat/main" : "chat"}`);
+      const chatUrl = new URL(collapsed ? "chat/main" : "chat", server.baseUrl);
+      if (collapsed) {
+        chatUrl.searchParams.set(
+          SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name,
+          SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
+        );
+      }
+      await page.goto(chatUrl.href);
       if (collapsed) {
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))

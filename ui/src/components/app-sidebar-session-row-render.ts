@@ -3,6 +3,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
+import { SIDEBAR_SESSION_NAV_COLLAPSE_QUERY } from "../app-session-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
@@ -274,6 +275,8 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  const querySeparator = session.href.includes("?") ? "&" : "?";
+  const sessionHref = `${session.href}${querySeparator}${SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name}=${SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value}`;
   // Always reserve the lead so every title shares the section-label text line.
   const row = html`
     <div
@@ -300,7 +303,7 @@ export function renderRecentSession(params: {
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
     >
       <a
-        href=${session.href}
+        href=${sessionHref}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}
