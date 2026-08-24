@@ -230,8 +230,6 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const stop = async () => {
     stopRequested = true;
     await closeIfListening();
-    // The limiter prune interval outlives a single stop/start cycle unless it is
-    // released here; callers own the timer lifecycle (dispose is idempotent).
     webhookAuthRateLimiter.dispose();
   };
 
