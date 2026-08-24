@@ -571,7 +571,7 @@ function renderSkeletonRows(columnCount: number) {
             : html`<td>
                 <span
                   class="session-skeleton ${columnIndex === 1 ? "session-skeleton--key" : ""}"
-                  style=${`animation-delay: ${rowIndex * 120}ms`}
+                  style=${`animation-delay: ${rowIndex * 60}ms`}
                 ></span>
               </td>`,
         )}

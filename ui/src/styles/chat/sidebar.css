@@ -51,7 +51,7 @@
   flex-direction: column;
   overflow: hidden;
   /* Smooth transition when sidebar opens/closes */
-  transition: flex 250ms ease-out;
+  transition: flex 180ms ease-out;
   flex: 1 1 0;
 }
 

@@ -1863,7 +1863,13 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
+    const skeletonRows = Array.from(container.querySelectorAll(".session-skeleton-row"));
+    expect(skeletonRows).toHaveLength(4);
+    expect(
+      skeletonRows.map(
+        (row) => row.querySelector<HTMLElement>(".session-skeleton")?.style.animationDelay,
+      ),
+    ).toEqual(["0ms", "60ms", "120ms", "180ms"]);
     expect(container.querySelector(".data-table-empty-cell")).toBeNull();
     expect(container.querySelector(".sessions-heading-facts")).toBeNull();
   });
