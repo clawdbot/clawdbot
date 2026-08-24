@@ -186,6 +186,7 @@ function readUiCss(): string {
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/composer-queue.css",
     "ui/src/styles/chat/text.css",
     "ui/src/styles/chat/grouped.css",
     "ui/src/styles/chat/tool-cards.css",

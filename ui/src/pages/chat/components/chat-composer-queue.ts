@@ -402,7 +402,7 @@ function renderChatQueueItem(
                   >${t("chat.queue.steer")}</span
                 >`
               : nothing}
-            ${stateLabel && !failed
+            ${stateLabel && (!failed || !item.sendError)
               ? html`<span
                   class="chat-queue__badge"
                   title=${ifDefined(reconnecting ? item.sendError : undefined)}

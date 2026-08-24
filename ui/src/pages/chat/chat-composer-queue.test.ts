@@ -432,6 +432,22 @@ describe("chat composer queue reordering", () => {
     expect(row?.querySelector(".chat-queue__error-text")?.textContent).toBe(
       `${sendState} diagnostic`,
     );
+    expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
+  });
+
+  it.each([
+    { sendState: "failed" as const, label: t("common.failed") },
+    { sendState: "unconfirmed" as const, label: t("chat.queue.states.needsReview") },
+  ])("keeps a $sendState row labeled without a diagnostic", ({ sendState, label }) => {
+    const container = renderQueue({
+      queue: [{ id: sendState, text: sendState, createdAt: 1, sendState }],
+      onQueueRemove: vi.fn(),
+    });
+
+    const row = container.querySelector(".chat-queue__item");
+    expect(row?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(label);
+    expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
+    expect(row?.querySelector(".chat-queue__error")).toBeNull();
   });
 
   it("keeps a row that already joined a run out of the reorder set", () => {
