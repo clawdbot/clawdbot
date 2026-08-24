@@ -4,7 +4,7 @@
     "onStartup": false
   },
   "name": "tokenjuice",
-  "description": "Compacts exec and bash tool results with tokenjuice reducers.",
+  "description": "Compacts exec and bash tool results for OpenClaw-embedded runs and OpenClaw dynamic tools in the Codex app-server harness. Native codex-rs bash/exec results are returned unchanged.",
   "catalog": { "featured": true, "order": 60 },
   "contracts": {
     "agentToolResultMiddleware": ["openclaw", "codex"]
