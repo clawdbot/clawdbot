@@ -320,6 +320,7 @@ export function handleToolExecutionStart(
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
+    lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
@@ -616,7 +617,10 @@ export function handleToolExecutionStart(
     }
   };
 
-  // Flush pending block replies to preserve message boundaries before tool execution.
+  // Only the outer provider tool owns the block-reply presentation boundary.
+  if (evt.lifecycleProvenance === "nested") {
+    return continueToolExecutionStart();
+  }
   let flushBlockReplyBufferResult: void | Promise<void>;
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();

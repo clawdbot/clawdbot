@@ -621,6 +621,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         args: toolParams.args,
         replaySafe: toolParams.replaySafe,
         hideFromChannelProgress: toolParams.hideFromChannelProgress,
+        lifecycleProvenance: "nested",
       } as never);
       let executionStarted = false;
       const onImplementationStart = () => {
