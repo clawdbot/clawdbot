@@ -106,6 +106,34 @@ type CompleteEmbeddedAttemptResultInput = {
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
 };
 
+/**
+ * Captures the settled transcript the tool-free finalizer needs when a settled
+ * post-tool turn dies on its final provider call. The consumer fails closed
+ * without this context, so the attempt-result owner has to supply it; the codex
+ * app-server harness already does the same for its own attempts.
+ */
+function resolveSettledTurnFinalizationContext(params: {
+  assistantTexts: readonly string[];
+  messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
+  terminalKind: string;
+}): EmbeddedRunAttemptResult["settledTurnFinalizationContext"] {
+  if (params.terminalKind !== "failed") {
+    return undefined;
+  }
+  // A turn that already produced visible text has nothing to finalize, and a
+  // turn without a tool result never settled one.
+  if (!params.assistantTexts.every((text) => !text.trim())) {
+    return undefined;
+  }
+  if (!params.messagesSnapshot.some((message) => message.role === "toolResult")) {
+    return undefined;
+  }
+  return {
+    source: "openclaw-transcript",
+    messages: Object.freeze([...params.messagesSnapshot]),
+  };
+}
+
 function normalizeEmbeddedAttemptToolMetas(
   entries: EmbeddedAttemptSubscription["toolMetas"],
 ): EmbeddedRunAttemptResult["toolMetas"] {
@@ -393,8 +421,14 @@ export function completeEmbeddedAttemptResult(
       terminal: state.terminal,
     },
   });
+  const settledTurnFinalizationContext = resolveSettledTurnFinalizationContext({
+    assistantTexts,
+    messagesSnapshot: state.messagesSnapshot,
+    terminalKind: state.terminal.kind,
+  });
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,
+    ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,
     currentAttemptReplayMetadata,
     codeModeReconciliationCandidate: state.codeModeReconciliationCandidate,
