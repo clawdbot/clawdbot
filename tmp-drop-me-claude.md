@@ -115,3 +115,32 @@ Preserved upstream's `operatorRoleActor: { kind: "system" }` contract at the
 canonical reviewed `wakeSubagentRunAfterDescendants` boundary by extending its
 existing successful-wake test. Removed only the stale delivery-test import and
 duplicate old call shape; no production API or behavior changed.
+
+The complete 26-path intersection set produced 2,166 passing assertions, 12
+upstream-class QA Lab failures, and 4 skips. The corrected descendant-wake owner
+added 5/5 passing sibling assertions. The announce-format E2E owner passed
+89/89 with the repository E2E config after removing only its generic global
+dist-build setup in an untracked temporary config; that setup failed before
+collection because the deliberately unreconciled worktree dependency link
+lacks the current `TuiMainScreen` export. The temporary config was deleted.
+
+## §2.7 — 2026-08-24T16:49Z — frozen-wall and mixed disposition
+
+Gate 2.7 at `7af720b791fe780476ce9f279a1e7807e283c3c9` examined 942
+reviewer-visible paths: 639 `GENUINE`, 300 `SAFE-NEW`, 3 `MIXED-CLOBBER`, and
+zero `FROZEN-STALE`. All three mixed rows were walked line-by-line:
+
+- `subagent-announce-delivery.test.ts` (22 lines): only upstream's obsolete
+  `runDescendantWake` import/test call shape. The role-policy assertion is now
+  retained at the canonical reviewed wake-owner test.
+- `compact.hooks.test.ts` (14 lines): the known overlapping upstream
+  permission-policy table. Gate 2 requires exact reviewed bytes; upstream's
+  production fix remains independently covered by
+  `run.session-permissions.test.ts` and the Codex permission suites.
+- `embedded-agent-subscribe.ts` (1 line): upstream's
+  `lifecycleProvenance: "nested"` moved with the reviewed lifecycle extraction
+  into `embedded-agent-subscribe.handlers.tools.ts`, its canonical owner.
+
+No mixed row is an upstream-only stale blob, so no restoration is warranted.
+Gate 2 reran clean at the same SHA: 40 invariants, 0 failures, 2 exact-upstream
+projections, and 3 tombstones.
