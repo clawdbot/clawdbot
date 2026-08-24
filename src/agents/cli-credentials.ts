@@ -18,6 +18,7 @@ import {
   CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS,
   hasClaudeCliKeychainItem,
   readClaudeCliKeychainPayload,
+  readClaudeCliKeychainPayloadAsync,
 } from "./cli-credentials.claude-keychain.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
@@ -511,57 +512,135 @@ function withClaudeAccountEmail(
   return email ? { ...cliLogin, email } : cliLogin;
 }
 
-/** Reads Claude CLI credentials in Claude Code's credential precedence order. */
-function readClaudeCliCredentials(options?: {
+type ClaudeCliCredentialSourceOptions = {
   allowKeychainPrompt?: boolean;
   tryKeychainWithoutPrompt?: boolean;
   onStoredCredentialUnreadable?: () => void;
   platform?: NodeJS.Platform;
   homeDir?: string;
   execSync?: ExecSyncFn;
-}): ClaudeCliCredential | null {
+};
+
+function shouldReadClaudeCliKeychain(
+  options: ClaudeCliCredentialSourceOptions | undefined,
+  platform: NodeJS.Platform,
+): boolean {
+  return (
+    platform === "darwin" &&
+    (options?.allowKeychainPrompt !== false || options?.tryKeychainWithoutPrompt === true)
+  );
+}
+
+function resolveClaudeCliKeychainTimeoutMs(
+  options: ClaudeCliCredentialSourceOptions | undefined,
+): number | undefined {
+  return options?.tryKeychainWithoutPrompt ? CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS : undefined;
+}
+
+function claudeCliCredentialFromKeychainPayload(
+  payload: Record<string, unknown> | null,
+  homeDir: string | undefined,
+): ClaudeCliCredential | null {
+  const keychainCreds = parseClaudeCliOauthCredential(payload?.claudeAiOauth);
+  if (!keychainCreds) {
+    return null;
+  }
+  log.info("read anthropic credentials from claude cli keychain", {
+    type: keychainCreds.type,
+  });
+  return withClaudeAccountEmail(keychainCreds, homeDir);
+}
+
+function readClaudeCliFileCredential(homeDir: string | undefined): ClaudeCliCredential | null {
+  const raw = loadJsonFileThroughSymlink(resolveClaudeCliCredentialsPath(homeDir));
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  return withClaudeAccountEmail(
+    parseClaudeCliOauthCredential((raw as Record<string, unknown>).claudeAiOauth),
+    homeDir,
+  );
+}
+
+// The Keychain existence probe is a second synchronous `security` invocation
+// with its own timeout, so it runs only when a caller consumes the signal.
+// Without a listener that probe bought nothing and cost a process spawn.
+function noteUnreadableClaudeCliCredential(
+  options: ClaudeCliCredentialSourceOptions | undefined,
+  platform: NodeJS.Platform,
+): void {
+  const onStoredCredentialUnreadable = options?.onStoredCredentialUnreadable;
+  if (!options?.tryKeychainWithoutPrompt || !onStoredCredentialUnreadable) {
+    return;
+  }
+  if (
+    fs.existsSync(resolveClaudeCliCredentialsPath(options.homeDir)) ||
+    (platform === "darwin" && hasClaudeCliKeychainItem(options.execSync))
+  ) {
+    onStoredCredentialUnreadable();
+  }
+}
+
+/** Reads Claude CLI credentials in Claude Code's credential precedence order. */
+function readClaudeCliCredentials(
+  options?: ClaudeCliCredentialSourceOptions,
+): ClaudeCliCredential | null {
   const helperAuth = readClaudeCliUserApiKeyHelperCredential(options?.homeDir);
   if (helperAuth) {
     return helperAuth;
   }
 
   const platform = options?.platform ?? process.platform;
-  const tryKeychain =
-    platform === "darwin" &&
-    (options?.allowKeychainPrompt !== false || options?.tryKeychainWithoutPrompt === true);
-  if (tryKeychain) {
-    const keychainPayload = readClaudeCliKeychainPayload(
-      options?.execSync,
-      options?.tryKeychainWithoutPrompt ? CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS : undefined,
+  if (shouldReadClaudeCliKeychain(options, platform)) {
+    const keychainCredential = claudeCliCredentialFromKeychainPayload(
+      readClaudeCliKeychainPayload(options?.execSync, resolveClaudeCliKeychainTimeoutMs(options)),
+      options?.homeDir,
     );
-    const keychainCreds = parseClaudeCliOauthCredential(keychainPayload?.claudeAiOauth);
-    if (keychainCreds) {
-      log.info("read anthropic credentials from claude cli keychain", {
-        type: keychainCreds.type,
-      });
-      return withClaudeAccountEmail(keychainCreds, options?.homeDir);
+    if (keychainCredential) {
+      return keychainCredential;
     }
   }
 
-  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
-  const raw = loadJsonFileThroughSymlink(credPath);
-  const fileCredential =
-    raw && typeof raw === "object"
-      ? withClaudeAccountEmail(
-          parseClaudeCliOauthCredential((raw as Record<string, unknown>).claudeAiOauth),
-          options?.homeDir,
-        )
-      : null;
+  const fileCredential = readClaudeCliFileCredential(options?.homeDir);
   if (fileCredential) {
     return fileCredential;
   }
-  if (
-    options?.tryKeychainWithoutPrompt &&
-    (fs.existsSync(credPath) ||
-      (platform === "darwin" && hasClaudeCliKeychainItem(options.execSync)))
-  ) {
-    options.onStoredCredentialUnreadable?.();
+  noteUnreadableClaudeCliCredential(options, platform);
+  return null;
+}
+
+/**
+ * Uncached, non-blocking read for callers that run inside a request.
+ *
+ * Precedence matches the synchronous reader, but the macOS Keychain lookup is
+ * spawned asynchronously so a locked Keychain cannot stall the event loop.
+ * Caching is deliberately absent: the Keychain exposes no mtime to fingerprint,
+ * so a cached value could not be invalidated correctly.
+ */
+export async function readClaudeCliCredentialsUncachedAsync(
+  options?: ClaudeCliCredentialSourceOptions,
+): Promise<ClaudeCliCredential | null> {
+  const helperAuth = readClaudeCliUserApiKeyHelperCredential(options?.homeDir);
+  if (helperAuth) {
+    return helperAuth;
   }
+
+  const platform = options?.platform ?? process.platform;
+  if (shouldReadClaudeCliKeychain(options, platform)) {
+    const keychainCredential = claudeCliCredentialFromKeychainPayload(
+      await readClaudeCliKeychainPayloadAsync(resolveClaudeCliKeychainTimeoutMs(options)),
+      options?.homeDir,
+    );
+    if (keychainCredential) {
+      return keychainCredential;
+    }
+  }
+
+  const fileCredential = readClaudeCliFileCredential(options?.homeDir);
+  if (fileCredential) {
+    return fileCredential;
+  }
+  noteUnreadableClaudeCliCredential(options, platform);
   return null;
 }
 

@@ -683,7 +683,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
       const externalCliOwnedProfileIds = new Set([
         ...externalCliProfileIds,
-        ...listLiveExternalCliOwnedProfileIds(store),
+        ...(await listLiveExternalCliOwnedProfileIds(store)),
       ]);
       const logoutProfileIds = new Set(
         Object.entries(store.profiles)

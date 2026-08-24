@@ -1,21 +1,58 @@
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
+import { promisify } from "node:util";
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 export const CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS = 2_000;
+const CLAUDE_CLI_KEYCHAIN_DEFAULT_TIMEOUT_MS = 5_000;
 
 type ExecSyncFn = typeof execSync;
 
+type ClaudeCliKeychainExecFileFn = (
+  file: string,
+  args: readonly string[],
+  options: { encoding: "utf8"; timeout: number },
+) => Promise<{ stdout: string }>;
+
+const execFileAsync = promisify(execFile) as unknown as ClaudeCliKeychainExecFileFn;
+
+function parseClaudeCliKeychainPayload(raw: string): Record<string, unknown> | null {
+  const parsed: unknown = JSON.parse(raw.trim());
+  return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+}
+
 export function readClaudeCliKeychainPayload(
   execSyncImpl: ExecSyncFn = execSync,
-  timeout = 5000,
+  timeout = CLAUDE_CLI_KEYCHAIN_DEFAULT_TIMEOUT_MS,
 ): Record<string, unknown> | null {
   try {
     const result = execSyncImpl(
       `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w`,
       { encoding: "utf8", timeout, stdio: ["pipe", "pipe", "pipe"] },
     );
-    const parsed = JSON.parse(result.trim());
-    return parsed && typeof parsed === "object" ? parsed : null;
+    return parseClaudeCliKeychainPayload(result);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Async twin of readClaudeCliKeychainPayload for callers on a request path.
+ *
+ * `security` blocks for the full timeout when the Keychain is locked, which is
+ * the steady state for a headless macOS host, so a request-path caller must not
+ * reach the synchronous reader and stall the event loop.
+ */
+export async function readClaudeCliKeychainPayloadAsync(
+  timeout = CLAUDE_CLI_KEYCHAIN_DEFAULT_TIMEOUT_MS,
+  execFileImpl: ClaudeCliKeychainExecFileFn = execFileAsync,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const { stdout } = await execFileImpl(
+      "security",
+      ["find-generic-password", "-s", CLAUDE_CLI_KEYCHAIN_SERVICE, "-w"],
+      { encoding: "utf8", timeout },
+    );
+    return parseClaudeCliKeychainPayload(stdout);
   } catch {
     return null;
   }

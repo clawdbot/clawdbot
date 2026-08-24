@@ -6,6 +6,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   readClaudeCliCredentialsCached,
+  readClaudeCliCredentialsUncachedAsync,
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
@@ -21,6 +22,7 @@ import { listExternalCliProfileMetadataIds } from "./external-cli-profile-metada
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
+  hasMatchingOAuthIdentity,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
@@ -49,8 +51,10 @@ type ExternalCliSyncProvider = {
   // Uncached, non-prompting read used to prove refresh ownership. It must reach
   // every backend the CLI can store credentials in, including the macOS
   // Keychain, and must not reuse a cached value whose freshness is tracked by
-  // file mtime alone. Only providers that define it can own a persisted slot.
-  readCurrentCredentials?: () => OAuthCredential | null;
+  // file mtime alone. It is asynchronous because status callers run inside a
+  // request and a Keychain lookup can block for seconds when the Keychain is
+  // locked. Only providers that define it can own a persisted slot.
+  readCurrentCredentials?: () => Promise<OAuthCredential | null>;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
@@ -103,9 +107,8 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
       }
       return { ...credential, provider: "claude-cli" };
     },
-    readCurrentCredentials: () => {
-      const credential = readClaudeCliCredentialsCached({
-        ttlMs: 0,
+    readCurrentCredentials: async () => {
+      const credential = await readClaudeCliCredentialsUncachedAsync({
         allowKeychainPrompt: false,
         tryKeychainWithoutPrompt: true,
       });
@@ -361,10 +364,10 @@ function listScopedExternalCliProfileIds(params: {
  * be detected without a network call; that matches existing behavior for a CLI
  * credential inside its validity window.
  */
-function isLiveExternalCliRefreshOwner(params: {
+async function isLiveExternalCliRefreshOwner(params: {
   profileId: string;
   credential: AuthProfileCredential | undefined;
-}): boolean {
+}): Promise<boolean> {
   const { credential } = params;
   if (credential?.type !== "oauth") {
     return false;
@@ -381,13 +384,21 @@ function isLiveExternalCliRefreshOwner(params: {
   if (hasUsableOAuthCredential(credential)) {
     return false;
   }
-  const live = providerConfig.readCurrentCredentials();
+  const live = await providerConfig.readCurrentCredentials();
   if (live?.type !== "oauth" || !live.refresh?.trim()) {
     return false;
   }
-  // Refresh material, not the access token, is what carries the credential
-  // forward. Matching access alone would leave the persisted refresh token
-  // unproven while suppressing an expired-credential warning.
+  // Refresh tokens rotate, so token equality alone expires as proof: once the
+  // CLI rotates, a still-owned slot would start warning again. Identity is the
+  // durable signal, and it is the same rule the sync layer already trusts to
+  // decide a CLI credential may be imported over an existing profile.
+  if (hasMatchingOAuthIdentity(credential, live)) {
+    return true;
+  }
+  // With identity absent on either side, matching refresh material is the only
+  // remaining proof. Access-token equality is deliberately not accepted: it
+  // would leave the persisted refresh token unproven while suppressing an
+  // expired-credential warning.
   return live.refresh === credential.refresh;
 }
 
@@ -397,12 +408,20 @@ function isLiveExternalCliRefreshOwner(params: {
  * Scoped to the canonical built-in CLI slot registry, so a user-owned profile
  * or another CLI provider keeps its expiry visible.
  */
-export function listLiveExternalCliOwnedProfileIds(store: AuthProfileStore): string[] {
-  return listExternalCliProfileMetadataIds()
-    .filter((profileId) =>
-      isLiveExternalCliRefreshOwner({ profileId, credential: store.profiles[profileId] }),
-    )
-    .toSorted();
+export async function listLiveExternalCliOwnedProfileIds(
+  store: AuthProfileStore,
+): Promise<string[]> {
+  const owned = await Promise.all(
+    listExternalCliProfileMetadataIds().map(async (profileId) =>
+      (await isLiveExternalCliRefreshOwner({
+        profileId,
+        credential: store.profiles[profileId],
+      }))
+        ? profileId
+        : null,
+    ),
+  );
+  return owned.filter((profileId) => profileId !== null).toSorted();
 }
 
 function backfillExternalCliIdentity(params: {

@@ -58,6 +58,9 @@ const mocks = vi.hoisted(() => ({
   ),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
   readClaudeCliCredentialsCached: vi.fn((): Record<string, unknown> | null => null),
+  readClaudeCliCredentialsUncachedAsync: vi.fn(
+    async (): Promise<Record<string, unknown> | null> => null,
+  ),
   readCodexCliCredentialsCached: vi.fn((): Record<string, unknown> | null => null),
   readMiniMaxCliCredentialsCached: vi.fn((): Record<string, unknown> | null => null),
   listProviderUsagePluginDescriptors: vi.fn(() => [
@@ -123,6 +126,7 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
 // hermetic so tests never consult a real developer or CI credential store.
 vi.mock("../../agents/cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: mocks.readClaudeCliCredentialsCached,
+  readClaudeCliCredentialsUncachedAsync: mocks.readClaudeCliCredentialsUncachedAsync,
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached: mocks.readMiniMaxCliCredentialsCached,
 }));
@@ -296,6 +300,7 @@ function resetAuthStatusMocks(): void {
   );
   mocks.resolveDefaultAgentId.mockReturnValue("main");
   mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
+  mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue(null);
   mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   mocks.readMiniMaxCliCredentialsCached.mockReturnValue(null);
   setPreparedAuthStore({ version: 1, profiles: {} });
@@ -731,7 +736,7 @@ describe("models.authStatus", () => {
       label: profileId,
     } satisfies AuthHealthSummary["profiles"][number];
 
-    function setPersistedClaudeCliStore(): void {
+    function setPersistedClaudeCliStore(identity: { email?: string } = {}): void {
       // No runtimeExternalCliProfileIds: after a gateway restart the profile is
       // loaded from the durable store with no runtime provenance attached.
       setPreparedAuthStore({
@@ -743,6 +748,7 @@ describe("models.authStatus", () => {
             access: "idle-access",
             refresh: "cli-owned-refresh",
             expires: 1,
+            ...identity,
           } satisfies AuthProfileStore["profiles"][string],
         },
       });
@@ -765,7 +771,7 @@ describe("models.authStatus", () => {
     it("reports signed in when the live CLI still holds the same login", async () => {
       // An idle Claude CLI access token expires long before its refresh token;
       // the CLI store still holds that same, not-yet-rotated login.
-      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue({
         type: "oauth",
         provider: "anthropic",
         access: "idle-access",
@@ -781,12 +787,14 @@ describe("models.authStatus", () => {
       expect(provider?.profiles[0]).toMatchObject({ profileId, status: "expired" });
     });
 
-    it("reads the CLI credential fresh and across every storage backend", async () => {
+    it("reads the CLI credential fresh, everywhere it is stored, without blocking", async () => {
       // macOS keeps the Claude CLI login in the Keychain rather than a file, and
       // the cached reader tracks freshness by file mtime only. Skipping the
       // Keychain leaves those logins false-expired, and reusing a cached value
-      // can report a logged-out CLI as healthy for the length of the TTL.
-      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      // can report a logged-out CLI as healthy for the length of the TTL. The
+      // read must also stay off the synchronous path: this runs inside a
+      // request, and a locked Keychain blocks `security` for its full timeout.
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue({
         type: "oauth",
         provider: "anthropic",
         access: "idle-access",
@@ -797,13 +805,14 @@ describe("models.authStatus", () => {
 
       await firstAuthStatusProvider();
 
-      expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
-        expect.objectContaining({ ttlMs: 0, tryKeychainWithoutPrompt: true }),
+      expect(mocks.readClaudeCliCredentialsUncachedAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ allowKeychainPrompt: false, tryKeychainWithoutPrompt: true }),
       );
+      expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
     });
 
     it("keeps the re-login warning when the CLI is logged out", async () => {
-      mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue(null);
       setPersistedClaudeCliStore();
 
       const provider = await firstAuthStatusProvider();
@@ -812,7 +821,7 @@ describe("models.authStatus", () => {
     });
 
     it("keeps the re-login warning when the CLI holds another account", async () => {
-      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue({
         type: "oauth",
         provider: "anthropic",
         access: "other-account-access",
@@ -829,7 +838,7 @@ describe("models.authStatus", () => {
     it("keeps the re-login warning when only the access token matches", async () => {
       // A matching access token does not prove the persisted refresh token is
       // still the one the CLI rotates, so it cannot establish refresh ownership.
-      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue({
         type: "oauth",
         provider: "anthropic",
         access: "idle-access",
@@ -843,8 +852,45 @@ describe("models.authStatus", () => {
       expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
     });
 
+    it("stays signed in after the CLI rotates its refresh token", async () => {
+      // Refresh tokens rotate on the CLI's own schedule. Account identity still
+      // proves the persisted slot and the live CLI store describe one login, so
+      // a rotation must not resurrect the re-login warning a rotation later.
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue({
+        type: "oauth",
+        provider: "anthropic",
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        email: "Operator@Example.com",
+        expires: 1,
+      });
+      setPersistedClaudeCliStore({ email: "operator@example.com" });
+
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "ok" });
+    });
+
+    it("keeps the re-login warning when a rotated CLI login is another account", async () => {
+      // Identity is what makes rotation survivable, so it has to be the thing
+      // that fails when the account changes underneath a rotated token.
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue({
+        type: "oauth",
+        provider: "anthropic",
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        email: "someone-else@example.com",
+        expires: 1,
+      });
+      setPersistedClaudeCliStore({ email: "operator@example.com" });
+
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
+    });
+
     it("keeps the re-login warning when the CLI has no refresh material", async () => {
-      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      mocks.readClaudeCliCredentialsUncachedAsync.mockResolvedValue({
         type: "oauth",
         provider: "anthropic",
         access: "idle-access",
