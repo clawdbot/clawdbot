@@ -140,10 +140,19 @@ async function cancelQueuedSteeringMessage(
     return false;
   }
   const message = queuedMessages[queueIndex];
-  if (!message || !retireQueuedUserMessage(message as AgentMessage)) {
+  if (!message) {
     return false;
   }
   queuedMessages.splice(queueIndex, 1);
+  try {
+    if (!retireQueuedUserMessage(message as AgentMessage)) {
+      log.warn("failed to retire queued steering display entry during cancellation");
+    }
+  } catch (error) {
+    // Runtime ownership is already retired; a display cleanup failure must not
+    // leave the same user turn eligible for both the old queue and its replay.
+    log.warn(`failed to retire queued steering display entry: ${String(error)}`);
+  }
   return true;
 }
 
@@ -197,10 +206,15 @@ async function steerAndWaitForTranscriptCommit(
       resolve();
     };
     const rejectAfterCancellation = (message: string, allowReplay = false) => {
+      acceptanceOpen = false;
+      const wasAccepted = accepted;
+      if (!wasAccepted) {
+        reportAcceptance(false);
+      }
       // Cancellation is best-effort but must finish before rejecting so callers
       // do not return while a stale queued message can leak into the next turn.
       cancellation ??= cancelQueuedSteeringMessage(activeSession, queueIdentity).then((removed) => {
-        if (!removed && !allowReplay) {
+        if (!removed && wasAccepted && !allowReplay) {
           log.warn("failed to find queued steering message for cancellation");
           throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
         }
@@ -214,7 +228,9 @@ async function steerAndWaitForTranscriptCommit(
           finish(
             error instanceof EmbeddedSteeringAcceptedUnconfirmedError
               ? error
-              : new EmbeddedSteeringAcceptedUnconfirmedError(message, { cause: error }),
+              : wasAccepted && !allowReplay
+                ? new EmbeddedSteeringAcceptedUnconfirmedError(message, { cause: error })
+                : new Error(message, { cause: error }),
           );
         },
       );
@@ -228,11 +244,7 @@ async function steerAndWaitForTranscriptCommit(
       () => {
         const message =
           "queued steering message was not committed to the transcript before timeout";
-        if (accepted) {
-          rejectAfterCancellation(message);
-          return;
-        }
-        rejectBeforeAcceptance(message);
+        rejectAfterCancellation(message);
       },
       Math.max(1, timeoutMs),
     );
@@ -246,13 +258,9 @@ async function steerAndWaitForTranscriptCommit(
       if (terminalEvent) {
         const handedOff = terminalEvent === "handoff";
         const message = `active session ${handedOff ? "handed off" : "ended"} before queued steering message was committed to the transcript`;
-        if (accepted) {
-          // Handoff transfers delivery ownership to the parked follow-up, so a
-          // missing queue entry is recoverable rather than an ambiguous commit.
-          rejectAfterCancellation(message, handedOff);
-          return;
-        }
-        rejectBeforeAcceptance(message);
+        // Terminal state closes admission and owns exact queue cleanup even when
+        // steer() enqueued synchronously but its Promise has not settled yet.
+        rejectAfterCancellation(message, handedOff);
       }
     });
     const unsubscribePersistenceFailure = subscribeSteeringMessagePersistenceFailure(
@@ -275,6 +283,9 @@ async function steerAndWaitForTranscriptCommit(
     );
     void steer.then(
       () => {
+        if (!acceptanceOpen) {
+          return;
+        }
         accepted = true;
         reportAcceptance(true);
         if (abortRequested) {
@@ -288,11 +299,11 @@ async function steerAndWaitForTranscriptCommit(
     );
     function onAbort() {
       abortRequested = true;
-      if (!accepted) {
-        rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
-        return;
-      }
-      rejectAfterCancellation("queued steering message was cancelled before delivery");
+      rejectAfterCancellation(
+        accepted
+          ? "queued steering message was cancelled before delivery"
+          : "queued steering message was cancelled before acceptance",
+      );
     }
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   });

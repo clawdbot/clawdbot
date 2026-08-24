@@ -44,7 +44,7 @@ import type { ToolDefinition } from "./extensions/types.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession handoff adoption integration", () => {
-  it("delivers one accepted handoff steer through the real follow-up queue", async () => {
+  it("cancels a pending-acceptance steer before one follow-up reuses the session", async () => {
     const queueKey = "agent:main:telegram:direct:handoff-proof";
     const sessionId = "handoff-proof-session";
     const steerText = "STEER-DURING-HANDOFF";
@@ -60,6 +60,14 @@ describe("AgentSession handoff adoption integration", () => {
     const finalDelivery = vi.fn(async (_text: string) => {});
     const followupRuns: string[] = [];
     const followupOperations: string[] = [];
+    let releaseSteerPromise!: () => void;
+    const steerPromise = new Promise<void>((resolve) => {
+      releaseSteerPromise = resolve;
+    });
+    let reportSteerReturned!: () => void;
+    const steerReturned = new Promise<void>((resolve) => {
+      reportSteerReturned = resolve;
+    });
     let releaseOwner!: () => void;
     const ownerReleased = new Promise<void>((resolve) => {
       releaseOwner = resolve;
@@ -67,9 +75,9 @@ describe("AgentSession handoff adoption integration", () => {
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetRecentQueuedMessageIdDedupe();
-    let resolveSteerAccepted!: () => void;
-    const steerAccepted = new Promise<void>((resolve) => {
-      resolveSteerAccepted = resolve;
+    let resolveSteerEnqueued!: () => void;
+    const steerEnqueued = new Promise<void>((resolve) => {
+      resolveSteerEnqueued = resolve;
     });
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       ["agent_settled", [async () => settled()]],
@@ -84,8 +92,7 @@ describe("AgentSession handoff adoption integration", () => {
         if (!activeSession) {
           throw new Error("session not ready");
         }
-        await steerAccepted;
-        activeSession.clearQueue();
+        await steerEnqueued;
         activeSession.agent.steer({
           role: "custom",
           customType: "test.turn-handoff",
@@ -116,16 +123,27 @@ describe("AgentSession handoff adoption integration", () => {
     });
     sessionRef.current = session;
     const lifecycleEvents: string[] = [];
-    session.subscribe((event) => lifecycleEvents.push(event.type));
+    session.subscribe((event) => {
+      lifecycleEvents.push(event.type);
+      if (event.type === "queue_update" && event.steering.includes(steerText)) {
+        resolveSteerEnqueued();
+      }
+    });
+    const delayedSteerTarget = {
+      agent: session.agent,
+      subscribe: session.subscribe.bind(session),
+      steer: async (...args: Parameters<AgentSession["steer"]>) => {
+        await session.steer(...args);
+        await steerPromise;
+        reportSteerReturned();
+      },
+    };
     const queueMessage: EmbeddedAgentQueueHandle["queueMessage"] = async (text, options) =>
-      await steerActiveSessionWithOptionalDeliveryWait(session, text, {
+      await steerActiveSessionWithOptionalDeliveryWait(delayedSteerTarget, text, {
         ...options,
         onQueueAccepted: (accepted) => {
           acceptanceEvents.push(accepted);
           options?.onQueueAccepted?.(accepted);
-          if (accepted) {
-            resolveSteerAccepted();
-          }
         },
       });
     const queueHandle: EmbeddedAgentQueueHandle = {
@@ -248,8 +266,11 @@ describe("AgentSession handoff adoption integration", () => {
       const initialPrompt = session.prompt("yield now");
       await vi.waitFor(() => expect(requests).toHaveLength(1));
       await Promise.all([runActiveReplySteer(steerParams), initialPrompt]);
+      releaseSteerPromise();
+      await steerReturned;
+      await Promise.resolve();
 
-      expect(acceptanceEvents).toEqual([true]);
+      expect(acceptanceEvents).toEqual([false]);
       expect(deferred).toHaveBeenCalledOnce();
       expect(adopted).not.toHaveBeenCalled();
       expect(abandoned).not.toHaveBeenCalled();
@@ -281,6 +302,7 @@ describe("AgentSession handoff adoption integration", () => {
       expect(
         requests.filter((request) => JSON.stringify(request.messages).includes(steerText)),
       ).toHaveLength(1);
+      expect(JSON.stringify(requests[1]?.messages).split(steerText)).toHaveLength(2);
       expect(getFollowupQueueDepth(queueKey)).toBe(0);
 
       scheduleFollowupDrain(queueKey, runFollowup);
@@ -306,6 +328,7 @@ describe("AgentSession handoff adoption integration", () => {
       expect(finalDelivery).toHaveBeenCalledOnce();
       expect(requests).toHaveLength(2);
     } finally {
+      releaseSteerPromise();
       releaseOwner();
       activeOperation.complete();
       clearActiveEmbeddedRun(sessionId, queueHandle, queueKey);

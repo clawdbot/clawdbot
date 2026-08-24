@@ -396,6 +396,95 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     }
   });
 
+  it("cancels a queued steer while its acceptance promise is still pending", async () => {
+    let emit!: (event: unknown) => void;
+    let releaseAcceptance!: () => void;
+    const acceptance = new Promise<void>((resolve) => {
+      releaseAcceptance = resolve;
+    });
+    let reportEnqueued!: () => void;
+    const enqueued = new Promise<void>((resolve) => {
+      reportEnqueued = resolve;
+    });
+    let reportSteerReturned!: () => void;
+    const steerReturned = new Promise<void>((resolve) => {
+      reportSteerReturned = resolve;
+    });
+    const targetMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "queued before settlement" }],
+      timestamp: 1,
+    };
+    const queueMessages = [targetMessage];
+    const retireDisplay = registerDisplayRetirement(targetMessage);
+    const onQueueAccepted = vi.fn();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      agent: { steeringQueue: { messages: queueMessages } },
+      steer: async (_text, _images, _recorder, _media, _imageOrder, queueIdentity) => {
+        setSteeringMessageIdentity(targetMessage, queueIdentity);
+        reportEnqueued();
+        await acceptance;
+        reportSteerReturned();
+      },
+      subscribe: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    };
+    const wait = steerActiveSessionWithOptionalDeliveryWait(
+      activeSession,
+      "queued before settlement",
+      { deliveryTimeoutMs: 10_000, onQueueAccepted, waitForTranscriptCommit: true },
+    );
+    const rejection = expect(wait).rejects.toThrow(
+      "active session ended before queued steering message was committed to the transcript",
+    );
+
+    await enqueued;
+    emit({ type: "agent_settled" });
+
+    await rejection;
+    expect(queueMessages).toEqual([]);
+    expect(retireDisplay).toHaveBeenCalledOnce();
+    expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+
+    releaseAcceptance();
+    await steerReturned;
+    await Promise.resolve();
+    expect(queueMessages).toEqual([]);
+    expect(onQueueAccepted).toHaveBeenCalledOnce();
+  });
+
+  it("removes the runtime steer even when display retirement fails", async () => {
+    let emit!: (event: unknown) => void;
+    const targetMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "runtime ownership wins" }],
+      timestamp: 1,
+    };
+    const queueMessages = [targetMessage];
+    registerQueuedUserMessageRetirement(targetMessage, () => {
+      throw new Error("display cleanup failed");
+    });
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      agent: { steeringQueue: { messages: queueMessages } },
+      steer: createIdentityAwareSteer(targetMessage),
+      subscribe: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    };
+    const wait = steerWithDeliveryWait(activeSession, "runtime ownership wins");
+
+    await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+    emit({ type: "agent_settled" });
+
+    await expect(wait).rejects.toThrow(
+      "active session ended before queued steering message was committed to the transcript",
+    );
+    expect(queueMessages).toEqual([]);
+  });
+
   it("fences an aborted steer before delayed preparation can enqueue it", async () => {
     let releasePreparation!: () => void;
     const preparation = new Promise<void>((resolve) => {
