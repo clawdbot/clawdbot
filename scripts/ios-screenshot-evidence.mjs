@@ -31,6 +31,14 @@ const FAMILY_SPECS = {
   },
 };
 const EXPECTED_FAMILIES = Object.keys(FAMILY_SPECS).toSorted();
+// Model only whole OpenClaw Fastlane invocations. Fastlane's internal launch
+// retries remain workflow-log evidence.
+const ATTEMPT_MODEL = Object.freeze({
+  owner: "openclaw",
+  unit: "capture_ios_screenshots invocation",
+  maxAttempts: 2,
+  fastlaneInternalRetries: "workflow-log",
+});
 
 function fail(message) {
   throw new Error(message);
@@ -126,7 +134,7 @@ function defaultReadXcresultSummary(resultPath) {
   try {
     const summary = JSON.parse(result.stdout);
     return {
-      result: requireString(summary.result, `${resultPath} result`),
+      testResult: requireString(summary.result, `${resultPath} test result`),
       failedTests: Number(summary.failedTests),
     };
   } catch (error) {
@@ -222,7 +230,7 @@ function collectXcresults({
         `${deviceName} ${screenshotName} expected attempt 1 and optional retry 2; found ${attemptNumbers || "none"}`,
       );
     }
-    const summaries = attempts.map(({ attempt, name }) => {
+    const summaries = attempts.map(({ attempt, name }, index) => {
       const source = path.join(xcresultDirectory, name);
       const summary = readXcresultSummary(source);
       if (!Number.isInteger(summary.failedTests) || summary.failedTests < 0) {
@@ -235,21 +243,19 @@ function collectXcresults({
         attempt,
         artifactPath,
         canonicalPath: path.posix.join("apps/ios/build/SnapshotTestResults", name),
-        result: summary.result,
+        captureOutcome: index === attempts.length - 1 ? "succeeded" : "failed",
+        testResult: summary.testResult,
         failedTests: summary.failedTests,
         sha256: sha256Directory(source),
       };
     });
     const final = summaries.at(-1);
-    if (final.result !== "Passed" || final.failedTests !== 0) {
-      fail(`${final.artifactPath} is not a passing final attempt`);
-    }
     if (
-      summaries.length === 2 &&
-      summaries[0].result === "Passed" &&
-      summaries[0].failedTests === 0
+      final.captureOutcome !== "succeeded" ||
+      final.testResult !== "Passed" ||
+      final.failedTests !== 0
     ) {
-      fail(`${summaries[0].artifactPath} is an unexpected passing retry predecessor`);
+      fail(`${final.artifactPath} is not a passing final attempt`);
     }
     results.push(...summaries);
   }
@@ -307,6 +313,7 @@ export function collectIosScreenshotEvidence({
     : [];
   const manifest = {
     schemaVersion: 1,
+    attemptModel: { ...ATTEMPT_MODEL },
     family,
     deviceName,
     ...normalizedProvenance,
@@ -320,16 +327,47 @@ export function collectIosScreenshotEvidence({
   return manifest;
 }
 
-function findManifestPaths(directory) {
-  return listFilesRecursive(directory)
-    .filter(({ relativePath }) => {
-      const segments = relativePath.split("/");
-      return (
-        segments.at(-1) === "manifest.json" &&
-        !segments.some((segment) => segment.endsWith(".xcresult"))
+function loadExpectedManifests(inputDirectory, targetSha) {
+  const expectedContainers = {
+    [`ios-release-screenshot-shard-iphone-${targetSha}`]: ["iphone", "watch"],
+    [`ios-release-screenshot-shard-ipad-13-${targetSha}`]: ["ipad-13"],
+  };
+  const actualContainers = listEntries(inputDirectory);
+  if (actualContainers.some((entry) => !entry.isDirectory())) {
+    fail("screenshot evidence input contains a non-container entry");
+  }
+  const actualContainerNames = actualContainers.map((entry) => entry.name).toSorted();
+  const expectedContainerNames = Object.keys(expectedContainers).toSorted();
+  if (actualContainerNames.join("\n") !== expectedContainerNames.join("\n")) {
+    fail(
+      `screenshot artifact container topology mismatch; expected ${expectedContainerNames.join(", ")}, found ${actualContainerNames.join(", ") || "none"}`,
+    );
+  }
+
+  return Object.entries(expectedContainers).flatMap(([containerName, expectedFamilies]) => {
+    const containerDirectory = path.join(inputDirectory, containerName);
+    const containerEntries = listEntries(containerDirectory);
+    if (containerEntries.some((entry) => !entry.isDirectory())) {
+      fail(`${containerName} contains a non-family entry`);
+    }
+    const actualFamilies = containerEntries.map((entry) => entry.name).toSorted();
+    if (actualFamilies.join("\n") !== expectedFamilies.toSorted().join("\n")) {
+      fail(
+        `${containerName} family topology mismatch; expected ${expectedFamilies.join(", ")}, found ${actualFamilies.join(", ") || "none"}`,
       );
-    })
-    .map(({ absolutePath }) => absolutePath);
+    }
+    return expectedFamilies.map((family) => {
+      const manifestPath = path.join(containerDirectory, family, "manifest.json");
+      if (!fs.existsSync(manifestPath)) {
+        fail(`${containerName} is missing ${family}/manifest.json`);
+      }
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (manifest.family !== family) {
+        fail(`${containerName}/${family} contains ${manifest.family ?? "unknown"} family evidence`);
+      }
+      return { containerName, manifestPath, manifest };
+    });
+  });
 }
 
 function verifyManifestEntry(manifestPath, entry, kind) {
@@ -395,8 +433,24 @@ function verifyFamilyArtifactUnion(manifestPath, manifest) {
   }
 }
 
+function verifyAttemptModel(manifest) {
+  const model = manifest.attemptModel;
+  const expectedKeys = Object.keys(ATTEMPT_MODEL).toSorted();
+  const actualKeys =
+    model && typeof model === "object" && !Array.isArray(model)
+      ? Object.keys(model).toSorted()
+      : [];
+  if (
+    actualKeys.join("\n") !== expectedKeys.join("\n") ||
+    expectedKeys.some((key) => model[key] !== ATTEMPT_MODEL[key])
+  ) {
+    fail(`${manifest.family} has an unexpected attempt model`);
+  }
+}
+
 function verifyManifestFamily(manifestPath, manifest) {
   const spec = FAMILY_SPECS[manifest.family];
+  verifyAttemptModel(manifest);
   const deviceName = requireString(manifest.deviceName, `${manifest.family} device name`);
   if (!spec.devicePattern.test(deviceName)) {
     fail(`${manifest.family} has unexpected device name: ${deviceName}`);
@@ -447,13 +501,26 @@ function verifyManifestFamily(manifestPath, manifest) {
       fail(`${manifest.family} ${screenshotName} xcresult attempt union mismatch`);
     }
     const final = attempts.at(-1);
-    if (final.result !== "Passed" || final.failedTests !== 0) {
+    if (
+      final.captureOutcome !== "succeeded" ||
+      final.testResult !== "Passed" ||
+      final.failedTests !== 0
+    ) {
       fail(`${manifest.family} ${screenshotName} final xcresult is not passing`);
     }
-    if (attempts.length === 2 && attempts[0].result === "Passed" && attempts[0].failedTests === 0) {
-      fail(`${manifest.family} ${screenshotName} retry predecessor unexpectedly passed`);
+    if (
+      attempts.some(
+        (entry, index) =>
+          entry.captureOutcome !== (index === attempts.length - 1 ? "succeeded" : "failed"),
+      )
+    ) {
+      fail(`${manifest.family} ${screenshotName} has an unexpected capture outcome sequence`);
     }
     for (const attempt of attempts) {
+      requireString(attempt.testResult, `${manifest.family} ${screenshotName} test result`);
+      if (!Number.isInteger(attempt.failedTests) || attempt.failedTests < 0) {
+        fail(`${manifest.family} ${screenshotName} has invalid failedTests`);
+      }
       const expectedFilename = `${deviceName}-${screenshotName}-attempt-${attempt.attempt}.xcresult`;
       const expectedCanonicalPath = `apps/ios/build/SnapshotTestResults/${expectedFilename}`;
       if (attempt.canonicalPath !== expectedCanonicalPath) {
@@ -467,34 +534,54 @@ function verifyManifestFamily(manifestPath, manifest) {
   verifyFamilyArtifactUnion(manifestPath, manifest);
 }
 
-export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, targetSha }) {
-  const expectedTargetSha = requireSha(targetSha, "expected target SHA");
-  const manifestPaths = findManifestPaths(inputDirectory);
-  const manifests = manifestPaths.map((manifestPath) => ({
-    manifestPath,
-    manifest: JSON.parse(fs.readFileSync(manifestPath, "utf8")),
-  }));
-  const families = manifests.map(({ manifest }) => manifest.family).toSorted();
+export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expectedProvenance }) {
+  const expected = {
+    targetSha: requireSha(expectedProvenance.targetSha, "expected target SHA"),
+    workflowSha: requireSha(expectedProvenance.workflowSha, "expected workflow SHA"),
+    runId: requireString(expectedProvenance.runId, "expected workflow run id"),
+    runAttempt: requirePositiveInteger(
+      expectedProvenance.runAttempt,
+      "expected workflow run attempt",
+    ),
+    tooling: {
+      xcode: requireString(expectedProvenance.tooling?.xcode, "expected Xcode version"),
+      fastlane: requireString(expectedProvenance.tooling?.fastlane, "expected Fastlane version"),
+      node: requireString(expectedProvenance.tooling?.node, "expected Node version"),
+    },
+  };
+  const manifests = loadExpectedManifests(inputDirectory, expected.targetSha);
+  const families = manifests
+    .map(({ manifest }) => manifest.family)
+    .toSorted((left, right) => left.localeCompare(right));
   if (families.join("\n") !== EXPECTED_FAMILIES.join("\n")) {
     fail(
       `screenshot family union mismatch; expected ${EXPECTED_FAMILIES.join(", ")}, found ${families.join(", ") || "none"}`,
     );
   }
-  const runIdentities = new Set();
-  const toolingIdentities = new Set();
   const canonicalEntries = [];
   for (const { manifestPath, manifest } of manifests) {
     if (manifest.schemaVersion !== 1) {
       fail(`unsupported screenshot manifest schema in ${manifestPath}`);
     }
-    if (manifest.targetSha !== expectedTargetSha) {
+    if (manifest.targetSha !== expected.targetSha) {
       fail(
-        `cross-SHA screenshot evidence in ${manifestPath}: expected ${expectedTargetSha}, found ${manifest.targetSha}`,
+        `cross-SHA screenshot evidence in ${manifestPath}: expected ${expected.targetSha}, found ${manifest.targetSha}`,
       );
     }
-    requireSha(manifest.workflowSha, `${manifest.family} workflow SHA`);
-    runIdentities.add(`${manifest.runId}:${manifest.runAttempt}:${manifest.workflowSha}`);
-    toolingIdentities.add(JSON.stringify(manifest.tooling));
+    if (manifest.workflowSha !== expected.workflowSha) {
+      fail(`${manifest.family} workflow SHA does not match the reducer context`);
+    }
+    if (manifest.runId !== expected.runId) {
+      fail(`${manifest.family} workflow run id does not match the reducer context`);
+    }
+    if (manifest.runAttempt !== expected.runAttempt) {
+      fail(`${manifest.family} workflow run attempt does not match the reducer context`);
+    }
+    for (const tool of ["xcode", "fastlane", "node"]) {
+      if (manifest.tooling?.[tool] !== expected.tooling[tool]) {
+        fail(`${manifest.family} ${tool} version does not match the reducer context`);
+      }
+    }
     verifyManifestFamily(manifestPath, manifest);
     for (const screenshot of manifest.screenshots) {
       canonicalEntries.push({
@@ -508,12 +595,6 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, target
         family: manifest.family,
       });
     }
-  }
-  if (runIdentities.size !== 1) {
-    fail(`cross-run screenshot evidence: ${[...runIdentities].join(", ")}`);
-  }
-  if (toolingIdentities.size !== 1) {
-    fail(`cross-tooling screenshot evidence: ${[...toolingIdentities].join(", ")}`);
   }
   const canonicalPaths = canonicalEntries.map(({ canonicalPath }) => canonicalPath);
   if (new Set(canonicalPaths).size !== canonicalPaths.length) {
@@ -532,8 +613,8 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, target
   }
   const combinedManifest = {
     schemaVersion: 1,
-    targetSha: expectedTargetSha,
-    runIdentity: [...runIdentities][0],
+    attemptModel: { ...ATTEMPT_MODEL },
+    ...expected,
     families: manifests
       .map(({ manifest }) => manifest)
       .toSorted((left, right) => left.family.localeCompare(right.family)),
@@ -586,7 +667,17 @@ function main(argv) {
     const manifest = reduceIosScreenshotEvidence({
       inputDirectory: options.input,
       outputRoot: options.output,
-      targetSha: options["target-sha"],
+      expectedProvenance: {
+        targetSha: options["target-sha"],
+        workflowSha: options["workflow-sha"],
+        runId: options["run-id"],
+        runAttempt: options["run-attempt"],
+        tooling: {
+          xcode: options["xcode-version"],
+          fastlane: options["fastlane-version"],
+          node: options["node-version"],
+        },
+      },
     });
     console.log(`reduced iOS screenshot evidence for ${manifest.targetSha}`);
     return;

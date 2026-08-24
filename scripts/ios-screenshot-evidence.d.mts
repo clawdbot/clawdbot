@@ -13,7 +13,7 @@ export type IosScreenshotProvenance = {
 };
 
 export type XcresultSummary = {
-  result: string;
+  testResult: string;
   failedTests: number;
 };
 
@@ -29,7 +29,7 @@ export function collectIosScreenshotEvidence(options: {
 export function reduceIosScreenshotEvidence(options: {
   inputDirectory: string;
   outputRoot: string;
-  targetSha: string;
+  expectedProvenance: IosScreenshotProvenance;
 }): Record<string, unknown>;
 
 export function parseIosScreenshotEvidenceArgs(argv: string[]): {

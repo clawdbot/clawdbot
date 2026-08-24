@@ -560,11 +560,24 @@ describe("iOS Fastlane release upload gates", () => {
     expect(shardJob).toContain("if: matrix.device_family == 'iphone'");
     expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
     expect(shardJob).toContain("run: pnpm ios:screenshots");
+    expect(shardJob).toContain("id: package_screenshot_evidence");
+    expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(shardJob).toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
+    expect(shardJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
     expect(shardJob).not.toContain("SnapshotDerivedData");
     expect(shardJob.match(/contents: read/g)).toHaveLength(1);
     expect(reducerJob).toContain("needs: [preflight, ios-screenshot-shard]");
     expect(reducerJob).toContain("merge-multiple: false");
+    expect(reducerJob).toContain("id: reduce_screenshot_evidence");
     expect(reducerJob).toContain("scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).toContain('--workflow-sha "$WORKFLOW_SHA"');
+    expect(reducerJob).toContain('--run-id "$RUN_ID"');
+    expect(reducerJob).toContain('--run-attempt "$RUN_ATTEMPT"');
+    expect(reducerJob).toContain('--xcode-version "$IOS_SCREENSHOT_XCODE_VERSION"');
+    expect(reducerJob).toContain('--fastlane-version "$IOS_SCREENSHOT_FASTLANE_VERSION"');
+    expect(reducerJob).toContain('--node-version "$(node --version)"');
+    expect(reducerJob).toContain("steps.reduce_screenshot_evidence.outcome == 'failure'");
+    expect(reducerJob).toContain("apps/ios/build/ScreenshotEvidenceInputs/**/xcresults/*.xcresult");
     expect(reducerJob).toContain(
       "name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}",
     );

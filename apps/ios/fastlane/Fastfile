@@ -1645,7 +1645,8 @@ def capture_release_ios_screenshot!(
     FileUtils.rm_f(expected_screenshot_path)
     FileUtils.rm_rf(result_bundle_path)
     begin
-      # Keep retry ownership outside Snapshot. Every action call creates a new
+      # OpenClaw owns retries of the whole capture action; Fastlane may still
+      # retry simulator launch internally. Each action call creates a new
       # xcodebuild/TestManager session and reboots the selected simulator.
       capture_ios_screenshots(
         project: project,
