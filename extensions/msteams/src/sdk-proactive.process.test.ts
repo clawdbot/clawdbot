@@ -1,18 +1,84 @@
 // Microsoft Teams process coverage protects real SDK CommonJS import ordering.
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { buildPluginNpmRuntime } from "../../../scripts/lib/plugin-npm-runtime-build.mts";
 
 const execFileAsync = promisify(execFile);
 
 describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
   it("keeps root exports intact when quoted behavior is the first SDK access", async () => {
-    const proactiveModuleUrl = new URL("./sdk-proactive.ts", import.meta.url).href;
+    const build = await buildPluginNpmRuntime({
+      repoRoot: process.cwd(),
+      packageDir: "extensions/msteams",
+      logLevel: "warn",
+    });
+    if (!build || build.runtimeFormat !== "cjs") {
+      throw new Error("Microsoft Teams did not produce a CommonJS runtime build");
+    }
+    const proactiveArtifact = fs
+      .readdirSync(build.outDir)
+      .filter((entry) => entry.endsWith(".cjs"))
+      .map((entry) => path.join(build.outDir, entry))
+      .find((entry) =>
+        fs
+          .readFileSync(entry, "utf8")
+          .includes('Object.defineProperty(exports, "sendMSTeamsActivityWithReference"'),
+      );
+    if (!proactiveArtifact) {
+      throw new Error("Microsoft Teams CommonJS runtime omitted the proactive send helper");
+    }
+    const proactiveArtifactSource = fs.readFileSync(proactiveArtifact, "utf8");
+    expect(proactiveArtifactSource).toContain('import("@microsoft/teams.api")');
+    expect(proactiveArtifactSource).not.toContain("@microsoft/teams.api/dist/");
+
     const fixture = `
       import assert from "node:assert/strict";
+      import { createRequire } from "node:module";
+
+      const require = createRequire(import.meta.url);
+      const Module = require("node:module");
+      const originalLoad = Module._load;
+      const universalStub = new Proxy(
+        function universalStub() {
+          return universalStub;
+        },
+        {
+          apply: () => universalStub,
+          construct: () => universalStub,
+          get: () => universalStub,
+        },
+      );
+      const hostSdkStub = new Proxy(
+        {},
+        {
+          get: (_target, key) => {
+            if (key === "createLazyRuntimeModule") {
+              return (importer) => {
+                let pending;
+                return () => (pending ??= importer());
+              };
+            }
+            if (key === "getOrCreateGlobalSingleton") {
+              return (_key, create) => create();
+            }
+            return universalStub;
+          },
+        },
+      );
+      // The built plugin expects an installed OpenClaw host. Stub unrelated host SDK exports so
+      // this child isolates the emitted Teams loader and the real pinned Teams CommonJS package.
+      Module._load = function load(request, parent, isMain) {
+        if (request.startsWith("openclaw/plugin-sdk/")) {
+          return hostSdkStub;
+        }
+        return originalLoad.call(this, request, parent, isMain);
+      };
 
       const { sendMSTeamsActivityWithReference } =
-        await import(process.env.OPENCLAW_MSTEAMS_PROACTIVE_MODULE);
+        require(process.env.OPENCLAW_MSTEAMS_PROACTIVE_ARTIFACT);
       const quotedCreates = [];
       const posts = [];
       const app = {
@@ -90,7 +156,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
         env: {
           ...process.env,
           NODE_DISABLE_COMPILE_CACHE: "1",
-          OPENCLAW_MSTEAMS_PROACTIVE_MODULE: proactiveModuleUrl,
+          OPENCLAW_MSTEAMS_PROACTIVE_ARTIFACT: proactiveArtifact,
           VITEST: undefined,
         },
       },
@@ -98,5 +164,5 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
 
     expect(stderr).toBe("");
     expect(stdout).toBe("root-sdk-ok");
-  });
+  }, 30_000);
 });
