@@ -2531,6 +2531,8 @@ describe("runCli exit behavior", () => {
 
   it.each([
     ["cron", ["node", "openclaw", "cron", "status"]],
+    ["cron parent timeout", ["node", "openclaw", "cron", "--timeout", "250", "status"]],
+    ["automations parent port", ["node", "openclaw", "automations", "--port", "18789", "status"]],
     ["cron alias", ["node", "openclaw", "cron", "create", "daily", "message"]],
     ["cron removal alias", ["node", "openclaw", "cron", "delete", "job"]],
     ["cron scratch equals", ["node", "openclaw", "cron", "scratch", "job", "--set=text"]],

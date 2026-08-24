@@ -1727,6 +1727,64 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
   });
 
+  it.each([
+    {
+      label: "the exact source route",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: true,
+    },
+    {
+      label: "the same target in another account",
+      accountId: "account-2",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: false,
+    },
+    {
+      label: "the same target in another thread",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-2",
+      expected: false,
+    },
+    {
+      label: "another target",
+      accountId: "account-1",
+      target: "chat456",
+      threadId: "thread-1",
+      expected: false,
+    },
+  ])("records explicit message sends only for $label", async (testCase) => {
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-explicit-${testCase.label}`,
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: testCase.accountId,
+        target: testCase.target,
+        threadId: testCase.threadId,
+        message: "explicit reply",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(testCase.expected);
+  });
+
   it("records rich-content delivery when visible text is blank", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-rich-content";

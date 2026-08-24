@@ -333,6 +333,69 @@ describe("cli json stdout contract", () => {
 
   it.each([
     {
+      name: "bare list active filter in human mode",
+      args: ["sessions", "--active", "0"],
+      message: "--active must be a positive number of minutes, for example --active 30.",
+      human: true,
+    },
+    {
+      name: "bare list limit in human mode through forced Commander",
+      args: ["sessions", "--limit", "0"],
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+      human: true,
+      commander: true,
+    },
+    {
+      name: "routed bare list active filter with JSON before its option",
+      args: ["sessions", "--json", "--active", "0"],
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "routed bare list limit with JSON after its option",
+      args: ["sessions", "--limit", "0", "--json"],
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+    },
+    {
+      name: "Commander bare list active filter with JSON after its option",
+      args: ["sessions", "--active", "0", "--json"],
+      message: "--active must be a positive number of minutes, for example --active 30.",
+      commander: true,
+    },
+    {
+      name: "Commander bare list limit with JSON before its option",
+      args: ["sessions", "--json", "--limit", "0"],
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+      commander: true,
+    },
+    {
+      name: "list alias active filter with inherited parent JSON",
+      args: ["sessions", "--json", "list", "--active", "0"],
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "list alias limit with leaf JSON",
+      args: ["sessions", "list", "--limit", "0", "--json"],
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+    },
+    {
+      name: "bare list active filter before an invalid limit",
+      args: ["sessions", "--json", "--limit", "0", "--active", "0"],
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "routed bare list active filter through dual-TTY finalization",
+      args: ["sessions", "--json", "--active", "0"],
+      message: "--active must be a positive number of minutes, for example --active 30.",
+      tty: true,
+    },
+    {
+      name: "Commander bare list limit through dual-TTY finalization",
+      args: ["sessions", "--limit", "0", "--json"],
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+      commander: true,
+      tty: true,
+    },
+    {
       name: "cleanup with an inherited filter in human mode",
       args: ["sessions", "--active", "5", "cleanup"],
       message:
@@ -421,7 +484,7 @@ describe("cli json stdout contract", () => {
       message: "--max-lines must be a positive integer.",
       tty: true,
     },
-  ])("renders sessions registration validation failures for $name", async (testCase) => {
+  ])("renders sessions list and registration validation failures for $name", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
         const preload = Buffer.from(

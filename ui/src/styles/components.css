@@ -6275,3 +6275,18 @@ td.data-table-key-col {
     transform: rotate(-10deg);
   }
 }
+
+/* Identity links (a name or avatar opening that person's Activity feed) stay neutral
+   until hover so identity chrome keeps its weight in dense surfaces. */
+.person-activity-link {
+  color: inherit;
+}
+
+.person-activity-link:not(:hover, :focus-visible) {
+  text-decoration: none;
+}
+
+.person-activity-avatar-link {
+  display: block;
+  line-height: 0;
+}

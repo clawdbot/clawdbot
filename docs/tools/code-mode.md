@@ -171,6 +171,32 @@ value into guessed field-dependent logic in the same program. Observe the raw
 value, then use a later `exec` for dependent composition. This costs an extra
 model turn, but prevents the model from guessing field names.
 
+### Recover from tool errors
+
+Nested tool failures are ordinary JavaScript errors. Guest code can catch them
+and return the information needed to choose the next action:
+
+```javascript
+try {
+  return await terminal({ action: "list" });
+} catch (error) {
+  return { status: "unavailable", error: error.message };
+}
+```
+
+JavaScript syntax errors, TypeScript transform errors, and tool failures proven
+to occur before execution become failed `exec` results that the model can read
+and correct across successive turns. A failed tool call does not automatically
+end the agent run when OpenClaw can prove that no nested action started.
+
+OpenClaw does not automatically replay a failed program. If earlier calls
+already ran or a failed call may have partially applied, OpenClaw first limits
+recovery to an authorized read-only inspection of the current state. It does
+not expose writes, sends, shell commands, or other mutations during that
+reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
+restrictions, approval requirements, and tool-policy denials retain their
+existing behavior.
+
 ### Verify the active surface
 
 To confirm the model payload shape while debugging, run the Gateway with
@@ -484,11 +510,16 @@ type CodeModeFailedResult = {
 `exec` returns `waiting` when the guest suspends with resumable state that still
 needs a model-visible continuation — an explicit `yield_control(...)`, or a
 bridge tool call that has not resolved within the exec deadline. The result
-includes a `runId` for `wait`. Bridge requests — `catalog.search`, handle
-`describe()`, callable tool handles, and namespace calls including MCP — are auto-drained
-inside the same `exec`/`wait` call while they resolve within the deadline, so a
-compact code block that awaits several tools runs to completion in one model
-turn instead of forcing one model tool call per await.
+includes a `runId` for `wait`. Native-channel exec approvals are different:
+while the operator decision is pending, OpenClaw suspends both the Code Mode
+execution budget and the owning agent-run budget. The original `exec` remains
+in flight, then resumes with exactly its unused budget after approval resolves;
+it does not return `pending_tools` or require model polling through `wait`.
+Bridge requests — `catalog.search`, handle `describe()`, callable tool handles,
+and namespace calls including MCP — are auto-drained inside the same
+`exec`/`wait` call while they resolve within the deadline, so a compact code
+block that awaits several tools runs to completion in one model turn instead of
+forcing one model tool call per await.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -507,9 +538,11 @@ type CodeModeWaitInput = {
 
 Output is the same `CodeModeResult` union returned by `exec`.
 
-`wait` exists because nested OpenClaw tools can be slow, interactive, approval
-gated, or stream partial updates; the model should not need to keep one long
-`exec` call open while the host waits for external work.
+`wait` exists because nested OpenClaw tools can be slow, interactive, or stream
+partial updates; the model should not need to keep one long `exec` call open
+while the host waits for ordinary external work. Native-channel exec approvals
+are the exception: they stay inside the original `exec` so approval authority
+remains bound to the admitted run.
 
 QuickJS-WASI snapshot/restore is the resume mechanism:
 
@@ -946,6 +979,15 @@ Nested calls project into the transcript as real tool calls so support
 bundles show what happened, with the projection identifying the parent
 code-mode tool call and the nested tool id.
 
+Nested tool failures cross into the guest as catchable JavaScript errors. If
+guest code does not catch an error, `exec` or `wait` returns a failed tool
+result. Proven no-start failures and guest-only errors allow ordinary model
+recovery; possible nested side effects require authorized read-only
+reconciliation before any further action. Network-controlled tool output and
+errors retain their existing untrusted-content wrapping and sanitization;
+recovering from a failure does not grant new permissions or replay completed
+side effects.
+
 Parallel nested calls are allowed up to `maxPendingToolCalls`.
 
 ## Run and snapshot lifecycle
@@ -1144,6 +1186,9 @@ Code mode coverage should prove:
 - Tool Search control tools are hidden from both the model surface and the
   hidden catalog
 - nested calls preserve approval and hook behavior
+- caught and uncaught nested failures remain recoverable without replaying
+  previously executed side effects
+- network-controlled failures retain untrusted-content wrapping and sanitization
 - shell `exec` is hidden from the model but callable as a guest global when
   allowed
 - recursive code-mode `exec` and `wait` are not callable from guest code

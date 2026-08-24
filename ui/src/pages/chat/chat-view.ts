@@ -21,6 +21,7 @@ import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../components/markdown-session-links.ts";
+import type { PersonActivityRouting } from "../../components/person-activity-link.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
@@ -185,6 +186,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     userId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
+    personActivity?: PersonActivityRouting;
     localMediaPreviewRoots?: string[];
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -340,6 +342,7 @@ export function renderChat(props: ChatProps) {
       userId: props.userId,
       userName: props.userName,
       userAvatar: props.userAvatar,
+      personActivity: props.personActivity,
       basePath: props.basePath,
       resourceBasePath: props.resourceBasePath,
       fullMessageAgentId: props.fullMessageAgentId,

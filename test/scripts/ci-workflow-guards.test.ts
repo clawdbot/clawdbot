@@ -5195,8 +5195,10 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     }
   });
 
-  it("bounds mantis discord smoke validation git fetches", () => {
-    const workflowPath = ".github/workflows/mantis-discord-smoke.yml";
+  it.each([
+    [".github/workflows/mantis-discord-smoke.yml"],
+    [".github/workflows/plugin-clawhub-release.yml"],
+  ])("bounds %s git fetches", (workflowPath) => {
     const source = readFileSync(workflowPath, "utf8");
     const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
 

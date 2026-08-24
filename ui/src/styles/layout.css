@@ -2198,32 +2198,6 @@ openclaw-settings-save-indicator:empty {
   }
 }
 
-.nav-collapse-toggle {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: var(--radius-md);
-  transition:
-    background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-  margin-bottom: 0;
-  color: var(--muted);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-}
-
-.nav-collapse-toggle:hover {
-  background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
-  border-color: color-mix(in srgb, var(--border-strong) 88%, transparent);
-  color: var(--text);
-  transform: translateY(-1px);
-}
-
 .nav-collapse-toggle__icon {
   display: flex;
   align-items: center;
@@ -3295,6 +3269,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: flex;
   height: 32px;
   align-items: center;
+  gap: 8px;
   transform: translateY(-50%);
 }
 
@@ -3973,7 +3948,9 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 /* Host elements are display:contents, so the anchor itself is the flex item;
    min-width 0 lets it yield to the footer icons and ellipsize. */
 .sidebar-footer-build {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);

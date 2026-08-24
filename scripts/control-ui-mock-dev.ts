@@ -90,7 +90,6 @@ const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 const PLAN_DEMO_RUN_ID = "mock-plan-run";
 const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 const CHAT_SEND_REPLY_DELAY_MS = 200;
-
 type UpdateFixture = {
   available: UpdateAvailable;
   runResponse: unknown;
@@ -1947,6 +1946,7 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    gatewayBootId: "mock-gateway-boot-1",
     serverBuildId: "mock",
     updateSchedule,
     updateAvailable: updateFixture?.available ?? null,

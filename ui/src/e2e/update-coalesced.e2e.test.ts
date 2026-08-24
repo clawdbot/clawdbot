@@ -79,7 +79,7 @@ suite.define(() => {
         );
         await updateIssue.locator("summary").click();
         await updateIssue.locator(".sidebar-update-card__compact-reason").waitFor();
-        expect(await page.locator(".sidebar-footer-update").count()).toBe(0);
+        expect(await page.locator(".sidebar-footer-update").count()).toBe(1);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "package-update-failure.png") });
       },
@@ -137,7 +137,7 @@ suite.define(() => {
             { exact: true },
           )
           .waitFor();
-        expect(await page.locator(".sidebar-footer-update").count()).toBe(0);
+        expect(await page.locator(".sidebar-footer-update").count()).toBe(1);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
       },
