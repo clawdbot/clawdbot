@@ -28,7 +28,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "mattermost",
   "memory-core",
   "ollama",
-  "open-prose",
   "qa-channel",
   "qa-lab",
   "reef",

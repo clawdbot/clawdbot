@@ -133,7 +133,6 @@ const DOCS_ROOT_SEGMENTS = new Set([
   "plan",
   "platforms",
   "plugins",
-  "prose",
   "providers",
   "refactor",
   "reference",
