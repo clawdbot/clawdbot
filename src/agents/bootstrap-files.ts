@@ -375,7 +375,7 @@ export async function resolveBootstrapFilesForRun(params: {
       files: updated,
       session,
       protectedFiles,
-      tierOverride: params.config?.agents?.defaults?.bootstrapTier as BootstrapTier | undefined,
+      tierOverride: params.config?.agents?.defaults?.bootstrapTier,
     }),
     workspaceSetupCompleted,
     params.workspaceDir,
