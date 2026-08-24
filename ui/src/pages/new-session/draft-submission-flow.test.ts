@@ -821,14 +821,24 @@ describe("DraftSubmissionFlow", () => {
   });
 
   it.each([
-    { scenario: "keeps startup progress active through navigation", navigationError: null },
+    {
+      scenario: "keeps startup progress active through navigation",
+      navigationError: null,
+      canonicalSessionKey: null,
+    },
+    {
+      scenario: "keeps placement ownership when the Gateway promotes a new session key",
+      navigationError: null,
+      canonicalSessionKey: "agent:cloud:dashboard:server-key",
+    },
     {
       scenario: "surfaces navigation failure after placement startup commits",
       navigationError: "Placement chat route failed to load",
+      canonicalSessionKey: null,
     },
-  ])("$scenario", async ({ navigationError }) => {
+  ])("$scenario", async ({ canonicalSessionKey, navigationError }) => {
     const createResult = vi.fn(async (params: Record<string, unknown>) => ({
-      key: String(params.key),
+      key: canonicalSessionKey ?? String(params.key),
       initialRun: { status: "idle" as const },
     }));
     const start = vi.fn(

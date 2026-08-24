@@ -527,8 +527,9 @@ export class DraftSubmissionFlow {
         return;
       }
       const recoveryOwnerKey = submissionPlacementRecovery?.sessionKey ?? "";
-      const ownsSubmissionRecovery = () =>
-        this.pendingPlacement.owns(submissionGatewayUrl, submissionRecoveryScope, recoveryOwnerKey);
+      const ownsRecovery = (sessionKey: string) =>
+        this.pendingPlacement.owns(submissionGatewayUrl, submissionRecoveryScope, sessionKey);
+      const ownsSubmissionRecovery = () => ownsRecovery(recoveryOwnerKey);
       const isSubmissionLifecycleCurrent = () =>
         this.read().isConnected &&
         submissionClient.recoveryScopeReady &&
@@ -598,7 +599,7 @@ export class DraftSubmissionFlow {
           createdAt: submittedAt,
         });
         const ownsStartedPlacement = () =>
-          isSubmissionLifecycleCurrent() && ownsSubmissionRecovery();
+          isSubmissionLifecycleCurrent() && ownsRecovery(recovery.sessionKey);
         if (!ownsStartedPlacement()) {
           return;
         }
