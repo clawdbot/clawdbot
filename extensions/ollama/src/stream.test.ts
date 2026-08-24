@@ -351,7 +351,6 @@ describe("createOllamaStreamFn thinking events", () => {
         allowPrivateNetwork: true,
         hostnameAllowlist: ["localhost"],
       },
-      signal: expect.any(AbortSignal),
       timeoutMs: 2500,
       auditContext: "ollama-stream.chat",
     });
@@ -540,7 +539,7 @@ describe("createOllamaStreamFn thinking events", () => {
     }
 
     expect(events.some((event) => event.type === "done")).toBe(true);
-    expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length + 1);
+    expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
   });
 
   it("redacts reflected credentials from a real non-2xx Ollama response", async () => {
@@ -619,6 +618,49 @@ describe("createOllamaStreamFn thinking events", () => {
       console.info(
         "[ollama credential redaction proof] surface=stream status=429 safe-marker-present=true authorization-secret-absent=true custom-secret-absent=true success-control=true",
       );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("rejects incomplete UTF-8 after a real terminal Ollama response", async () => {
+    let corrupted = true;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      const valid = Buffer.from(`${JSON.stringify(makeOllamaResponse({ content: "ok" }))}\n`);
+      response.end(corrupted ? Buffer.concat([valid, Buffer.from([0xc3])]) : valid);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { fetchWithSsrFGuard } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+      const address = server.address() as AddressInfo;
+      const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
+      const readEventTypes = async () => {
+        const events: string[] = [];
+        for await (const event of streamFn(
+          { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+          { messages: [{ role: "user", content: "test" }] } as never,
+          {},
+        ) as AsyncIterable<{ type: string }>) {
+          events.push(event.type);
+        }
+        return events;
+      };
+
+      expect(await readEventTypes()).toContain("error");
+      corrupted = false;
+      expect(await readEventTypes()).toContain("done");
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

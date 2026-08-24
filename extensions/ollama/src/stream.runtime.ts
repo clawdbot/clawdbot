@@ -68,9 +68,6 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-const OLLAMA_TERMINAL_TAIL_MAX_BYTES = 256 * 1024;
-const OLLAMA_TERMINAL_TAIL_DEADLINE_MS = 2_000;
-const OLLAMA_TERMINAL_TAIL_GUARD_TIMEOUT_MS = OLLAMA_TERMINAL_TAIL_DEADLINE_MS + 100;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -875,96 +872,32 @@ export function buildAssistantMessage(
 
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  options: { onTerminalRecord?: () => void } = {},
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   let pendingRecordBytes = 0;
-  let terminalRecord: OllamaChatResponse | undefined;
-  let terminalTailBytes = 0;
-  let terminalTailDeadline: number | undefined;
-  let terminalTailCutoff = false;
   try {
     while (true) {
-      const readResult = terminalRecord
-        ? await readWithTerminalTailDeadline(reader, terminalTailDeadline)
-        : { result: await reader.read(), timedOut: false };
-      const { done, value } = readResult.result;
+      const { done, value } = await reader.read();
       if (done) {
-        if (readResult.timedOut) {
-          terminalTailCutoff = true;
-        }
         break;
       }
-      if (terminalRecord) {
-        const tail = decodeTerminalTail(decoder, value, terminalTailBytes);
-        terminalTailBytes = tail.totalBytes;
-        if (tail.cutoff) {
-          terminalTailCutoff = true;
-          break;
-        }
-        continue;
-      }
-      const parsedRecords: OllamaChatResponse[] = [];
-      let offset = 0;
-      while (offset < value.byteLength) {
-        const newlineIndex = value.indexOf(0x0a, offset);
-        const segmentEnd = newlineIndex === -1 ? value.byteLength : newlineIndex + 1;
-        const segment = value.subarray(offset, segmentEnd);
-        pendingRecordBytes = checkNdjsonRecordCap(segment, pendingRecordBytes);
-        buffer += decoder.decode(segment, { stream: true });
-        offset = segmentEnd;
-        if (newlineIndex === -1) {
-          break;
-        }
+      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
 
-        const line = buffer;
-        buffer = "";
+      for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) {
           continue;
         }
-        const parsed = parseOllamaNdjsonRecord(trimmed);
-        if (parsed.done) {
-          // Hold the terminal record until the whole response body has been
-          // read and fatal-decoded: the production consumer exits on the
-          // terminal record, so malformed bytes in later transport chunks
-          // would otherwise complete successfully without validation.
-          terminalRecord = parsed;
-          options.onTerminalRecord?.();
-          terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
-          const tail = decodeTerminalTail(decoder, value.subarray(offset), terminalTailBytes);
-          terminalTailBytes = tail.totalBytes;
-          if (tail.cutoff) {
-            terminalTailCutoff = true;
-          }
-          break;
-        }
-        parsedRecords.push(parsed);
-      }
-
-      for (const parsed of parsedRecords) {
-        yield parsed;
-      }
-      if (terminalRecord) {
-        if (terminalTailCutoff) {
-          break;
-        }
-        continue;
+        yield parseOllamaNdjsonRecord(trimmed);
       }
     }
 
-    if (!terminalTailCutoff) {
-      // Finalize the fatal decoder so a terminal partial UTF-8 sequence
-      // (buffered by the continuing stream decode) rejects the stream at EOF
-      // when the generator is drained without a terminal record. A bounded
-      // terminal-tail cutoff is a policy boundary, not an EOF signal.
-      buffer += decoder.decode();
-    }
-
-    if (terminalRecord) {
-      yield terminalRecord;
-    } else if (buffer.trim()) {
+    buffer += decoder.decode();
+    if (buffer.trim()) {
       yield parseOllamaNdjsonRecord(buffer.trim());
     }
   } finally {
@@ -1003,68 +936,6 @@ function parseOllamaNdjsonRecord(value: string): OllamaChatResponse {
   }
   // SAFETY: Required Ollama chat-record fields are validated above; optional fields remain inert.
   return parsed as OllamaChatResponse;
-}
-
-function decodeTerminalTail(
-  decoder: TextDecoder,
-  value: Uint8Array,
-  terminalTailBytes: number,
-): { totalBytes: number; cutoff: boolean } {
-  const remainingBytes = OLLAMA_TERMINAL_TAIL_MAX_BYTES - terminalTailBytes;
-  if (remainingBytes > 0 && value.byteLength > 0) {
-    // Validate only the raw bytes inside the tail window. A code point that
-    // crosses the cutoff stays buffered and is intentionally not finalized.
-    const inspected = value.subarray(0, Math.min(value.byteLength, remainingBytes));
-    const decoded = decoder.decode(inspected, {
-      stream: true,
-    });
-    if (/[^	\n\r ]/.test(decoded)) {
-      throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-    }
-  }
-  const totalBytes = terminalTailBytes + value.byteLength;
-  return {
-    totalBytes,
-    cutoff: totalBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES,
-  };
-}
-
-async function readWithTerminalTailDeadline(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  deadline: number | undefined,
-): Promise<{
-  result: ReadableStreamReadResult<Uint8Array>;
-  timedOut: boolean;
-}> {
-  const remainingMs = deadline === undefined ? 0 : deadline - Date.now();
-  if (remainingMs <= 0) {
-    return {
-      result: { done: true as const, value: undefined },
-      timedOut: true,
-    };
-  }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read().then((result) => ({ result, timedOut: false })),
-      new Promise<{ result: ReadableStreamReadResult<Uint8Array>; timedOut: boolean }>(
-        (resolve) => {
-          timeout = setTimeout(
-            () =>
-              resolve({
-                result: { done: true as const, value: undefined },
-                timedOut: true,
-              }),
-            remainingMs,
-          );
-        },
-      ),
-    ]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 function resolveOllamaChatUrl(baseUrl: string): string {
@@ -1185,16 +1056,6 @@ function createRawOllamaStreamFn(
             acquisitionDeadline?.signal,
           )
           .finally(acquisitionDeadline?.cleanup);
-        const requestTimeoutGuard = buildTimeoutAbortSignal({
-          timeoutMs: requestTimeoutMs,
-          signal: options?.signal,
-          operation: "ollama-stream.chat",
-          url: chatUrl,
-        });
-        const guardedFetchTimeoutMs =
-          requestTimeoutMs === undefined
-            ? undefined
-            : Math.max(requestTimeoutMs, OLLAMA_TERMINAL_TAIL_GUARD_TIMEOUT_MS);
         const guardedFetch = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
@@ -1203,23 +1064,14 @@ function createRawOllamaStreamFn(
             body: JSON.stringify(requestBody),
           },
           policy: ssrfPolicy,
-          ...(requestTimeoutGuard.signal ? { signal: requestTimeoutGuard.signal } : {}),
-          timeoutMs: guardedFetchTimeoutMs,
+          ...(options?.signal ? { signal: options.signal } : {}),
+          timeoutMs: requestTimeoutMs,
           auditContext: "ollama-stream.chat",
         }).catch((error: unknown) => {
-          requestTimeoutGuard.cleanup();
           localServiceLease?.release();
           throw error;
         });
         const { response, release, refreshTimeout } = guardedFetch;
-        const onTerminalRecord = () => {
-          // The configured request timeout remains authoritative until a
-          // terminal record is parsed. The parser then owns a separate,
-          // bounded tail-validation window; refresh the transport guard so it
-          // cannot preempt that window.
-          requestTimeoutGuard.cleanup();
-          refreshTimeout?.();
-        };
 
         try {
           await notifyProviderHttpResponse({ options, response, model });
@@ -1374,17 +1226,14 @@ function createRawOllamaStreamFn(
             return resolution.text;
           };
 
-          for await (const chunk of parseNdjsonStream(reader, {
-            onTerminalRecord,
-          })) {
+          for await (const chunk of parseNdjsonStream(reader)) {
             throwIfOllamaStreamAborted(options?.signal);
             if (finalResponse) {
               throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
             }
-            // Keep the guarded timeout tied to inference progress. Terminal-tail
-            // validation has its own explicit bounded completion policy above.
+            // Keep guarded timeouts tied to inference progress. Once done arrives,
+            // trailing validation stays on the existing bounded request deadline.
             refreshTimeout?.();
-            requestTimeoutGuard.refresh();
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {
               ensureStreamStarted();
@@ -1531,7 +1380,6 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
-          requestTimeoutGuard.cleanup();
           try {
             await release();
           } finally {

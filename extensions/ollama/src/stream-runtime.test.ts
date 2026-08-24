@@ -1,5 +1,3 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 // Ollama tests cover stream runtime plugin behavior.
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
@@ -519,8 +517,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
 
         const request = getGuardedFetchCall(fetchMock);
         expect(request.timeoutMs).toBe(123_456);
-        expect(request.signal).toEqual(expect.any(AbortSignal));
-        expect(request.signal).not.toBe(signal);
+        expect(request.signal).toBe(signal);
         expect(request.init?.signal).toBeUndefined();
       },
     );
@@ -1222,23 +1219,6 @@ function mockNdjsonReader(
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
 }
 
-function mockChunkSequenceReader(chunks: Array<Uint8Array | null>) {
-  let index = 0;
-  return {
-    read: vi.fn(async () => {
-      const value = chunks[index++];
-      return value === null
-        ? { done: true as const, value: undefined }
-        : { done: false as const, value };
-    }),
-    releaseLock: () => {},
-    cancel: async () => {},
-    closed: Promise.resolve(undefined),
-  } as unknown as ReadableStreamDefaultReader<Uint8Array> & {
-    read: ReturnType<typeof vi.fn>;
-  };
-}
-
 function createPendingCancelNdjsonStream(lines: string[]) {
   const encoder = new TextEncoder();
   let markCancelStarted!: () => void;
@@ -1295,287 +1275,6 @@ async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Arr
 }
 
 describe("parseNdjsonStream", () => {
-  it("clears the terminal-tail deadline when the reader completes first", async () => {
-    vi.useFakeTimers();
-    try {
-      const encoder = new TextEncoder();
-      const reader = mockChunkSequenceReader([
-        encoder.encode('{"model":"m","message":{"role":"assistant","content":""},"done":true}\n'),
-        encoder.encode("\n"),
-        null,
-      ]);
-      const chunks = [];
-      for await (const chunk of parseNdjsonStream(reader)) {
-        chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(reader.read).toHaveBeenCalledTimes(3);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("counts terminal-tail bytes already present in the terminal read", async () => {
-    vi.useFakeTimers();
-    try {
-      const encoder = new TextEncoder();
-      const terminal = encoder.encode(
-        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-      );
-      const value = new Uint8Array(terminal.byteLength + 16 * 1024 * 1024 + 2);
-      value.set(terminal);
-      value.fill(0x20, terminal.byteLength, value.length - 1);
-      value[value.length - 1] = 0x0a;
-      let readCount = 0;
-      const read = vi.fn(async () => {
-        readCount += 1;
-        if (readCount === 1) {
-          return { done: false as const, value };
-        }
-        return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
-      });
-      const reader = {
-        read,
-        releaseLock: () => {},
-        cancel: async () => {},
-        closed: Promise.resolve(undefined),
-      } as unknown as ReadableStreamDefaultReader<Uint8Array>;
-
-      const chunksPromise = (async () => {
-        const chunks = [];
-        for await (const chunk of parseNdjsonStream(reader)) {
-          chunks.push(chunk);
-        }
-        return chunks;
-      })();
-      await vi.advanceTimersByTimeAsync(2_000);
-      const chunks = await chunksPromise;
-
-      expect(chunks).toHaveLength(1);
-      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-      expect(read).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("ignores invalid UTF-8 beyond the tail cap in the terminal read", async () => {
-    const encoder = new TextEncoder();
-    const terminal = encoder.encode(
-      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-    );
-    const tail = new Uint8Array(256 * 1024 + 2).fill(0x20);
-    tail[256 * 1024] = 0xc3;
-    tail[256 * 1024 + 1] = 0x28;
-    const value = new Uint8Array(terminal.byteLength + tail.byteLength);
-    value.set(terminal);
-    value.set(tail, terminal.byteLength);
-
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(mockChunkSequenceReader([value]))) {
-      chunks.push(chunk);
-    }
-
-    expect(chunks).toHaveLength(1);
-    expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-  });
-
-  it("ignores invalid UTF-8 beyond the tail cap in a later read", async () => {
-    const encoder = new TextEncoder();
-    const terminal = encoder.encode(
-      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-    );
-    const tail = new Uint8Array(256 * 1024 + 2).fill(0x20);
-    tail[256 * 1024] = 0xc3;
-    tail[256 * 1024 + 1] = 0x28;
-    const reader = mockChunkSequenceReader([terminal, tail]);
-
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-    }
-
-    expect(chunks).toHaveLength(1);
-    expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-    expect(reader.read).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps terminal-line whitespace under the NDJSON record cap", async () => {
-    const encoder = new TextEncoder();
-    const terminal = encoder.encode(
-      '{"model":"m","message":{"role":"assistant","content":""},"done":true}',
-    );
-    const value = new Uint8Array(terminal.byteLength + 16 * 1024 * 1024 + 2);
-    value.set(terminal);
-    value.fill(0x20, terminal.byteLength, value.length - 1);
-    value[value.length - 1] = 0x0a;
-    const reader = mockChunkSequenceReader([value]);
-
-    const chunksPromise = (async () => {
-      const chunks = [];
-      for await (const chunk of parseNdjsonStream(reader)) {
-        chunks.push(chunk);
-      }
-      return chunks;
-    })();
-
-    await expect(chunksPromise).rejects.toThrow(/Ollama NDJSON record exceeds/);
-  });
-
-  it("does not apply the NDJSON record cap to a large later tail", async () => {
-    vi.useFakeTimers();
-    try {
-      const encoder = new TextEncoder();
-      const terminal = encoder.encode(
-        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-      );
-      const tail = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
-      const reader = mockChunkSequenceReader([terminal, tail, null]);
-
-      const chunksPromise = (async () => {
-        const chunks = [];
-        for await (const chunk of parseNdjsonStream(reader)) {
-          chunks.push(chunk);
-        }
-        return chunks;
-      })();
-      await vi.advanceTimersByTimeAsync(2_000);
-      const chunks = await chunksPromise;
-
-      expect(chunks).toHaveLength(1);
-      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-      expect(reader.read).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("rejects a non-whitespace UTF-8 tail when it completes in a later read", async () => {
-    const encoder = new TextEncoder();
-    const terminal = encoder.encode(
-      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-    );
-    const firstTail = new Uint8Array(256 * 1024 - 1).fill(0x20);
-    firstTail[firstTail.length - 1] = 0xc3;
-    const first = new Uint8Array(terminal.byteLength + firstTail.byteLength);
-    first.set(terminal);
-    first.set(firstTail, terminal.byteLength);
-    const reader = mockChunkSequenceReader([first, new Uint8Array([0xa9]), null]);
-
-    const chunksPromise = (async () => {
-      const chunks = [];
-      for await (const chunk of parseNdjsonStream(reader)) {
-        chunks.push(chunk);
-      }
-      return chunks;
-    })();
-
-    await expect(chunksPromise).rejects.toThrow(
-      "OpenClaw transport error: malformed_streaming_fragment",
-    );
-  });
-
-  it("yields the terminal record when the byte cap cuts off an incomplete UTF-8 tail", async () => {
-    const encoder = new TextEncoder();
-    const terminal = encoder.encode(
-      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-    );
-    const tail = new Uint8Array(256 * 1024 + 1).fill(0x20);
-    tail[tail.length - 1] = 0xc3;
-    const value = new Uint8Array(terminal.byteLength + tail.byteLength);
-    value.set(terminal);
-    value.set(tail, terminal.byteLength);
-    const reader = mockChunkSequenceReader([value]);
-
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-    }
-
-    expect(chunks).toHaveLength(1);
-    expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-    expect(reader.read).toHaveBeenCalledTimes(1);
-  });
-
-  it("yields the terminal record when the deadline cuts off an incomplete UTF-8 tail", async () => {
-    vi.useFakeTimers();
-    try {
-      const encoder = new TextEncoder();
-      const terminal = encoder.encode(
-        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-      );
-      const value = new Uint8Array(terminal.byteLength + 1);
-      value.set(terminal);
-      value[value.length - 1] = 0xc3;
-      let readCount = 0;
-      const read = vi.fn(async () => {
-        readCount += 1;
-        if (readCount === 1) {
-          return { done: false as const, value };
-        }
-        return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
-      });
-      const reader = {
-        read,
-        releaseLock: () => {},
-        cancel: async () => {},
-        closed: Promise.resolve(undefined),
-      } as unknown as ReadableStreamDefaultReader<Uint8Array>;
-
-      const chunksPromise = (async () => {
-        const chunks = [];
-        for await (const chunk of parseNdjsonStream(reader)) {
-          chunks.push(chunk);
-        }
-        return chunks;
-      })();
-      await vi.advanceTimersByTimeAsync(2_000);
-      const chunks = await chunksPromise;
-
-      expect(chunks).toHaveLength(1);
-      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-      expect(read).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("accepts a split three-byte UTF-8 suffix at the terminal-tail cap", async () => {
-    vi.useFakeTimers();
-    try {
-      const encoder = new TextEncoder();
-      const terminal = encoder.encode(
-        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
-      );
-      const firstTail = new Uint8Array(256 * 1024).fill(0x20);
-      firstTail[firstTail.length - 3] = 0xf0;
-      firstTail[firstTail.length - 2] = 0x9f;
-      firstTail[firstTail.length - 1] = 0x98;
-      const first = new Uint8Array(terminal.byteLength + firstTail.byteLength);
-      first.set(terminal);
-      first.set(firstTail, terminal.byteLength);
-      const reader = mockChunkSequenceReader([first, new Uint8Array([0x80]), null]);
-
-      const chunksPromise = (async () => {
-        const chunks = [];
-        for await (const chunk of parseNdjsonStream(reader)) {
-          chunks.push(chunk);
-        }
-        return chunks;
-      })();
-
-      const chunks = await chunksPromise;
-
-      expect(chunks).toHaveLength(1);
-      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
-      expect(reader.read).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("cancels an oversized unterminated record", async () => {
     const oversizedRecord = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
     let canceled = false;
@@ -1630,30 +1329,59 @@ describe("parseNdjsonStream", () => {
     expect(ollamaStreamWarnMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an intermediate NDJSON record without a boolean done field", async () => {
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"partial"}}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
-    ]);
+  it.each([
+    {
+      name: "corrupted bytes inside an NDJSON record",
+      bytes: new Uint8Array([
+        ...new TextEncoder().encode('{"message":{"role":"assistant","content":"'),
+        0xff,
+        ...new TextEncoder().encode('"},"done":false}\n'),
+      ]),
+    },
+    {
+      name: "an incomplete UTF-8 sequence after the terminal record",
+      bytes: new Uint8Array([
+        ...new TextEncoder().encode(
+          '{"message":{"role":"assistant","content":"ok"},"done":true}\n',
+        ),
+        0xc3,
+      ]),
+    },
+  ])("rejects $name", async ({ bytes }) => {
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }).getReader();
 
-    await expect(expectNoParsedChunks(reader)).rejects.toThrow(
-      "OpenClaw transport error: malformed_streaming_fragment",
-    );
+    await expect(async () => {
+      for await (const _chunk of parseNdjsonStream(reader)) {
+        // Drain the response so decoder finalization runs at real EOF.
+      }
+    }).rejects.toThrow(/utf-8/i);
   });
 
-  it("rejects an unframed non-whitespace tail after the terminal record", async () => {
-    const encoder = new TextEncoder();
-    const terminal = encoder.encode(
-      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+  it("preserves valid UTF-8 characters split across transport chunks", async () => {
+    const bytes = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"héllo"},"done":true}\n',
     );
-    const tail = encoder.encode("not-json");
-    const value = new Uint8Array(terminal.byteLength + tail.byteLength);
-    value.set(terminal);
-    value.set(tail, terminal.byteLength);
+    const split = bytes.indexOf(0xc3) + 1;
+    const reader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      },
+    }).getReader();
+    const chunks = [];
 
-    await expect(expectNoParsedChunks(mockChunkSequenceReader([value]))).rejects.toThrow(
-      "OpenClaw transport error: malformed_streaming_fragment",
-    );
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.message.content).toBe("héllo");
   });
 
   it.each(["null", "[]", "42"])("rejects non-object NDJSON records: %s", async (record) => {
@@ -3993,8 +3721,8 @@ describe("createConfiguredOllamaStreamFn", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
       const fetchCall = getGuardedFetchCall(fetchWithSsrFGuardMock);
-      expect(fetchCall.signal).toEqual(expect.any(AbortSignal));
-      expect(fetchCall.timeoutMs).toBe(2_100);
+      expect(fetchCall.signal).toBeUndefined();
+      expect(fetchCall.timeoutMs).toBe(25);
       await vi.advanceTimersByTimeAsync(100);
       expect(acquisitionSignal?.aborted).toBe(false);
 
@@ -4017,86 +3745,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       const events = await eventsPromise;
 
       expect(events.at(-1)).toMatchObject({ type: "done" });
-      expect(refreshTimeout).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a short request timeout alive during an open terminal tail", async () => {
-    vi.useFakeTimers();
-    try {
-      const encoder = new TextEncoder();
-      let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-      let guardTimer: ReturnType<typeof setTimeout> | undefined;
-      let guardTimedOut = false;
-      const body = new ReadableStream<Uint8Array>({
-        start(streamController) {
-          controller = streamController;
-        },
-      });
-      const armGuardTimer = (timeoutMs: number) => {
-        if (guardTimer !== undefined) {
-          clearTimeout(guardTimer);
-        }
-        guardTimer = setTimeout(() => {
-          guardTimedOut = true;
-          controller?.error(new Error("guard timeout"));
-        }, timeoutMs);
-      };
-      const guardRelease = vi.fn(async () => {
-        if (guardTimer !== undefined) {
-          clearTimeout(guardTimer);
-        }
-      });
-      fetchWithSsrFGuardMock.mockImplementation(async (request: GuardedFetchCall) => {
-        const timeoutMs = request.timeoutMs ?? 25;
-        armGuardTimer(timeoutMs);
-        return {
-          response: new Response(body, {
-            status: 200,
-            headers: { "Content-Type": "application/x-ndjson" },
-          }),
-          release: guardRelease,
-          refreshTimeout: () => armGuardTimer(timeoutMs),
-        };
-      });
-
-      const eventsPromise = collectStreamEvents(
-        await createManagedOllamaTestStream({
-          baseUrl: "http://provider-host:11434",
-          model: { requestTimeoutMs: 25 },
-          acquire: vi.fn(async () => ({ release: vi.fn() })),
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expectDefined(controller, "controlled NDJSON stream").enqueue(
-        encoder.encode(
-          '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}\n',
-        ),
-      );
-
-      let settled = false;
-      void eventsPromise.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(settled).toBe(false);
-      expect(guardTimedOut).toBe(false);
-      expect(getGuardedFetchCall(fetchWithSsrFGuardMock).timeoutMs).toBe(2_100);
-      await vi.advanceTimersByTimeAsync(1_900);
-      const events = await eventsPromise;
-
-      expect(events.at(-1)).toMatchObject({ type: "done" });
-      expect(events.some((event) => event.type === "error")).toBe(false);
-      expect(guardTimedOut).toBe(false);
-      expect(guardRelease).toHaveBeenCalledOnce();
+      expect(refreshTimeout).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -4312,142 +3961,3 @@ describe("createConfiguredOllamaStreamFn", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-describe("parseNdjsonStream UTF-8 decoding", () => {
-  function byteReader(bytes: Uint8Array): ReadableStreamDefaultReader<Uint8Array> {
-    let consumed = false;
-    return {
-      read: async () => {
-        if (consumed) {
-          return { done: true as const, value: undefined };
-        }
-        consumed = true;
-        return { done: false as const, value: bytes };
-      },
-      releaseLock: () => {},
-      cancel: async () => {},
-      closed: Promise.resolve(undefined),
-    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
-  }
-
-  it("rejects invalid UTF-8 bytes in streaming NDJSON", async () => {
-    const encoded = new TextEncoder().encode(
-      '{"message":{"role":"assistant","content":"hello"},"done":false}\n',
-    );
-    const corrupted = new Uint8Array(encoded);
-    corrupted[encoded.indexOf(0x68) + 1] = 0xff;
-
-    const generator = parseNdjsonStream(byteReader(corrupted));
-    await expect(async () => {
-      for await (const _ of generator) {
-        // Drain the generator; the corrupted byte must reject the stream.
-      }
-    }).rejects.toThrow(/not valid for encoding utf-8/i);
-  });
-
-  it("rejects a terminal partial UTF-8 sequence at EOF", async () => {
-    const encoded = new TextEncoder().encode(
-      '{"message":{"role":"assistant","content":"hello"},"done":false}\n',
-    );
-    // A lone leading UTF-8 byte stays buffered by the continuing stream decode
-    // and must reject the stream when the fatal decoder is finalized at EOF.
-    const truncated = new Uint8Array([...encoded, 0xc3]);
-
-    const generator = parseNdjsonStream(byteReader(truncated));
-    await expect(async () => {
-      for await (const _ of generator) {
-        // Drain the generator; the terminal partial sequence must reject.
-      }
-    }).rejects.toThrow(/not valid for encoding utf-8/i);
-  });
-
-  it("parses valid UTF-8 NDJSON unchanged (negative control)", async () => {
-    const encoded = new TextEncoder().encode(
-      '{"message":{"role":"assistant","content":"hello"},"done":false}\n',
-    );
-    const chunks: unknown[] = [];
-    for await (const chunk of parseNdjsonStream(byteReader(encoded))) {
-      chunks.push(chunk);
-    }
-    expect(chunks).toHaveLength(1);
-    expect((chunks[0] as { message?: { content?: string } }).message?.content).toBe("hello");
-  });
-});
-
-describe("parseNdjsonStream real HTTP transport", () => {
-  async function serve(bytes: Uint8Array): Promise<{ url: string; close: () => Promise<void> }> {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/x-ndjson" });
-      response.end(bytes);
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const address = server.address() as AddressInfo;
-    return {
-      url: `http://127.0.0.1:${address.port}/api/chat`,
-      close: async () => {
-        server.closeAllConnections?.();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      },
-    };
-  }
-
-  async function drain(url: string): Promise<unknown[]> {
-    const response = await fetch(url, { method: "POST" });
-    if (!response.body) {
-      throw new Error("response body missing");
-    }
-    const chunks: unknown[] = [];
-    for await (const chunk of parseNdjsonStream(response.body.getReader())) {
-      chunks.push(chunk);
-    }
-    return chunks;
-  }
-
-  it("rejects invalid UTF-8 bytes through a real HTTP response stream", async () => {
-    const valid = new TextEncoder().encode(
-      '{"message":{"role":"assistant","content":"hello"},"done":false}\n',
-    );
-    const corrupted = new Uint8Array(valid);
-    corrupted[valid.indexOf(0x68) + 1] = 0xff;
-    const { url, close } = await serve(corrupted);
-    try {
-      await expect(drain(url)).rejects.toThrow(/not valid for encoding utf-8/i);
-    } finally {
-      await close();
-    }
-  });
-
-  it("rejects a terminal partial UTF-8 sequence at EOF through a real HTTP stream", async () => {
-    const valid = new TextEncoder().encode(
-      '{"message":{"role":"assistant","content":"hello"},"done":false}\n',
-    );
-    const { url, close } = await serve(new Uint8Array([...valid, 0xc3]));
-    try {
-      await expect(drain(url)).rejects.toThrow(/not valid for encoding utf-8/i);
-    } finally {
-      await close();
-    }
-  });
-
-  it("parses valid UTF-8 NDJSON through a real HTTP response stream", async () => {
-    const valid = new TextEncoder().encode(
-      '{"message":{"role":"assistant","content":"hello"},"done":false}\n',
-    );
-    const { url, close } = await serve(valid);
-    try {
-      const chunks = await drain(url);
-      expect(chunks).toHaveLength(1);
-      expect((chunks[0] as { message?: { content?: string } }).message?.content).toBe("hello");
-    } finally {
-      await close();
-    }
-  });
-});
