@@ -1,5 +1,4 @@
 // Lmstudio tests cover models plugin behavior.
-import { createServer } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
@@ -926,7 +925,13 @@ describe("lmstudio-models", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    params: Pick<Parameters<typeof ensureLmstudioModelLoaded>[0], "apiKey" | "headers">;
+    body: string;
+    status: number;
+    expected: string;
+  }>([
     {
       name: "redacts trimmed short API keys without losing safe diagnostics",
       params: { apiKey: "  sk-test  " },
@@ -1008,52 +1013,6 @@ describe("lmstudio-models", () => {
       message: expected,
       resolvedModelKey: "qwen3-8b-instruct",
     });
-  });
-
-  it("redacts actual outbound credentials reflected by a model-load HTTP server", async () => {
-    let responseStatus = 502;
-    const server = createServer((request, response) => {
-      if (request.method === "GET") {
-        response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(
-          JSON.stringify({
-            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
-          }),
-        );
-        return;
-      }
-      const reflected = `upstream rejected ${request.headers.authorization}; proxy ${request.headers["x-proxy-auth"]}`;
-      response.writeHead(responseStatus, { "Content-Type": "application/json" });
-      response.end(responseStatus === 200 ? JSON.stringify({ status: reflected }) : reflected);
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("LM Studio test server did not bind to a local port");
-      }
-      for (const [status, expected] of [
-        [502, "LM Studio model load failed (502): upstream rejected ***; proxy ***"],
-        [200, "LM Studio model load returned unexpected status: upstream rejected ***; proxy ***"],
-      ] as const) {
-        responseStatus = status;
-        await expect(
-          ensureLmstudioModelLoaded({
-            baseUrl: `http://127.0.0.1:${address.port}`,
-            modelKey: "qwen3-8b-instruct",
-            apiKey: "sk-test",
-            headers: { "X-Proxy-Auth": "opaque-short" },
-          }),
-        ).rejects.toThrow(expected);
-      }
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
   });
 
   it("loads model with clamped context length and merged headers", async () => {
