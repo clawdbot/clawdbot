@@ -27,6 +27,7 @@ type NodeTestShardGroup = {
   shard_name: string;
   configs: string[];
   includePatterns?: string[];
+  pretestBuildMode?: NodeTestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
   env?: Record<string, string>;
@@ -38,6 +39,7 @@ type NodeTestShard = {
   configs: string[];
   runner: string;
   requiresDist: boolean;
+  pretestBuildMode?: NodeTestPretestBuildMode;
   includePatterns?: string[];
   env?: Record<string, string>;
   groups?: NodeTestShardGroup[];
@@ -56,6 +58,15 @@ type NodeTestPlanOptions = {
 };
 
 type CompactNodeTestPlanMode = "pull-request" | "push";
+type NodeTestPretestBuildMode = "private-qa" | "runtime";
+
+const PRETEST_RUNTIME_BUILD_FILES = new Set([
+  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+]);
+
+function resolvePretestBuildMode(paths: readonly string[]): NodeTestPretestBuildMode | undefined {
+  return paths.some((file) => PRETEST_RUNTIME_BUILD_FILES.has(file)) ? "runtime" : undefined;
+}
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
@@ -1547,12 +1558,16 @@ function createToolingSplitShards(): NodeTestSplitShard[] {
       listCompactToolingTestFiles(),
       COMPACT_TOOLING_NODE_TEST_GROUPS,
       stripeFileWeight,
-    ).map((includePatterns, index) => ({
-      shardName: `core-tooling-${index + 1}`,
-      configs: [TOOLING_CONFIG],
-      includePatterns,
-      requiresDist: false,
-    })),
+    ).map((includePatterns, index) => {
+      const pretestBuildMode = resolvePretestBuildMode(includePatterns);
+      return {
+        shardName: `core-tooling-${index + 1}`,
+        configs: [TOOLING_CONFIG],
+        includePatterns,
+        ...(pretestBuildMode ? { pretestBuildMode } : {}),
+        requiresDist: false,
+      };
+    }),
     {
       shardName: "core-tooling-isolated",
       configs: ["test/vitest/vitest.tooling-docker.config.ts", TOOLING_ISOLATED_CONFIG],
@@ -1864,6 +1879,9 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
             configs: splitConfigs,
             ...(splitShard.env ? { env: splitShard.env } : {}),
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
+            ...(splitShard.pretestBuildMode
+              ? { pretestBuildMode: splitShard.pretestBuildMode }
+              : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
           },
@@ -2048,7 +2066,13 @@ export function createNodeTestShardBundles(
   const unbundled: NodeTestShard[] = [];
   const groups = new Map<
     string,
-    { configs: string[]; requiresDist: boolean; runner: string; shards: NodeTestShard[] }
+    {
+      configs: string[];
+      pretestBuildMode?: NodeTestPretestBuildMode;
+      requiresDist: boolean;
+      runner: string;
+      shards: NodeTestShard[];
+    }
   >();
 
   for (const shard of shards) {
@@ -2066,9 +2090,10 @@ export function createNodeTestShardBundles(
       continue;
     }
 
-    const key = JSON.stringify([shard.configs, shard.requiresDist, runner]);
+    const key = JSON.stringify([shard.configs, shard.pretestBuildMode, shard.requiresDist, runner]);
     const group = groups.get(key) ?? {
       configs: shard.configs,
+      ...(shard.pretestBuildMode ? { pretestBuildMode: shard.pretestBuildMode } : {}),
       requiresDist: shard.requiresDist,
       runner,
       shards: [],
@@ -2110,6 +2135,7 @@ export function createNodeTestShardBundles(
         shardName,
         configs: group.configs,
         includePatterns: bin.includePatterns.toSorted((a, b) => a.localeCompare(b)),
+        ...(group.pretestBuildMode ? { pretestBuildMode: group.pretestBuildMode } : {}),
         runner: group.runner,
         requiresDist: group.requiresDist,
       });
@@ -2190,6 +2216,7 @@ function createCompactNodeTestShardBundles(
       configs: shard.configs,
       ...(shard.env ? { env: shard.env } : {}),
       ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+      ...(shard.pretestBuildMode ? { pretestBuildMode: shard.pretestBuildMode } : {}),
       requiresDist: shard.requiresDist,
       runner,
       shard_name: shard.shardName,
@@ -2298,6 +2325,11 @@ function createCompactNodeTestShardBundles(
       compactJobs.push({
         checkName,
         groups: bin.groups,
+        ...(bin.groups.some((group) => group.pretestBuildMode === "private-qa")
+          ? { pretestBuildMode: "private-qa" }
+          : bin.groups.some((group) => group.pretestBuildMode === "runtime")
+            ? { pretestBuildMode: "runtime" }
+            : {}),
         requiresDist: firstGroup.requiresDist,
         runner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
