@@ -65,6 +65,25 @@ export class AcpTranslatorSessionState {
     };
   }
 
+  /**
+   * The directory the Gateway will run this session in, when its row records one. Adoption paths
+   * report this instead of the caller's request, so prompt text cannot contradict the agent's cwd.
+   */
+  async getSessionCwd(sessionKey: string): Promise<string | undefined> {
+    try {
+      const row = await this.getGatewaySessionRow(sessionKey);
+      return (
+        normalizeOptionalString(row?.spawnedCwd) ??
+        normalizeOptionalString(row?.spawnedWorkspaceDir)
+      );
+    } catch (err) {
+      // Matches the snapshot read above: an unreachable row leaves the caller on the requested
+      // directory, which is what it would have reported anyway.
+      this.log(`session cwd lookup failed for ${sessionKey}: ${String(err)}`);
+      return undefined;
+    }
+  }
+
   mapGatewaySession(session: GatewaySessionRow, fallbackCwd: string): SessionInfo {
     const cwd =
       normalizeOptionalString(session.spawnedCwd) ??

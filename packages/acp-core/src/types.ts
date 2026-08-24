@@ -24,6 +24,12 @@ export type AcpSession = {
   sessionKey: string;
   ledgerSessionId?: string;
   cwd: string;
+  /**
+   * Whether `cwd` is the directory the Gateway will actually run turns in. Adoption paths attach
+   * to a session whose row may record none, and `chat.send` cannot supply one, so the requested
+   * path is a client hint there rather than a runtime fact. False suppresses claims about it.
+   */
+  runtimeCwd?: boolean;
   createdAt: number;
   lastTouchedAt: number;
   abortController: AbortController | null;

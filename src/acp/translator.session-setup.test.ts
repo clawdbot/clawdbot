@@ -270,3 +270,206 @@ describe("acp session UX bridge behavior", () => {
     expect(sessionUpdatePayloads(sessionUpdate, "user_message_chunk")).toEqual([]);
   });
 });
+
+describe("acp bridge session cwd persistence", () => {
+  // adoptedCwd: undefined = new row (Gateway echoes the requested cwd back);
+  // a string = adopted row that owns that directory; null = adopted row with no directory.
+  function createRecordingGateway(
+    options: {
+      adoptedCwd?: string | null;
+      serverCapabilities?: readonly string[];
+      rowCwd?: string;
+    } = {},
+  ) {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      calls.push({ method, params });
+      if (method === "sessions.list") {
+        return {
+          sessions: options.rowCwd
+            ? [
+                {
+                  key: "agent:main:work",
+                  kind: "direct",
+                  updatedAt: 1_710_000_000_000,
+                  spawnedCwd: options.rowCwd,
+                },
+              ]
+            : [],
+        };
+      }
+      if (method === "sessions.create") {
+        const requested = (params as { cwd?: string } | undefined)?.cwd;
+        const spawnedCwd =
+          options.adoptedCwd === undefined ? requested : (options.adoptedCwd ?? undefined);
+        return { ok: true, entry: spawnedCwd ? { spawnedCwd } : {} };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    return {
+      calls,
+      gateway: createAcpGateway(
+        request,
+        options.serverCapabilities ? { serverCapabilities: options.serverCapabilities } : {},
+      ),
+    };
+  }
+
+  const createCalls = (calls: Array<{ method: string; params: unknown }>) =>
+    calls.filter((call) => call.method === "sessions.create").map((call) => call.params);
+
+  it("provisions a bridge-minted session with the requested cwd", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    const result = await agent.newSession(createNewSessionRequest("/tmp/my-project"));
+    const sessionKey = sessionStore.getSession(result.sessionId)?.sessionKey;
+
+    // The Gateway persists this as spawnedCwd, which every later prompt turn resolves.
+    expect(createCalls(calls)).toStrictEqual([
+      { key: sessionKey, cwd: "/tmp/my-project", cwdOnCreateOnly: true },
+    ]);
+  });
+
+  it("provisions an explicitly routed session key, which requireExisting=false leaves unresolved", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.newSession({
+      ...createNewSessionRequest("/tmp/my-project"),
+      _meta: { sessionKey: "agent:main:work" },
+    } as never);
+
+    // cwdOnCreateOnly makes the Gateway settle absence inside its own mutation, so an existing
+    // operator-owned row keeps its directory without the bridge racing a check-then-create.
+    expect(createCalls(calls)).toStrictEqual([
+      { key: "agent:main:work", cwd: "/tmp/my-project", cwdOnCreateOnly: true },
+    ]);
+  });
+
+  it("reports the directory the Gateway kept when it adopts an existing session", async () => {
+    const sessionStore = createInMemorySessionStore();
+    // The owner's row already has its own directory, so the Gateway keeps it and reports it back.
+    const { gateway } = createRecordingGateway({ adoptedCwd: "/tmp/owner-project" });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    const result = await agent.newSession({
+      ...createNewSessionRequest("/tmp/my-project"),
+      _meta: { sessionKey: "agent:main:work" },
+    } as never);
+
+    // Storing the requested cwd here would make the prompt prefix and provenance receipt
+    // contradict the directory the agent actually runs in.
+    expect(sessionStore.getSession(result.sessionId)?.cwd).toBe("/tmp/owner-project");
+  });
+
+  it("refuses to claim a directory an adopted session will not run in", async () => {
+    const sessionStore = createInMemorySessionStore();
+    // The key already belongs to a session with no directory, so the turn would use the agent
+    // workspace; reporting the requested cwd would recreate the defect this fix removes.
+    const { gateway } = createRecordingGateway({ adoptedCwd: null });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await expect(
+      agent.newSession({
+        ...createNewSessionRequest("/tmp/my-project"),
+        _meta: { sessionKey: "agent:main:work" },
+      } as never),
+    ).rejects.toThrow(/already exists without a working directory/i);
+  });
+
+  it("still provisions a bridge-minted session against a Gateway without the capability", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway({ serverCapabilities: [] });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.newSession(createNewSessionRequest("/tmp/my-project"));
+
+    // A freshly minted key cannot collide with an operator-owned row, so the reported bug stays
+    // fixed on older Gateways; the field is omitted because their closed schema would reject it.
+    expect(createCalls(calls)).toStrictEqual([
+      { key: expect.stringMatching(/^acp-bridge:/) as unknown as string, cwd: "/tmp/my-project" },
+    ]);
+  });
+
+  it("refuses an explicitly routed key against a Gateway without the capability", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway({ serverCapabilities: [] });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    // Such a Gateway would apply the directory to a row it merely adopts, so the request cannot
+    // be honored; starting a session that claims the requested cwd would be the defect again.
+    await expect(
+      agent.newSession({
+        ...createNewSessionRequest("/tmp/my-project"),
+        _meta: { sessionKey: "agent:main:work" },
+      } as never),
+    ).rejects.toThrow(/cannot scope a working directory to newly created sessions/i);
+    expect(createCalls(calls)).toStrictEqual([]);
+  });
+
+  it("reports the adopted session's directory on loadSession, not the requested one", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { gateway } = createRecordingGateway({ rowCwd: "/tmp/owner-project" });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    // loadSession attaches to a Gateway row that owns its directory; the prompt prefix and
+    // provenance receipt read this value, so claiming the requested cwd would contradict the turn.
+    await agent.loadSession(createLoadSessionRequest("agent:main:work", "/tmp/my-project"));
+
+    expect(sessionStore.getSession("agent:main:work")?.cwd).toBe("/tmp/owner-project");
+  });
+
+  it("reports the adopted session's directory on resumeSession too", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { gateway } = createRecordingGateway({ rowCwd: "/tmp/owner-project" });
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.resumeSession({
+      sessionId: "agent:main:work",
+      cwd: "/tmp/my-project",
+      mcpServers: [],
+      _meta: {},
+    } as never);
+
+    expect(sessionStore.getSession("agent:main:work")?.cwd).toBe("/tmp/owner-project");
+  });
+
+  it("keeps the runtime directory unknown when an adopted session records none", async () => {
+    const sessionStore = createInMemorySessionStore();
+    // A normal Gateway session records no directory, so the turn uses the agent workspace.
+    const { gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await agent.loadSession(createLoadSessionRequest("agent:main:work", "/tmp/my-project"));
+
+    // Adoption still succeeds - refusing here would break loading ordinary sessions - but the
+    // client path is not presented as the directory the agent runs in.
+    const session = sessionStore.getSession("agent:main:work");
+    expect(session?.cwd).toBe("/tmp/my-project");
+    expect(session?.runtimeCwd).toBe(false);
+  });
+
+  it("treats a bridge-provisioned session's directory as the runtime one", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    const result = await agent.newSession(createNewSessionRequest("/tmp/my-project"));
+
+    expect(sessionStore.getSession(result.sessionId)?.runtimeCwd).not.toBe(false);
+  });
+
+  it("rejects a relative cwd instead of silently running elsewhere", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const { calls, gateway } = createRecordingGateway();
+    const agent = new AcpGatewayAgent(createAcpConnection(), gateway, { sessionStore });
+
+    await expect(agent.newSession(createNewSessionRequest("relative/project"))).rejects.toThrow(
+      /requires an absolute cwd/i,
+    );
+    expect(createCalls(calls)).toStrictEqual([]);
+  });
+});

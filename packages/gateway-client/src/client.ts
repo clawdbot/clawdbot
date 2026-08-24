@@ -350,6 +350,9 @@ export class GatewayClient {
   private approvalRuntimeTokenRetryBudgetUsed = false;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
+  // Server capabilities from the current connection's hello; a reconnect may land on a
+  // different build, so this is replaced on every hello rather than accumulated.
+  private serverCapabilities: ReadonlySet<string> = new Set<string>();
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
   private readonly requestTimeoutMs: number;
@@ -425,6 +428,9 @@ export class GatewayClient {
           clearInterval(this.tickTimer);
           this.tickTimer = null;
         }
+        // A reconnect may land on a different build, so capabilities must not outlive the
+        // connection that advertised them; the next hello republishes the current set.
+        this.serverCapabilities = new Set<string>();
         if (decision.notify) {
           this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
         }
@@ -457,6 +463,15 @@ export class GatewayClient {
         !(error instanceof RangeError),
       rethrowSocketFactoryError: (error) => error instanceof GatewayClientTransportPolicyError,
     });
+  }
+
+  /**
+   * Whether the connected Gateway advertised this capability on hello. Older Gateways omit
+   * newer entries, so callers must treat `false` as "not supported" and degrade rather than
+   * send a request field a closed schema would reject.
+   */
+  hasServerCapability(capability: string): boolean {
+    return this.serverCapabilities.has(capability);
   }
 
   getConnectionMetadata(): GatewayClientConnectionMetadata {
@@ -970,6 +985,7 @@ export class GatewayClient {
       this.opts.password = undefined;
       this.opts.preferBootstrapToken = false;
     }
+    this.serverCapabilities = new Set(helloOk.features?.capabilities ?? []);
     this.tickIntervalMs =
       typeof helloOk.policy?.tickIntervalMs === "number" ? helloOk.policy.tickIntervalMs : 30_000;
     if (reconnectWithCurrentNodeProtocol) {

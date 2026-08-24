@@ -2361,6 +2361,51 @@ test("sessions.create accepts a node-host cwd without provisioning a Gateway wor
   expect(stored).not.toHaveProperty("sessionDiffBaselineCapture");
 });
 
+test("sessions.create cwdOnCreateOnly sets the directory on a genuinely new session", async () => {
+  await createSessionStoreDir();
+  // Real directory: sessions.create lstats the cwd and rejects one that is absent.
+  const acpProject = tempDirs.make("openclaw-session-acp-fresh-");
+  const created = await directSessionReq<{ entry: { spawnedCwd?: string } }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      key: "agent:main:acp-fresh",
+      cwd: acpProject,
+      cwdOnCreateOnly: true,
+    },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry.spawnedCwd).toBe(acpProject);
+});
+
+test("sessions.create cwdOnCreateOnly leaves an adopted session's directory to its owner", async () => {
+  await createSessionStoreDir();
+  const key = "agent:main:acp-owned";
+  // Real directories: sessions.create lstats the cwd and rejects one that is absent.
+  const ownerProject = tempDirs.make("openclaw-session-acp-owner-");
+  const acpProject = tempDirs.make("openclaw-session-acp-adopt-");
+  const owner = await directSessionReq<{ entry: { spawnedCwd?: string } }>(
+    "sessions.create",
+    { agentId: "main", key, cwd: ownerProject },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+  expect(owner.ok, JSON.stringify(owner.error)).toBe(true);
+  expect(owner.payload?.entry.spawnedCwd).toBe(ownerProject);
+
+  // Models the interleaving an out-of-process caller cannot exclude: the row already exists by the
+  // time this create lands, so absence must be settled here rather than by the caller's probe.
+  const adopted = await directSessionReq<{ entry: { spawnedCwd?: string } }>(
+    "sessions.create",
+    { agentId: "main", key, cwd: acpProject, cwdOnCreateOnly: true },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+
+  expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
+  expect(adopted.payload?.entry.spawnedCwd).toBe(ownerProject);
+});
+
 test("sessions.create accepts a Windows node-host cwd from a non-Windows Gateway", async () => {
   await createSessionStoreDir();
   const created = await directSessionReq<{

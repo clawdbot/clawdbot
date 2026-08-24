@@ -83,7 +83,7 @@ function buildSystemInputProvenance(originSessionId: string) {
 }
 
 function buildSystemProvenanceReceipt(params: {
-  cwd: string;
+  cwd?: string;
   sessionId: string;
   sessionKey: string;
 }) {
@@ -91,7 +91,8 @@ function buildSystemProvenanceReceipt(params: {
     "[Source Receipt]",
     "bridge=openclaw-acp",
     `originHost=${os.hostname()}`,
-    `originCwd=${shortenHomePath(params.cwd)}`,
+    // Omitted rather than guessed when the adopted session's runtime directory is unknown.
+    ...(params.cwd ? [`originCwd=${shortenHomePath(params.cwd)}`] : []),
     `acpSessionId=${params.sessionId}`,
     `originSessionId=${params.sessionId}`,
     `targetSession=${params.sessionKey}`,
@@ -246,7 +247,11 @@ export class AcpTranslatorPromptStream {
     // block-by-block, before the full string is ever assembled in memory (CWE-400)
     const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
     const attachments = extractAttachmentsFromPrompt(params.prompt);
-    const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
+    // Only state a working directory the turn will actually use; an adopted session whose row
+    // records none leaves this unknown, and naming the client's path there would tell the model
+    // it is somewhere Gateway never puts it.
+    const prefixCwd =
+      (meta.prefixCwd ?? this.opts.prefixCwd ?? true) && session.runtimeCwd !== false;
     const displayCwd = shortenHomePath(session.cwd);
     const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
     const provenanceMode = this.opts.provenanceMode ?? "off";
@@ -255,7 +260,7 @@ export class AcpTranslatorPromptStream {
     const systemProvenanceReceipt =
       provenanceMode === "meta+receipt"
         ? buildSystemProvenanceReceipt({
-            cwd: session.cwd,
+            ...(session.runtimeCwd === false ? {} : { cwd: session.cwd }),
             sessionId: params.sessionId,
             sessionKey: session.sessionKey,
           })

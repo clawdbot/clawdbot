@@ -8997,6 +8997,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let worktreename: String?
     public let execnode: String?
     public let cwd: String?
+    public let cwdoncreateonly: Bool?
 
     public init(
         key: String? = nil,
@@ -9025,7 +9026,8 @@ public struct SessionsCreateParams: Codable, Sendable {
         worktreebaseref: String? = nil,
         worktreename: String? = nil,
         execnode: String? = nil,
-        cwd: String? = nil)
+        cwd: String? = nil,
+        cwdoncreateonly: Bool? = nil)
     {
         self.key = key
         self.idempotencykey = idempotencykey
@@ -9054,6 +9056,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.worktreename = worktreename
         self.execnode = execnode
         self.cwd = cwd
+        self.cwdoncreateonly = cwdoncreateonly
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -9084,6 +9087,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case worktreename = "worktreeName"
         case execnode = "execNode"
         case cwd
+        case cwdoncreateonly = "cwdOnCreateOnly"
     }
 }
 

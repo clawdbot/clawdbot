@@ -22,6 +22,7 @@ import type {
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
@@ -67,6 +68,7 @@ export class AcpTranslatorSessionLifecycle {
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.assertSupportedSessionSetup(params.mcpServers);
+    assertAbsoluteCwd(params.cwd, "session/new");
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
@@ -75,12 +77,44 @@ export class AcpTranslatorSessionLifecycle {
       meta,
       fallbackKey: `acp-bridge:${sessionId}`,
     });
+    // chat.send carries no cwd, so the requested directory only reaches a turn as the row's
+    // spawnedCwd. cwdOnCreateOnly lets the Gateway settle absence inside its own mutation. A
+    // Gateway without it would apply the directory to a row it merely adopts, so a routed key
+    // cannot be honored there; a bridge-minted id is safe because nothing else can own it.
+    const scopesCwdToNewSessions = this.gateway.hasServerCapability(
+      GATEWAY_SERVER_CAPS.SESSIONS_CREATE_CWD_ON_CREATE_ONLY,
+    );
+    if (!scopesCwdToNewSessions && hasExplicitSessionRouting(meta, this.opts)) {
+      // Refuse before any reset so a rejected request leaves the routed session untouched.
+      throw new Error(
+        `ACP session/new cannot apply ${params.cwd} to session ${sessionKey}: this Gateway cannot scope a working directory to newly created sessions, so honoring it could overwrite that session's own directory. Update the Gateway, or omit the session key to start a new session.`,
+      );
+    }
 
-    const session = this.sessionStore.createSession({
-      sessionId,
-      sessionKey,
-      cwd: params.cwd,
-    });
+    const created = await this.gateway.request<{ entry?: { spawnedCwd?: string } }>(
+      "sessions.create",
+      {
+        key: sessionKey,
+        cwd: params.cwd,
+        ...(scopesCwdToNewSessions ? { cwdOnCreateOnly: true } : {}),
+      },
+    );
+    // The Gateway owns the run directory, so read back what it kept rather than assuming the
+    // request won. A create that passed a cwd always returns one for a new row, so its absence
+    // means an existing row owns this key and has no directory: the turn would run in the agent
+    // workspace while ACP reported otherwise, so refuse instead of claiming a directory.
+    const sessionCwd = normalizeOptionalString(created?.entry?.spawnedCwd);
+    if (!sessionCwd) {
+      throw new Error(
+        `ACP session/new cannot use ${params.cwd}: session ${sessionKey} already exists without a working directory, so the agent would run in its workspace instead. Route to a session created with that directory, or omit the session key to start a new one.`,
+      );
+    }
+
+    // Reset last: it runs after the row carries its directory, so a requested reset preserves the
+    // cwd instead of materializing a bare row that the check above would then reject.
+    await this.resetRoutedSession(meta, sessionKey);
+
+    const session = this.sessionStore.createSession({ sessionId, sessionKey, cwd: sessionCwd });
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.sessionState.getSnapshot(session.sessionKey);
@@ -117,6 +151,7 @@ export class AcpTranslatorSessionLifecycle {
       meta,
       fallbackKey: routedLedgerReplay.sessionKey ?? params.sessionId,
     });
+    await this.resetRoutedSession(meta, sessionKey);
     const ledgerReplay =
       exactLedgerReplay.complete && exactLedgerReplay.sessionKey === sessionKey
         ? exactLedgerReplay
@@ -127,11 +162,15 @@ export class AcpTranslatorSessionLifecycle {
               sessionKey,
             });
 
+    // Adopting an existing Gateway session inherits its directory; reporting the requested one
+    // would make the prompt prefix and provenance receipt describe a cwd the turn never uses.
+    const adoptedCwd = await this.sessionState.getSessionCwd(sessionKey);
     const session = this.sessionStore.createSession({
       sessionId: params.sessionId,
       sessionKey,
       ...(ledgerReplay.sessionId ? { ledgerSessionId: ledgerReplay.sessionId } : {}),
-      cwd: params.cwd,
+      cwd: adoptedCwd ?? params.cwd,
+      runtimeCwd: adoptedCwd !== undefined,
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: ledgerReplay.complete });
     this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
@@ -230,6 +269,7 @@ export class AcpTranslatorSessionLifecycle {
       meta,
       fallbackKey,
     });
+    await this.resetRoutedSession(meta, sessionKey);
 
     const shouldRequireGatewaySession =
       !existingSession || sessionKey !== existingSession.sessionKey;
@@ -237,10 +277,13 @@ export class AcpTranslatorSessionLifecycle {
       ? await this.sessionState.getExistingSnapshot(sessionKey)
       : await this.sessionState.getSnapshot(sessionKey);
 
+    // Resume rebinds to a Gateway session that owns its directory; report that, not the request.
+    const resumedCwd = await this.sessionState.getSessionCwd(sessionKey);
     const session = this.sessionStore.createSession({
       sessionId: params.sessionId,
       sessionKey,
-      cwd: params.cwd,
+      cwd: resumedCwd ?? params.cwd,
+      runtimeCwd: resumedCwd !== undefined,
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
@@ -332,23 +375,24 @@ export class AcpTranslatorSessionLifecycle {
     }
   }
 
+  /** Resolves the routed key only; callers decide when a requested reset may run. */
   private async resolveSessionKeyFromMeta(params: {
     meta: ReturnType<typeof parseSessionMeta>;
     fallbackKey: string;
   }): Promise<string> {
-    const sessionKey = await resolveAcpSessionKey({
+    return await resolveAcpSessionKey({
       meta: params.meta,
       fallbackKey: params.fallbackKey,
       gateway: this.gateway,
       opts: this.opts,
     });
-    await resetSessionIfNeeded({
-      meta: params.meta,
-      sessionKey,
-      gateway: this.gateway,
-      opts: this.opts,
-    });
-    return sessionKey;
+  }
+
+  private async resetRoutedSession(
+    meta: ReturnType<typeof parseSessionMeta>,
+    sessionKey: string,
+  ): Promise<void> {
+    await resetSessionIfNeeded({ meta, sessionKey, gateway: this.gateway, opts: this.opts });
   }
 
   private async getSessionTranscript(sessionKey: string): Promise<GatewayTranscriptMessage[]> {

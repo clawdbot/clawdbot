@@ -177,6 +177,11 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
       );
+      // ACP gates its sessions.create cwd scoping on this; dropping it silently reverts
+      // explicitly routed bridge sessions to the pre-capability behavior.
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.SESSIONS_CREATE_CWD_ON_CREATE_ONLY,
+      );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
       expect(payload?.policy?.allowedSessionVisibilities).toEqual([
