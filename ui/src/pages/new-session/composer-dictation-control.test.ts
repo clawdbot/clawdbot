@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 
 const dictationHarness = vi.hoisted(() => ({
@@ -59,6 +59,10 @@ describe("NewSessionDictationControl", () => {
     dictationHarness.controllers = [];
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("drops a final transcript when cloud placement claims the draft in flight", () => {
     let canCommit = true;
     const insertTranscript = vi.fn(() => "spoken task");
@@ -70,7 +74,6 @@ describe("NewSessionDictationControl", () => {
       canCommit: () => canCommit,
       onMessage,
       onError: vi.fn(),
-      onClearError: vi.fn(),
       requestUpdate: vi.fn(),
     });
 
@@ -82,10 +85,11 @@ describe("NewSessionDictationControl", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  it("clears its short-tap hint after a later dictation commits", () => {
+  it("owns its short-tap hint without publishing an error and retires it after six seconds", () => {
+    vi.useFakeTimers();
     const onError = vi.fn();
-    const onClearError = vi.fn();
     const onMessage = vi.fn();
+    const requestUpdate = vi.fn();
     const control = new NewSessionDictationControl({
       textarea: {
         captureSelection: vi.fn(),
@@ -96,19 +100,25 @@ describe("NewSessionDictationControl", () => {
       canCommit: () => true,
       onMessage,
       onError,
-      onClearError,
-      requestUpdate: vi.fn(),
+      requestUpdate,
     });
 
     control.render("agent-a");
     dictationHarness.options?.onTap();
     const hint = t("newSession.dictationHoldToSpeak");
-    expect(onError).toHaveBeenCalledWith(hint);
+    expect(onError).not.toHaveBeenCalled();
+    expect(control.currentHint()).toBe(hint);
 
+    vi.advanceTimersByTime(6_000);
+    expect(control.currentHint()).toBeUndefined();
+    expect(requestUpdate).toHaveBeenCalled();
+
+    dictationHarness.options?.onTap();
     dictationHarness.options?.onCommit("spoken task");
 
-    expect(onClearError).toHaveBeenCalledWith(hint);
+    expect(control.currentHint()).toBeUndefined();
     expect(onMessage).toHaveBeenCalledWith("spoken task");
+    control.dispose();
   });
 
   it("cancels active dictation and drops its late transcript when the route owner changes", () => {
@@ -121,7 +131,6 @@ describe("NewSessionDictationControl", () => {
       canCommit: () => true,
       onMessage,
       onError: vi.fn(),
-      onClearError: vi.fn(),
       requestUpdate: vi.fn(),
     });
 

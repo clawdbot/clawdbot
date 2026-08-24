@@ -782,22 +782,23 @@ wa-popover.new-session-page__project-popover::part(body) {
   border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 
-wa-dropdown.new-session-page__start-menu {
-  display: inline-flex;
-}
-
 .new-session-page__start-menu-trigger {
-  width: 22px;
-  min-width: 22px;
-  height: 36px;
-  padding: 0 4px 0 2px;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
   border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
 }
 
 .new-session-page__start-menu-trigger svg {
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
+}
+
+.new-session-page__start-submit--blocked {
+  cursor: var(--cursor-action);
+  filter: saturate(0.45);
+  opacity: 0.48;
 }
 
 /* Keep a long first prompt visible before scrolling. The shared auto-height
@@ -839,11 +840,57 @@ wa-dropdown.new-session-page__start-menu {
   opacity: 0.5;
 }
 
-/* Reason shown after Enter/Start is pressed while a submit gate blocks it. */
-.new-session-page__blocked-submit {
-  padding: 4px var(--chat-box-inset) 0;
+/* Gesture guidance is transient chrome, not an error in the page flow. */
+.new-session-page__dictation-hint {
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% + 10px);
+  z-index: 45;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 8px 11px;
+  border: 1px solid var(--chat-composer-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
   font-size: 12px;
-  color: var(--muted);
+  line-height: 1.35;
+}
+
+.new-session-page__dictation-hint svg,
+.new-session-page__blocked-submit svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+/* Attempt-bound submit reasons use the same attached underlap as chat status. */
+.new-session-page__blocked-submit {
+  position: relative;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  margin-top: calc(0px - var(--chat-composer-shell-gap) - 18px);
+  padding: 18px 14px 7px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--info) 12%, transparent);
+  border-top: 0;
+  border-radius: 0 0 calc(16px * var(--openclaw-corner-radius-scale))
+    calc(16px * var(--openclaw-corner-radius-scale));
+  background: color-mix(
+    in srgb,
+    var(--info) 7%,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
+  color: color-mix(in srgb, var(--info) 72%, var(--text));
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 @media (prefers-reduced-motion: reduce) {

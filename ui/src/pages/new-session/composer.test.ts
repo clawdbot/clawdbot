@@ -28,6 +28,7 @@ function renderComposer(
     requiresModifier?: boolean;
     submitDisabledReason?: string;
     blockedSubmitNotice?: string;
+    dictationHint?: string;
     terminalAction?: {
       canStart: boolean;
       disabledReason?: string;
@@ -80,6 +81,7 @@ function renderComposer(
         requestUpdate: renderCurrent,
         submitDisabledReason: overrides.submitDisabledReason,
         blockedSubmitNotice: overrides.blockedSubmitNotice,
+        dictationHint: overrides.dictationHint,
         terminalAction: overrides.terminalAction,
         submitting: overrides.submitting ?? false,
         textareaController,
@@ -427,15 +429,35 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("renders the blocked-submit notice near the composer", () => {
+  it("renders a reasoned submit block as an attached notice and keeps Start explanatory", () => {
+    const onSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
+      submitDisabledReason: "Restoring your last session setup…",
       blockedSubmitNotice: "Restoring your last session setup…",
+      onSubmit,
     });
     const notice = composer.querySelector<HTMLElement>(".new-session-page__blocked-submit");
+    const input = composer.querySelector<HTMLElement>(".agent-chat__input");
+    const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
     expect(notice?.getAttribute("role")).toBe("status");
     expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
+    expect(input?.contains(notice ?? null)).toBe(false);
+    expect(notice?.querySelector("svg")).not.toBeNull();
+    expect(start?.disabled).toBe(false);
+    expect(start?.getAttribute("aria-disabled")).toBe("true");
+    start?.click();
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("renders dictation guidance as floating status chrome", () => {
+    const { composer } = renderComposer({ dictationHint: "Hold to dictate." });
+    const hint = composer.querySelector<HTMLElement>(".new-session-page__dictation-hint");
+
+    expect(hint?.getAttribute("role")).toBe("status");
+    expect(hint?.textContent).toContain("Hold to dictate.");
+    expect(hint?.querySelector("svg")).not.toBeNull();
   });
 });
 
@@ -456,7 +478,7 @@ describe("new-session composer start control", () => {
     expect(start?.getAttribute("aria-label")).toBe("Starting…");
   });
 
-  it("renders the terminal action as a secondary split-button menu item", () => {
+  it("renders the terminal action as a direct square-terminal button on the right", () => {
     const onStart = vi.fn();
     const { composer } = renderComposer({
       terminalAction: { canStart: true, onStart },
@@ -464,13 +486,15 @@ describe("new-session composer start control", () => {
     const trigger = composer.querySelector<HTMLButtonElement>(
       ".new-session-page__start-menu-trigger",
     );
-    const item = composer.querySelector<HTMLElement>("wa-dropdown-item[value='start-terminal']");
 
     expect(composer.querySelector(".new-session-page__start-split")).not.toBeNull();
     expect(trigger?.disabled).toBe(false);
     expect(trigger?.getAttribute("aria-label")).toBe("Start in terminal");
-    expect(item?.textContent?.trim()).toBe("Start in terminal");
-    item?.click();
+    expect(trigger?.querySelector("svg")).not.toBeNull();
+    expect(
+      trigger?.previousElementSibling?.querySelector(".new-session-page__start-submit"),
+    ).not.toBeNull();
+    trigger?.click();
     expect(onStart).toHaveBeenCalledOnce();
   });
 
@@ -483,13 +507,11 @@ describe("new-session composer start control", () => {
     const trigger = composer.querySelector<HTMLButtonElement>(
       ".new-session-page__start-menu-trigger",
     );
-    const item = composer.querySelector<HTMLElement>("wa-dropdown-item[value='start-terminal']");
     const tooltips = composer.querySelectorAll<HTMLElement>("openclaw-tooltip");
 
     expect(trigger?.disabled).toBe(true);
-    expect(item?.hasAttribute("disabled")).toBe(true);
     expect((tooltips[1] as HTMLElement & { content?: string })?.content).toBe(reason);
-    item?.click();
+    trigger?.click();
     expect(onStart).not.toHaveBeenCalled();
   });
 });

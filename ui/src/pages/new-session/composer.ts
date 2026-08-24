@@ -72,6 +72,7 @@ type NewSessionComposerOptions = {
   refreshCommands?: () => void | Promise<void>;
   submitDisabledReason?: string;
   blockedSubmitNotice?: string;
+  dictationHint?: string;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -101,13 +102,17 @@ function submitNewSession(options: NewSessionComposerOptions) {
 
 function renderStartControl(options: NewSessionComposerOptions) {
   const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
+  const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
   if (!options.terminalAction) {
     return html`
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-submit"
-          ?disabled=${!options.canSubmit}
+          class="chat-send-btn new-session-page__start-submit ${reasonedBlock
+            ? "new-session-page__start-submit--blocked"
+            : ""}"
+          ?disabled=${!options.canSubmit && !reasonedBlock}
+          aria-disabled=${String(!options.canSubmit)}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${() => submitNewSession(options)}
@@ -123,8 +128,11 @@ function renderStartControl(options: NewSessionComposerOptions) {
       <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
         <button
           type="button"
-          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary"
-          ?disabled=${!options.canSubmit}
+          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary ${reasonedBlock
+            ? "new-session-page__start-submit--blocked"
+            : ""}"
+          ?disabled=${!options.canSubmit && !reasonedBlock}
+          aria-disabled=${String(!options.canSubmit)}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
           @click=${() => submitNewSession(options)}
@@ -133,28 +141,15 @@ function renderStartControl(options: NewSessionComposerOptions) {
         </button>
       </openclaw-tooltip>
       <openclaw-tooltip content=${options.terminalAction.disabledReason ?? terminalLabel}>
-        <wa-dropdown class="new-session-page__start-menu" placement="top-end">
-          <button
-            slot="trigger"
-            type="button"
-            class="chat-send-btn new-session-page__start-menu-trigger"
-            ?disabled=${!options.terminalAction.canStart}
-            aria-label=${terminalLabel}
-          >
-            ${icons.chevronUp}
-          </button>
-          <wa-dropdown-item
-            value="start-terminal"
-            ?disabled=${!options.terminalAction.canStart}
-            @click=${() => {
-              if (options.terminalAction?.canStart) {
-                options.terminalAction.onStart();
-              }
-            }}
-          >
-            ${terminalLabel}
-          </wa-dropdown-item>
-        </wa-dropdown>
+        <button
+          type="button"
+          class="chat-send-btn new-session-page__start-menu-trigger"
+          ?disabled=${!options.terminalAction.canStart}
+          aria-label=${terminalLabel}
+          @click=${() => options.terminalAction?.onStart()}
+        >
+          ${icons.squareTerminal}
+        </button>
       </openclaw-tooltip>
     </div>
   `;
@@ -496,6 +491,12 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       @dragleave=${attachmentDropHandlers.onDragleave}
       @dragover=${attachmentDropHandlers.onDragover}
     >
+      ${options.dictationHint
+        ? html`<div class="new-session-page__dictation-hint" role="status">
+            <span aria-hidden="true">${icons.info}</span>
+            ${options.dictationHint}
+          </div>`
+        : nothing}
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
@@ -567,15 +568,16 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
             </div>
           </div>
         </div>
-        ${options.blockedSubmitNotice
-          ? html`<div class="new-session-page__blocked-submit" role="status">
-              ${options.blockedSubmitNotice}
-            </div>`
-          : nothing}
         ${options.pendingAttachmentReads > 0
           ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
       </div>
+      ${options.blockedSubmitNotice
+        ? html`<div class="new-session-page__blocked-submit" role="status">
+            <span aria-hidden="true">${icons.info}</span>
+            <span>${options.blockedSubmitNotice}</span>
+          </div>`
+        : nothing}
     </div>
   `;
 }
@@ -601,6 +603,7 @@ export function renderNewSessionDraftComposer(options: {
   requestUpdate: () => void;
   submitDisabledReason?: string;
   blockedSubmitNotice?: string;
+  dictationHint?: string;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -658,6 +661,7 @@ export function renderNewSessionDraftComposer(options: {
       : undefined,
     submitDisabledReason: options.submitDisabledReason,
     blockedSubmitNotice: options.blockedSubmitNotice,
+    dictationHint: options.dictationHint,
     terminalAction: options.terminalAction,
     submitting: options.submitting,
     textareaController: options.textareaController,

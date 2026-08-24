@@ -167,7 +167,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
-      onClearError: (message) => this.submission.clearErrorIf(message),
       requestUpdate: () => this.requestUpdate(),
     });
     this.subscriptions = new SubscriptionsController(this)
@@ -566,6 +565,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           canSubmit: !this.submission.submitting && !dictationLocked && this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
           blockedSubmitNotice: this.submission.blockedSubmitNotice(),
+          dictationHint: this.dictation.currentHint(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           draftOwnerKey: this.routeOwnerKey(),
