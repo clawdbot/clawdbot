@@ -219,8 +219,19 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   };
   // CLI sessions keep their creation-time conversation prompt. Embedded attempts
   // can instead select the variant owned by their final prepared harness.
+  //
+  // The fallback must be this run's ACTUAL mode, not a hardcoded "automatic".
+  // sessionPromptSourceReplyDeliveryMode is only set for CLI sessions, so every
+  // other run used to be told "your replies are automatically sent to this
+  // conversation" even when delivery was message_tool_only. The agent then
+  // answered in plain text, the reply was never posted, and
+  // resolveStrandedReplyRecovery re-prompted once silently and then surfaced
+  // "I generated a reply but could not deliver it to this chat" on the second
+  // miss — a prompt/policy contradiction, not a delivery fault.
   const sessionStableConversationContext =
-    sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
+    sourceConversationContextByMode[
+      sessionPromptSourceReplyDeliveryMode ?? sourceReplyDeliveryMode ?? "automatic"
+    ];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
   const isDirectedTurn = isDirectedSourceReplyTurn(ctx, cfg, isDirectChat, inboundEventKind);
