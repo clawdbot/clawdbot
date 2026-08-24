@@ -2447,11 +2447,46 @@ describe("activateSetupInference", () => {
     expect(transformConfig).not.toHaveBeenCalled();
   });
 
-  it("treats an empty model reply as a failure with bounded probe identifiers", async () => {
+  it.each([
+    { name: "empty payload", runResult: { payloads: [] } },
+    {
+      name: "reasoning payload",
+      runResult: { payloads: [{ text: "Considering the answer", isReasoning: true }] },
+    },
+    {
+      name: "commentary payload",
+      runResult: { payloads: [{ text: "Checking the model", isCommentary: true }] },
+    },
+    {
+      name: "explicitly hidden payload",
+      runResult: { payloads: [{ text: "Private model output", visible: false }] },
+    },
+    {
+      name: "status notice",
+      runResult: { payloads: [{ text: "Still working", isStatusNotice: true }] },
+    },
+    {
+      name: "compaction notice",
+      runResult: { payloads: [{ text: "Compacting context", isCompactionNotice: true }] },
+    },
+    {
+      name: "fallback notice",
+      runResult: { payloads: [{ text: "Trying another model", isFallbackNotice: true }] },
+    },
+    { name: "silent payload", runResult: { payloads: [{ text: "NO_REPLY" }] } },
+    {
+      name: "silent visible metadata",
+      runResult: { meta: { finalAssistantVisibleText: "NO_REPLY" } },
+    },
+    {
+      name: "raw-only hidden metadata",
+      runResult: { meta: { finalAssistantRawText: "Hidden draft" } },
+    },
+  ])("rejects a $name as a model reply with bounded probe identifiers", async ({ runResult }) => {
     const transformConfig = vi.fn();
-    const runEmbeddedAgent = vi.fn(async (_params: { runId?: string; sessionId?: string }) => ({
-      payloads: [],
-    }));
+    const runEmbeddedAgent = vi.fn(
+      async (_params: { runId?: string; sessionId?: string }) => runResult,
+    );
     const result = await activateSetupInference({
       kind: "anthropic-api-key",
       deps: {
