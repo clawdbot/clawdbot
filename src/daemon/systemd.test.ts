@@ -1355,6 +1355,74 @@ describe("readSystemdServiceExecStart", () => {
     vi.restoreAllMocks();
   });
 
+  it("reports the exact manager-effective argv when a drop-in replaces the base ExecStart", async () => {
+    const effectiveArguments = [
+      "/opt/stale/openclaw",
+      "gateway",
+      "--name",
+      "Stale Drop-In Gateway",
+    ];
+    const objectPath = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
+    mockReadGatewayServiceFile([
+      "[Service]",
+      "ExecStart=/usr/bin/openclaw gateway run",
+      "WorkingDirectory=/srv/openclaw",
+      "Environment=OPENCLAW_GATEWAY_PORT=18789",
+    ]);
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((command, args, options, callback) => {
+      expect(command).toBe("busctl");
+      expect(options.timeout).toBe(1234);
+      expect(options.killSignal).toBe("SIGKILL");
+      if (args.includes("LoadUnit")) {
+        expect(args).toEqual([
+          "--user",
+          "--json=short",
+          "call",
+          "org.freedesktop.systemd1",
+          "/org/freedesktop/systemd1",
+          "org.freedesktop.systemd1.Manager",
+          "LoadUnit",
+          "s",
+          GATEWAY_SERVICE,
+        ]);
+        callback(null, JSON.stringify({ type: "o", data: [objectPath] }), "");
+        return;
+      }
+      expect(args).toEqual([
+        "--user",
+        "--json=short",
+        "get-property",
+        "org.freedesktop.systemd1",
+        objectPath,
+        "org.freedesktop.systemd1.Service",
+        "ExecStart",
+      ]);
+      callback(
+        null,
+        JSON.stringify({
+          type: "a(sasbttttuii)",
+          data: [[effectiveArguments[0], effectiveArguments, false, 0, 0, 0, 0, 0, 0, 0]],
+        }),
+        "",
+      );
+    });
+
+    const command = await readSystemdServiceExecStart(
+      { HOME: TEST_SERVICE_HOME },
+      { timeoutMs: 1234 },
+    );
+
+    expect(command).toMatchObject({
+      programArguments: effectiveArguments,
+      workingDirectory: "/srv/openclaw",
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      environmentValueSources: { OPENCLAW_GATEWAY_PORT: "inline" },
+      sourcePath: `${TEST_SERVICE_HOME}/.config/systemd/user/${GATEWAY_SERVICE}`,
+    });
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
   it("loads OPENCLAW_GATEWAY_TOKEN from EnvironmentFile", async () => {
     const readFileSpy = mockReadGatewayServiceFile(
       ["[Service]", "ExecStart=/usr/bin/openclaw gateway run", "EnvironmentFile=%h/.openclaw/.env"],
