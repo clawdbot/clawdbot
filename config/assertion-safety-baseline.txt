@@ -2110,7 +2110,7 @@ src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
 src/agents/tools/cron-tool.ts	13
 src/agents/tools/dashboard-tool.ts	3
-src/agents/tools/embedded-gateway-stub.ts	13
+src/agents/tools/embedded-gateway-stub.ts	8
 src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
 src/agents/tools/goal-tools.ts	4

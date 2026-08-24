@@ -36,16 +36,13 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import {
   buildSessionHistorySnapshot,
+  readBoundedSessionHistorySnapshotAsync,
   resolveCursorSeq,
-  resolveSessionHistoryTailReadOptions,
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
-import {
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionMessagesWithSourceAsync,
-} from "./session-transcript-readers.js";
+import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -222,25 +219,23 @@ export async function handleSessionHistoryHttpRequest(
   }
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   let boundedSnapshot:
-    | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>
+    | Awaited<ReturnType<typeof readBoundedSessionHistorySnapshotAsync>>
     | undefined;
   let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
   try {
     boundedSnapshot =
       cursor === undefined && typeof limit === "number"
-        ? await readRecentSessionMessagesWithStatsAsync(
-            {
+        ? await readBoundedSessionHistorySnapshotAsync({
+            target: {
               agentId: target.agentId,
               sessionEntry: entry,
               sessionId: entry.sessionId,
               sessionKey: target.canonicalKey,
               storePath: target.storePath,
             },
-            {
-              ...resolveSessionHistoryTailReadOptions(limit),
-              allowResetArchiveFallback: true,
-            },
-          )
+            limit,
+            maxChars: effectiveMaxChars,
+          })
         : undefined;
     // Cursor reads still need an arbitrary historical window. The common first
     // page path is bounded above so `limit=1` cannot materialize huge transcripts.
