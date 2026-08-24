@@ -671,6 +671,38 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("dedupes duplicate text when the reply only has blank media entries", async () => {
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [{ text: "hello world!", mediaUrls: ["   "] }],
+      messageProvider: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", text: "hello world!" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps real media when the caption matches a message-tool send", async () => {
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [{ text: "hello world!", mediaUrls: ["file:///tmp/photo.jpg"] }],
+      messageProvider: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", text: "hello world!" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "hello world!",
+      mediaUrls: ["file:///tmp/photo.jpg"],
+    });
+  });
+
   it.each<ReplyRouteDedupeCase>([
     {
       name: "keeps same-channel final text when the message tool sent it to another thread",
