@@ -74,7 +74,7 @@ it.each([
         .find((listener) => !listenersBefore.get(signal)?.has(listener));
       expect(signalHandler).toBeDefined();
 
-      signalHandler?.();
+      signalHandler?.(signal);
       await command;
 
       expect(runtimeSignal.aborted).toBe(true);
