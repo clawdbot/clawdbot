@@ -392,30 +392,6 @@ async function directorySizeBytes(root: string): Promise<number> {
   return total;
 }
 
-async function containsGitMarker(root: string, checkoutRoot = false): Promise<boolean> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return false;
-    }
-    throw error;
-  }
-  for (const entry of entries) {
-    if (entry.name === ".git") {
-      if (!checkoutRoot) {
-        return true;
-      }
-      continue;
-    }
-    if (entry.isDirectory() && (await containsGitMarker(path.join(root, entry.name), false))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function splitNullBuffer(input: Buffer): Buffer[] {
   const fields: Buffer[] = [];
   let start = 0;
@@ -457,6 +433,28 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
   }
 }
 
+async function containsSnapshotGitMarker(
+  root: string,
+  snapshotPaths: Iterable<Buffer>,
+): Promise<boolean> {
+  const checked = new Set<string>();
+  for (const gitPath of snapshotPaths) {
+    for (let end = gitPath.indexOf(47); end !== -1; end = gitPath.indexOf(47, end + 1)) {
+      const directory = gitPath.subarray(0, end);
+      const key = gitPathKey(directory);
+      if (checked.has(key)) {
+        continue;
+      }
+      checked.add(key);
+      const marker = Buffer.concat([directory, Buffer.from("/.git")]);
+      if (await rawPathExists(checkoutPathFromGitBytes(root, marker))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function snapshotWorktree(
   record: ManagedWorktreeRecord,
   reason: string,
@@ -480,9 +478,6 @@ async function snapshotWorktree(
         }),
   };
   try {
-    if (await containsGitMarker(record.path, true)) {
-      throw new Error("nested git repositories cannot be snapshotted losslessly");
-    }
     const provisioned = new Set(provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))));
     const snapshotPaths = new Map<string, Buffer>();
     const addSnapshotPath = (entry: Buffer) => {
@@ -536,6 +531,10 @@ async function snapshotWorktree(
       for (const entry of splitNullBuffer(await requireGitBuffer(record.path, args))) {
         addSnapshotPath(entry);
       }
+    }
+    // Ignored nested checkouts are disposable; only Git-visible snapshot paths need this guard.
+    if (await containsSnapshotGitMarker(record.path, snapshotPaths.values())) {
+      throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
     await requireGit(record.path, ["read-tree", "HEAD"], { env });
     // This index came from a tree, so it has no checkout-local skip-worktree
