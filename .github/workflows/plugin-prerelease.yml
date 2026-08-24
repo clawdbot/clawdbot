@@ -568,7 +568,7 @@ jobs:
                 throw new Error("Invalid Telegram extension file shard");
               }
               writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(patterns), "utf8");
-              EOF
+          EOF
               OPENCLAW_TEST_PROJECTS_PARALLEL=2 \
                 OPENCLAW_VITEST_INCLUDE_FILE="$include_file" \
                 pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"

@@ -218,6 +218,11 @@ describe("plugin prerelease Telegram extension shards", () => {
     expect(runStep?.run).toContain("OPENCLAW_TEST_PROJECTS_PARALLEL=2");
     expect(runStep?.run).toContain('OPENCLAW_VITEST_INCLUDE_FILE="$include_file"');
     expect(runStep?.run).toContain('pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"');
+    const shellCheck = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: runStep?.run,
+    });
+    expect(shellCheck.status, shellCheck.stderr).toBe(0);
     expect(runStep?.run?.match(/extension-file-shard\)([\s\S]*?)\n\s*;;/u)?.[1]).not.toContain(
       "--retry",
     );
