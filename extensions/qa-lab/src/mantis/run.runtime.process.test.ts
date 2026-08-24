@@ -163,6 +163,37 @@ describe("mantis before/after process runtime", () => {
     await fs.rm(repoRoot, { force: true, recursive: true });
   });
 
+  it("removes a pre-created lane directory after Git rejects worktree add", async () => {
+    await runGit(repoRoot, ["init"]);
+    await fs.writeFile(path.join(repoRoot, "seed.txt"), "seed\n", "utf8");
+    await runGit(repoRoot, ["add", "seed.txt"]);
+    await runGit(repoRoot, [
+      "-c",
+      "user.name=Mantis Test",
+      "-c",
+      "user.email=mantis@example.test",
+      "commit",
+      "-m",
+      "seed",
+    ]);
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "invalid-ref");
+    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "refs/heads/missing-mantis-ref",
+        candidate: "HEAD",
+        outputDir: ".artifacts/qa-e2e/mantis/invalid-ref",
+        repoRoot,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow("baseline worktree-add failed");
+
+    await expect(fs.stat(baselineWorktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
+  });
+
   it("stops an active injected lane command when aborted", async () => {
     const controller = new AbortController();
     const stages: string[] = [];
@@ -171,6 +202,7 @@ describe("mantis before/after process runtime", () => {
       if (execution.stage !== "worktree-add") {
         expect(execution.stage).toBe("worktree-cleanup");
         expect(execution.signal).toBeUndefined();
+        await fs.rm(String(_args[4]), { force: true, recursive: true });
         return successfulCommandResult();
       }
       expect(execution.signal).toBe(controller.signal);
@@ -214,6 +246,7 @@ describe("mantis before/after process runtime", () => {
       stages.push(execution.stage);
       if (execution.stage === "worktree-cleanup") {
         expect(execution.signal).toBeUndefined();
+        await fs.rm(String(_args[4]), { force: true, recursive: true });
         return successfulCommandResult();
       }
       expect(execution.stage).toBe("worktree-add");
@@ -411,9 +444,9 @@ describe("mantis before/after process runtime", () => {
           );
         }
         await Promise.all([waitForDead(parentPid, 2_000), waitForDead(descendantPid, 2_000)]);
-        const worktreeList = await runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"]);
+        const worktreeList = await runGit(repoRoot, ["worktree", "list", "--porcelain"]);
         const worktreeEntries = worktreeList.stdout
-          .split("\0")
+          .split(/\r?\n/u)
           .filter((entry) => entry.startsWith("worktree "))
           .map((entry) => entry.slice("worktree ".length));
         await expect(fs.realpath(worktreeEntries[0] ?? "")).resolves.toBe(

@@ -88,11 +88,11 @@ export function resolveMantisCommandTimeouts(
 function isWorktreeListCommand(command: string, args: readonly string[]): boolean {
   return (
     command === "git" &&
-    args.length === 4 &&
+    (args.length === 3 || args.length === 4) &&
     args[0] === "worktree" &&
     args[1] === "list" &&
     args[2] === "--porcelain" &&
-    args[3] === "-z"
+    (args.length === 3 || args[3] === "-z")
   );
 }
 
@@ -360,12 +360,62 @@ async function normalizeWorktreePath(filePath: string, repoRoot: string): Promis
   return path.join(canonicalRepoRoot, path.relative(resolvedRepoRoot, resolvedPath));
 }
 
-async function parseRegisteredWorktreePaths(stdout: string, repoRoot: string): Promise<string[]> {
-  const entries = stdout
-    .split("\0")
+async function parseRegisteredWorktreePaths(
+  stdout: string,
+  repoRoot: string,
+  nulTerminated: boolean,
+): Promise<string[]> {
+  const fields = nulTerminated
+    ? stdout.split("\0")
+    : stdout.split("\n").map((field) => (field.endsWith("\r") ? field.slice(0, -1) : field));
+  const entries = fields
     .filter((entry) => entry.startsWith("worktree "))
     .map((entry) => entry.slice("worktree ".length));
   return await Promise.all(entries.map((entry) => normalizeWorktreePath(entry, repoRoot)));
+}
+
+async function listRegisteredWorktreePaths(params: {
+  execution: MantisCommandExecution;
+  lane: "baseline" | "candidate";
+  repoRoot: string;
+  runner: MantisCommandRunner;
+  worktreeDir: string;
+}): Promise<string[]> {
+  let listResult: MantisCommandResult;
+  let nulTerminated = true;
+  try {
+    listResult = await runMantisCommand({
+      command: "git",
+      args: ["worktree", "list", "--porcelain", "-z"],
+      execution: params.execution,
+      lane: params.lane,
+      runner: params.runner,
+    });
+  } catch (nulListError) {
+    // Git gained `worktree list -z` in 2.36. Older porcelain is safe for our
+    // generated lane path unless an ancestor contains a newline; refuse recursive removal then.
+    if (params.worktreeDir.includes("\n")) {
+      throw new Error(
+        `${params.lane} worktree cleanup cannot verify a newline-containing path with legacy Git`,
+        { cause: nulListError },
+      );
+    }
+    listResult = await runMantisCommand({
+      command: "git",
+      args: ["worktree", "list", "--porcelain"],
+      execution: params.execution,
+      lane: params.lane,
+      runner: params.runner,
+    });
+    nulTerminated = false;
+  }
+
+  if (listResult.stdoutTruncatedBytes) {
+    throw new Error(
+      `${params.lane} worktree cleanup truncated registration output for ${params.worktreeDir}`,
+    );
+  }
+  return await parseRegisteredWorktreePaths(listResult.stdout, params.repoRoot, nulTerminated);
 }
 
 function createCleanupVerificationAggregate(params: {
@@ -438,44 +488,22 @@ export async function removeMantisWorktree(params: {
       );
     }
   } catch (removeError) {
-    let listResult: MantisCommandResult;
-    try {
-      listResult = await runMantisCommand({
-        command: "git",
-        args: ["worktree", "list", "--porcelain", "-z"],
-        execution: cleanupExecution,
-        lane: params.lane,
-        runner: params.runner,
-      });
-    } catch (listError) {
-      throw createCleanupVerificationAggregate({
-        errors: [removeError, listError],
-        lane: params.lane,
-        worktreeDir: params.worktreeDir,
-      });
-    }
-
-    if (listResult.stdoutTruncatedBytes) {
-      const truncationError = new Error(
-        `${params.lane} worktree cleanup truncated registration output for ${params.worktreeDir}`,
-      );
-      throw createCleanupVerificationAggregate({
-        errors: [removeError, truncationError],
-        lane: params.lane,
-        worktreeDir: params.worktreeDir,
-      });
-    }
-
     let normalizedWorktreeDir: string;
     let registeredWorktreePaths: string[];
     try {
       [normalizedWorktreeDir, registeredWorktreePaths] = await Promise.all([
         normalizeWorktreePath(params.worktreeDir, params.repoRoot),
-        parseRegisteredWorktreePaths(listResult.stdout, params.repoRoot),
+        listRegisteredWorktreePaths({
+          execution: cleanupExecution,
+          lane: params.lane,
+          repoRoot: params.repoRoot,
+          runner: params.runner,
+          worktreeDir: params.worktreeDir,
+        }),
       ]);
-    } catch (normalizationError) {
+    } catch (listError) {
       throw createCleanupVerificationAggregate({
-        errors: [removeError, normalizationError],
+        errors: [removeError, listError],
         lane: params.lane,
         worktreeDir: params.worktreeDir,
       });

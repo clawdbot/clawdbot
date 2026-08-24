@@ -37,6 +37,10 @@ function worktreeListOutput(worktreeDir: string): string {
   return `worktree ${worktreeDir}\0HEAD 0000000000000000000000000000000000000000\0detached\0\0`;
 }
 
+function legacyWorktreeListOutput(worktreeDir: string): string {
+  return `worktree ${worktreeDir}\nHEAD 0000000000000000000000000000000000000000\ndetached\n\n`;
+}
+
 function timedOutCommandResult(): StubCommandResult {
   return {
     code: 124,
@@ -776,6 +780,48 @@ describe("mantis before/after runtime", () => {
     await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
   });
 
+  it("falls back to legacy porcelain before removing an unregistered lane directory", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-legacy-git");
+    const listCalls: string[][] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        await fs.mkdir(String(args[4]), { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        if (args[1] === "remove") {
+          return failedCommandResult();
+        }
+        listCalls.push([...args]);
+        return args.includes("-z") ? failedCommandResult(129) : successfulCommandResult("");
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    const result = await runMantisBeforeAfter({
+      baseline: "baseline-ref",
+      candidate: "candidate-ref",
+      commandRunner: runner,
+      outputDir: ".artifacts/qa-e2e/mantis/cleanup-legacy-git",
+      repoRoot,
+      skipBuild: true,
+      skipInstall: true,
+    });
+
+    expect(result.status).toBe("pass");
+    expect(listCalls).toEqual([
+      ["worktree", "list", "--porcelain", "-z"],
+      ["worktree", "list", "--porcelain"],
+      ["worktree", "list", "--porcelain", "-z"],
+      ["worktree", "list", "--porcelain"],
+    ]);
+    await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
+  });
+
   it("fails closed when cleanup registration output is truncated", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-truncated");
     const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
@@ -838,7 +884,7 @@ describe("mantis before/after runtime", () => {
     ]);
   });
 
-  it("leaves a registered exact worktree path for operator cleanup", async () => {
+  it("leaves a registered exact worktree path for operator cleanup with legacy Git", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-registered");
     const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
     const stages: string[] = [];
@@ -856,7 +902,9 @@ describe("mantis before/after runtime", () => {
         if (args[1] === "remove") {
           return failedCommandResult();
         }
-        return successfulCommandResult(worktreeListOutput(baselineWorktreeDir));
+        return args.includes("-z")
+          ? failedCommandResult(129)
+          : successfulCommandResult(legacyWorktreeListOutput(baselineWorktreeDir));
       }
       throw new Error(`unexpected ${execution.stage} command`);
     });
@@ -878,6 +926,7 @@ describe("mantis before/after runtime", () => {
       "worktree-add:add",
       `qa:${baselineWorktreeDir}`,
       "worktree-cleanup:remove",
+      "worktree-cleanup:list",
       "worktree-cleanup:list",
     ]);
   });
