@@ -50,14 +50,6 @@ function formatSessionLine(entry: TranscriptsSessionEntry): string {
   return `${entry.selector}\t${started}\t${title}\t${summary}`;
 }
 
-async function requireStoredSession(selector: string): Promise<TranscriptsSessionEntry> {
-  const session = await createStore().readSessionEntry(selector);
-  if (!session) {
-    throw new Error(`transcripts session not found: ${selector}`);
-  }
-  return session;
-}
-
 async function listCommand(options: TranscriptsCliOptions): Promise<void> {
   const sessions = await createStore().listSessionEntries();
   if (options.json) {
@@ -132,7 +124,10 @@ function selectedArtifactKind(options: TranscriptsPathOptions): TranscriptArtifa
 
 async function pathCommand(selector: string, options: TranscriptsPathOptions): Promise<void> {
   const store = createStore();
-  const entry = await requireStoredSession(selector);
+  const entry = await store.readSessionEntry(selector);
+  if (!entry) {
+    throw new Error(`transcripts session not found: ${selector}`);
+  }
   const kind = selectedArtifactKind(options);
   const artifacts = await store.materializeSessionArtifacts(entry.session, kind);
   const selectedPath = options.dir
@@ -151,6 +146,9 @@ async function pathCommand(selector: string, options: TranscriptsPathOptions): P
       exists,
     });
     return;
+  }
+  if (!exists) {
+    throw new Error(`summary.md not found for transcripts session: ${selector}`);
   }
   writeLine(selectedPath);
 }
