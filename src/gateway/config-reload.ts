@@ -238,6 +238,29 @@ function findChannelOwnershipChange(params: {
   return null;
 }
 
+/**
+ * Whether an authored edit touched anything channel ownership reads. Ownership resolves from
+ * explicit plugin selection and the per-channel activation candidates, both of which live under
+ * `plugins` or `channels` in the source config, so no other source edit can move an owner.
+ *
+ * This exists to keep the comparison off the ordinary no-op reload path: resolving a manifest
+ * registry and walking ownership on both sides costs a few milliseconds warm and far more when no
+ * process-current plugin metadata snapshot is published, while `diffConfigPaths` is the same walk
+ * this file already runs on other source-only paths.
+ */
+function sourceEditTouchesChannelOwnership(
+  previousSourceConfig: OpenClawConfig,
+  nextSourceConfig: OpenClawConfig,
+): boolean {
+  return diffConfigPaths(previousSourceConfig, nextSourceConfig).some(
+    (path) =>
+      path === "plugins" ||
+      path === "channels" ||
+      path.startsWith("plugins.") ||
+      path.startsWith("channels."),
+  );
+}
+
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
@@ -752,7 +775,36 @@ export function startGatewayConfigReloader(opts: {
     const markPluginMetadataRefreshApplied = () => {
       pluginMetadataRefreshApplied = pluginMetadataRefreshToken;
     };
-    if (changedPaths.length === 0 && !forcePluginMetadataReload) {
+    // An authored edit can move a channel's selected owner while auto-enable leaves the effective
+    // config byte-identical: explicitly selecting a fallback that auto-enable had already
+    // materialized for another channel changes `isPluginExplicitlySelected` in the source while
+    // every effective path stays put. The early return below still publishes the source snapshot,
+    // so validation and the Control UI switch to the newly selected owner while the active registry
+    // keeps the previous `cededChannelIds` and goes on serving the replacement. Bypass the early
+    // return when that happens, exactly as a forced plugin-metadata refresh already does.
+    //
+    // The source-diff guard runs first so an ordinary no-op reload never pays for the comparison,
+    // and a resolution failure escalates rather than being read as "ownership held still".
+    const noDiffOwnershipChange = ((): ChannelOwnershipChange | null => {
+      if (changedPaths.length > 0 || forcePluginMetadataReload) {
+        return null;
+      }
+      try {
+        if (!sourceEditTouchesChannelOwnership(currentRuntimeEnvSourceConfig, nextSourceConfig)) {
+          return null;
+        }
+        return findChannelOwnershipChange({
+          previous: { config: currentConfig, sourceConfig: currentRuntimeEnvSourceConfig },
+          next: { config: nextConfig, sourceConfig: nextSourceConfig },
+        });
+      } catch (err) {
+        opts.log.warn(
+          `channel ownership comparison failed on an unchanged effective config: ${String(err)}`,
+        );
+        return { channelId: "unknown", previousOwner: undefined, nextOwner: undefined };
+      }
+    })();
+    if (changedPaths.length === 0 && !forcePluginMetadataReload && !noDiffOwnershipChange) {
       let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
       let publishedSourceRollback: (() => Promise<void>) | undefined;
       let publishedSourceRolledBack = false;
@@ -807,6 +859,17 @@ export function startGatewayConfigReloader(opts: {
     if (forcePluginMetadataReload && !plan.restartGateway && !plan.reloadPlugins) {
       // Mirror the `plugins.*` hot rule pairing: a replaced plugin registry
       // also invalidates MCP runtimes assembled from the previous generation.
+      plan.reloadPlugins = true;
+      plan.disposeMcpRuntimes = true;
+    }
+    if (noDiffOwnershipChange && !plan.restartGateway && !plan.reloadPlugins) {
+      opts.log.info(
+        `channel ownership moved without an effective config change (${
+          noDiffOwnershipChange.channelId
+        }: ${noDiffOwnershipChange.previousOwner ?? "none"} -> ${
+          noDiffOwnershipChange.nextOwner ?? "none"
+        }); reloading plugins`,
+      );
       plan.reloadPlugins = true;
       plan.disposeMcpRuntimes = true;
     }
