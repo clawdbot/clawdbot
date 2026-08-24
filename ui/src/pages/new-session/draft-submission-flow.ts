@@ -330,7 +330,10 @@ export class DraftSubmissionFlow {
           ),
         placementTargetForSubmission: () => this.placement().target,
         cloudDisabledReason: () => this.cloudDisabledReason(),
-        cloudRuntimeUnsupportedReason: () => this.cloudRuntimeUnsupportedReason(),
+        cloudRuntimeUnsupportedReason: () =>
+          this.place.modelControl.cloudRuntimeUnsupportedReason(
+            this.gateway.cloudProfiles.find((profile) => profile.id === this.place.cloudProfileId),
+          ),
       },
       kind,
     );
@@ -728,12 +731,6 @@ export class DraftSubmissionFlow {
     this.error = t("newSession.placementStartFailed", {
       error: "placement recovery storage is unavailable",
     });
-  }
-
-  private cloudRuntimeUnsupportedReason(): string | undefined {
-    return this.place.modelControl.cloudRuntimeUnsupportedReason(
-      this.gateway.cloudProfiles.find((profile) => profile.id === this.place.cloudProfileId),
-    );
   }
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery) {
