@@ -262,8 +262,11 @@ describe("openrouter provider hooks", () => {
       models: [],
     };
     const catalogSpy = vi
-      .spyOn(openRouterCatalog, "buildOpenrouterLiveProvider")
-      .mockResolvedValue(buildOpenrouterProvider());
+      .spyOn(openRouterCatalog, "buildOpenrouterLiveProviderCatalog")
+      .mockResolvedValue({
+        provider: buildOpenrouterProvider(),
+        outcomes: [{ provider: "openrouter", status: "ready" }],
+      });
 
     try {
       await provider.catalog?.run({
@@ -361,7 +364,7 @@ describe("openrouter provider hooks", () => {
 
   it("does not start authenticated catalog discovery when no credential exists", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const catalogSpy = vi.spyOn(openRouterCatalog, "buildOpenrouterLiveProvider");
+    const catalogSpy = vi.spyOn(openRouterCatalog, "buildOpenrouterLiveProviderCatalog");
 
     try {
       await expect(
@@ -375,7 +378,10 @@ describe("openrouter provider hooks", () => {
           },
           resolveProviderApiKey: () => ({}),
         } as never),
-      ).resolves.toBeNull();
+      ).resolves.toEqual({
+        provider: buildOpenrouterProvider(),
+        outcomes: [{ provider: "openrouter", status: "ready" }],
+      });
       expect(catalogSpy).not.toHaveBeenCalled();
     } finally {
       catalogSpy.mockRestore();

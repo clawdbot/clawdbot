@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
-  buildOpencodeZenLiveProviderConfig,
+  buildOpencodeZenLiveProviderCatalog,
   resolveOpencodeZenStarterModel,
 } from "./provider-catalog.js";
 
@@ -644,7 +644,10 @@ describe("opencode provider plugin", () => {
         resolveProviderApiKey: () => ({ apiKey: undefined }),
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({
+      provider: { models: expect.any(Array) },
+      outcomes: [{ provider: "opencode", status: "ready" }],
+    });
   });
 
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
@@ -699,16 +702,20 @@ describe("opencode provider plugin", () => {
       release: vi.fn(async () => undefined),
     }));
 
-    const first = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-    const second = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
+    const first = (
+      await buildOpencodeZenLiveProviderCatalog({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
+    const second = (
+      await buildOpencodeZenLiveProviderCatalog({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(fetchGuard).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
@@ -739,20 +746,24 @@ describe("opencode provider plugin", () => {
       finalUrl: "https://opencode.ai/zen/v1/models",
       release: vi.fn(async () => undefined),
     });
-    const unknownOnly = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
+    const unknownOnly = (
+      await buildOpencodeZenLiveProviderCatalog({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
     expect(unknownOnly.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
-    const fallback = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
+    const fallback = (
+      await buildOpencodeZenLiveProviderCatalog({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
     expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
     expect(fallback.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
   });
@@ -773,21 +784,27 @@ describe("opencode provider plugin", () => {
         release: vi.fn(async () => undefined),
       });
 
-    const first = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "runtime-a",
-      discoveryApiKey: "discovery-a",
-      fetchGuard,
-    });
-    const second = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "runtime-b",
-      discoveryApiKey: "discovery-b",
-      fetchGuard,
-    });
-    const secondCached = await buildOpencodeZenLiveProviderConfig({
-      apiKey: "runtime-c",
-      discoveryApiKey: "discovery-b",
-      fetchGuard,
-    });
+    const first = (
+      await buildOpencodeZenLiveProviderCatalog({
+        apiKey: "runtime-a",
+        discoveryApiKey: "discovery-a",
+        fetchGuard,
+      })
+    ).provider;
+    const second = (
+      await buildOpencodeZenLiveProviderCatalog({
+        apiKey: "runtime-b",
+        discoveryApiKey: "discovery-b",
+        fetchGuard,
+      })
+    ).provider;
+    const secondCached = (
+      await buildOpencodeZenLiveProviderCatalog({
+        apiKey: "runtime-c",
+        discoveryApiKey: "discovery-b",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(fetchGuard).toHaveBeenCalledTimes(2);
     expect(first.apiKey).toBe("runtime-a");

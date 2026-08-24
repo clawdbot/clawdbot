@@ -16,9 +16,12 @@ export type ProviderCatalogContext = {
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  /** Selected identities owned by this catalog hook; absent means the whole hook. */
+  providerIds?: readonly string[];
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+    profileId?: string;
   };
   resolveProviderAuth: (
     providerId?: string,

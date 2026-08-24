@@ -150,6 +150,7 @@ export async function runProviderCatalog(params: {
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  providerIds?: readonly string[];
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
@@ -175,10 +176,30 @@ export async function runProviderCatalog(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    ...(params.providerIds ? { providerIds: params.providerIds } : {}),
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
   });
-  for (const outcome of copyProviderCatalogOutcomes(result)) {
+  const outcomes = copyProviderCatalogOutcomes(result);
+  // Legacy hooks cannot distinguish no contribution from retryable failure. A successful return
+  // is terminal; only provider-owned explicit outcomes may keep lifecycle recovery pending.
+  if (outcomes.length === 0 && params.reportCatalogOutcome) {
+    const projection = copyProviderCatalogResultProjection(result);
+    let providers: string[] = [];
+    if (projection.kind === "providers") {
+      providers = [
+        ...new Set(projection.providers.map(([provider]) => normalizeProviderId(provider))),
+      ].filter(isSafeProviderConfigKey);
+    }
+    const readyProviders =
+      providers.length > 0
+        ? providers
+        : (params.providerIds ?? []).map(normalizeProviderId).filter(isSafeProviderConfigKey);
+    for (const provider of readyProviders.length > 0 ? readyProviders : [params.provider.id]) {
+      outcomes.push({ provider, status: "ready" });
+    }
+  }
+  for (const outcome of outcomes) {
     params.reportCatalogOutcome?.(outcome);
   }
   return result;

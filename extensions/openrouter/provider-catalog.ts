@@ -1,6 +1,6 @@
 // Openrouter provider module implements model/runtime integration.
 import {
-  buildLiveModelProviderConfig,
+  buildLiveModelProviderCatalog,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
@@ -204,14 +204,19 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
   };
 }
 
-export async function buildOpenrouterLiveProvider(params: {
+type BuildOpenrouterLiveProviderParams = {
   apiKey?: string;
   discoveryApiKey?: string;
+  profileId?: string;
   baseUrl?: string;
   request?: ModelProviderConfig["request"];
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
-}): Promise<ModelProviderConfig> {
+};
+
+export async function buildOpenrouterLiveProviderCatalog(
+  params: BuildOpenrouterLiveProviderParams,
+) {
   const fallback = buildOpenrouterProvider();
   const baseUrl = resolveOpenRouterApiBaseUrl(params.baseUrl);
   const request = sanitizeConfiguredModelProviderRequest(params.request);
@@ -229,7 +234,7 @@ export async function buildOpenrouterLiveProvider(params: {
     });
   const requestConfig = resolveRequest();
   const endpoint = `${requestConfig.baseUrl}/models`;
-  return await buildLiveModelProviderConfig({
+  return await buildLiveModelProviderCatalog({
     providerId: "openrouter",
     endpoint,
     providerConfig: {
@@ -240,6 +245,7 @@ export async function buildOpenrouterLiveProvider(params: {
     models: fallback.models,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
+    profileId: params.profileId,
     fetchGuard: async (fetchParams) =>
       await (params.fetchGuard ?? fetchWithSsrFGuard)({
         ...fetchParams,

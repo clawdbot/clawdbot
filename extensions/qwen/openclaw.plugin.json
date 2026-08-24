@@ -49,6 +49,10 @@
     }
   },
   "modelCatalog": {
+    "aliases": {
+      "modelstudio": { "provider": "qwen" },
+      "qwencloud": { "provider": "qwen" }
+    },
     "suppressions": [
       {
         "provider": "qwen",

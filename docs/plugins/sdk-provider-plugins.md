@@ -267,13 +267,13 @@ catalog, API-key auth, and dynamic model resolution.
     it as `projectRows`; the shared runtime still owns guarded fetches,
     provider-auth headers, cache admission, and static fallback.
 
-    Use `buildLiveModelProviderConfig` when the live API only tells you which
+    Use `buildLiveModelProviderCatalog` when the live API only tells you which
     provider-owned static catalog rows are currently available:
 
     ```typescript index.ts
     import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
     import {
-      buildLiveModelProviderConfig,
+      buildLiveModelProviderCatalog,
       type LiveModelCatalogFetchGuard,
     } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 
@@ -298,12 +298,13 @@ catalog, API-key auth, and dynamic model resolution.
       },
     ] as const;
 
-    async function buildAcmeLiveProvider(params: {
+    async function buildAcmeLiveCatalog(params: {
       apiKey: string;
       discoveryApiKey?: string;
+      profileId?: string;
       fetchGuard?: LiveModelCatalogFetchGuard;
     }) {
-      return await buildLiveModelProviderConfig({
+      return await buildLiveModelProviderCatalog({
         providerId: "acme-ai",
         endpoint: "https://api.acme-ai.com/v1/models",
         providerConfig: {
@@ -313,6 +314,7 @@ catalog, API-key auth, and dynamic model resolution.
         models: STATIC_MODELS,
         apiKey: params.apiKey,
         discoveryApiKey: params.discoveryApiKey,
+        profileId: params.profileId,
         fetchGuard: params.fetchGuard,
         ttlMs: 60_000,
         auditContext: "acme-ai-model-discovery",
@@ -334,16 +336,22 @@ catalog, API-key auth, and dynamic model resolution.
           catalog: {
             order: "simple",
             run: async (ctx) => {
-              const auth = ctx.resolveProviderAuth("acme-ai");
-              const apiKey =
-                auth.apiKey ?? ctx.resolveProviderApiKey("acme-ai").apiKey;
-              if (!apiKey) return null;
-              return {
-                provider: await buildAcmeLiveProvider({
-                  apiKey,
-                  discoveryApiKey: auth.discoveryApiKey,
-                }),
-              };
+              const auth = ctx.resolveProviderApiKey("acme-ai");
+              if (!auth.apiKey) {
+                return {
+                  provider: {
+                    baseUrl: "https://api.acme-ai.com/v1",
+                    api: "openai-completions",
+                    models: [...STATIC_MODELS],
+                  },
+                  outcomes: [{ provider: "acme-ai", status: "ready" }],
+                };
+              }
+              return await buildAcmeLiveCatalog({
+                apiKey: auth.apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+                profileId: auth.profileId,
+              });
             },
           },
           staticCatalog: {
@@ -361,13 +369,30 @@ catalog, API-key auth, and dynamic model resolution.
     });
     ```
 
-    `run` should stay auth-gated and return `null` when no usable credential is
-    available. Keep an offline `staticRun` or static fallback so setup, docs,
-    tests, and picker surfaces do not depend on live network access. Use a TTL
-    appropriate for model-list freshness, avoid request-time filesystem polling,
-    and pass a provider-specific `readRows` / `readModelId` only when the
-    upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
-    shape.
+    Keep an offline `staticRun` or static fallback so setup, docs, tests, and
+    picker surfaces do not depend on live network access. If runtime discovery
+    is selected but no usable credential exists, return that static provider
+    with a `ready` outcome: no live work remains pending, while normal auth
+    evaluation still marks models that cannot run as unavailable. To request
+    retry, report an explicit `unavailable` outcome. Legacy hooks that return
+    `null` without an outcome are terminal no-contribution results and remain
+    `ready` for compatibility.
+    Use a TTL appropriate for model-list freshness, avoid request-time filesystem
+    polling, and pass a provider-specific `readRows` / `readModelId` only when
+    the upstream response is not an OpenAI-compatible
+    `{ data: [{ id, object }] }` shape.
+
+    When the result feeds a runtime catalog hook, use
+    `buildLiveModelProviderCatalog` instead of the config-only helper and return
+    its `{ provider, outcomes }` result unchanged. The outcome is `ready` after
+    successful discovery, `auth-rejected` for HTTP 401/403, and `unavailable`
+    for transient transport or response failures; every status retains the
+    provider-owned static seed. Profile-backed discovery carries `profileId`
+    so rejection applies only to the tested credential; profile-less env or
+    config credentials omit it. `buildOpenAICompatibleLiveModelProviderCatalog`
+    provides the same lifecycle result for the OpenAI-compatible options above.
+    Keep `buildLiveModelProviderConfig` for callers that only need the projected
+    provider config and do not own discovery readiness.
 
     If the upstream provider uses different control tokens than OpenClaw, add a
     small bidirectional text transform instead of replacing the stream path:

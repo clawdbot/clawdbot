@@ -1,9 +1,11 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import type {
   ProviderCatalogContext,
+  ProviderCatalogOutcome,
   ProviderCatalogResult,
   ProviderPlugin,
 } from "../plugins/types.js";
@@ -96,6 +98,7 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
   FetchLiveProviderModelIdsParams & {
     providerConfig: Omit<ModelProviderConfig, "models">;
     models: readonly T[];
+    profileId?: string;
     ttlMs?: number;
     cacheKeyParts?: readonly unknown[];
     /** Provider-owned projection for catalogs that publish richer metadata than model ids. */
@@ -103,6 +106,23 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     /** Retry a rejected authenticated catalog request against the provider's public catalog. */
     fallbackToAnonymousOnUnauthorized?: boolean;
   };
+
+export type LiveModelProviderCatalogResult = {
+  provider: ModelProviderConfig;
+  outcomes: readonly ProviderCatalogOutcome[];
+};
+
+function liveModelProviderCatalogResult(
+  providerId: string,
+  provider: ModelProviderConfig,
+  status: ProviderCatalogOutcome["status"],
+  profileId?: string,
+): LiveModelProviderCatalogResult {
+  return {
+    provider,
+    outcomes: [{ provider: providerId, ...(profileId ? { profileId } : {}), status }],
+  };
+}
 
 export type OpenAICompatibleModelDiscoveryOptions = {
   /** Fixed endpoint used only while the effective inference base remains canonical. */
@@ -498,43 +518,60 @@ async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
   }
 }
 
-export async function buildLiveModelProviderConfig<T extends ModelDefinitionConfig>(
+async function resolveLiveModelProviderCatalog<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T>,
-): Promise<ModelProviderConfig> {
+): Promise<LiveModelProviderCatalogResult> {
   const fallback = buildProviderConfig(params, params.models);
   try {
+    let models: readonly T[];
     if (params.projectRows) {
-      const models = await projectCachedLiveModelRows({
+      models = await projectCachedLiveModelRows({
         ...params,
         fallback,
         projectRows: params.projectRows,
       });
-      if (models.length > 0) {
-        return { ...fallback, models: [...models] };
-      }
-      return fallback;
+    } else {
+      const liveModelIds = await getCachedLiveCatalogValue({
+        keyParts: params.cacheKeyParts ?? [
+          params.providerId,
+          "models",
+          params.endpoint,
+          liveModelCatalogAuthCacheKey(params),
+        ],
+        ttlMs: params.ttlMs,
+        load: async () => await fetchLiveProviderModelIds(params),
+        shouldCache: (modelIds) => modelIds.length > 0,
+      });
+      const liveModelIdSet = new Set(liveModelIds);
+      models = params.models.filter((model) => liveModelIdSet.has(model.id));
     }
-    const liveModelIds = await getCachedLiveCatalogValue({
-      keyParts: params.cacheKeyParts ?? [
-        params.providerId,
-        "models",
-        params.endpoint,
-        liveModelCatalogAuthCacheKey(params),
-      ],
-      ttlMs: params.ttlMs,
-      load: async () => await fetchLiveProviderModelIds(params),
-      shouldCache: (modelIds) => modelIds.length > 0,
-    });
-    const liveModelIdSet = new Set(liveModelIds);
-    const models = params.models.filter((model) => liveModelIdSet.has(model.id));
-    if (models.length > 0) {
-      return buildProviderConfig(params, models);
-    }
-  } catch {
+    return liveModelProviderCatalogResult(
+      params.providerId,
+      models.length > 0 ? buildProviderConfig(params, models) : fallback,
+      "ready",
+      params.profileId,
+    );
+  } catch (error) {
     // Live model catalogs are advisory. Keep provider-owned static rows visible
     // when discovery is unavailable or the provider returns an unexpected body.
+    const status =
+      error instanceof LiveModelCatalogHttpError && (error.status === 401 || error.status === 403)
+        ? "auth-rejected"
+        : "unavailable";
+    return liveModelProviderCatalogResult(params.providerId, fallback, status, params.profileId);
   }
-  return fallback;
+}
+
+export async function buildLiveModelProviderConfig<T extends ModelDefinitionConfig>(
+  params: BuildLiveModelProviderConfigParams<T>,
+): Promise<ModelProviderConfig> {
+  return (await resolveLiveModelProviderCatalog(params)).provider;
+}
+
+export async function buildLiveModelProviderCatalog<T extends ModelDefinitionConfig>(
+  params: BuildLiveModelProviderConfigParams<T>,
+): Promise<LiveModelProviderCatalogResult> {
+  return await resolveLiveModelProviderCatalog(params);
 }
 
 function resolveLiveModelDiscoveryEndpoint(baseUrl: string, endpointPath: string): string {
@@ -552,15 +589,20 @@ function resolveFixedLiveModelDiscoveryEndpoint(
   return effectiveBaseUrl === requiredBaseUrl ? endpoint.url : undefined;
 }
 
-export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
+type BuildOpenAICompatibleLiveModelProviderConfigParams = {
   providerId: string;
   providerConfig: ModelProviderConfig;
   apiKey?: string;
   discoveryApiKey?: string;
+  profileId?: string;
   modelDiscovery?: OpenAICompatibleModelDiscoveryOptions;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
-}): Promise<ModelProviderConfig> {
+};
+
+export async function buildOpenAICompatibleLiveModelProviderCatalog(
+  params: BuildOpenAICompatibleLiveModelProviderConfigParams,
+): Promise<LiveModelProviderCatalogResult> {
   const { models, ...providerConfig } = params.providerConfig;
   const fallback = {
     ...params.providerConfig,
@@ -574,15 +616,16 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
         params.modelDiscovery?.endpointPath ?? "models",
       );
   if (!endpoint) {
-    return fallback;
+    return liveModelProviderCatalogResult(params.providerId, fallback, "ready", params.profileId);
   }
-  return await buildLiveModelProviderConfig({
+  return await buildLiveModelProviderCatalog({
     providerId: params.providerId,
     endpoint,
     providerConfig,
     models,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
+    profileId: params.profileId,
     fetchGuard: params.fetchGuard,
     signal: params.signal,
     timeoutMs: params.modelDiscovery?.timeoutMs,
@@ -597,6 +640,12 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
   });
 }
 
+export async function buildOpenAICompatibleLiveModelProviderConfig(
+  params: BuildOpenAICompatibleLiveModelProviderConfigParams,
+): Promise<ModelProviderConfig> {
+  return (await buildOpenAICompatibleLiveModelProviderCatalog(params)).provider;
+}
+
 /** Builds the shared authenticated live/static hooks for an ordered provider family. */
 export function buildOpenAICompatibleProviderFamilyCatalog(params: {
   credentialProviderId: string;
@@ -608,27 +657,46 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
     catalog: {
       order: "paired" as const,
       run: async (ctx: ProviderCatalogContext) => {
+        const providerScope = new Set(
+          (ctx.providerIds ?? []).map(normalizeProviderId).filter(Boolean),
+        );
+        const providerInScope = (provider: string) =>
+          ctx.providerIds === undefined || providerScope.has(normalizeProviderId(provider));
+        const entries = params.entries.filter(({ id }) => providerInScope(id));
         const auth = ctx.resolveProviderApiKey(params.credentialProviderId);
         if (!auth.apiKey) {
-          return null;
-        }
-        return {
-          providers: Object.fromEntries(
-            await Promise.all(
-              params.entries.map(
-                async ({ id, buildProvider }) =>
-                  [
-                    id,
-                    await buildOpenAICompatibleLiveModelProviderConfig({
-                      providerId: id,
-                      providerConfig: buildProvider(),
-                      apiKey: auth.apiKey,
-                      discoveryApiKey: auth.discoveryApiKey,
-                    }),
-                  ] as const,
-              ),
+          const staticResult = await params.staticCatalog();
+          const providers = Object.fromEntries(
+            Object.entries(staticResult.providers).filter(([provider]) =>
+              providerInScope(provider),
             ),
+          );
+          return {
+            providers,
+            outcomes: Object.keys(providers).map((provider) => ({
+              provider,
+              status: "ready" as const,
+            })),
+          };
+        }
+        const results = await Promise.all(
+          entries.map(
+            async ({ id, buildProvider }) =>
+              [
+                id,
+                await buildOpenAICompatibleLiveModelProviderCatalog({
+                  providerId: id,
+                  providerConfig: buildProvider(),
+                  apiKey: auth.apiKey,
+                  discoveryApiKey: auth.discoveryApiKey,
+                  profileId: auth.profileId,
+                }),
+              ] as const,
           ),
+        );
+        return {
+          providers: Object.fromEntries(results.map(([id, result]) => [id, result.provider])),
+          outcomes: results.flatMap(([, result]) => result.outcomes),
         };
       },
       staticRun: params.staticCatalog,
@@ -647,16 +715,15 @@ export async function buildOpenAICompatibleProviderCatalog(
     allowExplicitBaseUrl: params.allowExplicitBaseUrl,
   });
   if (!result || !("provider" in result)) {
-    return result;
+    return liveModelProviderCatalogResult(params.providerId, await params.buildProvider(), "ready");
   }
   const auth = params.ctx.resolveProviderApiKey(params.providerId);
-  return {
-    provider: await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: params.providerId,
-      providerConfig: result.provider,
-      apiKey: auth.apiKey,
-      discoveryApiKey: auth.discoveryApiKey,
-      modelDiscovery: params.modelDiscovery,
-    }),
-  };
+  return await buildOpenAICompatibleLiveModelProviderCatalog({
+    providerId: params.providerId,
+    providerConfig: result.provider,
+    apiKey: auth.apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+    modelDiscovery: params.modelDiscovery,
+  });
 }

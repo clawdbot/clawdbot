@@ -8,6 +8,7 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMinimaxModelDiscovery } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
@@ -30,6 +31,7 @@ const minimaxProviderPlugin = {
 };
 
 afterEach(() => {
+  clearLiveCatalogCacheForTests();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -154,6 +156,40 @@ describe("minimax provider hooks", () => {
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("authorization")).toBe("Bearer profile-token");
     expect(headers.get("x-api-key")).toBeNull();
+  });
+
+  it("attributes portal auth rejection to the profile used for discovery", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("unauthorized", { status: 401 })),
+    );
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    const result = await portalProvider.catalog?.run({
+      env: {},
+      config: {},
+      resolveProviderApiKey: () => ({ apiKey: "MINIMAX_OAUTH_TOKEN" }),
+      resolveProviderAuth: () => ({
+        apiKey: MINIMAX_OAUTH_MARKER,
+        discoveryApiKey: "profile-token",
+        mode: "oauth",
+        source: "profile",
+        profileId: "minimax-portal:oauth",
+      }),
+    } as never);
+
+    expect(result && "outcomes" in result ? result.outcomes : undefined).toEqual([
+      {
+        provider: "minimax-portal",
+        profileId: "minimax-portal:oauth",
+        status: "auth-rejected",
+      },
+    ]);
   });
 
   it("declares CN provider auth aliases in the manifest", () => {

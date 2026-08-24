@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
-  buildOpencodeGoLiveProviderConfig,
+  buildOpencodeGoLiveProviderCatalog,
   buildStaticOpencodeGoProviderConfig,
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
@@ -452,7 +452,10 @@ describe("opencode-go provider plugin", () => {
         resolveProviderApiKey: () => ({ apiKey: undefined }),
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({
+      provider: { models: expect.any(Array) },
+      outcomes: [{ provider: "opencode-go", status: "ready" }],
+    });
   });
 
   it("keeps compatibility rows explicit-resolvable but out of static and live catalogs", async () => {
@@ -480,10 +483,12 @@ describe("opencode-go provider plugin", () => {
       finalUrl: "https://opencode.ai/zen/go/v1/models",
       release: vi.fn(async () => undefined),
     }));
-    const live = await buildOpencodeGoLiveProviderConfig({
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
+    const live = (
+      await buildOpencodeGoLiveProviderCatalog({
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(live.models.map((model) => model.id)).toEqual(activeModelIds);
   });
@@ -556,16 +561,20 @@ describe("opencode-go provider plugin", () => {
       release: vi.fn(async () => undefined),
     }));
 
-    const first = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
-    const second = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
+    const first = (
+      await buildOpencodeGoLiveProviderCatalog({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
+    const second = (
+      await buildOpencodeGoLiveProviderCatalog({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(fetchGuard).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
@@ -575,11 +584,13 @@ describe("opencode-go provider plugin", () => {
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
-    const fallback = await buildOpencodeGoLiveProviderConfig({
-      apiKey: "OPENCODE_API_KEY",
-      discoveryApiKey: "resolved-opencode-key",
-      fetchGuard,
-    });
+    const fallback = (
+      await buildOpencodeGoLiveProviderCatalog({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      })
+    ).provider;
     expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
     expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
       ACTIVE_MODEL_IDS.toSorted(),

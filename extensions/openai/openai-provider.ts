@@ -947,6 +947,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        let oauthDiscoveryUnavailable = false;
         try {
           const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
             await import("openclaw/plugin-sdk/provider-auth-runtime");
@@ -986,6 +987,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         } catch {
           // OAuth discovery is advisory; fall through so configured API-key
           // auth can still publish the standard OpenAI catalog.
+          oauthDiscoveryUnavailable = isCodexCatalogAuthMode(auth.mode);
         }
         if (auth.mode === "api_key" && auth.apiKey) {
           const catalog = scopeOpenAICatalogOutcome(
@@ -1003,13 +1005,24 @@ export function buildOpenAIProvider(): ProviderPlugin {
         }
         const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
         if (!apiKey.apiKey) {
-          return null;
+          return {
+            providers: { [PROVIDER_ID]: OPENAI_MANIFEST_PROVIDER },
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                status: oauthDiscoveryUnavailable ? "unavailable" : "ready",
+              },
+            ],
+          };
         }
-        const catalog = await buildOpenAILiveProviderConfig({
-          apiKey: apiKey.apiKey,
-          baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-          discoveryApiKey: apiKey.discoveryApiKey,
-        });
+        const catalog = scopeOpenAICatalogOutcome(
+          await buildOpenAILiveProviderConfig({
+            apiKey: apiKey.apiKey,
+            baseUrl: resolveOpenAICatalogBaseUrl(ctx),
+            discoveryApiKey: apiKey.discoveryApiKey,
+          }),
+          apiKey.profileId,
+        );
         return {
           providers: { [PROVIDER_ID]: catalog.provider },
           ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),

@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildGoogleLiveCatalogProvider,
+  buildGoogleLiveProviderCatalog,
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
@@ -122,11 +122,13 @@ describe("google provider catalog", () => {
       };
     });
 
-    const provider = await buildGoogleLiveCatalogProvider({
-      apiKey: "GEMINI_API_KEY",
-      discoveryApiKey: "resolved-google-key",
-      fetchGuard,
-    });
+    const provider = (
+      await buildGoogleLiveProviderCatalog({
+        apiKey: "GEMINI_API_KEY",
+        discoveryApiKey: "resolved-google-key",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(provider.apiKey).toBe("GEMINI_API_KEY");
     expect(provider.models).toEqual([
@@ -213,10 +215,12 @@ describe("google provider catalog", () => {
       release: async () => undefined,
     }));
 
-    const provider = await buildGoogleLiveCatalogProvider({
-      apiKey: "GEMINI_API_KEY",
-      fetchGuard,
-    });
+    const provider = (
+      await buildGoogleLiveProviderCatalog({
+        apiKey: "GEMINI_API_KEY",
+        fetchGuard,
+      })
+    ).provider;
 
     for (const { id, compat } of cases) {
       const model = provider.models.find((entry) => entry.id === id);
@@ -225,21 +229,72 @@ describe("google provider catalog", () => {
     }
   });
 
-  it("falls back to bundled rows when live discovery is unusable", async () => {
+  it("keeps bundled rows when live discovery has no usable model rows", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: Response.json({ models: [{ name: "models/gemini-3.6-flash" }] }),
       finalUrl: url,
       release: async () => undefined,
     }));
 
-    const provider = await buildGoogleLiveCatalogProvider({
-      apiKey: "GEMINI_API_KEY",
-      discoveryApiKey: "resolved-google-key",
-      fetchGuard,
-    });
+    const provider = (
+      await buildGoogleLiveProviderCatalog({
+        apiKey: "GEMINI_API_KEY",
+        discoveryApiKey: "resolved-google-key",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(provider.models.map((model) => model.id)).toEqual(
       buildGoogleStaticCatalogProvider().models.map((model) => model.id),
     );
+  });
+
+  it("reports a valid empty catalog as ready while retaining bundled rows", async () => {
+    const catalog = await buildGoogleLiveProviderCatalog({
+      apiKey: "GEMINI_API_KEY",
+      fetchGuard: vi.fn(async ({ url }) => ({
+        response: Response.json({ models: [] }),
+        finalUrl: url,
+        release: async () => undefined,
+      })),
+    });
+
+    expect(catalog.provider.models).toEqual(buildGoogleStaticCatalogProvider().models);
+    expect(catalog.outcomes).toEqual([{ provider: "google", status: "ready" }]);
+  });
+
+  it.each([
+    ["missing models", {}],
+    ["non-array models", { models: {} }],
+  ] as const)("reports %s as unavailable", async (_description, body) => {
+    const catalog = await buildGoogleLiveProviderCatalog({
+      apiKey: "GEMINI_API_KEY",
+      fetchGuard: vi.fn(async ({ url }) => ({
+        response: Response.json(body),
+        finalUrl: url,
+        release: async () => undefined,
+      })),
+    });
+
+    expect(catalog.provider.models).toEqual(buildGoogleStaticCatalogProvider().models);
+    expect(catalog.outcomes).toEqual([{ provider: "google", status: "unavailable" }]);
+  });
+
+  it.each([
+    [401, "auth-rejected"],
+    [403, "auth-rejected"],
+    [503, "unavailable"],
+  ] as const)("reports HTTP %s while retaining bundled rows", async (status, outcome) => {
+    const catalog = await buildGoogleLiveProviderCatalog({
+      apiKey: "GEMINI_API_KEY",
+      fetchGuard: vi.fn(async ({ url }) => ({
+        response: new Response("failed", { status }),
+        finalUrl: url,
+        release: async () => undefined,
+      })),
+    });
+
+    expect(catalog.provider.models).toEqual(buildGoogleStaticCatalogProvider().models);
+    expect(catalog.outcomes).toEqual([{ provider: "google", status: outcome }]);
   });
 });

@@ -10,7 +10,7 @@ import { opencodeMediaUnderstandingProvider } from "./media-understanding-provid
 import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
-  buildOpencodeZenLiveProviderConfig,
+  buildOpencodeZenLiveProviderCatalog,
   buildStaticOpencodeZenProviderConfig,
   listOpencodeZenModelCatalogEntries,
   normalizeOpencodeZenBaseUrl,
@@ -23,7 +23,7 @@ import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
-type OpencodeZenCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
+type OpencodeZenCatalogAuth = { apiKey?: string; discoveryApiKey?: string; profileId?: string };
 
 function resolveOpencodeZenCatalogAuth(
   resolveProviderApiKey: (providerId: string) => OpencodeZenCatalogAuth,
@@ -107,19 +107,22 @@ export default defineSingleProviderPluginEntry({
       run: async (ctx) => {
         const auth = resolveOpencodeZenCatalogAuth(ctx.resolveProviderApiKey);
         if (!auth) {
-          return null;
+          return {
+            provider: buildStaticOpencodeZenProviderConfig(),
+            outcomes: [{ provider: PROVIDER_ID, status: "ready" }],
+          };
         }
         if (!auth.discoveryApiKey) {
           return {
             provider: buildStaticOpencodeZenProviderConfig(auth.apiKey),
+            outcomes: [{ provider: PROVIDER_ID, status: "ready" }],
           };
         }
-        return {
-          provider: await buildOpencodeZenLiveProviderConfig({
-            apiKey: auth.apiKey ?? auth.discoveryApiKey,
-            discoveryApiKey: auth.discoveryApiKey,
-          }),
-        };
+        return await buildOpencodeZenLiveProviderCatalog({
+          apiKey: auth.apiKey ?? auth.discoveryApiKey,
+          discoveryApiKey: auth.discoveryApiKey,
+          profileId: auth.profileId,
+        });
       },
       staticRun: async () => ({ provider: buildStaticOpencodeZenProviderConfig() }),
     },
