@@ -979,6 +979,7 @@ export function createGatewayCloseHandler(
         clearInterval(params.maintenance.healthInterval);
         clearInterval(params.maintenance.dedupeCleanup);
         clearInterval(params.maintenance.worktreeCleanup);
+        clearInterval(params.maintenance.delegateArtifactCleanup);
         params.maintenance.skillCuratorCleanup();
       }
       if (params.delegateArtifactCleanup) {

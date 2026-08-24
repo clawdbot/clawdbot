@@ -16,3 +16,15 @@
 - Gateway shutdown keeps upstream's nullable aggregate `GatewayMaintenanceHandles` owner and threads it through lifecycle/close, while retaining the candidate's delegate-artifact cleanup handle and shutdown cleanup.
 - `server-close.test.ts` follows the aggregate maintenance shape, including its delegate cleanup timer, and retains the standalone delegate cleanup assertion. `server-runtime-handles.ts` starts with `maintenance: null` and the candidate cleanup handle unset.
 - Every resolution was composed from ancestor, candidate, and upstream intent; no file used wholesale side selection.
+
+## §2 — 2026-08-24 primitive-core preservation
+
+- Gate 2 compared reviewed `02f6c389e133a8fad28f97ca746661e3e54d4e9e` with merge checkpoint `326093c8dca84923ef53ffae7a449fd4e1c86c27`, projecting only exact frozen-upstream `6fe4e11a786bdd6ba366bb34a0c2e0f91fe3bc85`.
+- All 40 primitive-core invariants passed byte preservation: 37 exact reviewed blobs and three tombstones; zero failures and zero empty patterns.
+
+## §2.5 — 2026-08-24 semantic-conflict enumeration and cure
+
+- Enumerated all 111 test/support paths changed by the 27-commit `a6a9f553..6fe4e11a` upstream delta. Seven intersect the candidate feature surface: Codex dynamic tools, Feishu delivery trace, two commentary/stream-item owners, chat gateway, shutdown, and server-method projection.
+- The first focused run found three shutdown failures: the newly aggregated delegate timer remained live in fake-timer assertions because `server-close.ts` cleared only upstream's original aggregate members. The architectural owner is the aggregate maintenance branch, so close now clears `maintenance.delegateArtifactCleanup` before invoking its composite cleanup callback; no test-only workaround was used.
+- The exact rerun passed all seven intersections across four Vitest shards: 517 tests.
+- Direct pinned Codex `rust-v0.148.0` contract inspection confirmed dynamic calls carry thread, turn, call, namespace, tool, and arguments through `codex-rs/app-server-protocol/src/protocol/v2/item.rs`, are projected in `codex-rs/app-server/src/bespoke_event_handling.rs`, and return typed content plus success in `codex-rs/app-server/tests/suite/v2/dynamic_tools.rs`.
