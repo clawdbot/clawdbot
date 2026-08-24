@@ -256,6 +256,10 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       },
       ...input.context,
     });
+    // Runtime-only resume with an open contract must not accept exact NO_REPLY.
+    attempt.blockRuntimeResumeSilentReply =
+      promptContext.promptSubmission.runtimeOnly === true &&
+      promptContext.promptSubmission.resumeContract?.open === true;
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);
     input.lifecycle.setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);

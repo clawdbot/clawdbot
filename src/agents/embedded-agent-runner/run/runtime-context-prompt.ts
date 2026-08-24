@@ -11,6 +11,11 @@ import {
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
 import type { CurrentInboundPromptContext } from "./params.js";
+import {
+  extractRuntimeResumeContract,
+  formatRuntimeResumeSystemAppendix,
+  type RuntimeResumeContract,
+} from "./runtime-resume-contract.js";
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
@@ -20,6 +25,8 @@ type RuntimeContextPromptParts = {
   runtimeContext?: string;
   runtimeOnly?: boolean;
   runtimeSystemContext?: string;
+  /** Present on runtime-only turns when an unfinished user task is still owed. */
+  resumeContract?: RuntimeResumeContract;
 };
 
 /** Hidden custom transcript message that carries runtime context into model conversion. */
@@ -199,23 +206,27 @@ export function resolveRuntimeContextPromptParts(params: {
       .filter((value): value is string => Boolean(value?.trim()))
       .join("\n\n") || (!prompt.trim() ? extracted.text.trim() : undefined);
   if (!prompt.trim()) {
-    return runtimeContext
-      ? {
-          prompt: OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
-          ...(modelPromptText.trim() && modelPromptText !== OPENCLAW_RUNTIME_EVENT_USER_PROMPT
-            ? { modelPrompt: modelPromptText }
-            : {}),
-          runtimeContext,
-          runtimeOnly: true,
-          runtimeSystemContext: buildRuntimeContextMessageContent({
-            runtimeContext,
-            kind: "runtime-event",
-          }),
-        }
-      : {
-          prompt: "",
-          ...(modelPromptText ? { modelPrompt: modelPromptText } : {}),
-        };
+    if (!runtimeContext) {
+      return {
+        prompt: "",
+        ...(modelPromptText ? { modelPrompt: modelPromptText } : {}),
+      };
+    }
+    const resumeContract = extractRuntimeResumeContract(runtimeContext);
+    return {
+      prompt: OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
+      ...(modelPromptText.trim() && modelPromptText !== OPENCLAW_RUNTIME_EVENT_USER_PROMPT
+        ? { modelPrompt: modelPromptText }
+        : {}),
+      runtimeContext,
+      runtimeOnly: true,
+      runtimeSystemContext: buildRuntimeContextMessageContent({
+        runtimeContext,
+        kind: "runtime-event",
+        resumeContract,
+      }),
+      ...(resumeContract.open ? { resumeContract } : {}),
+    };
   }
 
   // When hooks added pre-prompt context, modelPromptText still contains the
@@ -247,15 +258,21 @@ export function resolveRuntimeContextPromptParts(params: {
 function buildRuntimeContextMessageContent(params: {
   runtimeContext: string;
   kind: "next-turn" | "runtime-event";
+  resumeContract?: RuntimeResumeContract;
 }): string {
   // Wrap the runtime context body in delimited internal-context markers so
   // stripInternalRuntimeContext can fully remove the block when it leaks
   // into user-visible surfaces (e.g. Feishu streaming cards, #92589).
+  const resumeAppendix =
+    params.kind === "runtime-event" && params.resumeContract
+      ? formatRuntimeResumeSystemAppendix(params.resumeContract)
+      : "";
   return [
     params.kind === "runtime-event"
       ? OPENCLAW_RUNTIME_EVENT_HEADER
       : OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
     OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+    ...(resumeAppendix ? ["", resumeAppendix] : []),
     "",
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     params.runtimeContext,

@@ -151,6 +151,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
     allowEmptyAssistantReplyAsSilent: input.runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: input.runParams.terminalReplyExpectation,
     onlyExplicitSilentReply: false,
+    blockRuntimeResumeSilentReply: input.runParams.blockRuntimeResumeSilentReply,
     payloadCount,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
@@ -263,6 +264,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: runParams.terminalReplyExpectation,
     onlyExplicitSilentReply: settledTurnFinalizationAttempted,
+    blockRuntimeResumeSilentReply: runParams.blockRuntimeResumeSilentReply,
     payloadCount,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
@@ -356,6 +358,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           timedOut: terminalTimedOut,
           hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
           hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
+          blockRuntimeResumeSilentReply: runParams.blockRuntimeResumeSilentReply,
           terminalAuthFailure: input,
           attempt,
         });

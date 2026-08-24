@@ -109,11 +109,16 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   onlyExplicitSilentReply?: boolean;
   terminalReplyExpectation?: "required" | "optional";
+  /** When true, exact NO_REPLY / empty finals are never intentional silence. */
+  blockRuntimeResumeSilentReply?: boolean;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
+  if (params.blockRuntimeResumeSilentReply === true) {
+    return false;
+  }
   // "optional" is the run consumer's declaration that no user-facing reply is
   // owed (e.g. cron without a delivery route). Silence after side-effecting
   // tools is intentional there; retry is replay-unsafe, so erroring would mark

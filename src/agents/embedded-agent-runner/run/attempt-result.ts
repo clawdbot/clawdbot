@@ -370,6 +370,7 @@ export function completeEmbeddedAttemptResult(
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: attempt.terminalReplyExpectation,
+    blockRuntimeResumeSilentReply: attempt.blockRuntimeResumeSilentReply,
     payloadCount: 0,
     aborted: terminal.aborted,
     timedOut: terminal.timedOut,
