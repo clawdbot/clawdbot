@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -52,7 +52,10 @@ type WorkflowStep = {
 };
 
 type Workflow = {
-  jobs: Record<string, { steps: WorkflowStep[]; with?: Record<string, unknown> }>;
+  jobs: Record<
+    string,
+    { outputs?: Record<string, unknown>; steps: WorkflowStep[]; with?: Record<string, unknown> }
+  >;
 };
 
 function readWorkflow(file: string): Workflow {
@@ -79,6 +82,65 @@ function runSourceRequirement(step: WorkflowStep, env: Record<string, string>) {
     });
     expect(result.status, result.stderr).toBe(0);
     return readFileSync(outputPath, "utf8").trim();
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
+function runLiveArtifactTupleValidation(packageEnv: Record<string, string>) {
+  const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
+  const step = workflowStep(workflow, "validate_selected_ref", "Validate selected ref");
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-live-artifact-tuple-"));
+  const fakeBin = path.join(tempDir, "bin");
+  const outputPath = path.join(tempDir, "output");
+  const summaryPath = path.join(tempDir, "summary");
+  const selectedSha = "a".repeat(40);
+  mkdirSync(fakeBin);
+  writeFileSync(
+    path.join(fakeBin, "git"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "rev-parse" && "$2" == "--verify" ]]; then
+  printf '%s\\n' "$SELECTED_SHA"
+  exit 0
+fi
+if [[ "$1" == "merge-base" && "$2" == "--is-ancestor" ]]; then
+  exit 0
+fi
+exit 64
+`,
+    { mode: 0o755 },
+  );
+  const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
+  try {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...stepEnv,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_STEP_SUMMARY: summaryPath,
+        INPUT_REF: "main",
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        PROVIDED_BARE_IMAGE: "ghcr.io/openclaw/openclaw:test",
+        SELECTED_SHA: selectedSha,
+        SHARED_IMAGE_POLICY: "existing-only",
+        ...packageEnv,
+      },
+    });
+    const output =
+      result.status === 0
+        ? Object.fromEntries(
+            readFileSync(outputPath, "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => {
+                const separator = line.indexOf("=");
+                return [line.slice(0, separator), line.slice(separator + 1)];
+              }),
+          )
+        : {};
+    return { output, result };
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
   }
@@ -333,7 +395,7 @@ describe("package source preflight", () => {
     expect(workflowSource.match(/\$\{\{ inputs\.release_package_spec \}\}/gu)).toHaveLength(1);
   });
 
-  it("guards the default live/E2E candidate producer before setup and packing", () => {
+  it("guards prepare-only source before harness setup and skips no-package lane setup", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
     const steps = workflow.jobs.prepare_docker_e2e_image!.steps;
     const sourceRequirement = workflowStep(
@@ -341,7 +403,12 @@ describe("package source preflight", () => {
       "prepare_docker_e2e_image",
       "Resolve source package requirement",
     );
-    const preflight = workflowStep(
+    const prepareOnlyPreflight = workflowStep(
+      workflow,
+      "prepare_docker_e2e_image",
+      "Validate prepare-only Docker E2E package source metadata",
+    );
+    const plannedPreflight = workflowStep(
       workflow,
       "prepare_docker_e2e_image",
       "Validate Docker E2E package source metadata",
@@ -360,26 +427,54 @@ describe("package source preflight", () => {
 
     expect(
       runSourceRequirement(sourceRequirement, {
-        PACKAGE_ARTIFACT_NAME: " ",
-        PACKAGE_ARTIFACT_RUN_ID: "\t",
+        PACKAGE_ARTIFACT_PRESENT: "false",
       }),
     ).toBe("required=true");
     expect(
       runSourceRequirement(sourceRequirement, {
-        PACKAGE_ARTIFACT_NAME: "release-package-1",
-        PACKAGE_ARTIFACT_RUN_ID: "123",
+        PACKAGE_ARTIFACT_PRESENT: "true",
       }),
     ).toBe("required=false");
-    expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(harnessSetup));
+    expect(steps.indexOf(prepareOnlyPreflight)).toBeLessThan(steps.indexOf(harnessSetup));
     expect(harnessSetup.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
-    expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(setup));
-    expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(pack));
-    expect(preflight.run).toContain("node .release-harness/scripts/package-source-preflight.mjs");
-    expect(preflight.if).toBe("steps.package_source.outputs.required == 'true'");
-    expect(setup.if).toContain("steps.package_source.outputs.required == 'true'");
+    expect(steps.indexOf(plannedPreflight)).toBeGreaterThan(
+      steps.findIndex((step) => step.name === "Plan Docker E2E images"),
+    );
+    expect(steps.indexOf(plannedPreflight)).toBeLessThan(steps.indexOf(setup));
+    expect(steps.indexOf(plannedPreflight)).toBeLessThan(steps.indexOf(pack));
+    expect(prepareOnlyPreflight.run).toContain(
+      "node .release-harness/scripts/package-source-preflight.mjs",
+    );
+    expect(prepareOnlyPreflight.if).toBe(
+      "inputs.prepare_only && steps.package_source.outputs.required == 'true'",
+    );
+    expect(plannedPreflight.if).toBe(
+      "(!inputs.prepare_only) && steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
+    );
+    expect(setup.if).toContain(
+      "steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
+    );
     expect(pack.if).toBe(
       "steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
     );
+  });
+
+  it("treats tab and newline-only package artifact tuples as absent", () => {
+    const whitespace = " \t\n ";
+    const { output, result } = runLiveArtifactTupleValidation({
+      PACKAGE_ARTIFACT_DIGEST: whitespace,
+      PACKAGE_ARTIFACT_ID: whitespace,
+      PACKAGE_ARTIFACT_NAME: whitespace,
+      PACKAGE_ARTIFACT_RUN_ATTEMPT: whitespace,
+      PACKAGE_ARTIFACT_RUN_ID: whitespace,
+      PACKAGE_FILE_NAME: whitespace,
+      PACKAGE_SHA256: whitespace,
+      PACKAGE_SOURCE_SHA: whitespace,
+      PACKAGE_VERSION: whitespace,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(output.package_artifact_present).toBe("false");
   });
 
   it("guards install-smoke candidate packaging before its dependency install", () => {

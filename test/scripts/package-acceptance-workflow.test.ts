@@ -3198,7 +3198,9 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
     expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
-    expect(workflow).toContain("inputs.package_artifact_id != ''");
+    expect(workflow).toContain(
+      "needs.validate_selected_ref.outputs.package_artifact_present == 'true'",
+    );
     expect(workflow).toContain(
       'bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"',
     );
@@ -3316,7 +3318,7 @@ describe("package artifact reuse", () => {
       prepareDockerImageStepNames.indexOf(planStepName),
     );
     expect(workflowStep(prepareDockerImage, setupCandidateStepName)).toMatchObject({
-      if: "steps.package_source.outputs.required == 'true' || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
+      if: "(steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
       uses: "./.github/actions/setup-node-env",
     });
     expect(workflowStep(prepareDockerImage, planStepName).env).toEqual({
