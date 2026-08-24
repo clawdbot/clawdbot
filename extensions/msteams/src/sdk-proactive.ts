@@ -64,7 +64,7 @@ type MSTeamsProactiveOptions = {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 };
 
-// Root-only runtime imports avoid 2.0.14 CJS leaf-first barrel poisoning; the deep type keeps tsgo accurate.
+// SAFETY: the 2.0.14 CJS root exports MessageActivityInput, while its declarations omit that export.
 const loadMSTeamsApiModule = createLazyRuntimeModule(
   () =>
     import("@microsoft/teams.api") as unknown as Promise<

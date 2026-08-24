@@ -4,24 +4,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { buildPluginNpmRuntime } from "../../../scripts/lib/plugin-npm-runtime-build.mts";
 
 const execFileAsync = promisify(execFile);
 
 describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
   it("keeps root exports intact when quoted behavior is the first SDK access", async () => {
-    const build = await buildPluginNpmRuntime({
-      repoRoot: process.cwd(),
-      packageDir: "extensions/msteams",
-      logLevel: "warn",
-    });
-    if (!build || build.runtimeFormat !== "cjs") {
-      throw new Error("Microsoft Teams did not produce a CommonJS runtime build");
-    }
+    await execFileAsync(
+      process.execPath,
+      ["scripts/lib/plugin-npm-runtime-build.mjs", "extensions/msteams"],
+      { cwd: process.cwd() },
+    );
+    const outDir = path.join(process.cwd(), "extensions/msteams/dist");
     const proactiveArtifact = fs
-      .readdirSync(build.outDir)
+      .readdirSync(outDir)
       .filter((entry) => entry.endsWith(".cjs"))
-      .map((entry) => path.join(build.outDir, entry))
+      .map((entry) => path.join(outDir, entry))
       .find((entry) =>
         fs
           .readFileSync(entry, "utf8")
