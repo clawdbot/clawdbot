@@ -403,15 +403,16 @@ describe("chat composer queue reordering", () => {
     expect(onQueueEditCancel).not.toHaveBeenCalled();
   });
 
-  it("projects an offline transition on each row without a queue header", () => {
+  it("projects one offline state on each row without a queue header", () => {
     const container = renderQueue({
       offline: true,
-      queue: [{ id: "a", text: "a", createdAt: 1, sendState: "waiting-idle" }],
+      queue: [{ id: "a", text: "a", createdAt: 1, queueMode: "steer", sendState: "waiting-idle" }],
       onQueueRemove: vi.fn(),
     });
 
     const row = container.querySelector(".chat-queue__item");
     expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
+    expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
     expect(row?.querySelector(".chat-queue__badge--reconnect")?.textContent?.trim()).toBe(
       t("chat.queue.states.waitingForReconnect"),
     );

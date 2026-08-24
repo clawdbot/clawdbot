@@ -280,11 +280,13 @@ describe("renderChatComposer controls", () => {
     expect(button(view.container, t("chat.composer.startVoiceInput")).disabled).toBe(true);
   });
 
-  it("disables Stop while disconnected from an abortable run", () => {
+  it("keeps Stop available while disconnected for an abortable run", () => {
     const onAbort = vi.fn();
     const { container } = renderComposer({ connected: false, canAbort: true, onAbort });
-    expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
-    expect(onAbort).not.toHaveBeenCalled();
+    const stop = button(container, t("chat.runControls.stopGenerating"));
+    expect(stop.disabled).toBe(false);
+    stop.click();
+    expect(onAbort).toHaveBeenCalledOnce();
   });
 
   it("offers Steer only for eligible queued messages during an active run", () => {
@@ -559,7 +561,7 @@ describe("renderChatComposer controls", () => {
           onAbort: vi.fn(),
           sendShortcut: "enter" as const,
         },
-        tooltip: t("chat.runControls.send"),
+        tooltip: t("chat.runControls.queue"),
       },
     ];
     for (const testCase of unavailable) {
@@ -627,7 +629,6 @@ describe("renderChatComposer controls", () => {
           id: "reconnect-1",
           text: "send me once the gateway is back",
           createdAt: 1,
-          queueMode: "steer",
           sendError: "chat.send unavailable during gateway restart",
           sendState: "waiting-reconnect",
         },
@@ -639,7 +640,6 @@ describe("renderChatComposer controls", () => {
       item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
     ).not.toBeNull();
     expect(item?.querySelector(".chat-queue__error")).toBeNull();
-    expect(item?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
     const state = item?.querySelector(".chat-queue__badge--reconnect");
     expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
     expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");

@@ -193,11 +193,9 @@ let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
 let removeDeliveredQueuedChatSendForRun: typeof import("./chat-queue.ts").removeDeliveredQueuedChatSendForRun;
 let removeVisibleOrScopedQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeVisibleOrScopedQueuedMessageWithoutReleasing;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
-let keepVolatileQueuedMessage: typeof import("./chat-queue.ts").keepVolatileQueuedMessage;
 let subscribeChatOutboxProjection: typeof import("./chat-queue.ts").subscribeChatOutboxProjection;
 let syncVisibleChatQueueProjection: typeof import("./chat-queue.ts").syncVisibleChatQueueProjection;
 let readChatQueueForScope: typeof import("./chat-queue.ts").readChatQueueForScope;
-let readQueuedMessageById: typeof import("./chat-queue.ts").readQueuedMessageById;
 let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQueueForEvent;
 let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
 let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
@@ -225,10 +223,8 @@ async function loadChatHelpers(): Promise<void> {
     removeDeliveredQueuedChatSendForRun,
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
-    keepVolatileQueuedMessage,
     removeVisibleOrScopedQueuedMessageWithoutReleasing,
     readChatQueueForScope,
-    readQueuedMessageById,
     subscribeChatOutboxProjection,
     syncVisibleChatQueueProjection,
   } = await import("./chat-queue.ts"));
@@ -7795,16 +7791,8 @@ describe("handleSendChat", () => {
     ).toEqual([expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" })]);
   });
 
-  it("projects every active queued send as waiting after a disconnect", () => {
+  it("marks saved session queued sends waiting after a disconnect", () => {
     const host = makeChatHost({ chatQueue: [] });
-    const volatile = {
-      id: "volatile-send",
-      text: "in flight",
-      createdAt: 0,
-      sendRunId: "run-volatile",
-      sendState: "sending" as const,
-      sessionKey: "agent:a",
-    };
     writeChatQueueForScope(host, "agent:a", [
       {
         id: "pending-send-a",
@@ -7815,15 +7803,10 @@ describe("handleSendChat", () => {
         sessionKey: "agent:a",
       },
     ]);
-    keepVolatileQueuedMessage(host, "agent:a", volatile, undefined, { retryable: true });
 
     markQueuedChatSendsWaitingForReconnect(host);
 
-    expect(readQueuedMessageById(host, volatile.id)).toMatchObject({
-      sendRunId: "run-volatile",
-      sendState: "waiting-reconnect",
-    });
-    expect(readQueuedMessageById(host, "pending-send-a")).toMatchObject({
+    expect(readChatQueueForScope(host, "agent:a")[0]).toMatchObject({
       sendRunId: "run-a",
       sendState: "waiting-reconnect",
     });

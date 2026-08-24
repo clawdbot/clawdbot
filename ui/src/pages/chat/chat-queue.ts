@@ -452,24 +452,26 @@ export function clearPendingQueueItemsForRun(
 
 export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSessionHost) {
   const items = chatOutboxOwner(host).allItems(host);
-  const waitForReconnect = (current: ChatQueueItem): ChatQueueItem => ({
-    ...current,
-    sendState: "waiting-reconnect",
-  });
   for (const item of items) {
     if (!item.sendRunId || (item.sendState !== "sending" && item.sendState !== "waiting-idle")) {
       continue;
     }
     if (isVolatileQueuedMessage(host, item.id)) {
-      updateVolatileQueuedMessage(host, item.id, waitForReconnect);
-    } else {
-      updateQueuedMessageForSession(
-        host,
-        item.sessionKey ?? host.sessionKey,
-        item.id,
-        waitForReconnect,
-        item.agentId,
-      );
+      updateVolatileQueuedMessage(host, item.id, (current) => ({
+        ...current,
+        sendState: "unconfirmed",
+      }));
+      continue;
     }
+    updateQueuedMessageForSession(
+      host,
+      item.sessionKey ?? host.sessionKey,
+      item.id,
+      (current) => ({
+        ...current,
+        sendState: "waiting-reconnect",
+      }),
+      item.agentId,
+    );
   }
 }

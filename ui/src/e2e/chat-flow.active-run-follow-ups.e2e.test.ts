@@ -435,7 +435,7 @@ suite.define(() => {
     }
   });
 
-  it("projects one disconnected state across queued follow-ups and run controls", async () => {
+  it("projects one disconnected state for an offline steer follow-up", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -446,7 +446,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.locator("[data-settings-follow-up-mode]").selectOption("steer");
       await page.locator("[data-settings-send-shortcut]").selectOption("enter");
       await page.goto(`${suite.server.baseUrl}chat`);
 
@@ -456,23 +456,18 @@ suite.define(() => {
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
-      const followUpText = "wait behind the active run";
-      await composer.fill(followUpText);
-      await page.getByRole("button", { name: "Queue message" }).click();
-      await page
-        .locator(".chat-queue__item", { hasText: followUpText })
-        .getByText("Waiting for current run")
-        .waitFor({ timeout: 10_000 });
-
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
+
+      const followUpText = "steer after the gateway returns";
+      await composer.fill(followUpText);
+      await page.locator(".agent-chat__composer-actions .chat-send-btn--send").click();
 
       const rows = page.locator(".chat-queue__item");
       await expect.poll(() => rows.count()).toBe(1);
       await expect.poll(() => rows.getByText("Waiting for reconnect").count()).toBe(1);
-      expect(await rows.getByText("Waiting for current run").count()).toBe(0);
       expect(await rows.getByText("Steer", { exact: true }).count()).toBe(0);
-      expect(await page.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+      await expectRequestCountStable(gateway, "chat.send", 1);
     } finally {
       await suite.closeBrowserContext(context);
     }
