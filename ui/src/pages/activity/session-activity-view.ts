@@ -378,7 +378,9 @@ function renderIdentityHeader(
       ${devices.length > 0
         ? html`<div class="activity-feed__devices">
             ${devices.map((entry) => {
-              const device = [entry.deviceFamily, entry.platform].filter(Boolean).join(" · ");
+              const device = [entry.deviceFamily, entry.platform, entry.ip, entry.timeZone]
+                .filter(Boolean)
+                .join(" · ");
               return html`<div class="activity-feed__device">
                 <span class="activity-feed__device-name"
                   >${entry.host ?? t("activityFeed.unknownDevice")}</span

@@ -438,6 +438,9 @@ export class GatewayBrowserClient {
     const role = CONTROL_UI_OPERATOR_ROLE;
     // Gateway Coupling makes the connect handshake the only version-skew gate.
     // A configured build identity must never be omitted or downgraded.
+    // Browsers know their own zone, so presence gets a location hint that survives
+    // proxies, tunnels, and CGNAT ranges where the connecting IP tells us nothing.
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
     const client: ConnectParams["client"] = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
       version: this.opts.clientVersion ?? "control-ui",
@@ -445,6 +448,7 @@ export class GatewayBrowserClient {
       platform: this.opts.platform ?? navigator.platform ?? "web",
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
+      ...(timeZone ? { timeZone } : {}),
     };
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;

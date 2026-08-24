@@ -47,6 +47,8 @@ export const ConnectParamsSchema = closedObject({
     platform: NonEmptyString,
     deviceFamily: Type.Optional(NonEmptyString),
     modelIdentifier: Type.Optional(NonEmptyString),
+    /** Self-reported IANA zone. Bounded because the longest real name is well under this cap. */
+    timeZone: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
     mode: GatewayClientModeSchema,
     instanceId: Type.Optional(NonEmptyString),
   }),
