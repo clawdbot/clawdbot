@@ -175,7 +175,7 @@ jobs:
       output_dir: ${{ steps.collect.outputs.output_dir }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
@@ -215,7 +215,7 @@ jobs:
 
       - name: Restore exact baseline build
         id: baseline_cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/mantis-runtime-build.tar
           key: ${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v2-${{ steps.worktrees.outputs.lockfile_sha256 }}-${{ steps.worktrees.outputs.node_version }}-${{ steps.worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
@@ -235,7 +235,7 @@ jobs:
       - name: Save exact baseline build
         if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.baseline_cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/mantis-runtime-build.tar
           key: ${{ steps.baseline_cache.outputs.cache-primary-key }}

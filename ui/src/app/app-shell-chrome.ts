@@ -629,14 +629,36 @@ export class ShellChromeOwner {
     }
   };
 
+  private lazyElementForShellEvent(eventType: LazyShellEvent["eventType"]): OptionalCustomElement {
+    const host = this.host;
+    const elements: Record<LazyShellEvent["eventType"], OptionalCustomElement> = {
+      [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement,
+      [DEBUG_OVERLAY_REQUEST_EVENT]: DEBUG_OVERLAY_ELEMENT,
+      [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT,
+      [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement,
+      [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement,
+      [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement,
+      [CUSTODIAN_PANEL_TOGGLE_EVENT]: host.custodianPanelElement,
+      [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement,
+    };
+    return elements[eventType];
+  }
+
   restorePendingLazyAction(): void {
     const event = this.pendingLazyAction;
-    if (
-      event &&
-      !this.host.lazyCustomElements.visibleState &&
-      this.dispatchLazyShellEvent(event) &&
-      !this.host.lazyCustomElements.visibleState
-    ) {
+    if (!event || this.host.lazyCustomElements.visibleState) {
+      return;
+    }
+    const element = this.lazyElementForShellEvent(event.eventType);
+    if (isOptionalElementDefined(element) && !this.host.querySelector(element.tagName)) {
+      // Loaded but render-gated (e.g. the shell is still booting): nothing can
+      // consume the dispatch yet, and re-dispatching re-arms a request/update
+      // cycle whose microtasks starve the boot (Gateway socket included).
+      // The host retries after every completed update, so the replay fires on
+      // the update that first renders the element.
+      return;
+    }
+    if (this.dispatchLazyShellEvent(event) && !this.host.lazyCustomElements.visibleState) {
       this.clearPendingLazyAction(event);
     }
   }

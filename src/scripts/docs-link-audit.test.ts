@@ -413,7 +413,7 @@ describe("docs-link-audit", () => {
       args: [
         "exec",
         "--yes",
-        "--package=mint@4.2.715",
+        "--package=mint@4.2.804",
         "--",
         "mint",
         "broken-links",
@@ -480,7 +480,7 @@ describe("docs-link-audit", () => {
         "npm",
         "exec",
         "--yes",
-        "--package=mint@4.2.715",
+        "--package=mint@4.2.804",
         "--",
         "mint",
         "broken-links",

@@ -12,6 +12,7 @@ import {
   resetAppHostTestGlobals,
   type ShellKeyboardState,
   type TestOptionalCustomElement,
+  stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import "./app-host.ts";
 import { DEBUG_OVERLAY_ELEMENT, KEYBOARD_SHORTCUTS_ELEMENT } from "./lazy-custom-element.ts";
@@ -153,6 +154,7 @@ describe("shell lazy events", () => {
     Object.defineProperty(shell, "approvalOverlay", {
       get: () => (customElements.get(element.tagName) ? { show } : undefined),
     });
+    stubRenderedWhenDefined(shell);
 
     await withConnectedShell(shell, async () => {
       shell.openApprovals();
