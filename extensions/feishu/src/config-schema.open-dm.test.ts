@@ -43,4 +43,21 @@ describe("FeishuConfigSchema named-account open DM policy", () => {
       }).success,
     ).toBe(true);
   });
+
+  it("does not enforce open DM access on disabled accounts", () => {
+    expect(
+      FeishuConfigSchema.safeParse({
+        accounts: { work: { enabled: false, dmPolicy: "open" } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("does not enforce account open DM access when the channel is disabled", () => {
+    expect(
+      FeishuConfigSchema.safeParse({
+        enabled: false,
+        accounts: { work: { dmPolicy: "open" } },
+      }).success,
+    ).toBe(true);
+  });
 });
