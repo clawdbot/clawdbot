@@ -37,6 +37,21 @@ describe("feishu named-account open DM doctor repair", () => {
     ).toBe(true);
   });
 
+  it("ignores disabled accounts and channel-disabled account policies", () => {
+    expect(
+      openDmRule?.match?.(
+        { accounts: { work: { enabled: false, dmPolicy: "open" } } },
+        {},
+      ),
+    ).toBe(false);
+    expect(
+      openDmRule?.match?.(
+        { enabled: false, accounts: { work: { dmPolicy: "open" } } },
+        {},
+      ),
+    ).toBe(false);
+  });
+
   it("preserves restricted access by converting invalid effective open accounts to allowlist", () => {
     const result = normalizeCompatibilityConfig({
       cfg: feishuConfig({
@@ -72,6 +87,23 @@ describe("feishu named-account open DM doctor repair", () => {
 
     expect(work).toEqual({ dmPolicy: "allowlist", allowFrom: ["ou_alice"] });
     expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
+  });
+
+  it("leaves disabled open DM account policies untouched", () => {
+    const accountDisabled = feishuConfig({
+      accounts: { work: { enabled: false, dmPolicy: "open", allowFrom: ["ou_alice"] } },
+    });
+    const accountResult = normalizeCompatibilityConfig({ cfg: accountDisabled });
+    expect(accountResult.changes).toEqual([]);
+    expect(accountResult.config).toBe(accountDisabled);
+
+    const channelDisabled = feishuConfig({
+      enabled: false,
+      accounts: { work: { dmPolicy: "open", allowFrom: ["ou_alice"] } },
+    });
+    const channelResult = normalizeCompatibilityConfig({ cfg: channelDisabled });
+    expect(channelResult.changes).toEqual([]);
+    expect(channelResult.config).toBe(channelDisabled);
   });
 
   it("leaves effective wildcard access unchanged and is idempotent", () => {
