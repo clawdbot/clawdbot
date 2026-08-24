@@ -381,7 +381,11 @@ export function startAgentRunExecution(params: {
               abortSignal: prepared.activeRunAbort.controller.signal,
               lifecycleGeneration: params.lifecycleGeneration,
               onExecutionStarted: () => {
-                if (prepared.activeRunAbort.markExecutionStarted() && params.resolvedSessionKey) {
+                if (!prepared.activeRunAbort.markExecutionStarted()) {
+                  return;
+                }
+                params.io.emitExecutionStarted?.();
+                if (params.resolvedSessionKey) {
                   emitSessionsChanged(params.context, {
                     sessionKey: params.resolvedSessionKey,
                     agentId: params.agentId,

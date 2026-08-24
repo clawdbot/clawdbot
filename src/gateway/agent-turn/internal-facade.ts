@@ -34,6 +34,7 @@ type InternalAgentTurnFacadeOptions = {
 type InternalAgentTurnDispatchOptions = {
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -115,6 +116,9 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
           resolveFinal?.(final);
         }
       },
+      ...(dispatchOptions.onExecutionStarted
+        ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
+        : {}),
     };
     const operation = runWithGatewayRequestEnvelope(
       method,

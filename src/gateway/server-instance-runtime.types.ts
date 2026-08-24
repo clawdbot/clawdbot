@@ -15,6 +15,7 @@ export type GatewayInstanceAgentDispatchOptions = {
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   scopes?: string[];
   signal?: AbortSignal;

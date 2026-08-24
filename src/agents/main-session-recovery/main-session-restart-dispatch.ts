@@ -380,6 +380,8 @@ export async function resumeMainSession(params: {
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   let reservation: MainSessionRecoveryReservation | undefined;
   let dispatchStarted = false;
+  let dispatchAccepted = false;
+  let executionStarted = false;
   const rollbackReservation = async (kind: "abandon_reservation" | "cancel_reservation") => {
     if (!reservation) {
       return undefined;
@@ -393,6 +395,49 @@ export async function resumeMainSession(params: {
     });
     reservation = undefined;
     return { current, result };
+  };
+  const restoreAcceptedRecovery = async () => {
+    if (params.shouldContinue?.() === false) {
+      return undefined;
+    }
+    const restored = await commitMainSessionRecovery({
+      command: {
+        kind: "mark_admitted_recovery_interrupted",
+        lifecycleGeneration,
+        now: Date.now(),
+        runId: recoveryRunId,
+        sessionId: params.entry.sessionId,
+      },
+      requireWriteSuccess: true,
+      shouldContinue: params.shouldContinue,
+      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    });
+    return params.shouldContinue?.() !== false &&
+      restored.transition.kind === "applied" &&
+      restored.entry &&
+      restored.sessionKey
+      ? {
+          sessionId: restored.entry.sessionId,
+          sessionKey: restored.sessionKey,
+          storePath: params.storePath,
+        }
+      : undefined;
+  };
+  const repairAcceptedRecovery = async () => {
+    const restored = await repairMainSessionRecoveryMutation({
+      mutation: restoreAcceptedRecovery,
+      onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+      onError: (restoreError) => {
+        if (params.shouldContinue?.() !== false) {
+          log.warn(
+            `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+          );
+        }
+      },
+    });
+    if (params.shouldContinue?.() !== false) {
+      scheduleMainSessionRecoveryPendingTarget(restored);
+    }
   };
   try {
     const reserved = await commitMainSessionRecovery({
@@ -512,10 +557,31 @@ export async function resumeMainSession(params: {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
     dispatchStarted = true;
-    const dispatchResult = await params.gatewayRuntime.dispatchAgent<{
+    let resolveExecutionStarted!: () => void;
+    const executionStartedPromise = new Promise<void>((resolve) => {
+      resolveExecutionStarted = resolve;
+    });
+    const dispatchPromise = params.gatewayRuntime.dispatchAgent<{
       runId: string;
       status?: unknown;
-    }>(agentParams, 10_000);
+    }>(agentParams, undefined, {
+      expectFinal: true,
+      onAccepted: () => {
+        dispatchAccepted = true;
+      },
+      onExecutionStarted: () => {
+        executionStarted = true;
+        resolveExecutionStarted();
+      },
+    });
+    const dispatchOutcome = await Promise.race([
+      dispatchPromise.then((result) => ({ kind: "terminal" as const, result })),
+      executionStartedPromise.then(() => ({ kind: "started" as const })),
+    ]);
+    const dispatchResult =
+      dispatchOutcome.kind === "terminal"
+        ? dispatchOutcome.result
+        : { runId: recoveryRunId, status: "accepted" };
     if (params.shouldContinue?.() === false) {
       // The accepted run belongs to its original Gateway; never let a stopped
       // owner settle or transfer that durable claim into a new lifecycle.
@@ -525,10 +591,20 @@ export async function resumeMainSession(params: {
     // Recovery-runtime fakes may return directly, so keep this idempotent fallback
     // to make the durable acceptance boundary explicit in focused tests too.
     let terminalStatus = normalizeRestartRecoveryTerminalStatus(dispatchResult.status);
-    if (!terminalStatus && reusingRecoveryRunId && dispatchResult.status === "accepted") {
+    if (
+      !executionStarted &&
+      !terminalStatus &&
+      reusingRecoveryRunId &&
+      dispatchResult.status === "accepted"
+    ) {
       terminalStatus = await probeRestartRecoveryTerminalStatus(
         recoveryRunId,
         params.gatewayRuntime,
+      );
+    }
+    if (!executionStarted && !terminalStatus) {
+      throw new Error(
+        `restart recovery dispatch ended before execution started: ${params.sessionKey}`,
       );
     }
     if (params.shouldContinue?.() === false) {
@@ -559,7 +635,10 @@ export async function resumeMainSession(params: {
     );
     return "resumed";
   } catch (error) {
-    const explicitlyRejected = error instanceof GatewayClientRequestError;
+    const explicitlyRejected = error instanceof GatewayClientRequestError && !dispatchAccepted;
+    if (dispatchAccepted && !executionStarted && params.shouldContinue?.() !== false) {
+      await repairAcceptedRecovery();
+    }
     try {
       if (dispatchStarted && !explicitlyRejected && params.shouldContinue?.() !== false) {
         const terminalStatus = await probeRestartRecoveryTerminalStatus(
@@ -592,47 +671,7 @@ export async function resumeMainSession(params: {
         log.warn(
           `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
         );
-        const restoreAdmittedRecovery = async () => {
-          if (params.shouldContinue?.() === false) {
-            return undefined;
-          }
-          const restored = await commitMainSessionRecovery({
-            command: {
-              kind: "mark_admitted_recovery_interrupted",
-              lifecycleGeneration,
-              now: Date.now(),
-              runId: recoveryRunId,
-              sessionId: params.entry.sessionId,
-            },
-            requireWriteSuccess: true,
-            shouldContinue: params.shouldContinue,
-            target: { sessionKey: params.sessionKey, storePath: params.storePath },
-          });
-          return params.shouldContinue?.() !== false &&
-            restored.transition.kind === "applied" &&
-            restored.entry &&
-            restored.sessionKey
-            ? {
-                sessionId: restored.entry.sessionId,
-                sessionKey: restored.sessionKey,
-                storePath: params.storePath,
-              }
-            : undefined;
-        };
-        const restored = await repairMainSessionRecoveryMutation({
-          mutation: restoreAdmittedRecovery,
-          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
-          onError: (restoreError) => {
-            if (params.shouldContinue?.() !== false) {
-              log.warn(
-                `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
-              );
-            }
-          },
-        });
-        if (params.shouldContinue?.() !== false) {
-          scheduleMainSessionRecoveryPendingTarget(restored);
-        }
+        await repairAcceptedRecovery();
       }
     }
     if (reservation) {

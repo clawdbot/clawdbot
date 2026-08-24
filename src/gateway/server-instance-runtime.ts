@@ -143,6 +143,7 @@ export function createGatewayInstanceRuntime(
         return await agentTurns.dispatch<T>(payload, {
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
+          onExecutionStarted: dispatchOptions.onExecutionStarted,
           onSignalAbort: dispatchOptions.onSignalAbort,
           signal: dispatchOptions.signal,
           timeoutMs,
