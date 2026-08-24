@@ -155,6 +155,7 @@ function resolverParams(params: {
   };
 }
 
+console.log("proof: starting Discord-owned Gateway/REST harness");
 const api = await startDiscordApi();
 const mock = await startQaMockOpenAiServer();
 const workspace = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-thread-starter-proof-"));
@@ -190,6 +191,7 @@ try {
       return cfg;
     },
   });
+  console.log("proof: Gateway ready; exercising production RequestClient path");
   const providerRequests = await runGatewayProof(gateway, mock.baseUrl);
   const rest = createRest(api.baseUrl);
   const secondAccountRest = createRest(api.baseUrl);
