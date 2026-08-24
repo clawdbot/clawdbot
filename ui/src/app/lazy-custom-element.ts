@@ -219,6 +219,14 @@ export const DEBUG_OVERLAY_ELEMENT = {
   loadModule: () => import("../pages/debug/debug-overlay.ts"),
 } satisfies OptionalCustomElement;
 
+const KEYBOARD_SHORTCUTS_TAG = "openclaw-keyboard-shortcuts-dialog";
+
+export const KEYBOARD_SHORTCUTS_ELEMENT = {
+  tagName: KEYBOARD_SHORTCUTS_TAG,
+  label: KEYBOARD_SHORTCUTS_TAG,
+  loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
+} satisfies OptionalCustomElement;
+
 export const TERMINAL_PANEL_ELEMENT = {
   tagName: "openclaw-terminal-panel",
   label: "terminal panel",

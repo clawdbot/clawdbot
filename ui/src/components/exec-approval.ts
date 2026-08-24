@@ -3,7 +3,10 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
-import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../lib/keyboard-shortcut-catalog.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
@@ -75,14 +78,16 @@ function keyEventComesFromTextEntry(event: KeyboardEvent): boolean {
 // when it opens, so a bare letter typed mid-sentence into the composer could
 // otherwise approve a command the user never read.
 function shortcutDecision(event: KeyboardEvent): ExecApprovalDecision | null {
-  const hasModChord = (event.metaKey || event.ctrlKey) && !event.altKey;
-  if (!hasModChord || keyEventComesFromTextEntry(event)) {
+  if (keyEventComesFromTextEntry(event)) {
     return null;
   }
-  if (event.key === "Enter") {
-    return event.shiftKey ? "allow-always" : "allow-once";
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.approveAlways, event)) {
+    return "allow-always";
   }
-  return !event.shiftKey && resolveAsciiShortcutKey(event) === "d" ? "deny" : null;
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
+    return "allow-once";
+  }
+  return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.denyApproval, event) ? "deny" : null;
 }
 
 class ExecApproval extends OpenClawLightDomContentsElement {
