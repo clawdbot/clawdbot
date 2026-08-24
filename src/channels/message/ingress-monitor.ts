@@ -36,8 +36,8 @@ export type ChannelIngressMonitorLifecycle = {
 };
 
 /** Optional explicit outcome from a channel delivery. */
-export type ChannelIngressMonitorDeliveryResult =
-  | { kind: "completed" }
+export type ChannelIngressMonitorDeliveryResult<TCompletedMetadata = unknown> =
+  | { kind: "completed"; metadata?: TCompletedMetadata }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };
 
@@ -101,10 +101,16 @@ export type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
 >;
 
-export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type CreateChannelIngressMonitorOptions<
+  TRaw,
+  TBody,
+  TStoredPayload,
+  TMetadata = unknown,
+  TCompletedMetadata = unknown,
+> = {
   queue:
-    | ChannelIngressQueue<TStoredPayload, TMetadata>
-    | (() => ChannelIngressQueue<TStoredPayload, TMetadata>);
+    | ChannelIngressQueue<TStoredPayload, TMetadata, TCompletedMetadata>
+    | (() => ChannelIngressQueue<TStoredPayload, TMetadata, TCompletedMetadata>);
   inspect: (
     raw: TRaw,
     context: ChannelIngressMonitorInspectionContext,
@@ -115,8 +121,8 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     lifecycle: ChannelIngressMonitorLifecycle,
     claim: ChannelIngressQueueClaim<TStoredPayload, TMetadata>,
   ) =>
-    | Promise<ChannelIngressMonitorDeliveryResult | void>
-    | ChannelIngressMonitorDeliveryResult
+    | Promise<ChannelIngressMonitorDeliveryResult<TCompletedMetadata> | void>
+    | ChannelIngressMonitorDeliveryResult<TCompletedMetadata>
     | void;
   pollIntervalMs: number;
   retention: "standard" | Partial<ChannelIngressMonitorRetention>;
@@ -152,8 +158,20 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
  * Creates the shared monitor around a durable queue and ingress drain.
  * Channel code keeps transport inspection, payload shape, and delivery policy.
  */
-export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetadata = unknown>(
-  options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
+export function createChannelIngressMonitor<
+  TRaw,
+  TBody,
+  TStoredPayload,
+  TMetadata = unknown,
+  TCompletedMetadata = unknown,
+>(
+  options: CreateChannelIngressMonitorOptions<
+    TRaw,
+    TBody,
+    TStoredPayload,
+    TMetadata,
+    TCompletedMetadata
+  >,
 ) {
   const now = options.now ?? Date.now;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
@@ -168,7 +186,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
   const deferredClaims = new Set<Promise<void>>();
-  type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
+  type Queue = ChannelIngressQueue<TStoredPayload, TMetadata, TCompletedMetadata>;
   const queueFactory: () => Queue =
     typeof options.queue === "function" ? options.queue : () => options.queue as Queue;
   let queue: Queue | undefined = typeof options.queue === "function" ? undefined : options.queue;
@@ -386,7 +404,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         );
         activeDeliveries.add(delivery);
         publishActivity();
-        let result: ChannelIngressMonitorDeliveryResult | void;
+        let result: ChannelIngressMonitorDeliveryResult<TCompletedMetadata> | void;
         try {
           result = await delivery;
         } catch (error) {

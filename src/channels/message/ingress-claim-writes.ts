@@ -88,12 +88,13 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
 
   const completeClaimWithRetry = async (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
+    metadata?: TCompletedMetadata,
   ): Promise<void> => {
     // Tombstone via complete() — never delete. Retry IO failures; false = reclaimed.
     await commitClaimWriteWithRetry({
       claim,
       label: "tombstone",
-      write: () => queue.complete(claim),
+      write: () => queue.complete(claim, { metadata }),
       falseMeansReclaimed: true,
     });
   };
