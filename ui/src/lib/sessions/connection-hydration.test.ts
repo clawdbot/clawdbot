@@ -275,7 +275,7 @@ describe("session connection hydration", () => {
     sessions.dispose();
   });
 
-  it("ignores same-connection gateway metadata snapshots during hydration", async () => {
+  it("rehydrates owner sessions when identity arrives on the same connection", async () => {
     let resolveList: (result: SessionsListResult) => void = () => undefined;
     const pendingList = new Promise<SessionsListResult>((resolve) => {
       resolveList = resolve;
@@ -288,7 +288,7 @@ describe("session connection hydration", () => {
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [],
     };
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: Record<string, unknown>) => {
       if (method === "sessions.subscribe") {
         return { subscribed: true };
       }
@@ -326,14 +326,25 @@ describe("session connection hydration", () => {
 
     snapshot = { ...snapshot, canvasPluginSurfaceUrl: "https://gateway.example.test/canvas" };
     gatewayListener?.(snapshot);
+    await Promise.resolve();
+    expect(listCalls).toBe(1);
+
     snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
     gatewayListener?.(snapshot);
     resolveList(result);
-    await waitForFast(() => expect(sessions.state.result).toBe(result));
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForFast(() => expect(listCalls).toBe(3));
 
-    expect(listCalls).toBe(1);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "sessions.list")
+        .map(([, params]) => params),
+    ).toEqual([
+      expect.not.objectContaining({ ownerId: expect.anything() }),
+      expect.objectContaining({ ownerId: "operator", limit: 60 }),
+      expect.not.objectContaining({ ownerId: expect.anything() }),
+    ]);
+    expect(sessions.state.result?.sessions).toEqual([]);
+    expect(sessions.state.agentId).toBe("main");
     sessions.dispose();
   });
 

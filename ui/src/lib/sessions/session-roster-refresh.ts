@@ -277,12 +277,19 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           ? appendSessionResults(currentState.result, result)
           : reconcileRosterPresentationMetadata(result, currentState.result);
       if (append && nextResult && !backgroundHydrate) {
-        // Canonical event refreshes must retain all previously appended visible pages.
+        const ownerFirstPage =
+          Boolean(host.snapshot().selfUser?.id.trim()) &&
+          isPrimarySessionListQuery(durableListOptions);
+        const retainedListLimit =
+          ownerFirstPage && result && typeof requestOptions.offset === "number"
+            ? requestOptions.offset + result.sessions.length
+            : nextResult.sessions.length;
+        // Retain the shared pagination window, excluding owner rows merged ahead of it.
         lastListOptions = {
           ...durableListOptions,
           limit: Math.max(
             durableListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit,
-            nextResult.sessions.length,
+            retainedListLimit,
           ),
         };
       }
@@ -384,6 +391,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!ownerId || options.append === true || !isPrimarySessionListQuery(options)) {
       return [options];
     }
+    const sharedLimit = Math.max(
+      OWNER_FIRST_SESSION_LIST_LIMIT,
+      typeof options.limit === "number" && options.limit > 0
+        ? Math.floor(options.limit)
+        : DEFAULT_SESSION_LIST_QUERY.limit,
+    );
     // Keep owner-first and shared loads atomic in the existing refresh queue.
     // Only the shared phase advances canonical membership and durable options.
     return [
@@ -395,7 +408,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       },
       {
         ...options,
-        limit: OWNER_FIRST_SESSION_LIST_LIMIT,
+        limit: sharedLimit,
         mergeExisting: true,
       },
     ];
