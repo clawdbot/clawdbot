@@ -123,7 +123,6 @@ export async function sendVoiceMessageDiscord(
 
       const metadata = await getVoiceMessageMetadata(oggPath);
       const audioBuffer = await fs.readFile(oggPath);
-      await opts.onPlatformSendDispatch?.();
       const result = await sendDiscordVoiceMessage(
         rest,
         channelId,
@@ -133,6 +132,7 @@ export async function sendVoiceMessageDiscord(
         request,
         opts.silent,
         token,
+        opts.onPlatformSendDispatch,
       );
 
       recordChannelActivity({

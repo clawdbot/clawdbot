@@ -242,10 +242,10 @@ export async function sendMessageDiscord(
     });
     let threadRes: { id: string; message?: { id: string; channel_id: string } };
     try {
-      await opts.onPlatformSendDispatch?.();
       threadRes = (await request(
-        () =>
-          createThread<{ id: string; message?: { id: string; channel_id: string } }>(
+        async () => {
+          await opts.onPlatformSendDispatch?.();
+          return createThread<{ id: string; message?: { id: string; channel_id: string } }>(
             rest,
             channelId,
             {
@@ -259,7 +259,8 @@ export async function sendMessageDiscord(
                 message: starterBody,
               },
             },
-          ),
+          );
+        },
         "forum-thread",
         { safety: "non-idempotent-create" },
       )) as { id: string; message?: { id: string; channel_id: string } };
@@ -505,9 +506,13 @@ async function resolveDiscordStructuredSendContext(
     : undefined;
   return {
     send: async (kind, body) => {
-      await opts.onPlatformSendDispatch?.();
       const result = (await request(
-        () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+        async () => {
+          await opts.onPlatformSendDispatch?.();
+          return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
+            body,
+          });
+        },
         kind,
         { safety: "nonce-protected-create" },
       )) as { id: string; channel_id: string };

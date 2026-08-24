@@ -185,6 +185,46 @@ describe("sendDiscordComponentMessage", () => {
     expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("msg-progress");
   });
 
+  it("rechecks delivery authority before each retried component post", async () => {
+    let authorityActive = true;
+    const loopback = await createDiscordLoopbackRest({
+      status: (request) => {
+        if (request.method === "POST") {
+          authorityActive = false;
+          return 503;
+        }
+        return 200;
+      },
+    });
+    try {
+      const authorityRevoked = new Error("delivery authority revoked");
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      });
+
+      await expect(
+        sendDiscordComponentMessage(
+          "channel:789",
+          { blocks: [{ type: "actions", buttons: [{ label: "Open" }] }] },
+          {
+            cfg: DISCORD_TEST_CFG,
+            rest: loopback.rest,
+            token: "test-token",
+            onPlatformSendDispatch,
+          },
+        ),
+      ).rejects.toBe(authorityRevoked);
+
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(1);
+    } finally {
+      await loopback.close();
+    }
+  });
+
   it("edits component messages and refreshes component registry entries", async () => {
     const { rest, patchMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
