@@ -10,10 +10,9 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
-  --shell-access-width: 0px;
   /* Collapsed navigation adds new-thread to the two persistent controls.
      Optional controls contribute only while they are actually mounted. */
-  --shell-controls-width: calc(104px + var(--shell-access-width));
+  --shell-controls-width: 104px;
   --shell-chrome-safe-area-left: calc(var(--shell-controls-width) - 18px);
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
@@ -172,51 +171,8 @@
   stroke-linejoin: round;
 }
 
-.shell:has(.scope-upgrade-shell-status) {
-  --shell-access-width: 36px;
-}
-
 .shell:has(.shell-chrome-controls__custodian) {
-  --shell-controls-width: calc(140px + var(--shell-access-width));
-}
-
-.scope-upgrade-shell-status {
-  position: fixed;
-  top: 10px;
-  left: calc(
-    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + 2 *
-      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
-  );
-  z-index: 45;
-}
-
-.shell--nav-collapsed .scope-upgrade-shell-status {
-  left: calc(
-    var(--shell-chrome-controls-inset) + 3 *
-      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
-  );
-}
-
-:is(.shell--settings, .shell--onboarding:not(.shell--mobile-nav)) .scope-upgrade-shell-status {
-  left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
-}
-
-.shell--nav-collapsed:has(.scope-upgrade-shell-status) .shell-chrome-controls__custodian {
-  margin-left: calc(var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap));
-}
-
-.shell--mobile-nav .scope-upgrade-shell-status {
-  top: max(10px, env(safe-area-inset-top));
-  right: max(58px, env(safe-area-inset-right));
-  left: auto;
-  width: 40px;
-  height: 40px;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.shell--onboarding.shell--mobile-nav .scope-upgrade-shell-status {
-  right: max(12px, env(safe-area-inset-right));
+  --shell-controls-width: 140px;
 }
 
 .shell--mobile-nav .shell-chrome-controls {
@@ -240,12 +196,6 @@ html.openclaw-native-macos .shell-chrome-controls {
   top: 52px;
 }
 
-html.openclaw-native-macos:not(.openclaw-native-web-chrome)
-  .shell:not(.shell--mobile-nav)
-  .scope-upgrade-shell-status {
-  top: 52px;
-}
-
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
    back/forward and add openclaw-native-nav; the in-page nav toggles would
    duplicate it, so they disappear (⌘B and the accessible titlebar button
@@ -259,31 +209,9 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
-html.openclaw-native-nav:not(.openclaw-native-web-chrome)
-  .shell:not(.shell--mobile-nav)
-  .scope-upgrade-shell-status {
-  left: calc(
-    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-controls-gap)
-  );
-}
-
-html.openclaw-native-nav:not(.openclaw-native-web-chrome)
-  .shell--nav-collapsed:not(.shell--mobile-nav)
-  .scope-upgrade-shell-status {
-  left: var(--shell-chrome-controls-inset);
-}
-
 /* Web-chrome hosts provide this entire cluster in the native titlebar. */
 html.openclaw-native-web-chrome .shell-chrome-controls {
   display: none;
-}
-
-html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .scope-upgrade-shell-status {
-  top: 11px;
-  left: 252px;
-  width: 28px;
-  height: 28px;
 }
 
 .macos-titlebar-controls {

@@ -97,6 +97,7 @@ describe("anthropic provider replay hooks", () => {
     expect(backend.bundleMcp).toBe(true);
     expectFields(backend.config, {
       command: "claude",
+      freshSessionRecovery: "invalidated-only",
       modelArg: "--model",
       sessionArgs: ["--session-id", "{sessionId}"],
     });

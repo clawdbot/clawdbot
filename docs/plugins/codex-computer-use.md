@@ -258,7 +258,7 @@ reconciliation so OpenClaw does not override that selection.
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.148.0. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.149.1. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 
@@ -280,7 +280,7 @@ install plugins or modify Codex configuration.
 | `healthCheckIntervalMinutes`    | 60             | Probe cadence; accepted values are 30, 60, 120, or 240 minutes.                |
 | `pluginCacheMode`               | `independent`  | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.  |
 | `strictReadiness`               | false          | Stop startup on a failed live probe instead of continuing with a warning.      |
-| `autoRepair`                    | false          | Kill stale scoped Computer Use MCP children and retry a failed probe once.     |
+| `autoRepair`                    | false          | Reload the Codex-owned MCP runtime and retry a failed probe once.              |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
 | `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |

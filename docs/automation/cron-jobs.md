@@ -559,6 +559,14 @@ Model override note:
 
 Gateway can expose HTTP webhook endpoints for external triggers. Enable in config:
 
+A configured mapping `id` is retained only as bounded ingress-source
+attribution when that mapping reaches agent admission. It is not an
+authenticated service principal or invoker. Direct `/hooks/agent` and requests
+authenticated only by the shared hook token stay unattributed unless another
+authoritative principal source exists. If a transform returns `null`, the
+request keeps its visible HTTP 204 outcome and stops before creating a run,
+task, execution identity, or audit receipt.
+
 ```json5
 {
   hooks: {

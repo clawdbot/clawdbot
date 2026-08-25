@@ -2029,6 +2029,42 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("admits the beta.2 Codex untrusted policy for doctor migration", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  mode: "guardian",
+                  approvalPolicy: "untrusted",
+                  sandbox: "workspace-write",
+                  approvalsReviewer: "user",
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.plugins?.entries?.codex?.config).toMatchObject({
+        appServer: { approvalPolicy: "untrusted" },
+      });
+    }
+  });
+
   it("accepts ask destructive policy without dropping adjacent Codex plugin config", () => {
     const res = validateConfigObjectWithPlugins(
       {

@@ -2,6 +2,7 @@ import { asNullableRecord as readThemeRecord } from "@openclaw/normalization-cor
 // Control UI module implements custom theme behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readResponseTextWithLimit } from "../lib/response-body.ts";
 
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
 const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -473,51 +474,12 @@ function assertTweakcnResponseUrl(value: string | undefined) {
   }
 }
 
-function parseContentLength(headers: Headers): number | null {
-  const raw = headers.get("content-length");
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-}
-
-async function readResponseTextWithLimit(response: Response): Promise<string> {
-  const contentLength = parseContentLength(response.headers);
-  if (contentLength != null && contentLength > MAX_TWEAKCN_THEME_BYTES) {
-    throw new Error("tweakcn theme payload is too large.");
-  }
-
-  if (!response.body) {
-    throw new Error("tweakcn returned an unreadable theme payload.");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let text = "";
-  try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) {
-        break;
-      }
-      bytes += chunk.value.byteLength;
-      if (bytes > MAX_TWEAKCN_THEME_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("tweakcn theme payload is too large.");
-      }
-      text += decoder.decode(chunk.value, { stream: true });
-    }
-    text += decoder.decode();
-    return text;
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 async function readJsonResponseWithLimit(response: Response): Promise<unknown> {
-  const text = await readResponseTextWithLimit(response);
+  const text = await readResponseTextWithLimit(response, {
+    maxBytes: MAX_TWEAKCN_THEME_BYTES,
+    tooLargeMessage: "tweakcn theme payload is too large.",
+    missingBodyMessage: "tweakcn returned an unreadable theme payload.",
+  });
   try {
     return JSON.parse(text) as unknown;
   } catch {

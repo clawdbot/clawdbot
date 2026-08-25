@@ -58,6 +58,11 @@ const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$
   exit 1
 fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 const TSX_IMPORT = import.meta.resolve("tsx");
 const TYPESCRIPT_NODE_MODULES = path.dirname(
   path.dirname(fileURLToPath(import.meta.resolve("typescript/package.json"))),
@@ -3121,7 +3126,7 @@ NODE
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
     for (const [workflowPath, selectorCount] of [
-      [".github/workflows/ci.yml", 1],
+      [".github/workflows/ci.yml", 2],
       [".github/workflows/ios-periphery.yml", 1],
       [".github/workflows/macos-periphery.yml", 1],
       [".github/workflows/shared-openclawkit-periphery.yml", 2],
@@ -3315,6 +3320,7 @@ NODE
       "control-ui-i18n": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
       "ios-build": "macos-26",
+      "ios-screenshot-shard": "macos-26",
       "macos-node": "macos-15",
       "macos-swift": "macos-26",
       "native-i18n": "ubuntu-24.04",
@@ -3341,6 +3347,7 @@ NODE
       "macos-node": "blacksmith-6vcpu-macos-15",
       "macos-swift": "blacksmith-12vcpu-macos-26",
       "ios-build": "blacksmith-12vcpu-macos-26",
+      "ios-screenshot-shard": "blacksmith-12vcpu-macos-26",
       "check-test-types-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-8vcpu-windows-2025",
@@ -3993,7 +4000,12 @@ NODE
       mkdirSync(consumer, { recursive: true });
       writeFileSync(
         path.join(source, "package.json"),
-        JSON.stringify({ files: ["index.js"], name: "cache-proof-dep", version: "1.0.0" }),
+        JSON.stringify({
+          files: ["index.js"],
+          name: "cache-proof-dep",
+          packageManager: rootPackageManager,
+          version: "1.0.0",
+        }),
       );
       writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
       execFileSync("pnpm", ["pack", "--pack-destination", registry], {
@@ -4058,6 +4070,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
           JSON.stringify({
             dependencies: { "cache-proof-dep": "1.0.0" },
             name: "cache-proof-root",
+            packageManager: rootPackageManager,
             private: true,
           }),
         );
@@ -5794,10 +5807,16 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     const workflow = readCiWorkflow();
 
     expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
-    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(3);
+    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(4);
     expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
+    for (const jobName of [
+      "checks-windows",
+      "macos-node",
+      "macos-swift",
+      "ios-build",
+      "ios-screenshot-shard",
+    ]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
@@ -7775,6 +7794,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "macos-node",
       "macos-swift",
       "ios-build",
+      "ios-screenshot-shard",
+      "ios-screenshot-evidence",
       "android",
       "docker-seed-e2e",
     ];

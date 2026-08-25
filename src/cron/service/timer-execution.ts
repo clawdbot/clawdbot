@@ -459,6 +459,7 @@ async function executeDetachedCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    executionIdentity: options?.executionIdentity,
   });
 
   if (abortSignal?.aborted) {
@@ -540,25 +541,34 @@ async function executeScriptCronJob(
   }
 
   const notify = result.notify?.trim() ? result.notify : undefined;
-  if (job.sessionTarget === "main" && notify) {
-    enqueueCronSystemEvent(state, notify, {
-      agentId: job.agentId,
-      contextKey: `cron:${job.id}:script`,
-    });
-  }
-  if (result.wake) {
-    const eventText = notify ?? `script job ${job.name} completed`;
-    if (job.sessionTarget !== "main" || !notify) {
-      enqueueCronSystemEvent(state, eventText, {
-        agentId: job.agentId,
-        contextKey: `cron:${job.id}:script-wake`,
+  if ((job.sessionTarget === "main" && notify) || result.wake) {
+    const agentId = resolveCronJobEffectiveAgentId(
+      job,
+      state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+    );
+    const deliveryContext =
+      job.sessionTarget === "main" ? resolveMainSessionCronDeliveryContext(state, job) : undefined;
+    const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };
+    if (job.sessionTarget === "main" && notify) {
+      enqueueCronSystemEvent(state, notify, {
+        ...eventOptions,
+        contextKey: `cron:${job.id}:script`,
       });
     }
-    requestCronHeartbeat(state, {
-      intent: result.wake === "now" ? "immediate" : "event",
-      reason: `cron:${job.id}:script`,
-      agentId: job.agentId,
-    });
+    if (result.wake) {
+      const eventText = notify ?? `script job ${job.name} completed`;
+      if (job.sessionTarget !== "main" || !notify) {
+        enqueueCronSystemEvent(state, eventText, {
+          ...eventOptions,
+          contextKey: `cron:${job.id}:script-wake`,
+        });
+      }
+      requestCronHeartbeat(state, {
+        intent: result.wake === "now" ? "immediate" : "event",
+        reason: `cron:${job.id}:script`,
+        agentId,
+      });
+    }
   }
   return {
     status: "ok" as const,

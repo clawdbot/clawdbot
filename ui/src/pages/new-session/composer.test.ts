@@ -111,6 +111,50 @@ afterEach(() => {
 });
 
 describe("new-session composer keyboard submission", () => {
+  it("opens slash commands and inserts the selected command with Enter", () => {
+    replaceSlashCommands([
+      {
+        key: "test-command",
+        name: "test-command",
+        description: "Test command.",
+      },
+      {
+        key: "local-command",
+        name: "local-command",
+        description: "Existing-session action.",
+        executeLocal: true,
+      },
+    ]);
+    const onSubmit = vi.fn();
+    let message = "";
+    const { composer } = renderComposer({
+      onInput: (next) => {
+        message = next;
+      },
+      onSubmit,
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+
+    textarea.value = "/";
+    textarea.setSelectionRange(1, 1);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(composer.querySelector("#chat-new-session-slash-menu-listbox")?.textContent).toContain(
+      "/test-command",
+    );
+    expect(
+      composer.querySelector("#chat-new-session-slash-menu-listbox")?.textContent,
+    ).not.toContain("/local-command");
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+    );
+    expect(message).toBe("/test-command ");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("opens skill mentions and inserts the selected skill with Enter", () => {
     replaceSlashCommands([
       {

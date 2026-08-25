@@ -355,7 +355,7 @@ describe("prepareCodexAttemptConnection", () => {
     expect(resolveModelPolicy).toHaveBeenCalledTimes(2);
   });
 
-  it("does not give OpenClaw ownership of an explicit operator approval policy", async () => {
+  it("rejects the retired explicit untrusted approval policy with Doctor remediation", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -365,15 +365,17 @@ describe("prepareCodexAttemptConnection", () => {
     params.agentDir = path.join(tempDir, "agent");
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
-      },
-    });
-
-    expect(connection.appServer.approvalPolicy).toBe("untrusted");
+    await expect(
+      prepareCodexAttemptConnection({
+        params,
+        options: {
+          bindingStore: testCodexAppServerBindingStore,
+          pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
+        },
+      }),
+    ).rejects.toThrow(
+      'plugins.entries.codex.config.appServer.approvalPolicy="untrusted" is retired; run "openclaw doctor --fix" to migrate it to "on-request".',
+    );
   });
 
   it("lets a workspace session mode override explicitly configured full exec", async () => {

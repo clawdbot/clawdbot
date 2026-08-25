@@ -2,17 +2,21 @@
 // Tracks transcript sequence windows for paginated chat-history SSE updates.
 import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
+import { readIncrementalChatHistoryTail } from "./session-history-tail.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
-  readRecentSessionMessagesWithStatsAsync,
+  readSessionMessagesPageWithStatsAsync,
   readSessionMessagesWithSourceAsync,
+  type ReadRecentSessionMessagesResult,
 } from "./session-transcript-readers.js";
 
 // Session history state owns the SSE-friendly projection of transcript JSONL:
@@ -50,17 +54,25 @@ type InlineSessionHistoryAppend = {
 
 type SessionHistoryTranscriptTarget = {
   agentId?: string;
-  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionEntry?: SessionEntry;
   sessionId: string;
   sessionKey: string;
   storePath?: string;
 };
 
 type SessionHistoryRawSnapshot = {
+  projection?: ReturnType<typeof projectChatDisplayMessagesWithState>;
   rawMessages: unknown[];
   rawTranscriptSeq?: number;
   totalRawMessages?: number;
   transcriptPath?: string;
+};
+
+type SessionHistoryStateSnapshot = SessionHistoryRawSnapshot & {
+  target: SessionHistoryTranscriptTarget;
+  maxChars?: number;
+  limit?: number;
+  cursor?: string;
 };
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
@@ -71,17 +83,43 @@ function readMessageIdempotencyKey(message: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-/** Computes an oversized raw transcript tail window for projected chat history. */
-export function resolveSessionHistoryTailReadOptions(limit: number): {
-  maxMessages: number;
-  maxLines: number;
-} {
-  const requested = Math.max(1, Math.floor(limit));
-  const rawWindow = requested * 20 + 20;
-  return {
-    maxMessages: rawWindow,
-    maxLines: rawWindow,
-  };
+/** Shares the bounded visible-message scanner across HTTP snapshots and SSE refreshes. */
+export async function readBoundedSessionHistorySnapshotAsync(params: {
+  cursor?: string;
+  target: SessionHistoryTranscriptTarget;
+  limit: number;
+  maxChars: number;
+}): Promise<
+  ReadRecentSessionMessagesResult & {
+    projection: ReturnType<typeof projectChatDisplayMessagesWithState>;
+  }
+> {
+  const cursorSeq = resolveCursorSeq(params.cursor);
+  const offset =
+    cursorSeq === undefined
+      ? undefined
+      : Math.max(
+          0,
+          (
+            await readSessionMessagesPageWithStatsAsync(params.target, {
+              offset: 0,
+              maxMessages: 0,
+              allowResetArchiveFallback: true,
+            })
+          ).totalMessages -
+            cursorSeq +
+            1,
+        );
+  const tail = await readIncrementalChatHistoryTail({
+    entry: params.target.sessionEntry,
+    readScope: params.target,
+    effectiveMaxChars: params.maxChars,
+    max: params.limit,
+    maxBytes: getMaxChatHistoryMessagesBytes(),
+    ...(offset === undefined ? {} : { offset }),
+    preserveProjectionContext: true,
+  });
+  return { ...tail.readPage, messages: tail.rawMessages, projection: tail.projection };
 }
 
 export function resolveCursorSeq(cursor: string | undefined): number | undefined {
@@ -176,6 +214,7 @@ function paginateSessionMessages(
 
 /** Builds the display history snapshot and raw transcript sequence watermark. */
 export function buildSessionHistorySnapshot(params: {
+  projection?: ReturnType<typeof projectChatDisplayMessagesWithState>;
   rawMessages: unknown[];
   maxChars?: number;
   limit?: number;
@@ -183,18 +222,20 @@ export function buildSessionHistorySnapshot(params: {
   rawTranscriptSeq?: number;
   totalRawMessages?: number;
 }): SessionHistorySnapshot {
-  const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
-    includeCommentaryFallbacks: true,
-    maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-    resolveCurrentUserProfileDisplay,
-  });
+  const projected =
+    params.projection ??
+    projectChatDisplayMessagesWithState(params.rawMessages, {
+      includeCommentaryFallbacks: true,
+      maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      resolveCurrentUserProfileDisplay,
+    });
   const visibleMessages = toSessionHistoryMessages(projected.messages);
   const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
   if (
-    !params.cursor &&
     typeof params.totalRawMessages === "number" &&
-    params.totalRawMessages > params.rawMessages.length
+    params.totalRawMessages > params.rawMessages.length &&
+    (!params.cursor || (resolveMessageSeq(rawHistoryMessages[0]) ?? 0) > 1)
   ) {
     const firstSeq = resolveMessageSeq(history.messages[0] ?? rawHistoryMessages[0]);
     history.hasMore = true;
@@ -225,51 +266,16 @@ export class SessionHistorySseState {
   private streamErrorFallbackPending: boolean;
   private transcriptPath: string | undefined;
 
-  static fromRawSnapshot(params: {
-    target: SessionHistoryTranscriptTarget;
-    rawMessages: unknown[];
-    rawTranscriptSeq?: number;
-    totalRawMessages?: number;
-    transcriptPath?: string;
-    maxChars?: number;
-    limit?: number;
-    cursor?: string;
-  }): SessionHistorySseState {
-    return new SessionHistorySseState({
-      target: params.target,
-      maxChars: params.maxChars,
-      limit: params.limit,
-      cursor: params.cursor,
-      initialRawMessages: params.rawMessages,
-      rawTranscriptSeq: params.rawTranscriptSeq,
-      totalRawMessages: params.totalRawMessages,
-      transcriptPath: params.transcriptPath,
-    });
+  static fromRawSnapshot(params: SessionHistoryStateSnapshot): SessionHistorySseState {
+    return new SessionHistorySseState(params);
   }
 
-  private constructor(params: {
-    target: SessionHistoryTranscriptTarget;
-    maxChars?: number;
-    limit?: number;
-    cursor?: string;
-    initialRawMessages: unknown[];
-    rawTranscriptSeq?: number;
-    totalRawMessages?: number;
-    transcriptPath?: string;
-  }) {
+  private constructor(params: SessionHistoryStateSnapshot) {
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
     this.cursor = params.cursor;
-    const snapshot = this.buildSnapshot({
-      rawMessages: params.initialRawMessages,
-      ...(typeof params.rawTranscriptSeq === "number"
-        ? { rawTranscriptSeq: params.rawTranscriptSeq }
-        : {}),
-      ...(typeof params.totalRawMessages === "number"
-        ? { totalRawMessages: params.totalRawMessages }
-        : {}),
-    });
+    const snapshot = this.buildSnapshot(params);
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
@@ -442,35 +448,26 @@ export class SessionHistorySseState {
 
   private buildSnapshot(rawSnapshot: SessionHistoryRawSnapshot): SessionHistorySnapshot {
     return buildSessionHistorySnapshot({
+      projection: rawSnapshot.projection,
       rawMessages: rawSnapshot.rawMessages,
       maxChars: this.maxChars,
       limit: this.limit,
       cursor: this.cursor,
-      ...(typeof rawSnapshot.rawTranscriptSeq === "number"
-        ? { rawTranscriptSeq: rawSnapshot.rawTranscriptSeq }
-        : {}),
-      ...(typeof rawSnapshot.totalRawMessages === "number"
-        ? { totalRawMessages: rawSnapshot.totalRawMessages }
-        : {}),
+      rawTranscriptSeq: rawSnapshot.rawTranscriptSeq,
+      totalRawMessages: rawSnapshot.totalRawMessages,
     });
   }
 
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
-    if (this.cursor === undefined && typeof this.limit === "number") {
-      const snapshot = await readRecentSessionMessagesWithStatsAsync(
-        {
-          agentId: this.target.agentId,
-          sessionEntry: this.target.sessionEntry,
-          sessionId: this.target.sessionId,
-          sessionKey: this.target.sessionKey,
-          storePath: this.target.storePath,
-        },
-        {
-          ...resolveSessionHistoryTailReadOptions(this.limit),
-          allowResetArchiveFallback: true,
-        },
-      );
+    if (typeof this.limit === "number") {
+      const snapshot = await readBoundedSessionHistorySnapshotAsync({
+        cursor: this.cursor,
+        target: this.target,
+        limit: this.limit,
+        maxChars: this.maxChars,
+      });
       return {
+        projection: snapshot.projection,
         rawMessages: snapshot.messages,
         rawTranscriptSeq: snapshot.totalMessages,
         totalRawMessages: snapshot.totalMessages,
