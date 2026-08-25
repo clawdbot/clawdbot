@@ -466,7 +466,10 @@ describe("sessions.dispatch", () => {
 
     await invoke(
       makeContext({
-        workerEnvironmentService: { supportsExecutionMode: () => false } as never,
+        workerEnvironmentService: {
+          supportsExecutionMode: (_profileId: string, mode: "worker-turn" | "remote-exec") =>
+            mode === "worker-turn",
+        } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
