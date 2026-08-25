@@ -19,7 +19,7 @@ import {
   readSessionTranscriptHistoryEvents,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
+import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import {
   attachOpenClawTranscriptMeta,
   projectTranscriptEntryMessage,
@@ -244,7 +244,7 @@ export function sqliteMessageEventWithSeq(entry: SessionTranscriptMessageEvent):
 function readSqliteAggregateUsageSnapshot(
   target: ResolvedTranscriptReadTarget,
 ): SessionTranscriptUsageSnapshot | null {
-  return aggregateSqliteUsageSnapshots(readSqliteMessagesSync(target));
+  return aggregateSessionTranscriptUsage(readSqliteMessagesSync(target));
 }
 
 function buildSqlitePreviewItems(
@@ -436,7 +436,7 @@ export function readRecentSessionUsageFromTranscript(
   maxBytes: number,
 ): SessionTranscriptUsageSnapshot | null {
   const target = resolveTranscriptReadTarget(scope);
-  return aggregateSqliteUsageSnapshots(readRecentSqliteUsageMessages(target, maxBytes));
+  return aggregateSessionTranscriptUsage(readRecentSqliteUsageMessages(target, maxBytes));
 }
 
 /** Reads compact session preview items through the reader seam. */
