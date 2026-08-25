@@ -143,15 +143,7 @@ function extractMessageRecordsFromEventEntries(
   });
 }
 
-function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): SqliteMessageRecord[] {
-  return extractMessageRecordsFromEventEntries(
-    readSessionTranscriptMessageEvents(toTranscriptReadScope(target)),
-  );
-}
-
-async function readSqliteMessageRecords(
-  target: ResolvedTranscriptReadTarget,
-): Promise<SqliteMessageRecord[]> {
+function readSqliteMessageRecords(target: ResolvedTranscriptReadTarget): SqliteMessageRecord[] {
   return extractMessageRecordsFromEventEntries(
     readSessionTranscriptMessageEvents(toTranscriptReadScope(target)),
   );
@@ -171,7 +163,7 @@ async function readSqliteHistoryMessages(target: ResolvedTranscriptReadTarget): 
 }
 
 function readSqliteMessagesSync(target: ResolvedTranscriptReadTarget): unknown[] {
-  return readSqliteMessageRecordsSync(target).map(sqliteRecordMessageWithSeq);
+  return readSqliteMessageRecords(target).map(sqliteRecordMessageWithSeq);
 }
 
 function normalizeRecentSqliteReadOptions(opts?: Partial<ReadRecentSessionMessagesOptions>) {
@@ -340,7 +332,7 @@ export async function visitSessionMessagesAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   let count = 0;
-  for (const record of await readSqliteMessageRecords(target)) {
+  for (const record of readSqliteMessageRecords(target)) {
     visit(record.message, record.seq);
     count += 1;
   }
