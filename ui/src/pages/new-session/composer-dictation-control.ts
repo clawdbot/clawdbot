@@ -3,7 +3,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  renderComposerDictationSubmitAction,
+  renderComposerDictationSendAction,
+  renderComposerDictationStatus,
   renderComposerVoiceButton,
   renderMicrophonePicker,
 } from "../chat/components/chat-composer-controls.ts";
@@ -57,6 +58,10 @@ export class NewSessionDictationControl {
       : undefined;
   }
 
+  renderStatus() {
+    return renderComposerDictationStatus(this.dictation ?? undefined);
+  }
+
   render(ownerKey: string) {
     if (this.owner?.key !== ownerKey) {
       this.owner = { key: ownerKey };
@@ -76,8 +81,8 @@ export class NewSessionDictationControl {
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
       onCommit: (transcript: string) => {
-        // Route changes replace draft ownership while finalization is asynchronous.
-        // Object identity keeps even an A -> B -> A transition from accepting A's result.
+        // Route changes replace draft ownership. Object identity keeps even an
+        // A -> B -> A transition from accepting the prior route's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
           return;
         }
@@ -129,7 +134,7 @@ export class NewSessionDictationControl {
         }),
         onDirectDictationStart: () => this.options.textarea.captureSelection(),
       })}
-      ${renderComposerDictationSubmitAction(dictation, () => {
+      ${renderComposerDictationSendAction(dictation, () => {
         if (ownsDraft() && this.options.canCommit()) {
           this.options.onSubmit();
         }

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -30,6 +30,7 @@ function renderComposer(
     blockedSubmitNotice?: string;
     dictationActive?: boolean;
     dictationPreview?: string;
+    dictationStatus?: TemplateResult;
     terminalAction?: {
       canStart: boolean;
       disabledReason?: string;
@@ -84,6 +85,7 @@ function renderComposer(
         blockedSubmitNotice: overrides.blockedSubmitNotice,
         dictationActive: overrides.dictationActive,
         dictationPreview: overrides.dictationPreview,
+        dictationStatus: overrides.dictationStatus,
         terminalAction: overrides.terminalAction,
         submitting: overrides.submitting ?? false,
         textareaController,
@@ -462,12 +464,14 @@ describe("new-session composer keyboard submission", () => {
       message: "Existing draft",
       dictationActive: true,
       dictationPreview: "Existing draft spoken words",
+      dictationStatus: html`<div class="agent-chat__dictation-status">Listening…</div>`,
       onSubmit,
     });
     const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
 
     expect(textarea?.value).toBe("Existing draft spoken words");
     expect(textarea?.readOnly).toBe(true);
+    expect(composer.querySelector(".agent-chat__dictation-status")?.textContent).toBe("Listening…");
     expect(composer.querySelector(".new-session-page__start-submit")).toBeNull();
     textarea?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(onSubmit).not.toHaveBeenCalled();

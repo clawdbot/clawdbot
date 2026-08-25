@@ -108,6 +108,42 @@ describe("renderChatComposer controls", () => {
     expect(handleClick).not.toHaveBeenCalled();
   });
 
+  it("keeps Stop and Send visually stable while dictation finalizes", () => {
+    const container = document.createElement("div");
+    const dictation = {
+      active: true,
+      connecting: false,
+      finalizing: true,
+      locksComposer: true,
+      finishActive: vi.fn(),
+    } as unknown as ComposerDictationController;
+    render(
+      renderChatPrimaryActions({
+        canAbort: false,
+        canSend: true,
+        connected: true,
+        draft: "preexisting draft",
+        isBusy: false,
+        steerNowEnabled: false,
+        sending: false,
+        dictation,
+        onSend: vi.fn(),
+      }),
+      container,
+    );
+
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
+    expect(stop?.disabled).toBe(false);
+    expect(stop?.getAttribute("aria-disabled")).toBe("true");
+    expect(stop?.querySelector("rect")).not.toBeNull();
+    expect(send?.classList.contains("chat-send-btn--send")).toBe(true);
+    expect(send?.disabled).toBe(false);
+    expect(send?.getAttribute("aria-disabled")).toBe("true");
+    expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
+  });
+
   it.each([
     {
       name: "empty idle",

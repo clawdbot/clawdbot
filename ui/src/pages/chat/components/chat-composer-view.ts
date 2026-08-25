@@ -16,7 +16,10 @@ import {
   renderChatAttachmentInputs,
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
-import { renderChatPrimaryActions } from "./chat-composer-controls.ts";
+import {
+  renderChatPrimaryActions,
+  renderComposerDictationStatus,
+} from "./chat-composer-controls.ts";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
@@ -359,24 +362,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     </div>
                   `
                 : nothing}
-              <div class="agent-chat__composer-status-stack">
-                ${dictation?.active
-                  ? html`
-                      <div
-                        class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
-                      >
-                        <span class="agent-chat__dictation-phase">
-                          ${dictation.connecting
-                            ? t("chat.composer.dictationConnecting")
-                            : dictation.finalizing
-                              ? t("chat.composer.dictationFinalizing")
-                              : t("chat.composer.dictationListening")}
-                        </span>
-                      </div>
-                    `
-                  : nothing}
-              </div>
-
+              ${renderComposerDictationStatus(dictation)}
               ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
               ${props.realtimeTalkVideoStream
                 ? html`

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dictationHarness = vi.hoisted(() => ({
@@ -170,13 +170,22 @@ describe("NewSessionDictationControl", () => {
     controller.active = true;
     controller.partial = "spoken";
     expect(control.previewDraft()).toBe("draft spoken");
-    render(control.render("agent-a"), container);
+    render(html`${control.renderStatus()}${control.render("agent-a")}`, container);
+    expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
+      "Listening",
+    );
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating")?.click();
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledWith("draft spoken task"));
     expect(onSubmit).not.toHaveBeenCalled();
 
     controller.active = true;
-    render(control.render("agent-a"), container);
+    controller.finalizing = true;
+    render(html`${control.renderStatus()}${control.render("agent-a")}`, container);
+    const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+    expect(stop?.querySelector("rect")).not.toBeNull();
+    expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
+    controller.finalizing = false;
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
     expect(controller.finishActive).toHaveBeenCalledTimes(2);

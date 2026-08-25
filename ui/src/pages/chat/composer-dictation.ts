@@ -13,8 +13,6 @@ import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 
 const HOLD_ARM_DELAY_MS = 200,
   HOLD_PROGRESS_MS = 600;
-const FINAL_TRANSCRIPT_QUIET_MS = 1500;
-const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
 const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
@@ -119,11 +117,6 @@ class ComposerDictationSession {
   private transcriptionSessionId: string | null = null;
   private readonly finalTranscripts: string[] = [];
   private currentPartial = "";
-  private trailingFinalDrain: {
-    resolve: () => void;
-    quietTimer: ReturnType<typeof globalThis.setTimeout> | null;
-    maxTimer: ReturnType<typeof globalThis.setTimeout>;
-  } | null = null;
   private startPromise: Promise<void> | null = null;
   private readonly pendingAudio: Float32Array[] = [];
   private pendingAudioSamples = 0;
@@ -133,7 +126,6 @@ class ComposerDictationSession {
   private discarded = false;
   private closed = false;
   private failed = false;
-  private gatewayDisconnected = false;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -196,7 +188,11 @@ class ComposerDictationSession {
     }
   }
 
-  async finish(): Promise<string> {
+  transcriptSnapshot(): string {
+    return this.transcriptIncludingPartial();
+  }
+
+  async finish(): Promise<void> {
     await this.stopCapture();
     await this.startPromise?.catch((error: unknown) => {
       if (!isAbortError(error)) {
@@ -205,25 +201,7 @@ class ComposerDictationSession {
     });
     await this.appendChain;
     await this.closeRemote();
-    if (!this.sessionId) {
-      this.cleanupEvents();
-      return "";
-    }
-    if (this.gatewayDisconnected || this.failed) {
-      this.cleanupEvents();
-      return this.transcriptIncludingPartial();
-    }
-    // A provider can emit several final utterances after close is acknowledged.
-    // Keep listening until the final stream has stayed quiet for a bounded span.
-    await this.waitForTrailingFinalDrain();
-    if (this.currentPartial) {
-      this.reportFailure(t("chat.composer.dictationFinalizationTimedOut"));
-    }
-    const transcript = this.failed
-      ? this.transcriptIncludingPartial()
-      : this.finalTranscripts.join(" ").trim();
     this.cleanupEvents();
-    return transcript;
   }
 
   async cancel(): Promise<void> {
@@ -236,10 +214,6 @@ class ComposerDictationSession {
   }
 
   markGatewayDisconnected(): boolean {
-    // The relay cannot emit another transcript after its transport is gone.
-    // Resolving any drain avoids retaining the composer in finalization.
-    this.gatewayDisconnected = true;
-    this.resolveTrailingFinalDrain();
     return this.hasTranscript();
   }
 
@@ -291,7 +265,6 @@ class ComposerDictationSession {
     if (payload.type === "partial" && typeof payload.text === "string") {
       this.currentPartial = payload.text.trim();
       this.callbacks.onPartial(this.currentPartial);
-      this.resetTrailingFinalDrain();
       return;
     }
     if (payload.type === "transcript" && typeof payload.text === "string") {
@@ -299,13 +272,11 @@ class ComposerDictationSession {
       if (payload.final !== true) {
         this.currentPartial = text;
         this.callbacks.onPartial(text);
-        this.resetTrailingFinalDrain();
         return;
       }
       if (text) {
         this.finalTranscripts.push(text);
         this.currentPartial = "";
-        this.resetTrailingFinalDrain();
       }
       this.callbacks.onPartial("");
       return;
@@ -329,7 +300,6 @@ class ComposerDictationSession {
       return;
     }
     this.failed = true;
-    this.resolveTrailingFinalDrain();
     this.callbacks.onError(message, this.hasTranscript());
   }
 
@@ -357,7 +327,6 @@ class ComposerDictationSession {
   }
 
   private cleanupEvents(): void {
-    this.resolveTrailingFinalDrain();
     this.closed = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -372,47 +341,6 @@ class ComposerDictationSession {
       .then(() => undefined)
       .catch(() => undefined);
     return this.closePromise;
-  }
-
-  private waitForTrailingFinalDrain(): Promise<void> {
-    return new Promise((resolve) => {
-      const hasCompleteTranscript = this.finalTranscripts.length > 0 && !this.currentPartial;
-      this.trailingFinalDrain = {
-        resolve,
-        quietTimer: hasCompleteTranscript
-          ? globalThis.setTimeout(() => this.resolveTrailingFinalDrain(), FINAL_TRANSCRIPT_QUIET_MS)
-          : null,
-        maxTimer: globalThis.setTimeout(
-          () => this.resolveTrailingFinalDrain(),
-          FINAL_TRANSCRIPT_MAX_WAIT_MS,
-        ),
-      };
-    });
-  }
-
-  private resetTrailingFinalDrain(): void {
-    if (!this.trailingFinalDrain) {
-      return;
-    }
-    if (this.trailingFinalDrain.quietTimer !== null) {
-      globalThis.clearTimeout(this.trailingFinalDrain.quietTimer);
-    }
-    this.trailingFinalDrain.quietTimer = globalThis.setTimeout(
-      () => this.resolveTrailingFinalDrain(),
-      FINAL_TRANSCRIPT_QUIET_MS,
-    );
-  }
-
-  private resolveTrailingFinalDrain(): void {
-    if (!this.trailingFinalDrain) {
-      return;
-    }
-    if (this.trailingFinalDrain.quietTimer !== null) {
-      globalThis.clearTimeout(this.trailingFinalDrain.quietTimer);
-    }
-    globalThis.clearTimeout(this.trailingFinalDrain.maxTimer);
-    this.trailingFinalDrain.resolve();
-    this.trailingFinalDrain = null;
   }
 }
 
@@ -686,31 +614,30 @@ export class ComposerDictationController {
     }
   }
 
-  private async stop(options: { commit: boolean }): Promise<boolean> {
+  private stop(options: { commit: boolean }): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopping") {
-      return false;
+      return Promise.resolve(false);
     }
     const wasActive = this.active;
     this.clearGesture();
     const session = this.session;
     if (!session) {
       this.reset();
-      return false;
+      return Promise.resolve(false);
     }
     this.setPhase("stopping");
-    const transcript = options.commit ? await session.finish() : (await session.cancel(), "");
-    const ownsSession = this.session === session;
-    if (ownsSession) {
-      this.session = null;
-    }
-    const committed = Boolean(
-      options.commit && transcript && wasActive && ownsSession && !this.disposed,
-    );
+    const transcript = options.commit ? session.transcriptSnapshot() : "";
+    const committed = Boolean(options.commit && transcript && wasActive && !this.disposed);
+    this.session = null;
+    this.reset();
     if (committed) {
       this.options.onCommit(transcript);
     }
-    this.reset();
-    return committed;
+    // UI ownership ends at the operator action. Provider close can be slow, but
+    // it must never retain the composer in a transient finalizing state.
+    const close = options.commit ? session.finish() : session.cancel();
+    void close.catch(() => undefined);
+    return Promise.resolve(committed);
   }
 
   private reset(): void {

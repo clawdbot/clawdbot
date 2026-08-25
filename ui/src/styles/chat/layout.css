@@ -5187,14 +5187,6 @@ button.chat-pr__diff {
   stroke: none;
 }
 
-.agent-chat__input .chat-send-btn--dictation-commit > svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.25px;
-}
-
 .agent-chat__video-preview {
   position: absolute;
   left: 50%;

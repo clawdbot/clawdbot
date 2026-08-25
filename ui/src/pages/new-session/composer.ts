@@ -74,6 +74,7 @@ type NewSessionComposerOptions = {
   blockedSubmitNotice?: string;
   dictationActive?: boolean;
   dictationPreview?: string;
+  dictationStatus?: TemplateResult;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -525,6 +526,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         class="agent-chat__input${options.dictationActive ? " agent-chat__input--dictating" : ""}"
       >
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
+        <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             ${slashMenuVisible
@@ -643,6 +645,7 @@ export function renderNewSessionDraftComposer(options: {
   blockedSubmitNotice?: string;
   dictationActive?: boolean;
   dictationPreview?: string;
+  dictationStatus?: TemplateResult;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -702,6 +705,7 @@ export function renderNewSessionDraftComposer(options: {
     blockedSubmitNotice: options.blockedSubmitNotice,
     dictationActive: options.dictationActive,
     dictationPreview: options.dictationPreview,
+    dictationStatus: options.dictationStatus,
     terminalAction: options.terminalAction,
     submitting: options.submitting,
     textareaController: options.textareaController,

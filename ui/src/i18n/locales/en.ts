@@ -6088,8 +6088,6 @@ export const en: TranslationMap = {
       dictationFinalizing: "Finishing dictation…",
       dictationListening: "Listening…",
       dictationStopAndKeep: "Stop and keep text",
-      dictationFinalizationTimedOut:
-        "Dictation stopped before the last partial transcript could be finalized.",
       dictationProviderUnavailable:
         "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",

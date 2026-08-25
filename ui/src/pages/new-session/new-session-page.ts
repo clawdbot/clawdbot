@@ -567,6 +567,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           blockedSubmitNotice: this.submission.blockedSubmitNotice(),
           dictationActive: this.dictation.active,
           dictationPreview: this.dictation.previewDraft(),
+          dictationStatus: this.dictation.renderStatus(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           draftOwnerKey: this.routeOwnerKey(),
