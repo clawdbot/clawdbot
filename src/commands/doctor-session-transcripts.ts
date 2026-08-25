@@ -332,7 +332,6 @@ async function repairBrokenSessionTranscriptFile(params: {
     });
     result.repaired = true;
   } catch (err) {
-    result.broken = params.shouldRepair;
     result.reason = formatErrorMessage(err);
   }
   return result;
@@ -445,16 +444,12 @@ export async function noteSessionTranscriptHealth(params?: {
           : shouldRepair
             ? "repair failed"
             : "needs repair";
-        const error =
-          shouldRepair && !result.repaired && result.reason
-            ? ` error=${result.reason.replace(/\s+/g, " ").trim()}`
-            : "";
         const metadata =
           result.legacyOpenAICodexEntries > 0
             ? ` openai-codex=${result.legacyOpenAICodexEntries}`
             : "";
         const error =
-          !result.repaired && result.reason && result.reason !== "no active branch"
+          result.reason && !(result.repaired && result.reason === "no active branch")
             ? ` error=${result.reason.replace(/\s+/g, " ").trim()}`
             : "";
         return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}${error}`;
