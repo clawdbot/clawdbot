@@ -1,6 +1,6 @@
 // Coverage for building compaction runtime context from active runner state.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -112,6 +112,10 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
 });
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
+  beforeEach(() => {
+    resetProcessRegistryForTests();
+  });
+
   it("preserves sender and current message routing for compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
@@ -237,33 +241,33 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves scoped active process session references for compaction", () => {
     // Only sessions tied to the same scope are summarized; cross-session process
     // state would leak unrelated task context into the compaction prompt.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
-    const active = createProcessSessionFixture({
-      id: "sess-active",
-      command: "sleep 600",
-      backgrounded: true,
-      pid: 1234,
-      startedAt: 1_000,
-    });
-    active.scopeKey = "agent:main:thread:1";
-    const other = createProcessSessionFixture({
-      id: "sess-other",
-      command: "sleep 600",
-      backgrounded: true,
-    });
-    other.scopeKey = "agent:other";
-    addSession(active);
-    addSession(other);
-
-    const result = buildEmbeddedCompactionRuntimeContext({
-      sessionKey: "agent:main:thread:1",
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      config: {} as unknown as OpenClawConfig,
-    });
-
     try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
+      const active = createProcessSessionFixture({
+        id: "sess-active",
+        command: "sleep 600",
+        backgrounded: true,
+        pid: 1234,
+        startedAt: 1_000,
+      });
+      active.scopeKey = "agent:main:thread:1";
+      const other = createProcessSessionFixture({
+        id: "sess-other",
+        command: "sleep 600",
+        backgrounded: true,
+      });
+      other.scopeKey = "agent:other";
+      addSession(active);
+      addSession(other);
+
+      const result = buildEmbeddedCompactionRuntimeContext({
+        sessionKey: "agent:main:thread:1",
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        config: {} as unknown as OpenClawConfig,
+      });
+
       expect(result.activeProcessSessions).toEqual([
         {
           command: "sleep 600",
