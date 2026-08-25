@@ -13,18 +13,13 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../../../infra/diagnostic-model-request.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-
-// Mirrors the module-private LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS in
-// attempt.model-diagnostic-events.ts (kept unexported to match this
-// codebase's "long but bounded" local-operation ceiling convention, e.g.
-// MAX_JOB_TTL_MS in bash-process-registry.ts).
-const LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS = 3 * 60 * 60 * 1000;
 
 async function collectModelCallEvents(
   run: () => Promise<void>,
@@ -236,15 +231,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expect(requestTimeouts).toEqual([60_000, undefined, 90_000, MAX_TIMER_TIMEOUT_MS, undefined]);
   });
 
-  it("propagates the resolved local no-gap stream policy as a finite diagnostic ceiling (#125147)", async () => {
-    // `streamIdleTimeoutMs: 0` is what `resolveLlmIdleTimeoutMs` returns for a
-    // genuinely local/self-hosted model that opted out of stream-gap
-    // policing. Diagnostic recovery must see that opt-out as a generous but
-    // finite ceiling, not silently fall back to the generic stuck-session
-    // threshold the way the raw per-call `model.requestTimeoutMs` field did —
-    // and not an effectively-unlimited sentinel either, or a genuinely wedged
-    // local call would never be recovered (caught in review, see
-    // LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS).
+  it("propagates the resolved local transport deadline to diagnostic recovery", async () => {
     let callSequence = 0;
     const requestTimeouts: Array<number | undefined> = [];
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
@@ -261,14 +248,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         trace: createDiagnosticTraceContext(),
         nextCallId: () => `call-${++callSequence}`,
         ownerGeneration: Object.freeze({}),
-        streamIdleTimeoutMs: 0,
+        requestTimeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       },
     );
 
     await collectModelCallEvents(
       async () => {
-        // Even though the raw per-call model config carries no timeout, the
-        // resolved local no-gap policy on ctx must still be honored.
         await drain(await wrapped({} as never, {} as never, {} as never));
       },
       (event, metadata) => {
@@ -281,10 +266,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       },
     );
 
-    expect(requestTimeouts).toEqual([LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS]);
+    expect(requestTimeouts).toEqual([DEFAULT_UNDICI_STREAM_TIMEOUT_MS]);
   });
 
-  it("prefers the resolved streamIdleTimeoutMs policy over an explicit per-call requestTimeoutMs", async () => {
+  it("preserves an explicit provider deadline over the caller transport allowance", async () => {
     let callSequence = 0;
     const requestTimeouts: Array<number | undefined> = [];
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
@@ -301,7 +286,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         trace: createDiagnosticTraceContext(),
         nextCallId: () => `call-${++callSequence}`,
         ownerGeneration: Object.freeze({}),
-        streamIdleTimeoutMs: 45_000,
+        requestTimeoutMs: 45_000,
       },
     );
 
@@ -321,7 +306,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       },
     );
 
-    expect(requestTimeouts).toEqual([45_000]);
+    expect(requestTimeouts).toEqual([300_000]);
   });
 
   it("captures output and completes when callers only await stream.result()", async () => {

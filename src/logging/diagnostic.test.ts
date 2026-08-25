@@ -1,5 +1,5 @@
-import fs from "node:fs";
 // Diagnostic logger tests cover event emission, metrics, and support output.
+import fs from "node:fs";
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +14,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
+import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
@@ -60,12 +61,6 @@ import {
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
 } from "./diagnostic.test-support.js";
-
-// Mirrors the module-private LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS in
-// attempt.model-diagnostic-events.ts (kept unexported to match this
-// codebase's "long but bounded" local-operation ceiling convention, e.g.
-// MAX_JOB_TTL_MS in bash-process-registry.ts).
-const LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS = 3 * 60 * 60 * 1000;
 
 function startDiagnosticHeartbeat(
   config?: Parameters<typeof startDiagnosticHeartbeatImpl>[0],
@@ -1253,7 +1248,7 @@ describe("stuck session diagnostics threshold", () => {
         model: "qwen3.5:9b-q8_0",
       },
       owner.generation,
-      LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS,
+      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -1298,13 +1293,13 @@ describe("stuck session diagnostics threshold", () => {
         model: "qwen3.5:9b-q8_0",
       },
       owner.generation,
-      LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS,
+      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // Past both the generic stuck-session abort threshold and the finite
     // no-gap ceiling — a genuinely wedged local call must be recoverable.
-    vi.advanceTimersByTime(LOCAL_MODEL_NO_GAP_DIAGNOSTIC_CEILING_MS + 60_000);
+    vi.advanceTimersByTime(DEFAULT_UNDICI_STREAM_TIMEOUT_MS + 60_000);
 
     expect(recoverStuckSession).toHaveBeenCalled();
   });
