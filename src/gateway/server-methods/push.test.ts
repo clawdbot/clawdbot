@@ -41,7 +41,7 @@ import {
   sendApnsAlert,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
-import { broadcastWebPush } from "../../infra/push-web.js";
+import { broadcastWebPush, registerWebPushSubscription } from "../../infra/push-web.js";
 
 type ApnsPushResult = Awaited<ReturnType<typeof sendApnsAlert>>;
 type WebPushResults = Awaited<ReturnType<typeof broadcastWebPush>>;
@@ -138,6 +138,43 @@ function createWebPushTestInvokeParams(params: Record<string, unknown> = {}) {
         context: {} as never,
         client: null,
         req: { type: "req", id: "req-1", method: "push.web.test" },
+        isWebchatConnect: () => false,
+      }),
+  };
+}
+
+function createWebPushSubscribeInvokeParams(options?: {
+  deviceId?: string;
+  userProfileId?: string;
+  config?: Record<string, unknown>;
+}) {
+  const respond = vi.fn();
+  return {
+    respond,
+    invoke: async () =>
+      await expectDefined(
+        pushHandlers["push.web.subscribe"],
+        'pushHandlers["push.web.subscribe"] test invariant',
+      )({
+        params: {
+          endpoint: "https://push.example.test/subscription",
+          keys: { p256dh: "p256dh", auth: "auth" },
+        },
+        respond: respond as never,
+        context: { getRuntimeConfig: () => options?.config ?? {} } as never,
+        client: {
+          connect: {
+            device: options?.deviceId ? { id: options.deviceId } : undefined,
+          },
+          ...(options?.userProfileId
+            ? {
+                authenticatedUserProfile: {
+                  profileId: options.userProfileId,
+                },
+              }
+            : {}),
+        } as never,
+        req: { type: "req", id: "req-1", method: "push.web.subscribe" },
         isWebchatConnect: () => false,
       }),
   };
@@ -426,5 +463,59 @@ describe("push.web.test handler", () => {
     await invoke();
 
     expectInvalidRequestResponse(respond, "no web push subscriptions registered");
+  });
+});
+
+describe("push.web.subscribe handler", () => {
+  beforeEach(() => {
+    vi.mocked(registerWebPushSubscription).mockReset();
+    vi.mocked(registerWebPushSubscription).mockResolvedValue({
+      subscriptionId: "subscription-1",
+      endpoint: "https://push.example.test/subscription",
+      keys: { p256dh: "p256dh", auth: "auth" },
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    });
+  });
+
+  it("binds the subscription to the authenticated browser device and profile", async () => {
+    const { respond, invoke } = createWebPushSubscribeInvokeParams({
+      deviceId: "browser-device",
+      userProfileId: "profile-1",
+    });
+
+    await invoke();
+
+    expect(registerWebPushSubscription).toHaveBeenCalledWith({
+      endpoint: "https://push.example.test/subscription",
+      keys: { p256dh: "p256dh", auth: "auth" },
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+    });
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { subscriptionId: "subscription-1" },
+      undefined,
+    ]);
+  });
+
+  it("rejects subscriptions without a paired browser device identity", async () => {
+    const { respond, invoke } = createWebPushSubscribeInvokeParams();
+
+    await invoke();
+
+    expectInvalidRequestResponse(respond, "paired browser device identity required");
+    expect(registerWebPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it("rejects profile-less subscriptions when Gateway roles are enabled", async () => {
+    const { respond, invoke } = createWebPushSubscribeInvokeParams({
+      deviceId: "browser-device",
+      config: { gateway: { roles: { definitions: {} } } },
+    });
+
+    await invoke();
+
+    expectInvalidRequestResponse(respond, "authenticated user profile");
+    expect(registerWebPushSubscription).not.toHaveBeenCalled();
   });
 });

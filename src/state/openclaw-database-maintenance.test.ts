@@ -79,6 +79,52 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("keeps Web Push binding columns compatible with the previous schema", () => {
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  auth TEXT NOT NULL,\n  device_id TEXT,\n  user_profile_id TEXT,\n",
+      "  auth TEXT NOT NULL,\n",
+    );
+    const database = createGlobalDatabase();
+    try {
+      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps the Web Push approval delivery table compatible with the previous schema", () => {
+    const additiveSchema = `CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
+  approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  subscription_id TEXT NOT NULL
+    REFERENCES web_push_subscriptions(subscription_id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  user_profile_id TEXT,
+  prepared_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (approval_id, subscription_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
+  ON web_push_approval_deliveries(subscription_id, approval_id);
+
+`;
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(additiveSchema, "");
+    const database = createGlobalDatabase();
+    try {
+      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("keeps the cron authority companion table compatible with the previous schema", () => {
     const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
       "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
@@ -221,6 +267,8 @@ describe("OpenClaw database maintenance schema validation", () => {
       "session_groups.cwd TEXT",
       "session_groups.worktree INTEGER",
       "secret_store_entries.allowed_hosts TEXT",
+      "web_push_subscriptions.device_id TEXT",
+      "web_push_subscriptions.user_profile_id TEXT",
       "skill_workshop_proposals.claim_released_time INTEGER",
     ]);
 

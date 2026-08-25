@@ -1,6 +1,8 @@
 // Canonical shared-SQLite store for Web Push subscriptions and VAPID identity.
+import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { readConfigMachineState, updateConfigMachineState } from "../state/config-machine-state.js";
+import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -18,6 +20,7 @@ export const WEB_PUSH_VAPID_STATE_KEY = "webPush.vapidKeys";
 export const DEFAULT_WEB_PUSH_VAPID_SUBJECT = "https://openclaw.ai";
 const WEB_PUSH_MAX_ENDPOINT_LENGTH = 2048;
 const WEB_PUSH_MAX_KEY_LENGTH = 512;
+const WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS = 1_024;
 
 export type WebPushSubscription = {
   subscriptionId: string;
@@ -25,6 +28,11 @@ export type WebPushSubscription = {
   keys: { p256dh: string; auth: string };
   createdAtMs: number;
   updatedAtMs: number;
+};
+
+export type BoundWebPushSubscription = WebPushSubscription & {
+  deviceId: string;
+  userProfileId: string | null;
 };
 
 export type VapidKeyPair = {
@@ -43,15 +51,75 @@ export function createWebPushVapidKeyPair(
 
 export type WebPushDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "config_machine_state" | "web_push_subscriptions"
+  | "config_machine_state"
+  | "operator_approvals"
+  | "web_push_approval_deliveries"
+  | "web_push_subscriptions"
 >;
 type WebPushSubscriptionRow = Selectable<WebPushDatabase["web_push_subscriptions"]>;
 type WebPushSubscriptionInsert = Insertable<WebPushDatabase["web_push_subscriptions"]>;
+
+const ensuredWebPushBindingDatabases = new WeakSet<DatabaseSync>();
+const ensuredWebPushApprovalDeliveryDatabases = new WeakSet<DatabaseSync>();
+
+const WEB_PUSH_APPROVAL_DELIVERY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
+  approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  subscription_id TEXT NOT NULL
+    REFERENCES web_push_subscriptions(subscription_id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  user_profile_id TEXT,
+  prepared_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (approval_id, subscription_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
+  ON web_push_approval_deliveries(subscription_id, approval_id);
+`;
 
 function webPushStateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir
     ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }
     : { env: process.env };
+}
+
+/** Adds downgrade-safe binding columns before the first Web Push store operation. */
+export function ensureWebPushSubscriptionBindingColumns(db: DatabaseSync): void {
+  ensureColumn(db, "web_push_subscriptions", "device_id TEXT");
+  ensureColumn(db, "web_push_subscriptions", "user_profile_id TEXT");
+}
+
+function ensureWebPushSubscriptionBindingSchema(stateDir?: string): void {
+  const options = webPushStateDatabaseOptions(stateDir);
+  const database = openOpenClawStateDatabase(options);
+  if (ensuredWebPushBindingDatabases.has(database.db)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => ensureWebPushSubscriptionBindingColumns(db),
+    options,
+    { operationLabel: "web-push.subscription-binding.schema.ensure" },
+  );
+  ensuredWebPushBindingDatabases.add(database.db);
+}
+
+/** Lazily adds the restart-safe approval delivery table on first feature use. */
+function ensureWebPushApprovalDeliveryTable(db: DatabaseSync): void {
+  // sqlite-allow-raw -- feature-local additive schema DDL; rows use Kysely.
+  db.exec(WEB_PUSH_APPROVAL_DELIVERY_SCHEMA_SQL);
+}
+
+function ensureWebPushApprovalDeliverySchema(stateDir?: string): void {
+  const options = webPushStateDatabaseOptions(stateDir);
+  const database = openOpenClawStateDatabase(options);
+  if (ensuredWebPushApprovalDeliveryDatabases.has(database.db)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(({ db }) => ensureWebPushApprovalDeliveryTable(db), options, {
+    operationLabel: "web-push.approval-delivery.schema.ensure",
+  });
+  ensuredWebPushApprovalDeliveryDatabases.add(database.db);
 }
 
 export function hashWebPushEndpoint(endpoint: string): string {
@@ -83,9 +151,23 @@ export function webPushSubscriptionFromRow(row: WebPushSubscriptionRow): WebPush
   };
 }
 
+function boundWebPushSubscriptionFromRow(
+  row: WebPushSubscriptionRow,
+): BoundWebPushSubscription | null {
+  if (!row.device_id) {
+    return null;
+  }
+  return {
+    ...webPushSubscriptionFromRow(row),
+    deviceId: row.device_id,
+    userProfileId: row.user_profile_id,
+  };
+}
+
 export function webPushSubscriptionToRow(params: {
   endpointHash: string;
   subscription: WebPushSubscription;
+  binding?: { deviceId: string; userProfileId: string | null };
 }): WebPushSubscriptionInsert {
   return {
     endpoint_hash: params.endpointHash,
@@ -93,6 +175,8 @@ export function webPushSubscriptionToRow(params: {
     endpoint: params.subscription.endpoint,
     p256dh: params.subscription.keys.p256dh,
     auth: params.subscription.keys.auth,
+    device_id: params.binding?.deviceId ?? null,
+    user_profile_id: params.binding?.userProfileId ?? null,
     created_at_ms: params.subscription.createdAtMs,
     updated_at_ms: params.subscription.updatedAtMs,
   };
@@ -113,6 +197,7 @@ export function webPushSubscriptionsEqual(
 }
 
 export function listWebPushSubscriptions(stateDir?: string): WebPushSubscription[] {
+  ensureWebPushSubscriptionBindingSchema(stateDir);
   const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
   const stateDb = getNodeSqliteKysely<WebPushDatabase>(database.db);
   return executeSqliteQuerySync(
@@ -125,15 +210,195 @@ export function listWebPushSubscriptions(stateDir?: string): WebPushSubscription
   ).rows.map(webPushSubscriptionFromRow);
 }
 
+/** Lists only subscriptions reconciled by an authenticated browser device. */
+export function listBoundWebPushSubscriptions(stateDir?: string): BoundWebPushSubscription[] {
+  ensureWebPushSubscriptionBindingSchema(stateDir);
+  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<WebPushDatabase>(database.db)
+      .selectFrom("web_push_subscriptions")
+      .selectAll()
+      .where("device_id", "is not", null)
+      .orderBy("created_at_ms", "asc")
+      .orderBy("subscription_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const subscription = boundWebPushSubscriptionFromRow(row);
+    return subscription ? [subscription] : [];
+  });
+}
+
+/**
+ * Record the subscriptions that may receive the request before network I/O.
+ * Definite failures are removed after send; retaining the crash-ambiguous set
+ * lets restart recovery replace any actionable notification that may exist.
+ */
+export function prepareWebPushApprovalDeliveries(params: {
+  approvalId: string;
+  subscriptions: readonly BoundWebPushSubscription[];
+  preparedAtMs: number;
+  stateDir?: string;
+}): boolean {
+  const subscriptionsById = new Map(
+    params.subscriptions.map((subscription) => [subscription.subscriptionId, subscription]),
+  );
+  if (subscriptionsById.size === 0) {
+    return false;
+  }
+  ensureWebPushApprovalDeliverySchema(params.stateDir);
+  const options = webPushStateDatabaseOptions(params.stateDir);
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<WebPushDatabase>(db);
+    const approval = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("operator_approvals")
+        .select("status")
+        .where("approval_id", "=", params.approvalId),
+    );
+    if (approval?.status !== "pending") {
+      return false;
+    }
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .insertInto("web_push_approval_deliveries")
+        .values(
+          [...subscriptionsById.values()].map((subscription) => ({
+            approval_id: params.approvalId,
+            subscription_id: subscription.subscriptionId,
+            device_id: subscription.deviceId,
+            user_profile_id: subscription.userProfileId,
+            prepared_at_ms: params.preparedAtMs,
+          })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["approval_id", "subscription_id"]).doUpdateSet({
+            device_id: (eb) => eb.ref("excluded.device_id"),
+            user_profile_id: (eb) => eb.ref("excluded.user_profile_id"),
+            prepared_at_ms: params.preparedAtMs,
+          }),
+        ),
+    );
+    return true;
+  }, options);
+}
+
+/** Keep only request sends the push service accepted; unknown crash state stays conservative. */
+export function retainSuccessfulWebPushApprovalDeliveries(params: {
+  approvalId: string;
+  successfulSubscriptionIds: readonly string[];
+  stateDir?: string;
+}): void {
+  ensureWebPushApprovalDeliverySchema(params.stateDir);
+  const successfulSubscriptionIds = [...new Set(params.successfulSubscriptionIds)];
+  runOpenClawStateWriteTransaction(({ db }) => {
+    let query = getNodeSqliteKysely<WebPushDatabase>(db)
+      .deleteFrom("web_push_approval_deliveries")
+      .where("approval_id", "=", params.approvalId);
+    if (successfulSubscriptionIds.length > 0) {
+      query = query.where("subscription_id", "not in", successfulSubscriptionIds);
+    }
+    executeSqliteQuerySync(db, query);
+  }, webPushStateDatabaseOptions(params.stateDir));
+}
+
+/** Load current subscription material for one approval's durable cleanup targets. */
+export function listWebPushApprovalDeliveryTargets(params: {
+  approvalId: string;
+  stateDir?: string;
+}): WebPushSubscription[] {
+  ensureWebPushApprovalDeliverySchema(params.stateDir);
+  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(params.stateDir));
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<WebPushDatabase>(database.db)
+      .selectFrom("web_push_approval_deliveries")
+      .innerJoin(
+        "web_push_subscriptions",
+        "web_push_subscriptions.subscription_id",
+        "web_push_approval_deliveries.subscription_id",
+      )
+      .selectAll("web_push_subscriptions")
+      .select([
+        "web_push_approval_deliveries.device_id as delivery_device_id",
+        "web_push_approval_deliveries.user_profile_id as delivery_user_profile_id",
+      ])
+      .where("web_push_approval_deliveries.approval_id", "=", params.approvalId)
+      .orderBy("web_push_subscriptions.created_at_ms", "asc")
+      .orderBy("web_push_subscriptions.subscription_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) =>
+    row.device_id === row.delivery_device_id && row.user_profile_id === row.delivery_user_profile_id
+      ? [webPushSubscriptionFromRow(row)]
+      : [],
+  );
+}
+
+/** Remove only targets whose terminal replacement was accepted. */
+export function deleteWebPushApprovalDeliveryTargets(params: {
+  approvalId: string;
+  subscriptionIds: readonly string[];
+  stateDir?: string;
+}): void {
+  const subscriptionIds = [...new Set(params.subscriptionIds)];
+  if (subscriptionIds.length === 0) {
+    return;
+  }
+  ensureWebPushApprovalDeliverySchema(params.stateDir);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<WebPushDatabase>(db)
+        .deleteFrom("web_push_approval_deliveries")
+        .where("approval_id", "=", params.approvalId)
+        .where("subscription_id", "in", subscriptionIds),
+    );
+  }, webPushStateDatabaseOptions(params.stateDir));
+}
+
+/** Discover terminal approvals whose request notifications still need replacement. */
+export function listTerminalWebPushApprovalDeliveryIds(stateDir?: string): {
+  approvalIds: string[];
+  truncated: boolean;
+} {
+  ensureWebPushApprovalDeliverySchema(stateDir);
+  const database = openOpenClawStateDatabase(webPushStateDatabaseOptions(stateDir));
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<WebPushDatabase>(database.db)
+      .selectFrom("web_push_approval_deliveries")
+      .innerJoin(
+        "operator_approvals",
+        "operator_approvals.approval_id",
+        "web_push_approval_deliveries.approval_id",
+      )
+      .select("web_push_approval_deliveries.approval_id")
+      .distinct()
+      .where("operator_approvals.status", "!=", "pending")
+      .orderBy("web_push_approval_deliveries.approval_id", "asc")
+      .limit(WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS + 1),
+  ).rows;
+  return {
+    approvalIds: rows
+      .slice(0, WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS)
+      .map((row) => row.approval_id),
+    truncated: rows.length > WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS,
+  };
+}
+
 /** Reread the endpoint row inside the write transaction before creating or updating it. */
 export function upsertWebPushSubscription(params: {
   endpointHash: string;
   endpoint: string;
   keys: { p256dh: string; auth: string };
+  binding?: { deviceId: string; userProfileId: string | null };
   candidateSubscriptionId: string;
   nowMs: number;
   stateDir?: string;
 }): WebPushSubscription {
+  ensureWebPushSubscriptionBindingSchema(params.stateDir);
   return runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getNodeSqliteKysely<WebPushDatabase>(db);
     const existingRow = executeSqliteQueryTakeFirstSync(
@@ -156,6 +421,7 @@ export function upsertWebPushSubscription(params: {
     const row = webPushSubscriptionToRow({
       endpointHash: params.endpointHash,
       subscription,
+      binding: params.binding,
     });
     executeSqliteQuerySync(
       db,
@@ -168,6 +434,8 @@ export function upsertWebPushSubscription(params: {
             endpoint: row.endpoint,
             p256dh: row.p256dh,
             auth: row.auth,
+            device_id: row.device_id,
+            user_profile_id: row.user_profile_id,
             updated_at_ms: row.updated_at_ms,
           }),
         ),
@@ -181,6 +449,7 @@ export function deleteWebPushSubscriptionByEndpoint(params: {
   endpoint: string;
   stateDir?: string;
 }): boolean {
+  ensureWebPushSubscriptionBindingSchema(params.stateDir);
   return runOpenClawStateWriteTransaction(({ db }) => {
     const result = executeSqliteQuerySync(
       db,
@@ -200,6 +469,7 @@ export function deleteWebPushSubscriptionIfCurrent(params: {
   stateDir?: string;
 }): boolean {
   const subscription = params.subscription;
+  ensureWebPushSubscriptionBindingSchema(params.stateDir);
   return runOpenClawStateWriteTransaction(({ db }) => {
     const result = executeSqliteQuerySync(
       db,

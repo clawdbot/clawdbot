@@ -2,23 +2,66 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  insertOperatorApproval,
+  resolveOperatorApproval,
+} from "../gateway/operator-approval-store.js";
+import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import {
+  closeOpenClawStateDatabase,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   createWebPushVapidKeyPair,
+  deleteWebPushApprovalDeliveryTargets,
+  hashWebPushEndpoint,
+  listBoundWebPushSubscriptions,
+  listTerminalWebPushApprovalDeliveryIds,
+  listWebPushApprovalDeliveryTargets,
   listWebPushSubscriptions,
+  prepareWebPushApprovalDeliveries,
   readPersistedVapidKeyPair,
+  retainSuccessfulWebPushApprovalDeliveries,
 } from "./push-web-store.js";
 import {
   broadcastWebPush,
   clearWebPushSubscriptionByEndpoint,
+  prepareWebPushNotificationSender,
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "./push-web.js";
 
 let tmpDir: string;
+
+function insertPendingApproval(id: string): void {
+  const inserted = insertOperatorApproval({
+    approval: {
+      id,
+      kind: "exec",
+      presentation: {
+        kind: "exec",
+        commandText: "echo approval",
+        commandPreview: "echo approval",
+        warningText: null,
+        host: "gateway",
+        nodeId: null,
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      runtimeEpoch: "web-push-test-runtime",
+      createdAtMs: 1_000,
+      expiresAtMs: 60_000,
+    },
+    databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+  });
+  if (inserted.outcome !== "inserted") {
+    throw new Error("expected pending approval insert");
+  }
+}
 const generatedVapidKeys = vi.hoisted(
   () =>
     Object.fromEntries([
@@ -191,6 +234,71 @@ describe("subscription CRUD", () => {
     await expect(fs.stat(path.join(tmpDir, "push"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("lazily adds and persists authenticated device bindings", async () => {
+    const environment = { ...process.env, OPENCLAW_STATE_DIR: tmpDir };
+    const database = openOpenClawStateDatabase({ env: environment });
+    database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN device_id;");
+    database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN user_profile_id;");
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "device_id")).toBe(false);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "user_profile_id")).toBe(false);
+
+    const subscription = await registerWebPushSubscription({
+      endpoint,
+      keys,
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+      baseDir: tmpDir,
+    });
+
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "device_id")).toBe(true);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "user_profile_id")).toBe(true);
+    expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([
+      { ...subscription, deviceId: "browser-device", userProfileId: "profile-1" },
+    ]);
+  });
+
+  it("keeps legacy unbound rows test-only until browser reconciliation", async () => {
+    await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
+    expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([]);
+
+    const rebound = await registerWebPushSubscription({
+      endpoint,
+      keys,
+      binding: { deviceId: "browser-device", userProfileId: null },
+      baseDir: tmpDir,
+    });
+    expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([
+      { ...rebound, deviceId: "browser-device", userProfileId: null },
+    ]);
+  });
+
+  it("preserves bindings when an older writer updates only the original columns", async () => {
+    const subscription = await registerWebPushSubscription({
+      endpoint,
+      keys,
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+      baseDir: tmpDir,
+    });
+    closeOpenClawStateDatabase();
+
+    const olderWriter = new DatabaseSync(path.join(tmpDir, "state", "openclaw.sqlite"));
+    olderWriter
+      .prepare(
+        "UPDATE web_push_subscriptions SET auth = ?, updated_at_ms = ? WHERE endpoint_hash = ?",
+      )
+      .run("older-auth", subscription.updatedAtMs + 1, hashWebPushEndpoint(endpoint));
+    olderWriter.close();
+
+    expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([
+      {
+        ...subscription,
+        keys: { ...subscription.keys, auth: "older-auth" },
+        updatedAtMs: subscription.updatedAtMs + 1,
+        deviceId: "browser-device",
+        userProfileId: "profile-1",
+      },
+    ]);
+  });
+
   it("preserves unrelated concurrent registrations", async () => {
     await Promise.all(
       ["a", "b", "c"].map((suffix) =>
@@ -282,6 +390,158 @@ describe("subscription CRUD", () => {
   });
 });
 
+describe("approval delivery target persistence", () => {
+  const keys = { p256dh: "p256dh-key", auth: "auth-key" };
+
+  it("lazily persists successful targets across reopen until terminal replacement", async () => {
+    const approvalId = "exec:restart-safe-push";
+    insertPendingApproval(approvalId);
+    const first = await registerWebPushSubscription({
+      endpoint: "https://push.example.com/approval-first",
+      keys,
+      binding: { deviceId: "device-first", userProfileId: "profile-first" },
+      baseDir: tmpDir,
+    });
+    const second = await registerWebPushSubscription({
+      endpoint: "https://push.example.com/approval-second",
+      keys,
+      binding: { deviceId: "device-second", userProfileId: null },
+      baseDir: tmpDir,
+    });
+    const firstBound = {
+      ...first,
+      deviceId: "device-first",
+      userProfileId: "profile-first",
+    };
+    const secondBound = { ...second, deviceId: "device-second", userProfileId: null };
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
+    });
+    expect(tableExists(database.db, "web_push_approval_deliveries")).toBe(false);
+
+    expect(
+      prepareWebPushApprovalDeliveries({
+        approvalId,
+        subscriptions: [firstBound, secondBound],
+        preparedAtMs: 2_000,
+        stateDir: tmpDir,
+      }),
+    ).toBe(true);
+    expect(tableExists(database.db, "web_push_approval_deliveries")).toBe(true);
+    closeOpenClawStateDatabase();
+
+    expect(
+      listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir }).map(
+        (subscription) => subscription.subscriptionId,
+      ),
+    ).toEqual([first.subscriptionId, second.subscriptionId]);
+
+    retainSuccessfulWebPushApprovalDeliveries({
+      approvalId,
+      successfulSubscriptionIds: [first.subscriptionId],
+      stateDir: tmpDir,
+    });
+    closeOpenClawStateDatabase();
+    expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([first]);
+
+    expect(
+      resolveOperatorApproval({
+        id: approvalId,
+        decision: "deny",
+        resolver: { kind: "system", id: null },
+        nowMs: 3_000,
+        databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+      }).outcome,
+    ).toBe("resolved");
+    expect(listTerminalWebPushApprovalDeliveryIds(tmpDir)).toEqual({
+      approvalIds: [approvalId],
+      truncated: false,
+    });
+
+    deleteWebPushApprovalDeliveryTargets({
+      approvalId,
+      subscriptionIds: [first.subscriptionId],
+      stateDir: tmpDir,
+    });
+    expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
+  });
+
+  it("cascades delivery targets when the browser subscription is removed", async () => {
+    const approvalId = "exec:removed-push-target";
+    insertPendingApproval(approvalId);
+    const subscription = await registerWebPushSubscription({
+      endpoint: "https://push.example.com/approval-removed",
+      keys,
+      binding: { deviceId: "device-removed", userProfileId: "profile-removed" },
+      baseDir: tmpDir,
+    });
+    expect(
+      prepareWebPushApprovalDeliveries({
+        approvalId,
+        subscriptions: [
+          {
+            ...subscription,
+            deviceId: "device-removed",
+            userProfileId: "profile-removed",
+          },
+        ],
+        preparedAtMs: 2_000,
+        stateDir: tmpDir,
+      }),
+    ).toBe(true);
+
+    await expect(clearWebPushSubscriptionByEndpoint(subscription.endpoint, tmpDir)).resolves.toBe(
+      true,
+    );
+    expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
+  });
+
+  it("rejects a terminal target after the endpoint is rebound to another owner", async () => {
+    const approvalId = "exec:rebound-push-target";
+    insertPendingApproval(approvalId);
+    const original = await registerWebPushSubscription({
+      endpoint: "https://push.example.com/approval-rebound",
+      keys,
+      binding: { deviceId: "device-original", userProfileId: "profile-original" },
+      baseDir: tmpDir,
+    });
+    expect(
+      prepareWebPushApprovalDeliveries({
+        approvalId,
+        subscriptions: [
+          {
+            ...original,
+            deviceId: "device-original",
+            userProfileId: "profile-original",
+          },
+        ],
+        preparedAtMs: 2_000,
+        stateDir: tmpDir,
+      }),
+    ).toBe(true);
+    expect(
+      resolveOperatorApproval({
+        id: approvalId,
+        decision: "deny",
+        resolver: { kind: "system", id: null },
+        nowMs: 3_000,
+        databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+      }).outcome,
+    ).toBe("resolved");
+    closeOpenClawStateDatabase();
+
+    const rebound = await registerWebPushSubscription({
+      endpoint: original.endpoint,
+      keys: { p256dh: "rebound-p256dh", auth: "rebound-auth" },
+      binding: { deviceId: "device-rebound", userProfileId: "profile-rebound" },
+      baseDir: tmpDir,
+    });
+    expect(rebound.subscriptionId).toBe(original.subscriptionId);
+    expect(listTerminalWebPushApprovalDeliveryIds(tmpDir).approvalIds).toContain(approvalId);
+    expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([]);
+  });
+});
+
 describe("sending", () => {
   const keys = { p256dh: "p256dh-key", auth: "auth-key" };
 
@@ -303,6 +563,37 @@ describe("sending", () => {
     expect(results.every((result) => result.ok)).toBe(true);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a bounded high-urgency notification only to selected subscriptions", async () => {
+    const selected = await registerWebPushSubscription({
+      endpoint: "https://push.example.com/selected",
+      keys,
+      baseDir: tmpDir,
+    });
+    await registerWebPushSubscription({
+      endpoint: "https://push.example.com/not-selected",
+      keys,
+      baseDir: tmpDir,
+    });
+
+    const send = await prepareWebPushNotificationSender(tmpDir);
+    await expect(
+      send({
+        subscriptions: [selected],
+        payload: { title: "Approval", url: "/approve/1" },
+        deliveryOptions: { TTL: 60, urgency: "high", timeout: 10_000 },
+      }),
+    ).resolves.toEqual([{ ok: true, subscriptionId: selected.subscriptionId, statusCode: 201 }]);
+    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledOnce();
+    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledWith(
+      {
+        endpoint: selected.endpoint,
+        keys: selected.keys,
+      },
+      JSON.stringify({ title: "Approval", url: "/approve/1" }),
+      { TTL: 60, urgency: "high", timeout: 10_000 },
+    );
   });
 
   it("does not delete a subscription re-registered during an expired send", async () => {

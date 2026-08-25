@@ -1,6 +1,13 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 
 const SW_READY_TIMEOUT = 10_000;
+const VAPID_MISMATCH_MESSAGE =
+  "This browser push subscription belongs to another Gateway. Open this Gateway's own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.";
+
+type WebPushReconcileResult =
+  | { state: "missing" }
+  | { state: "registered" }
+  | { state: "vapid-mismatch"; error: string };
 
 function swReady(): Promise<ServiceWorkerRegistration> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -36,6 +43,77 @@ export async function getExistingSubscription(): Promise<PushSubscription | null
   return await registration.pushManager.getSubscription();
 }
 
+async function resolveGatewayVapidPublicKey(client: GatewayBrowserClient): Promise<Uint8Array> {
+  const vapidRes = await client.request("push.web.vapidPublicKey", {});
+  const vapidPublicKey = (vapidRes as { vapidPublicKey: string }).vapidPublicKey;
+  if (!vapidPublicKey) {
+    throw new Error("Failed to retrieve VAPID public key");
+  }
+  return urlBase64ToUint8Array(vapidPublicKey);
+}
+
+function subscriptionUsesVapidKey(
+  subscription: PushSubscription,
+  vapidPublicKey: Uint8Array,
+): boolean {
+  const applicationServerKey = subscription.options.applicationServerKey;
+  if (!applicationServerKey) {
+    return false;
+  }
+  const currentKey = new Uint8Array(applicationServerKey);
+  return (
+    currentKey.length === vapidPublicKey.length &&
+    currentKey.every((value, index) => value === vapidPublicKey[index])
+  );
+}
+
+function serializePushSubscription(subscription: PushSubscription) {
+  const json = subscription.toJSON();
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
+    throw new Error("Invalid push subscription from browser");
+  }
+  return {
+    endpoint: json.endpoint,
+    keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+  };
+}
+
+async function registerPushSubscription(
+  client: GatewayBrowserClient,
+  subscription: PushSubscription,
+): Promise<{ subscriptionId: string }> {
+  return (await client.request("push.web.subscribe", serializePushSubscription(subscription))) as {
+    subscriptionId: string;
+  };
+}
+
+async function clearMismatchedGatewaySubscription(
+  client: GatewayBrowserClient,
+  subscription: PushSubscription,
+): Promise<void> {
+  // Remove only this Gateway's unusable row. Keep the browser subscription so
+  // the Gateway that owns its VAPID identity continues receiving notifications.
+  await client
+    .request("push.web.unsubscribe", { endpoint: subscription.endpoint })
+    .catch(() => undefined);
+}
+
+export async function reconcileExistingWebPushSubscription(
+  client: GatewayBrowserClient,
+): Promise<WebPushReconcileResult> {
+  const subscription = await getExistingSubscription();
+  if (!subscription) {
+    return { state: "missing" };
+  }
+  const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
+  if (!subscriptionUsesVapidKey(subscription, vapidPublicKey)) {
+    await clearMismatchedGatewaySubscription(client, subscription);
+    return { state: "vapid-mismatch", error: VAPID_MISMATCH_MESSAGE };
+  }
+  await registerPushSubscription(client, subscription);
+  return { state: "registered" };
+}
+
 export async function subscribeToWebPush(
   client: GatewayBrowserClient,
 ): Promise<{ subscriptionId: string }> {
@@ -44,30 +122,23 @@ export async function subscribeToWebPush(
     throw new Error(`Notification permission ${permission}`);
   }
 
-  const vapidRes = await client.request("push.web.vapidPublicKey", {});
-  const vapidPublicKey = (vapidRes as { vapidPublicKey: string }).vapidPublicKey;
-  if (!vapidPublicKey) {
-    throw new Error("Failed to retrieve VAPID public key");
-  }
-
   const registration = await swReady();
+  const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
+  const existingSubscription = await registration.pushManager.getSubscription();
+  if (existingSubscription) {
+    if (!subscriptionUsesVapidKey(existingSubscription, vapidPublicKey)) {
+      await clearMismatchedGatewaySubscription(client, existingSubscription);
+      throw new Error(VAPID_MISMATCH_MESSAGE);
+    }
+    return await registerPushSubscription(client, existingSubscription);
+  }
   const pushSubscription = await registration.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer,
+    applicationServerKey: vapidPublicKey.buffer as ArrayBuffer,
   });
-  const subscription = pushSubscription.toJSON();
-  if (!subscription.endpoint || !subscription.keys?.p256dh || !subscription.keys.auth) {
-    throw new Error("Invalid push subscription from browser");
-  }
 
   try {
-    return (await client.request("push.web.subscribe", {
-      endpoint: subscription.endpoint,
-      keys: {
-        p256dh: subscription.keys.p256dh,
-        auth: subscription.keys.auth,
-      },
-    })) as { subscriptionId: string };
+    return await registerPushSubscription(client, pushSubscription);
   } catch (error) {
     try {
       await pushSubscription.unsubscribe();

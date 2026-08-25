@@ -71,6 +71,20 @@ column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database
 safely.
 
+Web Push subscription ownership uses the same rule for nullable bare
+`web_push_subscriptions.device_id TEXT` and `user_profile_id TEXT` columns. Web
+Push lazily ensures both columns on first use. Existing rows remain unbound and
+test-only until the browser reconnects; older readers ignore the columns and
+continue reading or updating the endpoint and key fields safely.
+
+Approval-notification cleanup uses the same-version additive
+`web_push_approval_deliveries` table. It records the approval/subscription
+identifiers plus the request-time device/profile binding for notifications that
+may have reached a browser. A terminal or restarted Gateway sends only when the
+current subscription still has that binding. The table is lazily created on
+first use, rows cascade away with their approval or subscription, and older
+readers ignore it safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 Structured [Goal controls](/tools/goal#gateway-requests-and-retries) use a lazy

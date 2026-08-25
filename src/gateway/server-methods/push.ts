@@ -142,8 +142,30 @@ export const pushHandlers: GatewayRequestHandlers = {
     });
   },
 
-  "push.web.subscribe": async ({ params, respond }) => {
+  "push.web.subscribe": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateWebPushSubscribeParams, "push.web.subscribe", respond)) {
+      return;
+    }
+
+    const deviceId = normalizeOptionalString(client?.connect.device?.id);
+    if (!deviceId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "paired browser device identity required"),
+      );
+      return;
+    }
+    const userProfileId = normalizeOptionalString(client?.authenticatedUserProfile?.profileId);
+    if (context.getRuntimeConfig().gateway?.roles && !userProfileId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Web Push requires an authenticated user profile when Gateway roles are enabled",
+        ),
+      );
       return;
     }
 
@@ -151,6 +173,7 @@ export const pushHandlers: GatewayRequestHandlers = {
       const subscription = await registerWebPushSubscription({
         endpoint: params.endpoint,
         keys: params.keys,
+        binding: { deviceId, userProfileId: userProfileId ?? null },
       });
       respond(true, { subscriptionId: subscription.subscriptionId }, undefined);
     });

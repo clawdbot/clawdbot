@@ -13,6 +13,7 @@ import {
   insertVapidKeyPairIfAbsent,
   isValidWebPushEndpoint,
   isValidWebPushKey,
+  listBoundWebPushSubscriptions,
   listWebPushSubscriptions,
   readPersistedVapidKeyPair,
   upsertWebPushSubscription,
@@ -36,6 +37,20 @@ const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-k
 
 type WebPushRuntime = typeof import("web-push");
 type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
+type WebPushDeliveryOptions = Pick<
+  NonNullable<Parameters<WebPushRuntime["sendNotification"]>[2]>,
+  "TTL" | "timeout" | "topic" | "urgency"
+>;
+
+export { listBoundWebPushSubscriptions };
+export type { BoundWebPushSubscription } from "./push-web-store.js";
+export {
+  deleteWebPushApprovalDeliveryTargets,
+  listTerminalWebPushApprovalDeliveryIds,
+  listWebPushApprovalDeliveryTargets,
+  prepareWebPushApprovalDeliveries,
+  retainSuccessfulWebPushApprovalDeliveries,
+} from "./push-web-store.js";
 
 const loadWebPushRuntime = createLazyRuntimeModule(() =>
   import("web-push").then((mod: WebPushRuntimeModule) => mod.default ?? mod),
@@ -127,6 +142,7 @@ function resolveVapidPrivateKeyFromEnv(): string | undefined {
 type RegisterWebPushParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
+  binding?: { deviceId: string; userProfileId: string | null };
   baseDir?: string;
 };
 
@@ -147,6 +163,7 @@ export async function registerWebPushSubscription(
     endpointHash: hashWebPushEndpoint(endpoint),
     endpoint,
     keys: { p256dh: keys.p256dh, auth: keys.auth },
+    binding: params.binding,
     candidateSubscriptionId: randomUUID(),
     nowMs: Date.now(),
     stateDir: baseDir,
@@ -170,6 +187,7 @@ export async function clearWebPushSubscriptionByEndpoint(
 type WebPushPayload = {
   title: string;
   body?: string;
+  renotify?: boolean;
   tag?: string;
   url?: string;
 };
@@ -182,6 +200,7 @@ async function sendPreparedWebPushNotification(
   webPush: WebPushRuntime,
   subscription: WebPushSubscription,
   payload: WebPushPayload,
+  deliveryOptions?: WebPushDeliveryOptions,
 ): Promise<WebPushSendResult> {
   const pushSubscription = {
     endpoint: subscription.endpoint,
@@ -192,7 +211,11 @@ async function sendPreparedWebPushNotification(
   };
 
   try {
-    const result = await webPush.sendNotification(pushSubscription, JSON.stringify(payload));
+    const result = await webPush.sendNotification(
+      pushSubscription,
+      JSON.stringify(payload),
+      deliveryOptions,
+    );
     return {
       ok: true,
       subscriptionId: subscription.subscriptionId,
@@ -216,24 +239,27 @@ async function sendPreparedWebPushNotification(
   }
 }
 
-export async function broadcastWebPush(
-  payload: WebPushPayload,
-  baseDir?: string,
-): Promise<WebPushSendResult[]> {
-  assertLegacyWebPushMigrationComplete(baseDir);
-  const subscriptions = listWebPushSubscriptions(baseDir);
+async function sendPreparedWebPushNotifications(params: {
+  webPush: WebPushRuntime;
+  subscriptions: readonly WebPushSubscription[];
+  payload: WebPushPayload;
+  deliveryOptions?: WebPushDeliveryOptions;
+  baseDir?: string;
+}): Promise<WebPushSendResult[]> {
+  const { subscriptions, webPush } = params;
   if (subscriptions.length === 0) {
     return [];
   }
 
-  const vapidKeys = await resolveVapidKeys(baseDir);
-  const webPush = await loadWebPushRuntime();
-
-  // Set VAPID details once before fanning out concurrent sends.
-  applyVapidDetails(webPush, vapidKeys);
-
   const results = await Promise.allSettled(
-    subscriptions.map((sub) => sendPreparedWebPushNotification(webPush, sub, payload)),
+    subscriptions.map((subscription) =>
+      sendPreparedWebPushNotification(
+        webPush,
+        subscription,
+        params.payload,
+        params.deliveryOptions,
+      ),
+    ),
   );
 
   const mapped = results.map((r, i) =>
@@ -255,11 +281,11 @@ export async function broadcastWebPush(
 
   for (const subscription of expiredSubscriptions) {
     try {
-      assertLegacyWebPushMigrationComplete(baseDir);
+      assertLegacyWebPushMigrationComplete(params.baseDir);
       deleteWebPushSubscriptionIfCurrent({
         endpointHash: hashWebPushEndpoint(subscription.endpoint),
         subscription,
-        stateDir: baseDir,
+        stateDir: params.baseDir,
       });
     } catch {
       // Delivery already completed. Cleanup stays best-effort so callers do not retry valid sends.
@@ -267,4 +293,34 @@ export async function broadcastWebPush(
   }
 
   return mapped;
+}
+
+/** Prepares transport state so callers can perform final authorization immediately before send. */
+export async function prepareWebPushNotificationSender(
+  baseDir?: string,
+): Promise<
+  (params: {
+    subscriptions: readonly WebPushSubscription[];
+    payload: WebPushPayload;
+    deliveryOptions?: WebPushDeliveryOptions;
+  }) => Promise<WebPushSendResult[]>
+> {
+  assertLegacyWebPushMigrationComplete(baseDir);
+  const vapidKeys = await resolveVapidKeys(baseDir);
+  const webPush = await loadWebPushRuntime();
+  applyVapidDetails(webPush, vapidKeys);
+  return (params) => sendPreparedWebPushNotifications({ ...params, webPush, baseDir });
+}
+
+export async function broadcastWebPush(
+  payload: WebPushPayload,
+  baseDir?: string,
+): Promise<WebPushSendResult[]> {
+  assertLegacyWebPushMigrationComplete(baseDir);
+  const subscriptions = listWebPushSubscriptions(baseDir);
+  if (subscriptions.length === 0) {
+    return [];
+  }
+  const send = await prepareWebPushNotificationSender(baseDir);
+  return await send({ subscriptions, payload });
 }

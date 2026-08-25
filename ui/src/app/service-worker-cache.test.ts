@@ -291,6 +291,16 @@ describe("Control UI service worker notification scope", () => {
       { target: "chat?session=42#latest", navigatedUrl: `${nestedScope}chat?session=42#latest` },
     ),
     notificationScenario(
+      "opens a scope-relative approval route with its Gateway handoff fragment",
+      nestedScope,
+      [],
+      {
+        target: "approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+        openedUrl:
+          "https://control.example/openclaw/approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+      },
+    ),
+    notificationScenario(
       "prefers a later exact explicit route over an unrelated nested app tab",
       nestedScope,
       [`${nestedScope}settings`, `${nestedScope}chat?session=42#latest`],
@@ -510,6 +520,27 @@ describe("Control UI service worker notification scope", () => {
     },
   );
 
+  it("preserves a quiet shared tag for approval terminal replacements", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, []);
+    const tag = "openclaw-approval-exec:replacement";
+
+    const requested = await worker.dispatchPush({
+      title: "OpenClaw approval requested",
+      body: "Open OpenClaw to review this request.",
+      tag,
+      renotify: false,
+    });
+    const terminal = await worker.dispatchPush({
+      title: "OpenClaw approval updated",
+      body: "This approval is no longer pending.",
+      tag,
+      renotify: false,
+    });
+
+    expect(requested.options).toMatchObject({ tag, renotify: false });
+    expect(terminal.options).toMatchObject({ tag, renotify: false });
+  });
+
   it.each([
     {
       name: "root",
@@ -626,6 +657,8 @@ type NotificationClickScenario = {
 type ServiceWorkerPushPayload = {
   title: string;
   body: string;
+  renotify?: boolean;
+  tag?: string;
   url?: string;
 };
 
@@ -634,6 +667,7 @@ type ServiceWorkerNotificationOptions = {
   icon: string;
   badge: string;
   tag: string;
+  renotify: boolean;
   data: { url: string; explicitUrl: boolean };
 };
 

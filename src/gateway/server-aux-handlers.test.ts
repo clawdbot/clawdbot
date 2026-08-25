@@ -385,10 +385,12 @@ describe("gateway aux handlers", () => {
       });
       const broadcast = vi.fn();
       const publishResolved = vi.fn();
+      const handleWebPushExpired = vi.spyOn(gatewayAux.approvalWebPushDelivery, "handleExpired");
       gatewayAux.bindApprovalPublicationContext({
         broadcast,
         broadcastToConnIds: vi.fn(),
         approvalEvents: { publishResolved },
+        approvalWebPushDelivery: gatewayAux.approvalWebPushDelivery,
         logGateway: { error: vi.fn() },
       } as never);
       const record = gatewayAux.execApprovalManager.create(
@@ -404,6 +406,9 @@ describe("gateway aux handlers", () => {
       // The gateway clock owns expiry: reviewer surfaces must receive the
       // terminal event instead of pruning on their own (skewed) clocks.
       await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
+      expect(handleWebPushExpired).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "exec-timeout-publish" }),
+      );
       expect(broadcast).toHaveBeenCalledWith(
         "exec.approval.resolved",
         expect.objectContaining({ id: "exec-timeout-publish", decision: "deny" }),

@@ -40,7 +40,8 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
     error: null,
   };
   let disposed = false;
-  let wasConnected = false;
+  let connectedClient: GatewayBrowserClient | null = null;
+  let connectionGeneration = 0;
   let operation: Promise<void> | null = null;
   const listeners = new Set<(snapshot: WebPushSnapshot) => void>();
 
@@ -64,19 +65,32 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
     return subscription;
   };
 
-  const reconcile = async (client: GatewayBrowserClient) => {
+  const reconcile = async (client: GatewayBrowserClient, generation: number) => {
     try {
-      const subscription = await readExistingSubscription();
-      const json = subscription?.toJSON();
-      if (!json?.endpoint || !json.keys?.p256dh || !json.keys.auth) {
+      const { reconcileExistingWebPushSubscription } = await import("./web-push.runtime.ts");
+      const result = await reconcileExistingWebPushSubscription(client);
+      if (
+        generation !== connectionGeneration ||
+        gateway.snapshot.phase !== "connected" ||
+        gateway.snapshot.client !== client
+      ) {
         return;
       }
-      await client.request("push.web.subscribe", {
-        endpoint: json.endpoint,
-        keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+      publish({
+        subscribed: result.state !== "missing",
+        error: result.state === "vapid-mismatch" ? result.error : null,
       });
-    } catch {
-      // Existing subscriptions are reconciled best-effort after reconnect.
+    } catch (error) {
+      if (
+        generation !== connectionGeneration ||
+        gateway.snapshot.phase !== "connected" ||
+        gateway.snapshot.client !== client
+      ) {
+        return;
+      }
+      // Local subscription presence is independent from this Gateway request.
+      // Preserve it so Settings keeps the explicit unsubscribe/recovery action.
+      publish({ error: formatUiError(error) });
     }
   };
 
@@ -104,10 +118,15 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
   const stopGateway = gateway.subscribe((gatewaySnapshot) => {
     const client = gatewaySnapshot.client;
     const connected = gatewaySnapshot.phase === "connected" && client !== null;
-    if (connected && !wasConnected && client) {
-      void reconcile(client);
+    const nextClient = connected ? client : null;
+    if (nextClient === connectedClient) {
+      return;
     }
-    wasConnected = connected;
+    connectedClient = nextClient;
+    const generation = ++connectionGeneration;
+    if (nextClient) {
+      void reconcile(nextClient, generation);
+    }
   });
 
   return {
@@ -137,6 +156,8 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
       }),
     dispose() {
       disposed = true;
+      connectedClient = null;
+      connectionGeneration += 1;
       stopGateway();
       listeners.clear();
     },
