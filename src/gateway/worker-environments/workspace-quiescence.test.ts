@@ -90,4 +90,47 @@ describe("worker workspace quiescence", () => {
 
     expect(runWorkspaceCommand).toHaveBeenCalledTimes(3);
   });
+
+  it.each([
+    { remoteWorkspaceDir: "/workspace", sharedHost: false },
+    { remoteWorkspaceDir: String.raw`C:\Users\angry\workspace`, sharedHost: true },
+  ])(
+    "retries a failed workspace release without duplicating concurrent attempts ($remoteWorkspaceDir)",
+    async ({ remoteWorkspaceDir, sharedHost }) => {
+      const nonce = "d".repeat(32);
+      let releaseAttempts = 0;
+      const runWorkspaceCommand = vi.fn(async (command: { argv: readonly string[] }) => {
+        if (command.argv[4] === nonce && ++releaseAttempts === 1) {
+          throw new Error("remote connection interrupted");
+        }
+        return {
+          stdout: releaseAttempts === 0 ? `quiesced ${nonce}\n` : "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      });
+      const lease = await createWorkerWorkspaceQuiescence({
+        ownerSignal: new AbortController().signal,
+        sharedHost,
+        runWorkspaceCommand,
+      })(remoteWorkspaceDir);
+
+      await expect(Promise.all([lease.resume(), lease.resume()])).rejects.toThrow(
+        "remote connection interrupted",
+      );
+      expect(releaseAttempts).toBe(1);
+      await expect(lease.assertActive()).rejects.toThrow("already released");
+
+      await expect(Promise.all([lease.resume(), lease.resume()])).resolves.toEqual([
+        undefined,
+        undefined,
+      ]);
+      expect(releaseAttempts).toBe(2);
+      await lease.resume();
+      expect(releaseAttempts).toBe(2);
+    },
+  );
 });

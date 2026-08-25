@@ -98,7 +98,7 @@ export function createWorkerWorkspaceQuiescence(params: {
     })();
     return {
       assertActive: async () => {
-        if (resumed || releasePromise) {
+        if (resumed || renewalAbort.signal.aborted) {
           throw new Error("Worker workspace quiescence was already released");
         }
         if (renewalFailure) {
@@ -119,7 +119,10 @@ export function createWorkerWorkspaceQuiescence(params: {
           await renewalQueue;
           await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce]);
           resumed = true;
-        })();
+        })().catch((error: unknown) => {
+          releasePromise = undefined;
+          throw error;
+        });
         await releasePromise;
       },
     };
