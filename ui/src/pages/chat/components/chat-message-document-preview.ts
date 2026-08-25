@@ -211,7 +211,10 @@ function requestDocumentFramePreview(
   resource.pending = pending;
 }
 
-function renderAttachmentTablePreview(previewText: string | null | undefined) {
+function renderAttachmentTablePreview(
+  attachment: AttachmentItem["attachment"],
+  previewText: string | null | undefined,
+) {
   if (previewText === undefined) {
     return html`<div class="chat-assistant-attachment-card__preview-unavailable">
       ${t("chat.mediaPlayer.preparing")}
@@ -308,7 +311,7 @@ export function renderAttachmentDocumentPreview(
     </div>`;
   }
   if (previewKind === "table") {
-    return renderAttachmentTablePreview(previewText);
+    return renderAttachmentTablePreview(attachment, previewText);
   }
   const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">
