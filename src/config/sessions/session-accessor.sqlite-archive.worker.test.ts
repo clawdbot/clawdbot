@@ -53,6 +53,7 @@ describe("SQLite transcript archive worker", () => {
     // A deferred projection reconcile worker may still hold the agent DB open;
     // Windows cannot unlink open files, so settle it before removing tempDir.
     await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
       path: resolveSqliteTargetFromSessionStorePath(storePath).path,
     });
     closeOpenClawAgentDatabasesForTest();
