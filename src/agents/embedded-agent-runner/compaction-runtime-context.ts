@@ -12,10 +12,10 @@ import {
 } from "../bash-process-references.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
-  resolveModelRefFromString,
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
@@ -191,17 +191,14 @@ export function resolveEmbeddedCompactionTarget(params: {
     return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasResolution = resolveModelRefFromString({
+  // Literal overrides need no provider-runtime normalization; only a matching
+  // configured alias can change their already-owned compaction target.
+  const alias = buildModelAliasIndex({
     cfg: config,
-    raw: override,
     defaultProvider,
-    aliasIndex: buildModelAliasIndex({
-      cfg: config,
-      defaultProvider,
-    }),
-  });
-  if (aliasResolution?.alias) {
-    return assembleTarget(aliasResolution.ref.provider, aliasResolution.ref.model);
+  }).byAlias.get(normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model));
+  if (alias) {
+    return assembleTarget(alias.ref.provider, alias.ref.model);
   }
   return assembleTarget(provider, override);
 }

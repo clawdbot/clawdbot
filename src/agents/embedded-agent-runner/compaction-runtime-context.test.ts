@@ -7,6 +7,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import { addSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
+import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionContextTokenBudget,
@@ -222,6 +223,33 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.model).toBe("gpt-4o");
     // Auth profile preserved because provider didn't change
     expect(result.authProfileId).toBe("openai:p1");
+  });
+
+  it("keeps literal compaction model overrides off provider runtime discovery", () => {
+    const normalizeProviderModelId = vi.spyOn(
+      providerModelNormalizationRuntime,
+      "normalizeProviderModelIdWithRuntime",
+    );
+
+    try {
+      const result = resolveEmbeddedCompactionTarget({
+        config: {
+          agents: { defaults: { compaction: { model: "gpt-4o" } } },
+        } as OpenClawConfig,
+        provider: "openai",
+        modelId: "gpt-3.5-turbo",
+        authProfileId: "openai:p1",
+      });
+
+      expect(result).toEqual({
+        provider: "openai",
+        model: "gpt-4o",
+        authProfileId: "openai:p1",
+      });
+      expect(normalizeProviderModelId).not.toHaveBeenCalled();
+    } finally {
+      normalizeProviderModelId.mockRestore();
+    }
   });
 
   it("uses session model when no compaction.model override configured", () => {
@@ -654,7 +682,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("resolves compaction.model alias to canonical model ref on same provider (#90340)", () => {
+  it("resolves a mixed-case compaction model alias with a trailing profile on its provider", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         agents: {
@@ -665,7 +693,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
                 params: { thinking: "high" },
               },
             },
-            compaction: { model: "gpt54mini" },
+            compaction: { model: "GPT54MINI@work" },
           },
         },
       } as unknown as OpenClawConfig,
@@ -706,7 +734,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("falls back to literal model when alias does not match", () => {
+  it("preserves the full literal model and profile when no configured alias matches", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         agents: {
@@ -716,7 +744,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
                 alias: "gpt54mini",
               },
             },
-            compaction: { model: "nonexistent-alias" },
+            compaction: { model: "nonexistent-alias@work" },
           },
         },
       } as unknown as OpenClawConfig,
@@ -727,7 +755,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "gpt-5.5",
     });
     expect(result.provider).toBe("openai");
-    expect(result.model).toBe("nonexistent-alias");
+    expect(result.model).toBe("nonexistent-alias@work");
     expect(result.authProfileId).toBe("openai:default");
   });
 
