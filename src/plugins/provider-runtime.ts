@@ -899,7 +899,7 @@ export function resolveProviderDeprecatedAuthProfileIds(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): readonly string[] {
-  return resolveProviderRuntimePlugin(params)?.deprecatedProfileIds ?? [];
+  return resolveLoadedProviderRuntimePlugin(params)?.deprecatedProfileIds ?? [];
 }
 
 export function buildProviderMissingAuthMessageWithPlugin(params: {

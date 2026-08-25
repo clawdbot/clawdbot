@@ -70,6 +70,7 @@ let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js")
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
 let resolveProviderAuthProfileId: typeof import("./provider-runtime.js").resolveProviderAuthProfileId;
 let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
+let resolveProviderDeprecatedAuthProfileIds: typeof import("./provider-runtime.js").resolveProviderDeprecatedAuthProfileIds;
 let resolveProviderExtraParamsForTransport: typeof import("./provider-runtime.js").resolveProviderExtraParamsForTransport;
 let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js").resolveProviderFollowupFallbackRoute;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
@@ -316,6 +317,7 @@ describe("provider-runtime", () => {
       prepareProviderExtraParams,
       resolveProviderAuthProfileId,
       resolveProviderConfigApiKeyWithPlugin,
+      resolveProviderDeprecatedAuthProfileIds,
       resolveProviderExtraParamsForTransport,
       resolveProviderFollowupFallbackRoute,
       resolveProviderStreamFn,
@@ -620,6 +622,40 @@ describe("provider-runtime", () => {
     ).toEqual({
       fromActiveRegistry: true,
     });
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not activate provider runtime to inspect retired auth profiles", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: DEMO_PROVIDER_ID,
+        label: "Demo",
+        auth: [],
+        deprecatedProfileIds: ["demo:retired"],
+      },
+    ]);
+
+    expect(resolveProviderDeprecatedAuthProfileIds({ provider: DEMO_PROVIDER_ID })).toEqual([]);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("honors retired auth profiles declared by an active provider", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      deprecatedProfileIds: ["demo:retired"],
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({ pluginId: DEMO_PROVIDER_ID, provider, source: "test" });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    expect(
+      resolveProviderDeprecatedAuthProfileIds({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toEqual(["demo:retired"]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
