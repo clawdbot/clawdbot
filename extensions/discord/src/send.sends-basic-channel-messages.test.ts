@@ -683,6 +683,8 @@ describe("sendMessageDiscord", () => {
   it.each([
     { input: "ping @Alice", expected: "ping <@123456789012345678>" },
     { input: "Run `notify @Alice", expected: "Run `notify @Alice" },
+    { input: "literal \\` ping @Alice", expected: "literal \\` ping <@123456789012345678>" },
+    { input: "literal \\\\` inside @Alice", expected: "literal \\\\` inside @Alice" },
   ])(
     "rewrites cached @username mentions only outside code: $input",
     async ({ input, expected }) => {

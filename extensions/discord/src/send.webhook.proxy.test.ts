@@ -153,12 +153,18 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     globalFetchMock.mockRestore();
   });
 
-  it("does not rewrite webhook mentions inside unterminated inline code", async () => {
+  it.each([
+    { input: "Run `notify @OpsLead", expected: "Run `notify @OpsLead" },
+    {
+      input: "literal \\` ping @OpsLead",
+      expected: "literal \\` ping <@123456789012345678>",
+    },
+  ])("only rewrites webhook mentions outside inline code: $input", async ({ input, expected }) => {
     const globalFetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(JSON.stringify({ id: "msg-code" }), { status: 200 }));
 
-    await sendWebhookMessageDiscord("Run `notify @OpsLead", {
+    await sendWebhookMessageDiscord(input, {
       cfg: {
         channels: {
           discord: {
@@ -173,7 +179,9 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(globalFetchMock.mock.calls[0]?.[1]?.body).toContain('"content":"Run `notify @OpsLead"');
+    expect(globalFetchMock.mock.calls[0]?.[1]?.body).toContain(
+      `"content":${JSON.stringify(expected)}`,
+    );
   });
 
   it("accepts Discord's no-body webhook response when wait is false", async () => {

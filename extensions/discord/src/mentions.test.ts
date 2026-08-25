@@ -101,6 +101,21 @@ describe("rewriteDiscordKnownMentions", () => {
       input: "outside @alice then ``inside @alice",
       expected: "outside <@123456789> then ``inside @alice",
     },
+    {
+      name: "escaped literal backticks",
+      input: "literal \\` outside @alice",
+      expected: "literal \\` outside <@123456789>",
+    },
+    {
+      name: "backticks after an even number of backslashes",
+      input: "literal \\\\` inside @alice",
+      expected: "literal \\\\` inside @alice",
+    },
+    {
+      name: "escaped backticks before real unterminated code",
+      input: "literal \\` outside @alice then `inside @alice",
+      expected: "literal \\` outside <@123456789> then `inside @alice",
+    },
   ])("does not rewrite mentions inside $name", ({ input, expected }) => {
     rememberDiscordDirectoryUser({
       accountId: "default",

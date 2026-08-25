@@ -155,16 +155,16 @@ function findNextMarkdownCodeSegment(
   text: string,
   startIndex: number,
 ): { startIndex: number; endIndex: number } | null {
-  const segmentStart = text.indexOf("`", startIndex);
-  if (segmentStart === -1) {
+  const segmentOffset = text.slice(startIndex).search(/(?<=(?:^|[^\\])(?:\\\\)*)`/);
+  if (segmentOffset === -1) {
     return null;
   }
+  const segmentStart = startIndex + segmentOffset;
   const runLength = countBacktickRun(text, segmentStart);
-  const inlineEndIndex = findSameLineBacktickRun(text, segmentStart + runLength, runLength);
   return {
     startIndex: segmentStart,
     endIndex:
-      inlineEndIndex ??
+      findSameLineBacktickRun(text, segmentStart + runLength, runLength) ??
       (runLength >= 3 ? findFenceEnd(text, segmentStart, runLength) : text.length),
   };
 }
