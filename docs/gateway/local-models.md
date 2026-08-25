@@ -3,6 +3,7 @@ summary: "Run OpenClaw on local LLMs (LM Studio, vLLM, LiteLLM, custom OpenAI en
 read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
+  - You want one vLLM engine to prioritize interactive and background traffic
   - You need the safest local model guidance
 title: "Local models"
 ---
@@ -248,6 +249,134 @@ Compat overrides for stricter OpenAI-compatible backends:
     },
   }
   ```
+
+## One shared vLLM engine with priority lanes
+
+For mixed interactive and background workloads, keep one vLLM engine and use
+request priority instead of loading three copies of the model. The three lanes
+are logical request classes, not separate processes:
+
+| Lane       | vLLM priority | OpenClaw provenance                                                                   |
+| ---------- | ------------: | ------------------------------------------------------------------------------------- |
+| Foreground |        `-100` | A current inbound `user_request`, `external_user` input, or direct user-triggered run |
+| Normal     |           `0` | Spawned work, trusted handoffs, inter-session/internal input, or unclassified work    |
+| Background |         `100` | Cron, heartbeat, commitment-only, or memory work                                      |
+
+Lower numbers are handled earlier when requests contend. Requests with the same
+priority use arrival order. A background classification wins if a run also
+carries foreground-looking metadata, so scheduler and maintenance work cannot
+accidentally enter the foreground lane. Normal delegated provenance likewise
+wins over a generic user trigger.
+
+This layout has one copy of the target and draft model, one global sequence and
+batch budget, and one KV block pool. With automatic prefix caching enabled,
+requests that share the same token prefix can reuse cached KV blocks. The lanes
+do not reserve GPU capacity, create hard concurrency quotas, or isolate memory:
+when no foreground request is waiting, background work can use the whole
+engine.
+
+### Server requirements
+
+vLLM must start with priority scheduling. Nonzero request priorities are
+rejected by a server running the default FCFS scheduler.
+
+```bash
+vllm serve <model-id> \
+  --served-model-name <canonical-name> <stable-alias> \
+  --scheduling-policy priority \
+  --enable-prefix-caching
+```
+
+Keep every alias immediately after `--served-model-name` and before the next
+option. In array-based launchers, inserting an alias after `--host` or another
+option separates that option from its value and produces an invalid command.
+
+Priority does not replace the normal capacity controls. Size
+`--max-num-seqs`, `--max-num-batched-tokens`, the context limit, and GPU memory
+utilization for the one shared engine. See the
+[vLLM scheduler reference](https://docs.vllm.ai/en/stable/api/vllm/config/scheduler/)
+and [automatic prefix caching design](https://docs.vllm.ai/en/stable/design/prefix_caching/)
+for the upstream behavior.
+
+### OpenClaw routing boundary
+
+Dynamic routing is opt-in per configured model. Add the neutral marker
+`priority: 0` under the model's configured `extraBody` or `extra_body` params:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "custom-vllm/my-local-model": {
+          params: {
+            extraBody: { priority: 0 },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The provider ID can be any configured name. The provenance router recognizes
+the marker when the selected model uses `openai-completions` and its `baseUrl`
+host is `localhost` or a private/loopback IP address. It rewrites the neutral
+marker to the per-run class while preserving sibling fields. A configured
+nonzero value or a request-scoped priority of any value without the configured
+marker does not opt in; any such priority is removed.
+
+Model fallbacks can inherit agent-level request parameters. When the selected
+route does not meet the private OpenAI-completions boundary, OpenClaw removes
+the inherited `priority` field while leaving the rest of the extra body intact.
+This prevents a vLLM scheduling hint from leaking to a hosted or otherwise
+unrelated endpoint.
+
+Use only the neutral configured marker, not a static `-100` or `100`. The
+runtime class is authoritative for each attempt, including a new attempt
+selected during model fallback.
+
+Compaction calls triggered within a run, including overflow and timeout
+recovery, inherit that run's urgency. An interactive run therefore keeps
+foreground priority while recovering context; overflow is not intrinsically a
+background lane.
+
+### Verification
+
+Verify the two sides independently before relying on lane behavior:
+
+1. Inspect the running server command and confirm there is one engine with
+   `--scheduling-policy priority` and `--enable-prefix-caching`.
+2. Query `/v1/models` and confirm the canonical model name and any stable alias
+   resolve to the same loaded model.
+3. Run the focused OpenClaw priority tests:
+
+   ```bash
+   node scripts/run-vitest.mjs src/agents/embedded-agent-runner/vllm-priority.test.ts
+   ```
+
+4. Submit a synchronized burst of long requests at `-100`, `0`, and `100`, then
+   inspect server request logs or metrics. Repeat the burst: wall-clock order
+   from a single short request is not reliable evidence of scheduler behavior.
+5. Exercise one hosted fallback and confirm its outgoing request body contains
+   no `priority` while sibling `extra_body` fields remain present.
+
+### Rollback
+
+Keep a timestamped launcher backup before changing scheduler or served-name
+arguments. To return to FCFS safely:
+
+1. Remove the configured `priority: 0` opt-in marker and deploy OpenClaw so it
+   stops sending dynamic nonzero priorities.
+2. Restart vLLM without `--scheduling-policy priority`, or explicitly select
+   `fcfs`.
+3. Confirm ordinary local requests and every configured fallback still work.
+
+Do not blindly restore an older launcher. Diff it first and retain the corrected
+served-name argument order: the canonical name and all aliases must remain
+contiguous after `--served-model-name`. A backup from before that correction can
+undo the scheduler change and reintroduce a broken alias command at the same
+time.
 
 ## Smaller or stricter backends
 

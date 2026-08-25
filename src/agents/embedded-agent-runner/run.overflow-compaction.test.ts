@@ -166,6 +166,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       makeRecoveryInput({
         runParams: {
           ...baseRunParams,
+          trigger: "user",
           modelSelectionLocked: true,
           modelFallbacksOverride: [],
         },
@@ -205,6 +206,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         modelSelectionLocked: true,
         modelFallbacksOverride: [],
         authProfileId: "openai:work",
+        modelCallUrgency: "foreground",
         promptCache,
       },
     });

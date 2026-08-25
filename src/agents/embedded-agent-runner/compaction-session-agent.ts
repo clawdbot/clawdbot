@@ -12,6 +12,7 @@ import {
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
+import type { ModelCallUrgency } from "./vllm-priority.js";
 
 export async function prepareCompactionSessionAgent(params: {
   session: { agent: { streamFn?: unknown } };
@@ -38,6 +39,7 @@ export async function prepareCompactionSessionAgent(params: {
   groupChannel?: string | null;
   groupSpace?: string | null;
   spawnedBy?: string | null;
+  modelCallUrgency?: ModelCallUrgency;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -123,6 +125,7 @@ export async function prepareCompactionSessionAgent(params: {
         senderUsername: params.senderUsername,
         senderE164: params.senderE164,
       },
+      vllmPriority: { urgency: params.modelCallUrgency ?? "normal" },
     },
   );
   return { ...extraParams, transportApiKey };

@@ -600,6 +600,7 @@ describe("applyExtraParamsToAgent", () => {
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
     thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
+    applyOptions?: Parameters<typeof applyExtraParamsToAgent>[11];
   }) {
     // Mutates a caller-owned payload through onPayload, matching how the runtime
     // finalizes provider request bodies.
@@ -609,14 +610,31 @@ describe("applyExtraParamsToAgent", () => {
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
-    applyExtraParamsToAgent(
-      agent,
-      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
-      params.applyProvider,
-      params.applyModelId,
-      params.extraParamsOverride,
-      params.thinkingLevel,
-    );
+    if (params.applyOptions) {
+      applyExtraParamsToAgent(
+        agent,
+        params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+        params.applyProvider,
+        params.applyModelId,
+        params.extraParamsOverride,
+        params.thinkingLevel,
+        undefined,
+        undefined,
+        params.model,
+        undefined,
+        undefined,
+        params.applyOptions,
+      );
+    } else {
+      applyExtraParamsToAgent(
+        agent,
+        params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+        params.applyProvider,
+        params.applyModelId,
+        params.extraParamsOverride,
+        params.thinkingLevel,
+      );
+    }
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
     return payload;
@@ -1261,6 +1279,42 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
     expect(payload).not.toHaveProperty("store");
+  });
+
+  it("writes opted-in vLLM urgency into the top-level transport payload", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "local",
+      applyModelId: "qwen",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "local/qwen": {
+                params: {
+                  extraBody: { priority: 0 },
+                },
+              },
+            },
+          },
+        },
+      },
+      extraParamsOverride: {
+        extra_body: { request_field: true },
+      },
+      applyOptions: {
+        vllmPriority: { urgency: "foreground" },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "local",
+        id: "qwen",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: { messages: [] },
+    });
+
+    expect(payload.priority).toBe(-100);
+    expect(payload.request_field).toBe(true);
   });
 
   it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {
