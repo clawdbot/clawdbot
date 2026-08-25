@@ -3,9 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import JSZip from "jszip";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import * as tar from "tar";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 import {
   LLAMA_SERVER_BUILD,
@@ -15,6 +13,7 @@ import {
   selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
+import { extractLlamaServerArchive } from "./llama-server-extract.js";
 
 export {
   resolveManagedLlamaServerPaths,
@@ -176,23 +175,6 @@ export async function downloadVerifiedFile(params: {
   }
 }
 
-async function extractZip(archivePath: string, destination: string): Promise<void> {
-  const zip = await JSZip.loadAsync(await fsp.readFile(archivePath));
-  for (const entry of Object.values(zip.files)) {
-    const normalized = path.posix.normalize(entry.name);
-    if (normalized.startsWith("/") || normalized === ".." || normalized.startsWith("../")) {
-      throw new Error(`unsafe path in llama-server archive: ${entry.name}`);
-    }
-    const outputPath = path.join(destination, ...normalized.split("/"));
-    if (entry.dir) {
-      await fsp.mkdir(outputPath, { recursive: true });
-    } else {
-      await fsp.mkdir(path.dirname(outputPath), { recursive: true });
-      await fsp.writeFile(outputPath, await entry.async("nodebuffer"), { mode: 0o600 });
-    }
-  }
-}
-
 async function findExecutable(root: string, executable: string): Promise<string> {
   for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
     const candidate = path.join(root, entry.name);
@@ -279,11 +261,7 @@ async function installLlamaServer(asset: LlamaServerAsset): Promise<string> {
       expectedSha256: asset.sha256,
     });
     await fsp.mkdir(extractDir, { recursive: true });
-    if (asset.archive === "zip") {
-      await extractZip(archivePath, extractDir);
-    } else {
-      await tar.x({ file: archivePath, cwd: extractDir, preservePaths: false });
-    }
+    await extractLlamaServerArchive({ archivePath, destDir: extractDir, archive: asset.archive });
     const extractedCommand = await findExecutable(extractDir, asset.executable);
     const extractedRoot = path.dirname(extractedCommand);
     await fsp.chmod(extractedCommand, 0o755);
