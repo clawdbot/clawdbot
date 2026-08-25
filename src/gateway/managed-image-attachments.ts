@@ -862,9 +862,9 @@ function buildManagedImageResizeWarningBlock(params: {
   };
 }
 
-function toRecordFilename(filePath: string, attachmentName?: string) {
-  const fallback = path.basename(filePath).trim();
-  if (!attachmentName) {
+function toRecordFilename(filePath: string, attachmentName?: string, fallbackName?: string) {
+  const fallback = fallbackName ?? path.basename(filePath).trim();
+  if (!attachmentName?.trim()) {
     return fallback || null;
   }
   const safeName = sanitizeUntrustedFileName(attachmentName, fallback);
@@ -1549,10 +1549,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
           width: originalStats.width,
           height: originalStats.height,
           sizeBytes: originalStats.sizeBytes,
-          filename:
-            mediaKind === "image"
-              ? toRecordFilename(savedOriginal.path, attachmentMetadata?.name)
-              : attachmentMetadata?.name?.trim() || label,
+          filename: toRecordFilename(
+            savedOriginal.path,
+            attachmentMetadata?.name,
+            mediaKind === "image" ? undefined : label,
+          ),
         },
       };
       let playback: "native" | "transcode" | undefined;
