@@ -121,6 +121,7 @@ export function isSidebarAttentionDismissed(
 function pruneDismissals(
   dismissals: SidebarAttentionDismissals,
   active: readonly SidebarAttentionDismissal[],
+  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
 ): SidebarAttentionDismissals {
   const next: SidebarAttentionDismissals = {};
   let changed = false;
@@ -129,9 +130,25 @@ function pruneDismissals(
     if (!stored) {
       continue;
     }
-    const current = stored.filter((signature) =>
-      active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature),
-    );
+    const current = stored.filter((signature) => {
+      // Selected-agent responses are partial: they may re-arm their own auth
+      // warning, but only an all-agent cron inventory may re-arm cron entries.
+      const authoritative =
+        !scope ||
+        (kind === "modelAuthExpired"
+          ? Boolean(
+              scope.modelAuthAgentId &&
+              (!signature.startsWith("agent:") ||
+                signature.startsWith(`agent:${scope.modelAuthAgentId}\n`)),
+            )
+          : kind === "cronFailed" || kind === "cronOverdue"
+            ? scope.cronInventoryComplete
+            : true);
+      return (
+        !authoritative ||
+        active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature)
+      );
+    });
     if (current.length > 0) {
       next[kind] = current;
     }
@@ -145,9 +162,10 @@ function pruneDismissals(
 export function reconcileSidebarAttentionDismissals(params: {
   active: readonly SidebarAttentionDismissal[];
   gatewayUrl: string;
+  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
 }): SidebarAttentionDismissals {
   const stored = loadDismissals(params.gatewayUrl);
-  const pruned = pruneDismissals(stored, params.active);
+  const pruned = pruneDismissals(stored, params.active, params.scope);
   if (pruned !== stored) {
     saveDismissals(params.gatewayUrl, pruned);
   }

@@ -4323,6 +4323,7 @@ export const en: TranslationMap = {
     failed: "Failed",
     overdue: "Overdue",
     dismissItem: "Dismiss {item}",
+    dismissShown: "Dismiss shown",
     emptyTitle: "Nothing waiting",
     emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
