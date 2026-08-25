@@ -305,6 +305,7 @@ async function runProvisionSetup(
     setup: string;
     timeoutMs?: number;
     forwardedEnv?: Record<string, string>;
+    env?: NodeJS.ProcessEnv;
   },
 ): Promise<void> {
   let result: SpawnResult;
@@ -313,7 +314,7 @@ async function runProvisionSetup(
       action: "setup",
       args: crabboxLeaseRunArgs({ ...params, id: params.inspect.id }, params.forwardedEnv),
       binary: params.binary,
-      env: params.forwardedEnv,
+      env: params.env ?? params.forwardedEnv,
       input: params.setup,
       runCommand: params.runCommand,
       timeoutMs: remainingProvisionTimeout(
@@ -332,10 +333,7 @@ async function runProvisionSetup(
 }
 
 async function runProvisionSetupAndWaitReady(
-  params: ProvisionInspectContext & {
-    setup: string;
-    timeoutMs?: number;
-    forwardedEnv?: Record<string, string>;
+  params: Parameters<typeof runProvisionSetup>[0] & {
     sleep: (milliseconds: number) => Promise<void>;
   },
 ): Promise<ParsedInspect> {
@@ -619,6 +617,7 @@ export function createCrabboxWorkerProvider(
           ...inspectedParams,
           setup: parsed.setup,
           forwardedEnv,
+          env: { ...forwardedEnv, CRABBOX_ENV_ALLOW: parsed.setupEnv?.join(",") || "," },
           sleep,
         });
       }

@@ -649,6 +649,8 @@ describe("Crabbox worker provider", () => {
   ])(
     "runs profile setup $name without widening node enrollment",
     async ({ setupEnv, forwardedEnv }) => {
+      vi.stubEnv("CRABBOX_ENV_ALLOW", "OPENCLAW_UNSELECTED_SECRET");
+      vi.stubEnv("OPENCLAW_UNSELECTED_SECRET", "unselected-secret");
       for (const [name, value] of Object.entries(forwardedEnv ?? {})) {
         vi.stubEnv(name, value);
       }
@@ -688,7 +690,10 @@ describe("Crabbox worker provider", () => {
         ...Object.keys(forwardedEnv ?? {}).flatMap((name) => ["--allow-env", name]),
         "--script-stdin",
       ]);
-      expect(setupCall?.options.env).toEqual(forwardedEnv);
+      expect(setupCall?.options.env).toEqual({
+        ...forwardedEnv,
+        CRABBOX_ENV_ALLOW: setupEnv?.join(",") || ",",
+      });
       expect(setupCall?.options.input).toBe(setup);
       expect(enrollmentCall?.options.env).toEqual({
         CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
@@ -2314,6 +2319,10 @@ describe("Crabbox worker provider", () => {
     { profile: { ...PROFILE, setup: "install-node", setupEnv: [""] }, message: "valid" },
     { profile: { ...PROFILE, setup: "install-node", setupEnv: ["1TOKEN"] }, message: "valid" },
     { profile: { ...PROFILE, setup: "install-node", setupEnv: ["BAD-NAME"] }, message: "valid" },
+    {
+      profile: { ...PROFILE, setup: "install-node", setupEnv: ["CRABBOX_ENV_ALLOW"] },
+      message: "CRABBOX_ENV_ALLOW is reserved",
+    },
     {
       profile: { ...PROFILE, setup: "install-node", setupEnv: ["TOKEN", "TOKEN"] },
       message: "duplicate",

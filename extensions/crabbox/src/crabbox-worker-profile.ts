@@ -160,6 +160,9 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
           "Crabbox profile setupEnv must contain only valid POSIX environment variable names",
         );
       }
+      if (name === "CRABBOX_ENV_ALLOW") {
+        throw new WorkerProviderError(`Crabbox profile setupEnv name ${name} is reserved`);
+      }
       return name;
     });
     if (new Set(setupEnv).size !== setupEnv.length) {
