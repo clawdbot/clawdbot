@@ -243,6 +243,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
 
   private async deleteProfile(profile: ConfiguredCloudWorkerProfile) {
     const gateway = this.context.gateway;
+    const client = gateway.snapshot.client;
     const gatewayUrl = gateway.connection.gatewayUrl;
     const runtimeConfig = this.context.runtimeConfig;
     if (
@@ -259,6 +260,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const scope = this.gateway.capture();
     if (
       !scope ||
+      scope.client !== client ||
       this.context.gateway !== gateway ||
       gateway.connection.gatewayUrl !== gatewayUrl ||
       this.context.runtimeConfig !== runtimeConfig ||
