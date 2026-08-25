@@ -7,9 +7,9 @@
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
-  readSessionTranscriptBoundedActiveContextCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";

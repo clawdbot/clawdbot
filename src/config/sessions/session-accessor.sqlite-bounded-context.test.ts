@@ -5,9 +5,9 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
-  readSessionTranscriptBoundedActiveContextCore,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-events.js";
 
 async function withBoundedContextScope(
   run: (scope: {
