@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
+// A launcher that hands its stdio to a detached grandchild which writes only after the
+// guard has already fired, then stays alive itself so SIGKILL has a launcher to reach.
+const DETACHED_GRANDCHILD_SCRIPT = [
+  "const { spawn } = require('node:child_process');",
+  "spawn(process.execPath, ['-e', \"setTimeout(() => process.stdout.write('after-guard'), 800); setInterval(() => {}, 1_000);\"],",
+  "  { detached: true, stdio: ['ignore', 1, 2] }).unref();",
+  "process.stdout.write('launcher');",
+  "setInterval(() => {}, 1_000);",
+].join("\n");
+
+const sleep = async (ms: number) =>
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 describe("formatCliProcessFailure", () => {
   it("includes the failure identity and both captured output tails", () => {
     const reason =
@@ -49,5 +64,28 @@ describe("runCliProcessChild", () => {
         timeoutMs: 500,
       }),
     ).rejects.toThrow(/500ms deadlock guard[\s\S]*partial/u);
+  });
+
+  it("stops reading a detached grandchild's pipes once the guard fires", async () => {
+    // The CLI's own respawn topology: stdio handed to a detached grandchild in its own
+    // process group, which the launcher's SIGKILL cannot reach. If the guard rejects while
+    // still holding those pipe ends, the orphan keeps feeding a Vitest worker that has
+    // already moved on — the "still running with no output" stall this suite exists to kill.
+    const chunks: string[] = [];
+
+    await expect(
+      runCliProcessChild({
+        nodeArgs: ["-e", DETACHED_GRANDCHILD_SCRIPT],
+        env: process.env,
+        onStdout: (stdout) => chunks.push(stdout),
+        timeoutMs: 400,
+      }),
+    ).rejects.toThrow(/400ms deadlock guard/u);
+
+    const afterGuard = chunks.length;
+    await sleep(900);
+
+    expect(chunks).toHaveLength(afterGuard);
+    expect(chunks.at(-1) ?? "").not.toContain("after-guard");
   });
 });

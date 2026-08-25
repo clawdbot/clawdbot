@@ -86,6 +86,13 @@ export async function runCliProcessChild(params: {
     new Promise<never>((_, reject) => {
       guard = setTimeout(() => {
         child.kill("SIGKILL");
+        // SIGKILL reaches the launcher only. A respawning entrypoint hands its stdio to a
+        // detached grandchild in its own process group, which survives and keeps these pipes
+        // open — enough to keep the Vitest worker alive long after this rejects. Release our
+        // ends so the guard cannot leak a wedged worker; the orphan then dies on EPIPE, or is
+        // reaped with the runner. Waiting for that tree instead would defeat a deadlock guard.
+        child.stdout.destroy();
+        child.stderr.destroy();
         reject(
           new Error(
             formatCliProcessFailure({
