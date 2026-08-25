@@ -306,23 +306,24 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
+  const tokenUpper = token.toUpperCase();
   const trimmed = text.trimStart();
-  if (!trimmed) {
-    return false;
-  }
-  // Guard against suppressing natural-language "No..." text while still
-  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== trimmed.toUpperCase()) {
+  // The `tokenUpper.startsWith(normalized)` test below can only hold for a
+  // candidate no longer than the token, and Unicode upper-casing never shortens
+  // a string, so reject over-long input before scanning it. Without this the
+  // per-delta typing check walks the whole accumulated reply buffer.
+  if (!trimmed || trimmed.length > tokenUpper.length) {
     return false;
   }
   const normalized = trimmed.toUpperCase();
-  if (!normalized) {
+  // Guard against suppressing natural-language "No..." text while still
+  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
+  if (trimmed !== normalized) {
     return false;
   }
   if (normalized.length < 2) {
     return false;
   }
-  const tokenUpper = token.toUpperCase();
   if (!tokenUpper.startsWith(normalized)) {
     return false;
   }
