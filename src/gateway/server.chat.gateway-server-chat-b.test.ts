@@ -26,7 +26,10 @@ import {
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
-import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "../config/sessions/session-transcript-reconcile.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -329,6 +332,13 @@ async function writeMainSessionTranscript(
     },
     transcriptEvents,
   );
+  // Oversized fixture transcripts take the deferred rebuild path; history
+  // reads need the projection converged before the case under test runs.
+  await waitForSessionTranscriptProjection({
+    agentId: opts?.agentId ?? "main",
+    sessionId,
+    storePath,
+  });
 }
 
 async function withDirectChatSession(

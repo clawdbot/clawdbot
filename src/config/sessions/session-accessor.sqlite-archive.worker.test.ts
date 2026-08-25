@@ -30,7 +30,10 @@ import {
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "./session-transcript-reconcile.js";
 
 type TestTranscriptEvent = {
   id: string;
@@ -46,7 +49,12 @@ describe("SQLite transcript archive worker", () => {
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // A deferred projection reconcile worker may still hold the agent DB open;
+    // Windows cannot unlink open files, so settle it before removing tempDir.
+    await waitForSessionTranscriptIndexReconcile({
+      path: resolveSqliteTargetFromSessionStorePath(storePath).path,
+    });
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
