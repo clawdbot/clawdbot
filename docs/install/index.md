@@ -138,8 +138,9 @@ If you already manage Node yourself:
 
     <Note>
     `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
-    can install the global package, but the resulting `openclaw` executable
-    requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
+    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    remains the primary runtime, so the plain `openclaw` executable keeps its
+    Node shebang. Use `bun run --bun openclaw <args>` to force the Bun runtime.
     </Note>
 
   </Tab>
