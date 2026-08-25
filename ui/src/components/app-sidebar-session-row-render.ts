@@ -268,11 +268,12 @@ export function renderRecentSession(params: {
   const menuLabel = `${menuTooltip}: ${label}`;
   const menuOpen =
     host.sidebarMenus.sessionMenu?.session.key === session.key || display?.catalogMenuOpen === true;
+  const reserveLiveSubtitleLine = host.sessionsShowPreview && host.sidebarLiveActivity && running;
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
     session.isChild ? "sidebar-recent-session--child" : "",
-    !subtitle ? "sidebar-recent-session--single-line" : "",
+    !subtitle && !reserveLiveSubtitleLine ? "sidebar-recent-session--single-line" : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",

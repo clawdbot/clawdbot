@@ -33,7 +33,7 @@ const subtitleStabilityProofDir = path.join(
 );
 
 suite.define(() => {
-  it("keeps a running subtitle and row height stable when its session is opened", async () => {
+  it("keeps a running row and its successor stable as narration arrives and it opens", async () => {
     if (captureUiProofEnabled) {
       await mkdir(subtitleStabilityProofDir, { recursive: true });
     }
@@ -49,6 +49,7 @@ suite.define(() => {
     const proofVideo = page.video();
     const firstKey = "agent:main:session-a";
     const secondKey = "agent:main:session-b";
+    const thirdKey = "agent:main:session-c";
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": chatSessionListResponse([
@@ -70,6 +71,7 @@ suite.define(() => {
             hasActiveRun: true,
             status: "running",
           },
+          { key: thirdKey, kind: "direct", label: "Following session", updatedAt: 0 },
         ]),
       },
       sessionKey: firstKey,
@@ -78,6 +80,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const secondRow = page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`);
+      const thirdRow = page.locator(`.sidebar-recent-session[data-session-key="${thirdKey}"]`);
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.messages.subscribe")).some(
@@ -85,6 +88,12 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      const heightBeforeNarration = await secondRow.evaluate(
+        (row) => row.getBoundingClientRect().height,
+      );
+      const thirdTopBeforeNarration = await thirdRow.evaluate(
+        (row) => row.getBoundingClientRect().top,
+      );
       await gateway.emitGatewayEvent("agent", {
         sessionKey: secondKey,
         runId: "run-second",
@@ -93,6 +102,11 @@ suite.define(() => {
       });
       await secondRow.getByText("Using bash").waitFor();
       const heightBefore = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
+      expect(heightBefore).toBeCloseTo(heightBeforeNarration, 1);
+      expect(await thirdRow.evaluate((row) => row.getBoundingClientRect().top)).toBeCloseTo(
+        thirdTopBeforeNarration,
+        1,
+      );
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
         await secondRow.screenshot({
@@ -412,9 +426,6 @@ suite.define(() => {
             label:
               "An extremely long single-line session title that keeps going and going far past the sidebar width",
             updatedAt: 1,
-            activeRunIds: ["run-long-title"],
-            hasActiveRun: true,
-            status: "running",
             unread: true,
           },
         ]),
@@ -506,7 +517,7 @@ suite.define(() => {
       }
 
       // A long title must truncate instead of crushing the collapsed row's icon
-      // endcap: the spinner/unread icons keep their intrinsic width and stay
+      // endcap: the unread icon keeps its intrinsic width and stays
       // inside the row, exactly like the two-line endcap under a long subtitle.
       const longRow = page.locator(`.sidebar-recent-session[data-session-key="${longKey}"]`);
       const longLayout = await longRow.evaluate((row) => {
@@ -926,7 +937,9 @@ suite.define(() => {
             Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
           ),
         )
-        .toBeLessThan(idleShift);
+        // Running rows reserve their live subtitle line, moving the spinner out
+        // of the title line. The changed shift proves the retained row remeasured.
+        .not.toBe(idleShift);
     } finally {
       await suite.closeBrowserContext(context);
     }
