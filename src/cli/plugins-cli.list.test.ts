@@ -105,11 +105,72 @@ describe("plugins cli list", () => {
     expect(output).toContain("Disabled plugin description");
   });
 
+  it.each([
+    { label: "default", args: [], visibleError: true },
+    { label: "verbose", args: ["--verbose"], visibleError: true },
+    { label: "enabled-only", args: ["--enabled"], visibleError: false },
+  ])(
+    "surfaces plugin discovery and stale-registry diagnostics in the $label list",
+    async ({ args, visibleError }) => {
+      const refreshMessage =
+        "Persisted plugin registry is stale. Run `openclaw plugins registry --refresh`.";
+      const dependencyError = "Plugin dependency example-package could not be resolved.";
+      buildPluginRegistrySnapshotReportMock.mockReturnValue({
+        workspaceDir: "/workspace",
+        registrySource: "derived",
+        registryDiagnostics: [
+          {
+            level: "info",
+            code: "persisted-registry-missing",
+            message: "Persisted plugin registry is missing; using the derived index.",
+          },
+          {
+            level: "warn",
+            code: "persisted-registry-stale-source",
+            message: refreshMessage,
+          },
+        ],
+        plugins: [
+          createPluginRecord({ id: "healthy", description: "Healthy plugin" }),
+          createPluginRecord({
+            id: "broken",
+            enabled: visibleError,
+            status: "error",
+            error: dependencyError,
+          }),
+        ],
+        diagnostics: [
+          { level: "warn", message: "Duplicate plugin ID shadows an installed plugin." },
+          { level: "error", message: "Plugin manifest could not be loaded." },
+          { level: "error", pluginId: "broken", message: dependencyError },
+        ],
+      });
+
+      await runPluginsCommand(["plugins", "list", ...args]);
+
+      const output = pluginsCliRuntimeLogs.join("\n");
+      expect(output).toContain("Warning: Duplicate plugin ID shadows an installed plugin.");
+      expect(output).toContain("Error: Plugin manifest could not be loaded.");
+      expect(output).toContain(`Warning: ${refreshMessage}`);
+      expect(output).not.toContain("Persisted plugin registry is missing");
+      expect(output.split(dependencyError)).toHaveLength(2);
+      expect(output.includes(`Error: ${dependencyError}`)).toBe(!visibleError);
+    },
+  );
+
   it("includes imported state in JSON output", async () => {
+    const registryDiagnostics = [
+      {
+        level: "info",
+        code: "persisted-registry-missing",
+        message: "Persisted plugin registry is missing; using the derived index.",
+      },
+    ];
+    const diagnostics = [{ level: "warn", message: "Plugin discovery needs attention." }];
     buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/workspace",
       registrySource: "persisted",
-      registryDiagnostics: [],
+      registryDiagnostics,
       plugins: [
         createPluginRecord({
           id: "demo",
@@ -118,7 +179,7 @@ describe("plugins cli list", () => {
           explicitlyEnabled: true,
         }),
       ],
-      diagnostics: [],
+      diagnostics,
     });
 
     await runPluginsCommand(["plugins", "list", "--json"]);
@@ -148,13 +209,13 @@ describe("plugins cli list", () => {
     };
     expect(output.workspaceDir).toBe("/workspace");
     expect(output.registry?.source).toBe("persisted");
-    expect(output.registry?.diagnostics).toEqual([]);
+    expect(output.registry?.diagnostics).toEqual(registryDiagnostics);
     expect(output.plugins).toHaveLength(1);
     expect(output.plugins?.[0]?.id).toBe("demo");
     expect(output.plugins?.[0]?.imported).toBe(true);
     expect(output.plugins?.[0]?.activated).toBe(true);
     expect(output.plugins?.[0]?.explicitlyEnabled).toBe(true);
-    expect(output.diagnostics).toEqual([]);
+    expect(output.diagnostics).toEqual(diagnostics);
   });
 
   it("keeps doctor on a module-loading snapshot", async () => {
