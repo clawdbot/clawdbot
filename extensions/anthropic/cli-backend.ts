@@ -218,6 +218,7 @@ export function buildAnthropicCliBackend(
       sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always",
       reseedFromRawTranscriptWhenUncompacted: true,
+      freshSessionRecovery: "invalidated-only",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",

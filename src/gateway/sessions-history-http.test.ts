@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -286,7 +287,7 @@ async function withGatewayHarness<T>(
 
 type SessionHistoryMessage = {
   content?: Array<{ text?: string }>;
-  __openclaw?: { id?: string; seq?: number };
+  __openclaw?: { id?: string; seq?: number; turnBoundary?: boolean };
 };
 
 type SessionHistoryBody = {
@@ -864,6 +865,14 @@ describe("session history HTTP endpoints", () => {
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         seq: 2,
       });
+
+      const older = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: `?limit=1&cursor=${body.nextCursor}`,
+      });
+      expect(older.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "restored first",
+      ]);
+      expect(older.hasMore).toBe(false);
     });
   });
 
@@ -1068,6 +1077,29 @@ describe("session history HTTP endpoints", () => {
       expect(firstBody.hasMore).toBe(true);
       expect(firstBody.nextCursor).toBe("2");
 
+      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: AGENT_ID,
+      }).path;
+      if (!databasePath) {
+        throw new Error("expected session database path");
+      }
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "transcript_events">>(
+            database.db,
+          );
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("transcript_events")
+              .set({ event_json: "{" })
+              .where("session_id", "=", "sess-main")
+              .where("event_json", "like", "%third message%"),
+          );
+        },
+        { agentId: AGENT_ID, path: databasePath },
+      );
+
       const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
         query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
       });
@@ -1215,49 +1247,62 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("backfills REST and SSE history past an all-silent bounded tail", async () => {
-    const storePath = await createSessionStoreFile();
-    const sessionId = "sess-silent-tail";
-    const sessionKey = "agent:main:main";
-    await writeSessionStore({
-      entries: { main: { sessionId, updatedAt: Date.now() } },
-      storePath,
-    });
-    await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "assistant", content: "reachable older history" } },
-      ...Array.from({ length: 40 }, () => ({
-        message: { role: "assistant", content: "NO_REPLY" },
-      })),
-    ]);
-
-    await withGatewayHarness(async (harness) => {
-      const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
-        query: "?limit=1",
+  test.each([
+    { name: "all-silent tail", heartbeatBoundary: false, silentMessages: 40 },
+    { name: "heartbeat context boundary", heartbeatBoundary: true, silentMessages: 39 },
+  ])(
+    "backfills REST and SSE history past an all-silent bounded tail ($name)",
+    async ({ heartbeatBoundary, silentMessages }) => {
+      const storePath = await createSessionStoreFile();
+      const sessionId = "sess-silent-tail";
+      const sessionKey = "agent:main:main";
+      await writeSessionStore({
+        entries: { main: { sessionId, updatedAt: Date.now() } },
+        storePath,
       });
-      expect(firstPage.messages?.map((message) => message.content)).toEqual([
-        "reachable older history",
+      await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+        { type: "session", version: 1, id: sessionId },
+        ...(heartbeatBoundary ? [{ message: { role: "user", content: HEARTBEAT_PROMPT } }] : []),
+        { message: { role: "assistant", content: "reachable older history" } },
+        ...Array.from({ length: silentMessages }, () => ({
+          message: { role: "assistant", content: "NO_REPLY" },
+        })),
       ]);
-      expect(firstPage.hasMore).toBe(false);
-      expect(firstPage.nextCursor).toBeUndefined();
 
-      const stream = await openSessionHistorySse(harness.port, sessionKey, {
-        query: "?limit=1",
-      });
-      try {
-        const event = await readSseEvent(stream.reader, stream.streamState);
-        expect(event.event).toBe("history");
-        const history = event.data as SessionHistoryBody;
-        expect(history.messages?.map((message) => message.content)).toEqual([
+      await withGatewayHarness(async (harness) => {
+        const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
+          query: "?limit=1",
+        });
+        expect(firstPage.messages?.map((message) => message.content)).toEqual([
           "reachable older history",
         ]);
-        expect(history.hasMore).toBe(false);
-        expect(history.nextCursor).toBeUndefined();
-      } finally {
-        await stream.reader.cancel();
-      }
-    });
-  });
+        expect(firstPage.hasMore).toBe(heartbeatBoundary);
+        expect(firstPage.nextCursor).toBe(heartbeatBoundary ? "2" : undefined);
+        expect(firstPage.messages?.[0]?.["__openclaw"]?.turnBoundary === true).toBe(
+          heartbeatBoundary,
+        );
+
+        const stream = await openSessionHistorySse(harness.port, sessionKey, {
+          query: "?limit=1",
+        });
+        try {
+          const event = await readSseEvent(stream.reader, stream.streamState);
+          expect(event.event).toBe("history");
+          const history = event.data as SessionHistoryBody;
+          expect(history.messages?.map((message) => message.content)).toEqual([
+            "reachable older history",
+          ]);
+          expect(history.hasMore).toBe(heartbeatBoundary);
+          expect(history.nextCursor).toBe(heartbeatBoundary ? "2" : undefined);
+          expect(history.messages?.[0]?.["__openclaw"]?.turnBoundary === true).toBe(
+            heartbeatBoundary,
+          );
+        } finally {
+          await stream.reader.cancel();
+        }
+      });
+    },
+  );
 
   test("caps all-digit direct REST history limits that exceed safe integer range", async () => {
     const { storePath } = await seedSession({ text: "first message" });

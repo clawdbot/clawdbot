@@ -451,6 +451,10 @@ openclaw-activity-page {
   white-space: nowrap;
 }
 
+.activity-feed__session-source {
+  white-space: nowrap;
+}
+
 .activity-feed__session-headline,
 .activity-feed__session-owner {
   min-width: 0;

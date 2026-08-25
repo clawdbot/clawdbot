@@ -3,12 +3,14 @@
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
@@ -370,10 +372,11 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
 /** Dispatches a cron event without letting subscriber errors escape scheduler work. */
 export function emit(state: CronServiceState, evt: CronEvent, context?: CronEventContext) {
   try {
+    const publicEvent = evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt;
     if (context) {
-      state.deps.onEvent?.(evt, context);
+      state.deps.onEvent?.(publicEvent, context);
     } else {
-      state.deps.onEvent?.(evt);
+      state.deps.onEvent?.(publicEvent);
     }
   } catch {
     /* ignore */
@@ -438,6 +441,8 @@ export type CronAddOptions = {
   enabledExplicit?: boolean;
   /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
   systemOwned?: boolean;
+  /** Trusted creator provenance persisted with new jobs; never accepted from public input. */
+  createdActor?: SessionCreatedActor;
   /** Authenticated caller provenance stamped by the service, never public input. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
   /** Private proof from an authenticated agent-runtime caller. */
