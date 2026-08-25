@@ -45,6 +45,13 @@ import {
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
+let attachmentStyles: Promise<unknown> | undefined;
+
+function loadAttachmentStyles(): Promise<unknown> {
+  // Keep preview/icon rules off the core chat route until a transcript actually has attachments.
+  return (attachmentStyles ??= import("../../../styles/chat/attachments.css"));
+}
+
 function retainManagedAttachmentUntilExpiry(
   resource: ChatMediaResource<ManagedAttachmentAvailability>,
   availability: Extract<ManagedAttachmentAvailability, { status: "available" }> | null,
@@ -351,6 +358,7 @@ export function renderAssistantAttachments(
   if (attachments.length === 0) {
     return nothing;
   }
+  void loadAttachmentStyles();
   const {
     localMediaPreviewRoots = [],
     resourceBasePath,
