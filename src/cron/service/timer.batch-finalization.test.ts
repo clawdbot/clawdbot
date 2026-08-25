@@ -467,7 +467,12 @@ describe("cron batch outcome finalization", () => {
       sessionKey: undefined,
     });
     expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: `cron:${job.id}:auto-disabled`, agentId: "main" }),
+      expect.objectContaining({
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        agentId: "main",
+      }),
     );
     expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
       enabled: false,
