@@ -49,7 +49,10 @@ const mocks = vi.hoisted(() => ({
     warnings: [],
   })),
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
-  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
+    config: cfg,
+    retiredProfileCleanupPlans: [],
+  })),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
@@ -648,9 +651,10 @@ describe("doctor health contributions", () => {
       warnings: [],
     });
     mocks.maybeRepairGatewayDaemon.mockClear().mockResolvedValue(undefined);
-    mocks.maybeRepairLegacyOAuthProfileIds
-      .mockClear()
-      .mockImplementation(async (cfg: unknown) => cfg);
+    mocks.maybeRepairLegacyOAuthProfileIds.mockClear().mockImplementation(async (cfg: unknown) => ({
+      config: cfg,
+      retiredProfileCleanupPlans: [],
+    }));
     mocks.collectLegacyPluginManifestContractMigrations.mockReset().mockReturnValue([]);
     mocks.legacyPluginManifestContractMigrationToHealthFinding.mockClear();
     mocks.maybeRepairLegacyPluginManifestContracts.mockClear().mockResolvedValue(undefined);
@@ -2211,6 +2215,39 @@ describe("doctor health contributions", () => {
       prompter: ctx.prompter,
       runtime: ctx.runtime,
     });
+    expect(mocks.maybeRepairLegacyOAuthProfileIds.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.maybeMigrateModelCatalogCredentials.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("persists provider runtime mappings added while removing retired auth profiles", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const cfg = {
+      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
+    };
+    mocks.maybeRepairLegacyOAuthProfileIds.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      retiredProfileCleanupPlans: [],
+    });
+    const ctx = createDoctorHealthFlowContext({
+      cfg,
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+    });
+
+    await contribution.run(ctx);
+
+    expect(ctx.configResult.explicitSetPaths).toContainEqual(["agents", "defaults", "models"]);
   });
 
   it("registers auth profile health as an opt-in structured check", async () => {
@@ -4035,7 +4072,7 @@ describe("doctor health contributions", () => {
       );
     });
 
-    it("forwards explicit paths only for the pending doctor migration write", async () => {
+    it("forwards explicit paths through later doctor repair writes", async () => {
       const ctx = buildWriteConfigCtx({});
       ctx.configResult.explicitSetPaths = [["agents", "entries"]];
 
@@ -4057,8 +4094,8 @@ describe("doctor health contributions", () => {
       expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
-          writeOptions: expect.not.objectContaining({
-            explicitSetPaths: expect.anything(),
+          writeOptions: expect.objectContaining({
+            explicitSetPaths: [["agents", "entries"]],
           }),
         }),
       );

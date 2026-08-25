@@ -1,6 +1,7 @@
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
@@ -87,6 +88,21 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
+  const modelsBeforeRepair = ctx.cfg.agents?.defaults?.models;
+  const legacyOAuthRepair = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
+  ctx.cfg = legacyOAuthRepair.config;
+  if (legacyOAuthRepair.retiredProfileCleanupPlans.length > 0) {
+    ctx.configResult.retiredAuthProfileCleanupPlans = [
+      ...(ctx.configResult.retiredAuthProfileCleanupPlans ?? []),
+      ...legacyOAuthRepair.retiredProfileCleanupPlans,
+    ];
+  }
+  if (!isDeepStrictEqual(modelsBeforeRepair, ctx.cfg.agents?.defaults?.models)) {
+    ctx.configResult.explicitSetPaths = [
+      ...(ctx.configResult.explicitSetPaths ?? []),
+      ["agents", "defaults", "models"],
+    ];
+  }
   const { maybeMigrateModelCatalogCredentials } =
     await import("../commands/doctor-model-catalog-credentials.js");
   await maybeMigrateModelCatalogCredentials({
@@ -95,7 +111,6 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
-  ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({
     cfg: ctx.cfg,
     prompter: ctx.prompter,

@@ -15,15 +15,16 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 OpenClaw detects the available Anthropic credential and selects the matching usage surface:
 
-- Claude subscription/setup credentials show quota windows and optional extra-usage budget.
+- OpenClaw-managed subscription/setup credentials show quota windows and optional extra-usage budget.
+- Native Claude CLI logins stay under Claude's exclusive refresh control, so OpenClaw does not poll their quota endpoint.
 - `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` shows 30 days of provider-reported organization cost and Messages API usage in Control UI **Usage**, including daily spend, token/cache totals, top models, and cost categories.
 - An `sk-ant-admin...` credential stored in the Anthropic provider profile is detected as an Admin API key automatically.
 
 Admin API cost history comes from Anthropic's [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api). It is actual provider billing, separate from OpenClaw's session-derived estimated cost.
 
 <Warning>
-Claude Code owns its existing login and subscription; OpenClaw does not extract
-that login or synthesize Anthropic API requests. Agent SDK and `claude -p`
+Claude Code owns its existing login and subscription; OpenClaw does not persist
+or refresh that login. Agent SDK and `claude -p`
 usage currently draw from the signed-in subscription's limits. API-key auth
 uses separate pay-as-you-go billing and is preferable for shared automation or
 predictable production spend.
@@ -89,6 +90,13 @@ OpenClaw release:
 
         ```bash
         claude --version
+        claude auth status --text
+        ```
+
+        If Claude is not logged in, authenticate once as the Gateway user:
+
+        ```bash
+        claude auth login
         ```
 
         If the installed build is incompatible, update Claude Code and restart
@@ -104,15 +112,15 @@ OpenClaw release:
         # choose: Claude CLI
         ```
 
-        OpenClaw detects the existing Claude CLI login. Normal agent turns use
-        the official Agent SDK with the installed, authenticated Claude Code
-        executable, including native-tool turns whose approvals remain under
-        OpenClaw control. Schema-valid native calls pass through OpenClaw's
-        canonical tool policy before native approval. Imported native OAuth
-        profiles reuse the verified Claude Code login; explicitly selected
-        API-key or token credentials still use protected file-descriptor
-        forwarding. Isolated side-question
-        completions and paired-node execution retain the supervised CLI path.
+        Normal agent turns use the official Agent SDK with the installed,
+        authenticated Claude Code executable. OpenClaw uses a non-secret route
+        marker and never reads, persists, refreshes, selects, or forwards the
+        native login tokens. Claude owns the login and token refresh lifecycle.
+        Explicitly selected API-key or token credentials still use protected
+        file-descriptor forwarding. Native-tool approvals remain under OpenClaw
+        control. Schema-valid native calls pass through OpenClaw's canonical
+        tool policy before native approval. Isolated side-question completions
+        and paired-node execution retain the supervised CLI path.
 
         Consecutive agent turns reuse the same warm Agent SDK query and Claude
         Code subprocess when their authenticated session and execution policy

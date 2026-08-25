@@ -118,10 +118,11 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 The bundled Anthropic plugin runs the installed Claude Code executable through
 Anthropic's official Agent SDK. Claude Code owns its existing local login and
-subscription; OpenClaw does not extract that login or send synthesized
-Anthropic API requests. Compatible agent turns share one warm SDK query and
-Claude Code subprocess. A changed model, system prompt, authenticated identity,
-or tool policy starts a new query; persisted Claude session IDs still provide
+subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
+refreshes, or forwards native tokens, or sends synthesized Anthropic API
+requests. Compatible agent turns share one warm SDK query and
+Claude Code subprocess. A changed model, system prompt, or tool policy starts a
+new query; persisted Claude session IDs still provide
 conversation continuity when the gateway or subprocess restarts.
 
 Keep Claude Code updated, especially if the SDK reports an incompatible
@@ -350,12 +351,12 @@ If no MCP servers are enabled, OpenClaw still injects a strict config when a bac
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
 
-For `claude-cli`, an imported native OAuth profile reuses the matching,
-identity-verified Claude Code login without forwarding an extracted access
-token. Explicit non-native API-key and token profiles continue to use the
-protected, per-invocation credential-forwarding CLI path, keeping selected
-per-agent profiles authoritative without placing credential values in command
-arguments.
+For `claude-cli`, the installed Claude Code process uses its current native
+login. OpenClaw uses a non-secret route marker and never reads, persists,
+refreshes, selects, or forwards the native tokens.
+Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+Explicit OpenClaw-managed API-key and token profiles continue to use the
+protected, per-invocation credential-forwarding CLI path.
 
 ## Reseed history cap
 
