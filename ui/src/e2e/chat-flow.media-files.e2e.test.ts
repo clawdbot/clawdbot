@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  buildLocalWebchatAudioMessage,
   captureUiProofEnabled,
   copiedViaExec,
   createChatFlowE2eSuite,
@@ -97,7 +98,7 @@ suite.define(() => {
     },
     {
       kind: "audio",
-      source: "FILE:/home/node/.openclaw/media/outbound/bootstrap-structured-audio.mp3",
+      source: `FILE:${path.join(managedImageCacheProofDir, "bootstrap-structured-audio.mp3")}`,
       ticket: "ticket-bootstrap-structured-audio",
       structured: true,
     },
@@ -111,12 +112,13 @@ suite.define(() => {
       });
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
+      const expectedSource = "structured" in options ? new URL(source).pathname : source;
 
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
         requestedMediaUrls.push(url);
-        expect(url.searchParams.get("source")).toBe(source);
+        expect(url.searchParams.get("source")).toBe(expectedSource);
         if (url.searchParams.get("meta") === "1") {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
           await route.fulfill({
@@ -159,7 +161,7 @@ suite.define(() => {
                 role: "assistant",
                 content:
                   "structured" in options
-                    ? [{ type: "audio", url: source, fileName: "bootstrap-structured-audio.mp3" }]
+                    ? (await buildLocalWebchatAudioMessage(source)).content
                     : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
                 timestamp: Date.now(),
               },
