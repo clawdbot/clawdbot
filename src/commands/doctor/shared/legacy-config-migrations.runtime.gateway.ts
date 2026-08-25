@@ -35,12 +35,12 @@ function isBelowDurationFloorConfigValue(value: unknown): boolean {
   );
 }
 
-// A persisted positive integer below the floor (e.g. windowMs: 500) is a
-// currently-accepted setting the runtime would only floor to 1000ms anyway --
-// raise it in place instead of discarding the operator's shorter-duration
-// intent for the much larger documented default.
-function isPositiveIntegerConfigValue(value: unknown): boolean {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
+// A positive finite value (integer or fractional) always has a well-defined
+// runtime-effective value -- see resolveIntegerOption / resolveTimerTimeoutMs
+// in auth-rate-limit.ts, which floor (and, for durations, clamp) exactly
+// this way regardless of whether the input was already an integer.
+function isPositiveFiniteConfigValue(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 const GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE: LegacyConfigRule = {
@@ -252,45 +252,57 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       const repairs: Array<{
         key: "maxAttempts" | "windowMs" | "lockoutMs";
         fallback: number;
-        isInvalid: (value: unknown) => boolean;
         requirement: string;
-        // Duration fields only: a positive integer below this floor is
-        // raised in place instead of deleted+defaulted (see
-        // isPositiveIntegerConfigValue above).
-        floorMs?: number;
+        // Any positive finite value (integer or fractional) has a
+        // well-defined runtime-effective value -- see resolveIntegerOption
+        // and resolveTimerTimeoutMs in auth-rate-limit.ts, which floor and
+        // then clamp exactly this way. Normalize to that value in place
+        // instead of deleting, so intent (e.g. a stricter fractional
+        // threshold) survives the schema-tightening migration. Only
+        // non-positive or non-finite input has no sensible target and still
+        // deletes+defaults below.
+        normalizePositiveFinite: (value: number) => number;
       }> = [
         {
           key: "maxAttempts",
           fallback: DEFAULT_MAX_ATTEMPTS,
-          isInvalid: isNonPositiveIntegerConfigValue,
           requirement: "a positive integer",
+          normalizePositiveFinite: (value) => Math.max(1, Math.floor(value)),
         },
         {
           key: "windowMs",
           fallback: DEFAULT_WINDOW_MS,
-          isInvalid: isBelowDurationFloorConfigValue,
           requirement: `an integer of at least ${GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS}ms`,
-          floorMs: GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS,
+          normalizePositiveFinite: (value) =>
+            Math.max(GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS, Math.floor(value)),
         },
         {
           key: "lockoutMs",
           fallback: DEFAULT_LOCKOUT_MS,
-          isInvalid: isBelowDurationFloorConfigValue,
           requirement: `an integer of at least ${GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS}ms`,
-          floorMs: GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS,
+          normalizePositiveFinite: (value) =>
+            Math.max(GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS, Math.floor(value)),
         },
       ];
-      for (const { key, fallback, isInvalid, requirement, floorMs } of repairs) {
+      for (const { key, fallback, requirement, normalizePositiveFinite } of repairs) {
         const value = rateLimit[key];
-        if (floorMs !== undefined && isPositiveIntegerConfigValue(value) && value < floorMs) {
-          rateLimit[key] = floorMs;
+        if (isPositiveFiniteConfigValue(value)) {
+          const normalized = normalizePositiveFinite(value);
+          if (normalized === value) {
+            continue;
+          }
+          rateLimit[key] = normalized;
           changes.push(
-            `Raised gateway.auth.rateLimit.${key} (${String(value)}) to ${floorMs}. ` +
+            `Raised gateway.auth.rateLimit.${key} (${String(value)}) to ${normalized}. ` +
               `It must be ${requirement}.`,
           );
           continue;
         }
-        if (!isInvalid(value)) {
+        if (typeof value !== "number") {
+          // Not this migration's concern: an absent key or a wrong-type
+          // value (string/boolean/etc.) is a schema type mismatch, not the
+          // numeric-range issue this migration repairs -- leave it for
+          // normal schema validation to surface.
           continue;
         }
         delete rateLimit[key];

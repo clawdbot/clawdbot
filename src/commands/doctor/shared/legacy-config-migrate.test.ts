@@ -3470,14 +3470,39 @@ describe("gateway.auth.rateLimit out-of-range repair migrate", () => {
     ]);
   });
 
-  it("removes fractional gateway.auth.rateLimit.maxAttempts and records a change", () => {
+  it("normalizes a positive fractional gateway.auth.rateLimit.maxAttempts instead of removing it", () => {
+    // 2.5 currently locks on the 3rd failed attempt (resolveIntegerOption
+    // floors it to 2) -- deleting it would silently widen that to the
+    // default of 10, so normalize in place instead.
     const res = migrateLegacyConfigForTest({
       gateway: { auth: { rateLimit: { maxAttempts: 2.5 } } },
     });
 
     expect(res.changes).toStrictEqual([
-      "Removed invalid gateway.auth.rateLimit.maxAttempts (2.5). It must be a positive integer; the gateway will use the default of 10.",
+      "Raised gateway.auth.rateLimit.maxAttempts (2.5) to 2. It must be a positive integer.",
     ]);
+    expect(res.config?.gateway?.auth?.rateLimit).toStrictEqual({ maxAttempts: 2 });
+  });
+
+  it("normalizes a sub-1 positive fractional maxAttempts up to 1, not down to 0", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0.5 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Raised gateway.auth.rateLimit.maxAttempts (0.5) to 1. It must be a positive integer.",
+    ]);
+    expect(res.config?.gateway?.auth?.rateLimit).toStrictEqual({ maxAttempts: 1 });
+  });
+
+  it("is idempotent after normalizing a fractional maxAttempts", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 2.5 } } },
+    });
+    expect(first.changes.length).toBe(1);
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
   });
 
   it("removes non-finite gateway.auth.rateLimit.maxAttempts and records a change", () => {
@@ -3496,6 +3521,15 @@ describe("gateway.auth.rateLimit out-of-range repair migrate", () => {
     });
 
     expect(res.config?.gateway?.auth?.rateLimit).toStrictEqual({ windowMs: 60_000 });
+  });
+
+  it("leaves a wrong-type gateway.auth.rateLimit.maxAttempts untouched (not this migration's concern)", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: "5" } } },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
   });
 
   it("preserves valid gateway.auth.rateLimit.maxAttempts values", () => {
@@ -3560,9 +3594,9 @@ describe("gateway.auth.rateLimit out-of-range repair migrate", () => {
   });
 
   it("still removes (not raises) a truly invalid windowMs/lockoutMs value", () => {
-    // Non-positive, fractional, or non-finite values have no sensible
-    // "raise to the floor" target -- these still delete+default.
-    for (const bad of [0, -1, 1.5, Number.NaN]) {
+    // Only non-positive or non-finite values have no sensible runtime-
+    // effective target to preserve -- these still delete+default.
+    for (const bad of [0, -1, Number.NaN]) {
       const res = migrateLegacyConfigForTest({
         gateway: { auth: { rateLimit: { windowMs: bad } } },
       });
@@ -3571,6 +3605,38 @@ describe("gateway.auth.rateLimit out-of-range repair migrate", () => {
       ]);
       expect(res.config).not.toHaveProperty("gateway");
     }
+  });
+
+  it("normalizes a positive fractional windowMs/lockoutMs instead of removing it", () => {
+    // 1000.5 currently behaves as 1000ms at runtime (resolveTimerTimeoutMs
+    // floors then clamps to the 1000ms floor) -- deleting it would silently
+    // lengthen it to the 60s/300s defaults, so normalize in place instead.
+    const windowRes = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 1_000.5 } } },
+    });
+    expect(windowRes.changes).toStrictEqual([
+      "Raised gateway.auth.rateLimit.windowMs (1000.5) to 1000. It must be an integer of at least 1000ms.",
+    ]);
+    expect(windowRes.config?.gateway?.auth?.rateLimit).toStrictEqual({ windowMs: 1_000 });
+
+    // A sub-floor fractional value normalizes straight to the floor.
+    const lockoutRes = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { lockoutMs: 500.7 } } },
+    });
+    expect(lockoutRes.changes).toStrictEqual([
+      "Raised gateway.auth.rateLimit.lockoutMs (500.7) to 1000. It must be an integer of at least 1000ms.",
+    ]);
+    expect(lockoutRes.config?.gateway?.auth?.rateLimit).toStrictEqual({ lockoutMs: 1_000 });
+  });
+
+  it("is idempotent after normalizing a fractional windowMs/lockoutMs", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 1_000.5, lockoutMs: 500.7 } } },
+    });
+    expect(first.changes.length).toBe(2);
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
   });
 
   it("is idempotent after raising windowMs/lockoutMs to the floor", () => {
@@ -3599,10 +3665,10 @@ describe("gateway.auth.rateLimit out-of-range repair migrate", () => {
 
     expect(res.changes).toStrictEqual([
       "Removed invalid gateway.auth.rateLimit.maxAttempts (0). It must be a positive integer; the gateway will use the default of 10.",
-      "Removed invalid gateway.auth.rateLimit.windowMs (1.5). It must be an integer of at least 1000ms; the gateway will use the default of 60000.",
+      "Raised gateway.auth.rateLimit.windowMs (1.5) to 1000. It must be an integer of at least 1000ms.",
       "Removed invalid gateway.auth.rateLimit.lockoutMs (NaN). It must be an integer of at least 1000ms; the gateway will use the default of 300000.",
     ]);
-    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.config?.gateway?.auth?.rateLimit).toStrictEqual({ windowMs: 1_000 });
   });
 
   it("preserves other auth keys when removing the whole rateLimit block", () => {
