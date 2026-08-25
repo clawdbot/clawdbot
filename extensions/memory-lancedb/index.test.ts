@@ -433,12 +433,12 @@ describe("memory plugin e2e", () => {
       logger,
       on,
       vectorSearch,
-      updateConfig(overrides: Partial<MemoryPluginTestConfig>) {
+      updateConfig: (overrides: Partial<MemoryPluginTestConfig>) => {
         configFile = {
           plugins: { entries: { "memory-lancedb": { config: { ...pluginConfig, ...overrides } } } },
         };
       },
-      removePluginEntry() {
+      removePluginEntry: () => {
         configFile = { plugins: { entries: {} } };
       },
     };
