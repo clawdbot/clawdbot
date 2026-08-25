@@ -197,7 +197,7 @@ describe("gateway chat metadata lifecycle", () => {
   });
 
   it("keeps an owner available when a subordinate catalog publishes during attachment", async () => {
-    const pendingRefresh = createDeferred<void>();
+    const pendingRefresh = createDeferred();
     mocks.refresh.mockReturnValueOnce(pendingRefresh.promise);
     const { lifecycle: pendingLifecycle } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
