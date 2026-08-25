@@ -1867,7 +1867,7 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         },
         bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
         broadcast: {
@@ -1898,7 +1898,6 @@ describe("buildLiveGatewayConfig", () => {
         agents: {
           entries: {
             dev: {
-              default: true,
               agentDir: "/operator/agent",
               workspace: "/operator/workspace",
             },
