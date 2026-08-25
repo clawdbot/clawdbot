@@ -932,6 +932,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         }),
       }),
     );
+    expect(buildEmbeddedSystemPromptMock.mock.calls[0]?.[0]).not.toHaveProperty("heartbeatPrompt");
   });
 
   it("keeps the compaction prompt and durable provider resources after disposal", async () => {

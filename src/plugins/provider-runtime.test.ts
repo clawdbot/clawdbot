@@ -1466,7 +1466,7 @@ describe("provider-runtime", () => {
     );
   });
 
-  it("passes heartbeat trigger context to the shared GPT-5 prompt overlay", () => {
+  it("keeps scheduled heartbeat guidance out of shared GPT-5 provider overlays", () => {
     const contribution = resolveProviderSystemPromptContribution({
       provider: "openrouter",
       context: {
@@ -1477,7 +1477,7 @@ describe("provider-runtime", () => {
       } as never,
     });
 
-    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+    expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
       "Heartbeat = useful proactive progress",
     );
   });
