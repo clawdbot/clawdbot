@@ -8,7 +8,12 @@ import type { GatewayRequestContext } from "./types.js";
 const mocks = vi.hoisted(() => ({
   invalidate: vi.fn(),
   loadRow: vi.fn(),
+  modelCatalog: [] as Array<{ provider: string; id: string; name: string; reasoning?: boolean }>,
   rowLabel: "first",
+}));
+
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  getAvailablePreparedModelCatalogSnapshot: () => ({ entries: mocks.modelCatalog }),
 }));
 
 vi.mock("../session-sharing.js", async (importOriginal) => {
@@ -70,6 +75,7 @@ beforeEach(() => {
   mocks.invalidate.mockClear();
   mocks.loadRow.mockClear();
   mocks.rowLabel = "first";
+  mocks.modelCatalog = [];
 });
 
 afterEach(() => {
@@ -78,6 +84,22 @@ afterEach(() => {
 });
 
 describe("sessions.changed coalescing", () => {
+  it("uses the prepared catalog for mutation event rows", () => {
+    mocks.modelCatalog = [
+      { provider: "anthropic", id: "claude-opus-4-8", name: "Claude Opus 4.8", reasoning: true },
+    ];
+    const context = createContext(new Set(["conn-1"]), {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+    });
+
+    emitSessionsChanged(context, { reason: "patch", sessionKey: "agent:main:chat" });
+
+    expect(mocks.loadRow).toHaveBeenCalledWith("agent:main:chat", {
+      agentId: "main",
+      modelCatalog: mocks.modelCatalog,
+    });
+  });
+
   it("emits a leading row and one trailing row with the latest state", () => {
     const context = createContext();
     const initialVersion = readSessionsMutationVersion(context);
