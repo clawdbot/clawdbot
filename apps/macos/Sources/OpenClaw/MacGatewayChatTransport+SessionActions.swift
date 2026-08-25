@@ -74,14 +74,21 @@ extension MacGatewayChatTransport {
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         guard let serverLease = await self.connection.captureServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
+        let supportsConditionalUnreadAck = await self.connection.supportsServerCapability(
+            .sessionUnreadAckContract,
+            ifCurrentServerLease: serverLease) == true
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, expectedMarkedUnreadAt, label, category, pinned, archived, unread in
                 let target = transport.sessionTarget(for: key)
+                let guardedUnreadExpectation: Double?? = supportsConditionalUnreadAck
+                    ? expectedMarkedUnreadAt
+                    : nil
                 let request = OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
                     expectedSessionID: expectedSessionID,
+                    expectedMarkedUnreadAt: guardedUnreadExpectation,
                     label: label,
                     category: category,
                     pinned: pinned,

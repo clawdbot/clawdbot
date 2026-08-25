@@ -100,14 +100,21 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         guard let route = await currentSessionMutationRoute() else { return nil }
+        let supportsConditionalUnreadAck = await self.gateway.supportsServerCapability(
+            .sessionUnreadAckContract,
+            ifCurrentRoute: route) == true
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, expectedMarkedUnreadAt, label, category, pinned, archived, unread in
                 let target = transport.sessionTarget(for: key)
+                let guardedUnreadExpectation: Double?? = supportsConditionalUnreadAck
+                    ? expectedMarkedUnreadAt
+                    : nil
                 let request = OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
                     expectedSessionID: expectedSessionID,
+                    expectedMarkedUnreadAt: guardedUnreadExpectation,
                     label: label,
                     category: category,
                     pinned: pinned,

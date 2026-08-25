@@ -338,6 +338,7 @@ public enum OpenClawChatGatewayRequests {
         sessionKey: String,
         agentID: String?,
         expectedSessionID: String? = nil,
+        expectedMarkedUnreadAt: Double?? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -349,6 +350,9 @@ public enum OpenClawChatGatewayRequests {
            !expectedSessionID.isEmpty
         {
             params["expectedSessionId"] = AnyCodable(expectedSessionID)
+        }
+        if let expectedMarkedUnreadAt {
+            params["expectedMarkedUnreadAt"] = expectedMarkedUnreadAt.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
         if let label {
             params["label"] = label.map(AnyCodable.init) ?? AnyCodable(NSNull())

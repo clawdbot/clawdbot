@@ -6198,6 +6198,7 @@ public struct SessionRow: Codable, Sendable {
     public let pinnedat: Double?
     public let unread: Bool?
     public let lastreadat: Double?
+    public let markedunreadat: Double?
     public let lastactivityat: Double?
     public let lastinteractionat: Double?
     public let status: AnyCodable?
@@ -6269,6 +6270,7 @@ public struct SessionRow: Codable, Sendable {
         pinnedat: Double? = nil,
         unread: Bool? = nil,
         lastreadat: Double? = nil,
+        markedunreadat: Double? = nil,
         lastactivityat: Double? = nil,
         lastinteractionat: Double? = nil,
         status: AnyCodable? = nil,
@@ -6339,6 +6341,7 @@ public struct SessionRow: Codable, Sendable {
         self.pinnedat = pinnedat
         self.unread = unread
         self.lastreadat = lastreadat
+        self.markedunreadat = markedunreadat
         self.lastactivityat = lastactivityat
         self.lastinteractionat = lastinteractionat
         self.status = status
@@ -6411,6 +6414,7 @@ public struct SessionRow: Codable, Sendable {
         case pinnedat = "pinnedAt"
         case unread
         case lastreadat = "lastReadAt"
+        case markedunreadat = "markedUnreadAt"
         case lastactivityat = "lastActivityAt"
         case lastinteractionat = "lastInteractionAt"
         case status
@@ -9348,6 +9352,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let agentid: String?
     public let expectedsessionid: String?
     public let expectedlifecyclerevision: String?
+    public let expectedmarkedunreadat: AnyCodable?
     public let label: AnyCodable?
     public let icon: AnyCodable?
     public let category: AnyCodable?
@@ -9385,6 +9390,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         agentid: String? = nil,
         expectedsessionid: String? = nil,
         expectedlifecyclerevision: String? = nil,
+        expectedmarkedunreadat: AnyCodable? = nil,
         label: AnyCodable? = nil,
         icon: AnyCodable? = nil,
         category: AnyCodable? = nil,
@@ -9421,6 +9427,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.agentid = agentid
         self.expectedsessionid = expectedsessionid
         self.expectedlifecyclerevision = expectedlifecyclerevision
+        self.expectedmarkedunreadat = expectedmarkedunreadat
         self.label = label
         self.icon = icon
         self.category = category
@@ -9459,6 +9466,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case agentid = "agentId"
         case expectedsessionid = "expectedSessionId"
         case expectedlifecyclerevision = "expectedLifecycleRevision"
+        case expectedmarkedunreadat = "expectedMarkedUnreadAt"
         case label
         case icon
         case category
@@ -9632,17 +9640,20 @@ public struct SessionsPatchManyTarget: Codable, Sendable {
     public let agentid: String?
     public let expectedsessionid: String?
     public let expectedlifecyclerevision: String?
+    public let expectedmarkedunreadat: AnyCodable?
 
     public init(
         key: String,
         agentid: String? = nil,
         expectedsessionid: String? = nil,
-        expectedlifecyclerevision: String? = nil)
+        expectedlifecyclerevision: String? = nil,
+        expectedmarkedunreadat: AnyCodable? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.expectedsessionid = expectedsessionid
         self.expectedlifecyclerevision = expectedlifecyclerevision
+        self.expectedmarkedunreadat = expectedmarkedunreadat
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -9650,6 +9661,7 @@ public struct SessionsPatchManyTarget: Codable, Sendable {
         case agentid = "agentId"
         case expectedsessionid = "expectedSessionId"
         case expectedlifecyclerevision = "expectedLifecycleRevision"
+        case expectedmarkedunreadat = "expectedMarkedUnreadAt"
     }
 }
 

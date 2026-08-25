@@ -3,7 +3,6 @@ import {
   errorShape,
   type ErrorShape,
   type SessionsPatchManyResult,
-  type SessionsPatchManyTarget,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -36,6 +35,7 @@ import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
   type SessionPatchArchivePreparation,
@@ -49,10 +49,8 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-type PatchTargetIdentity = Pick<
-  SessionsPatchManyTarget,
-  "agentId" | "expectedLifecycleRevision" | "expectedSessionId" | "key"
->;
+type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
+const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
 type MutationTarget = PatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
@@ -73,7 +71,9 @@ type PreparedPatchTarget = {
   targetAgentId: string;
 };
 
-type MutationOutcome = { ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape };
+type MutationOutcome =
+  | { ok: true; applied: boolean; entry: SessionEntry }
+  | { ok: false; error: ErrorShape };
 
 type ModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
 
@@ -175,6 +175,14 @@ async function executeSessionPatchMutations(params: {
     length: params.targets.length,
   });
   for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
+    const unreadAckError = validateSessionUnreadAck(params.patch, input.expectedMarkedUnreadAt);
+    if (unreadAckError) {
+      outcomes[index] = {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, unreadAckError),
+      };
+      continue;
+    }
     if (!requestedAgent.ok) {
       outcomes[index] = requestedAgent;
       continue;
@@ -432,6 +440,31 @@ async function executeSessionPatchMutations(params: {
                             continue;
                           }
                         }
+                        const unreadAck = resolveSessionUnreadAck(
+                          existingEntry,
+                          target.fullPatch.expectedMarkedUnreadAt,
+                        );
+                        if (unreadAck.kind === "missing") {
+                          projectedOutcomes.push({
+                            ok: false,
+                            error: sessionChangedError(target.key),
+                          });
+                          continue;
+                        }
+                        if (unreadAck.kind === "stale") {
+                          const authorizationFailure = params.targets[target.index]!.commitGuard();
+                          if (authorizationFailure) {
+                            projectedOutcomes.push({ ok: false, error: authorizationFailure });
+                            continue;
+                          }
+                          // A newer explicit marker owns the session until a later activation.
+                          projectedOutcomes.push({
+                            ok: true,
+                            applied: false,
+                            entry: unreadAck.entry,
+                          });
+                          continue;
+                        }
                         const projected = await projectSessionsPatchEntry({
                           cfg,
                           creation,
@@ -484,6 +517,7 @@ async function executeSessionPatchMutations(params: {
                         );
                         projectedOutcomes.push({
                           ok: true,
+                          applied: true,
                           entry: cloned,
                         });
                       } catch (error) {
@@ -528,7 +562,7 @@ async function executeSessionPatchMutations(params: {
   const archivedSessionKeys = new Set<string>();
   for (const target of prepared) {
     const outcome = outcomes[target.index];
-    if (!outcome?.ok) {
+    if (!outcome?.ok || !outcome.applied) {
       continue;
     }
     triggerSessionPatchHook({
@@ -655,6 +689,7 @@ export async function executeSessionPatch(params: {
     ...(params.patch.expectedLifecycleRevision !== undefined
       ? { expectedLifecycleRevision: params.patch.expectedLifecycleRevision }
       : {}),
+    expectedMarkedUnreadAt: params.patch.expectedMarkedUnreadAt,
   };
   const executed = await executeSessionPatchMutations({
     client: params.client,

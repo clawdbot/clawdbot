@@ -395,7 +395,9 @@ export async function projectSessionsPatchEntry(params: {
 
   if ("unread" in patch) {
     if (patch.unread === true) {
-      next.markedUnreadAt = now;
+      // This timestamp is also the conditional-ack revision. Repeated writes in
+      // one clock tick must still represent distinct manual unread intent.
+      next.markedUnreadAt = Math.max(now, (params.existingEntry?.markedUnreadAt ?? 0) + 1);
     } else {
       next.lastReadAt = now;
       delete next.markedUnreadAt;

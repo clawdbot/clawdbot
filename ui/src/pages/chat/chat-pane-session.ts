@@ -250,7 +250,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const agentStatusActive = Boolean(row.agentStatus && row.agentStatus.expiresAt > Date.now());
     const unread = row.unread === true || unreadFailure || agentStatusActive;
     if (!unread) {
-      this.unreadPatchGuard.shouldPatch(state.sessionKey, false);
+      this.unreadPatchGuard.shouldPatch(state.sessionKey, false, row.markedUnreadAt);
       return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
@@ -260,24 +260,33 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     });
     // Read-only navigation must remain silent: absence of mutation access is
     // not an operation failure and should not latch the unread retry guard.
-    if (!access.allowed || !this.unreadPatchGuard.shouldPatch(state.sessionKey, true)) {
+    if (
+      !access.allowed ||
+      !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
+    ) {
       return;
     }
     const guardKey = state.sessionKey;
-    void this.context.sessions.patch(row.key, { unread: false }, { agentId }).then(
-      (result) => {
-        // A null result means no request was sent (connection scope lost);
-        // unlatch like a failure or the badge stays lit until navigation.
-        if (result === null) {
+    void this.context.sessions
+      .patch(
+        row.key,
+        { unread: false },
+        { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
+      )
+      .then(
+        (result) => {
+          // A null result means no request was sent (connection scope lost);
+          // unlatch like a failure or the badge stays lit until navigation.
+          if (result === null) {
+            this.unreadPatchGuard.patchFailed(guardKey);
+          }
+        },
+        () => {
+          // Unlatch so later unread snapshots retry; the session capability
+          // publishes the actionable error for the owning page.
           this.unreadPatchGuard.patchFailed(guardKey);
-        }
-      },
-      () => {
-        // Unlatch so later unread snapshots retry; the session capability
-        // publishes the actionable error for the owning page.
-        this.unreadPatchGuard.patchFailed(guardKey);
-      },
-    );
+        },
+      );
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {

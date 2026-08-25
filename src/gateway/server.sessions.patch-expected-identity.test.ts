@@ -288,6 +288,65 @@ test.each([
   expect(loadSessionEntry({ sessionKey, storePath })).not.toHaveProperty("label");
 });
 
+test("sessions.patch rejects conditional unread acknowledgements with another mutation", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:conditional-unread-label";
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("conditional-unread-label", { markedUnreadAt: 10 }),
+    },
+  });
+
+  const result = await directSessionReq("sessions.patch", {
+    key: sessionKey,
+    unread: false,
+    label: "Must not be discarded",
+    expectedMarkedUnreadAt: 9,
+  });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "expectedMarkedUnreadAt requires unread=false as the only mutation.",
+    },
+  });
+  expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+    markedUnreadAt: 10,
+    sessionId: "conditional-unread-label",
+  });
+});
+
+test("sessions.patch keeps explicit unread markers strictly advancing", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:conditional-unread-revision";
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("conditional-unread-revision"),
+    },
+  });
+  const now = vi.spyOn(Date, "now").mockReturnValue(100);
+
+  try {
+    await directSessionReq("sessions.patch", { key: sessionKey, unread: true });
+    const firstMarker = loadSessionEntry({ sessionKey, storePath })?.markedUnreadAt;
+    await directSessionReq("sessions.patch", { key: sessionKey, unread: true });
+    const secondMarker = loadSessionEntry({ sessionKey, storePath })?.markedUnreadAt;
+
+    expect(firstMarker).toBe(100);
+    expect(secondMarker).toBe(101);
+    const staleRead = await directSessionReq("sessions.patch", {
+      key: sessionKey,
+      unread: false,
+      expectedMarkedUnreadAt: firstMarker,
+    });
+    expect(staleRead).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey, storePath })?.markedUnreadAt).toBe(secondMarker);
+  } finally {
+    now.mockRestore();
+  }
+});
+
 test("sessions.patch archives the expected session under its lifecycle lock", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:subagent:archive-identity";

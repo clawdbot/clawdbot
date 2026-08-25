@@ -99,6 +99,7 @@ struct ChatGatewayRequestTests {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "global",
             agentID: "reviewer",
+            expectedMarkedUnreadAt: .some(1_720_000_000_000),
             label: .some(nil),
             category: .some(nil),
             pinned: true,
@@ -112,7 +113,22 @@ struct ChatGatewayRequestTests {
         #expect(request.params["category"]?.value is NSNull)
         #expect(request.params["pinned"]?.value as? Bool == true)
         #expect(request.params["unread"]?.value as? Bool == false)
+        #expect(request.params["expectedMarkedUnreadAt"]?.value as? Double == 1_720_000_000_000)
         #expect(request.params["archived"] == nil)
+    }
+
+    @Test func `session read acknowledgement encodes an absent manual marker as null`() {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "main",
+            agentID: nil,
+            expectedMarkedUnreadAt: .some(nil),
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unread: false)
+
+        #expect(request.params["expectedMarkedUnreadAt"]?.value is NSNull)
     }
 
     @Test func `settings patch request encodes default model as null`() {

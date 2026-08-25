@@ -5,19 +5,39 @@
  */
 export class SessionUnreadPatchGuard {
   private activeSessionKey = "";
+  private activationObserved = false;
+  private activationMarkedUnreadAt: number | undefined;
   private requested = false;
 
-  shouldPatch(activeSessionKey: string, unread: boolean | undefined): boolean {
+  beginActivation(activeSessionKey: string) {
+    this.activeSessionKey = activeSessionKey.trim();
+    this.activationObserved = false;
+    this.activationMarkedUnreadAt = undefined;
+    this.requested = false;
+  }
+
+  shouldPatch(
+    activeSessionKey: string,
+    unread: boolean | undefined,
+    markedUnreadAt?: number,
+  ): boolean {
     const key = activeSessionKey.trim();
     if (key !== this.activeSessionKey) {
-      this.activeSessionKey = key;
-      this.requested = false;
+      this.beginActivation(key);
     }
     if (!key) {
       return false;
     }
+    if (!this.activationObserved) {
+      this.activationObserved = true;
+      this.activationMarkedUnreadAt = markedUnreadAt;
+    }
     if (unread === false) {
+      this.activationMarkedUnreadAt = undefined;
       this.requested = false;
+      return false;
+    }
+    if (markedUnreadAt !== undefined && markedUnreadAt !== this.activationMarkedUnreadAt) {
       return false;
     }
     if (unread !== true || this.requested) {
