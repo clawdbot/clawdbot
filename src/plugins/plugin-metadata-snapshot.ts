@@ -5,7 +5,6 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import {
-  adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
 } from "./current-plugin-metadata-snapshot.js";
@@ -20,7 +19,10 @@ import {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
+import {
+  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
+  registerPluginMetadataSnapshotReaders,
+} from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -388,7 +390,7 @@ export function resolvePluginMetadataSnapshot(
         snapshot.workspaceDir === undefined &&
         snapshot.pluginIds === undefined
       ) {
-        adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, params);
+        adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(snapshot, params);
       }
       return snapshot;
     }
