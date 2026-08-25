@@ -4342,7 +4342,7 @@ button.chat-pr__diff {
 
 @media (prefers-reduced-motion: no-preference) {
   .agent-chat__dictation-phase--listening {
-    background-image: linear-gradient(
+    background-image: repeating-linear-gradient(
       90deg,
       var(--muted) 0%,
       var(--muted) 38%,
@@ -4350,12 +4350,17 @@ button.chat-pr__diff {
       var(--muted) 62%,
       var(--muted) 100%
     );
-    background-size: 220% 100%;
+    background-size: 200% 100%;
+    background-repeat: repeat-x;
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    animation: chat-dictation-listening-shimmer 2s ease-in-out infinite;
+    animation-name: chat-dictation-listening-shimmer;
+    animation-duration: 2s;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+    animation-direction: normal;
   }
 }
 
