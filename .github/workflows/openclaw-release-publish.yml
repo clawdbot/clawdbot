@@ -535,6 +535,8 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/plugin-sdk-api-release-evidence.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/validate-authorized-beta-focused-evidence.mts?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/validate-authorized-beta-focused-evidence.mts"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify-authorized-beta-focused-candidate.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/verify-authorized-beta-focused-candidate.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/authorized-beta-focused-policy.json?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/authorized-beta-focused-policy.json"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/record-shared.mjs?ref=${WORKFLOW_SHA}" \
@@ -814,8 +816,11 @@ jobs:
             --source-digest "${PRODUCER_WORKFLOW_SHA}" \
             --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --deny-self-hosted-runners
-          node "${RUNNER_TEMP}/release-validation-tooling/validate-authorized-beta-focused-evidence.mts" verify \
-            --candidate-root . \
+          tooling_dir="${RUNNER_TEMP}/release-validation-tooling"
+          node "${tooling_dir}/verify-authorized-beta-focused-candidate.mjs" \
+            --repository-root . \
+            --validator "${tooling_dir}/validate-authorized-beta-focused-evidence.mts" \
+            --policy "${tooling_dir}/authorized-beta-focused-policy.json" \
             --artifact "${evidence}" \
             --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
@@ -950,8 +955,10 @@ jobs:
             --source-digest "${PRODUCER_WORKFLOW_SHA}" \
             --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --deny-self-hosted-runners
-          node .release-harness/scripts/validate-authorized-beta-focused-evidence.mts verify \
-            --candidate-root . \
+          node .release-harness/scripts/verify-authorized-beta-focused-candidate.mjs \
+            --repository-root . \
+            --validator .release-harness/scripts/validate-authorized-beta-focused-evidence.mts \
+            --policy .release-harness/scripts/authorized-beta-focused-policy.json \
             --artifact "${evidence}" \
             --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
             --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \

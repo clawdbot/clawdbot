@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -50,6 +50,7 @@ const VALIDATOR_CLOSURE = [
   "scripts/authorized-beta-focused-policy.json",
   "scripts/lib/record-shared.mjs",
   "scripts/validate-authorized-beta-focused-evidence.mts",
+  "scripts/verify-authorized-beta-focused-candidate.mjs",
 ] as const;
 
 function stageValidatorClosure(root: string, scriptsDirectory: boolean): string {
@@ -131,6 +132,57 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
       ],
     },
   };
+}
+
+function stageCandidateVerifier(policy: AuthorizedBetaFocusedPolicy, shouldFail = false) {
+  const trustedRoot = tempDirs.make("authorized-beta-focused-trusted-");
+  const validatorPath = stageValidatorClosure(trustedRoot, false);
+  const policyPath = join(trustedRoot, "authorized-beta-focused-policy.json");
+  const markerPath = join(trustedRoot, "candidate-verifier.json");
+  writeFileSync(policyPath, JSON.stringify(policy));
+  const fixtureValidatorPath = join(trustedRoot, "candidate-verifier.mjs");
+  writeFileSync(
+    fixtureValidatorPath,
+    [
+      `import { readdirSync, writeFileSync } from "node:fs";`,
+      `import { assertAuthorizedBetaFocusedCandidate, readAuthorizedBetaFocusedPolicy } from ${JSON.stringify(pathToFileURL(validatorPath).href)};`,
+      `const args = process.argv.slice(2);`,
+      `const candidateRoot = args[args.indexOf("--candidate-root") + 1];`,
+      `assertAuthorizedBetaFocusedCandidate(readAuthorizedBetaFocusedPolicy(), candidateRoot);`,
+      `writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ args, candidateRoot, entries: readdirSync(candidateRoot) }));`,
+      shouldFail ? `throw new Error("trusted fixture verifier rejected evidence");` : "",
+    ].join("\n"),
+  );
+  return {
+    fixtureValidatorPath,
+    helperPath: join(trustedRoot, "verify-authorized-beta-focused-candidate.mjs"),
+    markerPath,
+    policyPath,
+    validatorPath,
+  };
+}
+
+function runCandidateVerifier(params: {
+  helperPath?: string;
+  policyPath: string;
+  repositoryRoot: string;
+  validatorPath: string;
+  verifierArgs?: string[];
+}) {
+  return spawnSync(
+    process.execPath,
+    [
+      params.helperPath ?? join(REPO_ROOT, "scripts/verify-authorized-beta-focused-candidate.mjs"),
+      "--repository-root",
+      params.repositoryRoot,
+      "--validator",
+      params.validatorPath,
+      "--policy",
+      params.policyPath,
+      ...(params.verifierArgs ?? []),
+    ],
+    { encoding: "utf8" },
+  );
 }
 
 function resolveFocusedProducer(
@@ -336,6 +388,16 @@ describe("authorized beta focused evidence", () => {
     expect(revalidation).toBeLessThan(download);
     expect(download).toBeLessThan(verification);
     expect(verification).toBeLessThan(provenance);
+    const verifyStep = namedStep(
+      docker,
+      "resolve_build_provenance",
+      "Verify focused release evidence after Docker approval",
+    );
+    expect(verifyStep.run).toContain("verify-authorized-beta-focused-candidate.mjs");
+    expect(verifyStep.run).not.toContain("--candidate-root .");
+    expect(verifyStep.run?.indexOf("gh attestation verify")).toBeLessThan(
+      verifyStep.run?.indexOf("verify-authorized-beta-focused-candidate.mjs") ?? -1,
+    );
 
     for (const jobName of ["build-amd64", "build-arm64"]) {
       expect(docker.jobs?.[jobName]?.needs).toContain("resolve_build_provenance");
@@ -388,6 +450,229 @@ describe("authorized beta focused evidence", () => {
         root,
       ),
     ).toThrow("candidate diff does not match authorized path");
+  });
+
+  it("verifies the policy candidate when the release checkout has diverged", () => {
+    const { policy, root } = fixturePolicy();
+    git(root, ["checkout", "--quiet", "--detach", policy.baseCandidateSha]);
+    writeFileSync(join(root, "published.txt"), "divergent release\n");
+    const releaseSha = commit(root, "divergent release");
+    const ancestry = spawnSync(
+      "git",
+      ["merge-base", "--is-ancestor", policy.candidateSha, releaseSha],
+      { cwd: root },
+    );
+    expect(ancestry.status).toBe(1);
+
+    const staged = stageCandidateVerifier(policy);
+    const checkoutHookMarker = join(root, "checkout-hook-ran");
+    writeFileSync(
+      join(root, ".git", "hooks", "post-checkout"),
+      `#!/bin/sh\n: > ${JSON.stringify(checkoutHookMarker)}\n`,
+      { mode: 0o755 },
+    );
+    const producerSha = "a".repeat(40);
+    const verifierArgs = [
+      "--artifact",
+      join(root, "evidence.json"),
+      "--producer-run-id",
+      "123",
+      "--producer-run-attempt",
+      "1",
+      "--producer-workflow-full-ref",
+      "refs/tags/release-publish/aaaaaaaaaaaa-1",
+      "--producer-workflow-sha",
+      producerSha,
+    ];
+    const direct = spawnSync(
+      process.execPath,
+      [staged.validatorPath, "verify", "--candidate-root", root, ...verifierArgs],
+      { encoding: "utf8" },
+    );
+    expect(direct.status).toBe(1);
+    expect(direct.stderr).toContain(
+      `candidate checkout must be ${policy.candidateSha}, got ${releaseSha}`,
+    );
+
+    const originalWorktrees = git(root, ["worktree", "list", "--porcelain"]);
+    const stagedResult = runCandidateVerifier({
+      helperPath: staged.helperPath,
+      policyPath: staged.policyPath,
+      repositoryRoot: root,
+      validatorPath: staged.fixtureValidatorPath,
+      verifierArgs,
+    });
+    expect(stagedResult.status).toBe(0);
+    const invocation = JSON.parse(readFileSync(staged.markerPath, "utf8")) as {
+      args: string[];
+      candidateRoot: string;
+      entries: string[];
+    };
+    expect(invocation.args).toEqual([
+      "verify",
+      "--candidate-root",
+      invocation.candidateRoot,
+      ...verifierArgs,
+    ]);
+    expect(invocation.entries).toEqual([".git"]);
+    expect(existsSync(checkoutHookMarker)).toBe(false);
+    expect(existsSync(invocation.candidateRoot)).toBe(false);
+    expect(git(root, ["worktree", "list", "--porcelain"])).toBe(originalWorktrees);
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(releaseSha);
+  });
+
+  it.each([
+    { name: "null policy", policy: null },
+    { name: "array policy", policy: [] },
+    {
+      name: "wrong policy schema",
+      policy: { schema: "other", mode: "authorized-beta-focused-v1", candidateSha: "a".repeat(40) },
+    },
+    {
+      name: "wrong policy mode",
+      policy: {
+        schema: "openclaw.authorized-beta-focused-policy.v1",
+        mode: "other",
+        candidateSha: "a".repeat(40),
+      },
+    },
+    {
+      name: "missing candidate",
+      policy: {
+        schema: "openclaw.authorized-beta-focused-policy.v1",
+        mode: "authorized-beta-focused-v1",
+      },
+    },
+    {
+      name: "short candidate",
+      policy: {
+        schema: "openclaw.authorized-beta-focused-policy.v1",
+        mode: "authorized-beta-focused-v1",
+        candidateSha: "abc",
+      },
+    },
+    {
+      name: "uppercase candidate",
+      policy: {
+        schema: "openclaw.authorized-beta-focused-policy.v1",
+        mode: "authorized-beta-focused-v1",
+        candidateSha: "A".repeat(40),
+      },
+    },
+  ])("rejects $name before touching the repository or verifier", ({ policy }) => {
+    const trustedRoot = tempDirs.make("authorized-beta-focused-invalid-");
+    const policyPath = join(trustedRoot, "authorized-beta-focused-policy.json");
+    writeFileSync(policyPath, JSON.stringify(policy));
+    const result = runCandidateVerifier({
+      policyPath,
+      repositoryRoot: join(trustedRoot, "missing-repository"),
+      validatorPath: join(trustedRoot, "missing-verifier.mjs"),
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("invalid trusted focused evidence policy");
+    expect(result.stderr).not.toContain("missing-repository");
+  });
+
+  it("rejects a policy that is not adjacent to the trusted verifier", () => {
+    const { policy, root } = fixturePolicy();
+    const staged = stageCandidateVerifier(policy);
+    const otherRoot = tempDirs.make("authorized-beta-focused-other-policy-");
+    const policyPath = join(otherRoot, "authorized-beta-focused-policy.json");
+    writeFileSync(policyPath, JSON.stringify(policy));
+    const result = runCandidateVerifier({
+      policyPath,
+      repositoryRoot: root,
+      validatorPath: staged.fixtureValidatorPath,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("trusted validator's adjacent policy");
+    expect(existsSync(staged.markerPath)).toBe(false);
+  });
+
+  it("rejects an unavailable policy candidate without invoking the verifier", () => {
+    const { policy, root } = fixturePolicy();
+    git(root, ["remote", "add", "origin", root]);
+    const staged = stageCandidateVerifier({ ...policy, candidateSha: "f".repeat(40) });
+    const originalWorktrees = git(root, ["worktree", "list", "--porcelain"]);
+    const result = runCandidateVerifier({
+      policyPath: staged.policyPath,
+      repositoryRoot: root,
+      validatorPath: staged.fixtureValidatorPath,
+    });
+    expect(result.status).toBe(1);
+    expect(existsSync(staged.markerPath)).toBe(false);
+    expect(git(root, ["worktree", "list", "--porcelain"])).toBe(originalWorktrees);
+  });
+
+  it("fetches only the exact policy candidate when the release clone does not contain it", () => {
+    const { policy, root } = fixturePolicy();
+    git(root, ["checkout", "--quiet", "--detach", policy.baseCandidateSha]);
+    writeFileSync(join(root, "published.txt"), "divergent release\n");
+    const releaseSha = commit(root, "divergent release");
+    git(root, ["branch", "release-candidate", releaseSha]);
+    const releaseRoot = tempDirs.make("authorized-beta-focused-release-clone-");
+    execFileSync("git", [
+      "clone",
+      "--quiet",
+      "--no-local",
+      "--depth",
+      "1",
+      "--branch",
+      "release-candidate",
+      root,
+      releaseRoot,
+    ]);
+    expect(
+      spawnSync("git", ["cat-file", "-e", `${policy.candidateSha}^{commit}`], {
+        cwd: releaseRoot,
+      }).status,
+    ).not.toBe(0);
+
+    const staged = stageCandidateVerifier(policy);
+    const originalWorktrees = git(releaseRoot, ["worktree", "list", "--porcelain"]);
+    const result = runCandidateVerifier({
+      policyPath: staged.policyPath,
+      repositoryRoot: releaseRoot,
+      validatorPath: staged.fixtureValidatorPath,
+    });
+    expect(result.status).toBe(0);
+    expect(existsSync(staged.markerPath)).toBe(true);
+    expect(git(releaseRoot, ["rev-parse", "HEAD"])).toBe(releaseSha);
+    expect(git(releaseRoot, ["worktree", "list", "--porcelain"])).toBe(originalWorktrees);
+  });
+
+  it("rejects candidate-root overrides before staging a trusted candidate", () => {
+    const { policy, root } = fixturePolicy();
+    const staged = stageCandidateVerifier(policy);
+    const originalWorktrees = git(root, ["worktree", "list", "--porcelain"]);
+    const result = runCandidateVerifier({
+      policyPath: staged.policyPath,
+      repositoryRoot: root,
+      validatorPath: staged.fixtureValidatorPath,
+      verifierArgs: ["--candidate-root", root],
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("invalid focused evidence verifier option: --candidate-root");
+    expect(existsSync(staged.markerPath)).toBe(false);
+    expect(git(root, ["worktree", "list", "--porcelain"])).toBe(originalWorktrees);
+  });
+
+  it("removes and prunes the candidate worktree when trusted verification fails", () => {
+    const { policy, root } = fixturePolicy();
+    const staged = stageCandidateVerifier(policy, true);
+    const originalWorktrees = git(root, ["worktree", "list", "--porcelain"]);
+    const result = runCandidateVerifier({
+      policyPath: staged.policyPath,
+      repositoryRoot: root,
+      validatorPath: staged.fixtureValidatorPath,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("trusted fixture verifier rejected evidence");
+    const invocation = JSON.parse(readFileSync(staged.markerPath, "utf8")) as {
+      candidateRoot: string;
+    };
+    expect(existsSync(invocation.candidateRoot)).toBe(false);
+    expect(git(root, ["worktree", "list", "--porcelain"])).toBe(originalWorktrees);
   });
 
   it("hashes sorted unique package inventories and rejects duplicates", () => {
@@ -598,6 +883,12 @@ describe("authorized beta focused evidence", () => {
         '--producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}"',
       );
       expect(verifyStep.run).toContain('--producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"');
+      expect(verifyStep.run).toContain("verify-authorized-beta-focused-candidate.mjs");
+      expect(verifyStep.run).toContain("--repository-root .");
+      expect(verifyStep.run).not.toContain("--candidate-root .");
+      expect(verifyStep.run?.indexOf("gh attestation verify")).toBeLessThan(
+        verifyStep.run?.indexOf("verify-authorized-beta-focused-candidate.mjs") ?? -1,
+      );
     }
     const publishSteps = parentWorkflow.jobs?.publish?.steps ?? [];
     const publishStepNames = publishSteps.map((step) => step.name);
