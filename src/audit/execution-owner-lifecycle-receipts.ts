@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -62,6 +63,7 @@ const KNOWN_STATUSES: Record<OwnerLifecycleStage, ReadonlySet<string>> = {
     "lost",
   ]),
 };
+const OWNER_LIFECYCLE_CURSOR_RETAINED_ERROR = "owner lifecycle cursor is no longer retained";
 
 function ownerName(stage: OwnerLifecycleStage): OwnerLifecycleRow["owner"] {
   return stage === "cron" ? "cron_run_receipts" : stage === "task" ? "task_runs" : "flow_runs";
@@ -75,10 +77,60 @@ function displayProducer(stage: OwnerLifecycleStage): OwnerLifecycleDisplayProdu
       : "flow-lifecycle";
 }
 
+function assertRetainedCursor(params: {
+  db: DatabaseSync;
+  stage: OwnerLifecycleStage;
+  contextId: string;
+  executionId: string;
+  after?: OwnerLifecycleCursor;
+}): void {
+  if (!params.after) {
+    return;
+  }
+  const kysely = getNodeSqliteKysely<OwnerLifecycleDatabase>(params.db);
+  const ownerQuery =
+    params.stage === "cron"
+      ? kysely
+          .selectFrom("cron_run_receipts")
+          .select("receipt_id as ownerId")
+          .where("rowid", "=", params.after.rowId)
+          .where("started_at_ms", "=", params.after.occurredAt)
+      : params.stage === "task"
+        ? kysely
+            .selectFrom("task_runs")
+            .select("task_id as ownerId")
+            .where("rowid", "=", params.after.rowId)
+            .where("created_at", "=", params.after.occurredAt)
+        : kysely
+            .selectFrom("flow_runs")
+            .select("flow_id as ownerId")
+            .where("rowid", "=", params.after.rowId)
+            .where("created_at", "=", params.after.occurredAt);
+  const owner = executeSqliteQueryTakeFirstSync(params.db, ownerQuery);
+  // Admission binds at most one owner per lifecycle kind to an execution.
+  // The exact execution match therefore rejects a different owner reusing this rowid.
+  const binding = owner
+    ? executeSqliteQueryTakeFirstSync(
+        params.db,
+        kysely
+          .selectFrom(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
+          .select("owner_id")
+          .where("owner_kind", "=", params.stage)
+          .where("owner_id", "=", owner.ownerId)
+          .where("context_id", "=", params.contextId)
+          .where("execution_id", "=", params.executionId),
+      )
+    : undefined;
+  if (!binding) {
+    throw new Error(OWNER_LIFECYCLE_CURSOR_RETAINED_ERROR);
+  }
+}
+
 function readRows(params: {
   db: DatabaseSync;
   stage: OwnerLifecycleStage;
   contextId: string;
+  executionId: string;
   after?: OwnerLifecycleCursor;
   offset?: number;
   limit: number;
@@ -88,8 +140,12 @@ function readRows(params: {
     !tableExists(params.db, owner) ||
     !tableExists(params.db, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
   ) {
+    if (params.after) {
+      throw new Error(OWNER_LIFECYCLE_CURSOR_RETAINED_ERROR);
+    }
     return [];
   }
+  assertRetainedCursor(params);
   const kysely = getNodeSqliteKysely<OwnerLifecycleDatabase>(params.db);
   if (params.stage === "cron") {
     let query = kysely
@@ -353,19 +409,28 @@ export function pageOwnerLifecycleReceipts(params: {
   limit: number;
   options: OpenClawStateDatabaseOptions;
 }): { entries: OwnerLifecycleReceiptEntry[]; nextCursor?: OwnerLifecycleCursor } {
-  const rows =
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        readRows({
-          db,
-          stage: params.stage,
-          contextId: params.context.contextId,
-          after: params.after,
-          offset: params.offset,
-          limit: params.limit + 1,
-        }),
-      params.options,
-    ) ?? [];
+  const retainedRows = withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) =>
+      runSqliteDeferredTransactionSync(
+        db,
+        () =>
+          readRows({
+            db,
+            stage: params.stage,
+            contextId: params.context.contextId,
+            executionId: params.context.executionId,
+            after: params.after,
+            offset: params.offset,
+            limit: params.limit + 1,
+          }),
+        { operationLabel: "owner lifecycle receipt page" },
+      ),
+    params.options,
+  );
+  if (!retainedRows && params.after) {
+    throw new Error(OWNER_LIFECYCLE_CURSOR_RETAINED_ERROR);
+  }
+  const rows = retainedRows ?? [];
   const hasMore = rows.length > params.limit;
   const page = hasMore ? rows.slice(0, params.limit) : rows;
   const last = page.at(-1);

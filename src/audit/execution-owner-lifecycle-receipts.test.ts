@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -90,6 +91,26 @@ function admitted(contextId = "context-1", executionId = "execution-1"): Admitte
       executionId,
       now: 50,
     }),
+  };
+}
+
+function executionContext(contextId = "context-1"): ExecutionIdentityContextV1 {
+  return {
+    schemaVersion: 1,
+    contextId,
+    executionId: "execution-1",
+    runId: "run-1",
+    createdAt: 50,
+    trustDomain: { kind: "gateway-cell", domainRef: "host-1", state: "present" },
+    invoker: { state: "unknown" },
+    ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+    agentPrincipal: { kind: "agent", domainRef: "host-1", principalRef: "main" },
+    agentDefinition: { definitionRef: "main", state: "present" },
+    runtimeInstance: { runtimeRef: "runtime-1", kind: "embedded", state: "present" },
+    applicableGrants: [],
+    assurance: [],
+    coverageState: "unattributed",
+    missingEvidence: [],
   };
 }
 
@@ -237,23 +258,7 @@ describe("owner-native execution lifecycle receipts", () => {
          owner_kind, owner_id, context_id, execution_id
        ) VALUES (?, ?, ?, ?)`,
     ).run("cron", "cron-2", "context-1", "execution-other");
-    const context: ExecutionIdentityContextV1 = {
-      schemaVersion: 1,
-      contextId: "context-1",
-      executionId: "execution-1",
-      runId: "run-1",
-      createdAt: 50,
-      trustDomain: { kind: "gateway-cell", domainRef: "host-1", state: "present" },
-      invoker: { state: "unknown" },
-      ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-      agentPrincipal: { kind: "agent", domainRef: "host-1", principalRef: "main" },
-      agentDefinition: { definitionRef: "main", state: "present" },
-      runtimeInstance: { runtimeRef: "runtime-1", kind: "embedded", state: "present" },
-      applicableGrants: [],
-      assurance: [],
-      coverageState: "unattributed",
-      missingEvidence: [],
-    };
+    const context = executionContext();
 
     const first = presentExecutionDecisionReceipts({
       context,
@@ -326,28 +331,249 @@ describe("owner-native execution lifecycle receipts", () => {
     ).toBe("cron_run_receipts");
   });
 
+  const deletedAnchorCases = [
+    {
+      stage: "cron",
+      cursor: "c:0:0",
+      bindFirst: (options: ReturnType<typeof createOldOwnerDatabase>) =>
+        bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+      addSuccessor: (db: DatabaseSync) => {
+        db.prepare(
+          `INSERT INTO cron_run_receipts (
+             receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+             status, owner_pid, started_at_ms, finished_at_ms
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "running", 1, 63, null);
+        db.prepare(
+          `INSERT INTO execution_owner_lifecycle_bindings (
+             owner_kind, owner_id, context_id, execution_id
+           ) VALUES ('cron', 'cron-2', 'context-1', 'execution-1')`,
+        ).run();
+      },
+      deleteAnchor: (db: DatabaseSync) => {
+        db.prepare(
+          "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'cron' AND owner_id = 'cron-1'",
+        ).run();
+        db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
+      },
+    },
+    {
+      stage: "task",
+      cursor: "t:0:0",
+      bindFirst: (options: ReturnType<typeof createOldOwnerDatabase>) =>
+        bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options }),
+      addSuccessor: (db: DatabaseSync) => {
+        db.prepare(
+          `INSERT INTO task_runs (
+             task_id, runtime, owner_key, scope_kind, task, status, delivery_status,
+             notify_policy, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          "task-2",
+          "cron",
+          "owner-2",
+          "system",
+          "private",
+          "running",
+          "not_applicable",
+          "silent",
+          63,
+        );
+        db.prepare(
+          `INSERT INTO execution_owner_lifecycle_bindings (
+             owner_kind, owner_id, context_id, execution_id
+           ) VALUES ('task', 'task-2', 'context-1', 'execution-1')`,
+        ).run();
+      },
+      deleteAnchor: (db: DatabaseSync) => {
+        db.prepare(
+          "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'task' AND owner_id = 'task-1'",
+        ).run();
+        db.prepare("DELETE FROM task_runs WHERE task_id = 'task-1'").run();
+      },
+    },
+    {
+      stage: "flow",
+      cursor: "f:0:0",
+      bindFirst: (options: ReturnType<typeof createOldOwnerDatabase>) =>
+        bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options }),
+      addSuccessor: (db: DatabaseSync) => {
+        db.prepare(
+          `INSERT INTO flow_runs (
+             flow_id, owner_key, status, notify_policy, goal, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ).run("flow-2", "owner-2", "running", "silent", "private", 63, 63);
+        db.prepare(
+          `INSERT INTO execution_owner_lifecycle_bindings (
+             owner_kind, owner_id, context_id, execution_id
+           ) VALUES ('flow', 'flow-2', 'context-1', 'execution-1')`,
+        ).run();
+      },
+      deleteAnchor: (db: DatabaseSync) => {
+        db.prepare(
+          "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'flow' AND owner_id = 'flow-1'",
+        ).run();
+        db.prepare("DELETE FROM flow_runs WHERE flow_id = 'flow-1'").run();
+      },
+    },
+  ] as const;
+
+  it.each(deletedAnchorCases)(
+    "rejects a nonzero $stage cursor after its exact owner anchor is deleted",
+    ({ cursor, bindFirst, addSuccessor, deleteAnchor }) => {
+      const options = createOldOwnerDatabase();
+      expect(bindFirst(options)).toBe("bound");
+      const db = openOpenClawStateDatabase(options).db;
+      addSuccessor(db);
+      const firstPage = presentExecutionDecisionReceipts({
+        context: executionContext(),
+        decisionCursor: cursor,
+        decisionLimit: 1,
+        options,
+      });
+      expect(firstPage.nextDecisionCursor).toMatch(/^[ctf]:[1-9]\d*:[1-9]\d*$/);
+
+      deleteAnchor(db);
+
+      expect(() =>
+        presentExecutionDecisionReceipts({
+          context: executionContext(),
+          decisionCursor: firstPage.nextDecisionCursor,
+          decisionLimit: 1,
+          options,
+        }),
+      ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
+    },
+  );
+
+  it("rejects a nonzero owner cursor when its retained anchor belongs to another context", () => {
+    const options = createOldOwnerDatabase();
+    expect(
+      bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+    ).toBe("bound");
+    const db = openOpenClawStateDatabase(options).db;
+    deletedAnchorCases[0].addSuccessor(db);
+    const firstPage = presentExecutionDecisionReceipts({
+      context: executionContext(),
+      decisionCursor: "c:0:0",
+      decisionLimit: 1,
+      options,
+    });
+    expect(firstPage.nextDecisionCursor).toMatch(/^c:[1-9]\d*:[1-9]\d*$/);
+
+    expect(() =>
+      presentExecutionDecisionReceipts({
+        context: executionContext("context-other"),
+        decisionCursor: firstPage.nextDecisionCursor,
+        decisionLimit: 1,
+        options,
+      }),
+    ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
+  });
+
+  it("rejects a nonzero owner cursor after the state database is removed", () => {
+    const options = createOldOwnerDatabase();
+    expect(
+      bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+    ).toBe("bound");
+    const db = openOpenClawStateDatabase(options).db;
+    deletedAnchorCases[0].addSuccessor(db);
+    const firstPage = presentExecutionDecisionReceipts({
+      context: executionContext(),
+      decisionCursor: "c:0:0",
+      decisionLimit: 1,
+      options,
+    });
+    expect(firstPage.nextDecisionCursor).toMatch(/^c:[1-9]\d*:[1-9]\d*$/);
+
+    closeOpenClawStateDatabaseForTest();
+    rmSync(options.path);
+
+    expect(() =>
+      presentExecutionDecisionReceipts({
+        context: executionContext(),
+        decisionCursor: firstPage.nextDecisionCursor,
+        decisionLimit: 1,
+        options,
+      }),
+    ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
+  });
+
+  it("rejects a reused owner rowid whose binding belongs to another execution", () => {
+    const options = createOldOwnerDatabase();
+    const db = openOpenClawStateDatabase(options).db;
+    db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
+    db.prepare(
+      `INSERT INTO cron_run_receipts (
+         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+         status, owner_pid, started_at_ms, finished_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "running", 1, 63, null);
+    db.prepare(
+      `INSERT INTO cron_run_receipts (
+         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+         status, owner_pid, started_at_ms, finished_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
+    expect(
+      bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+    ).toBe("bound");
+    db.prepare(
+      `INSERT INTO execution_owner_lifecycle_bindings (
+         owner_kind, owner_id, context_id, execution_id
+       ) VALUES ('cron', 'cron-2', 'context-1', 'execution-1')`,
+    ).run();
+    const firstPage = presentExecutionDecisionReceipts({
+      context: executionContext(),
+      decisionCursor: "c:0:0",
+      decisionLimit: 1,
+      options,
+    });
+    expect(firstPage.nextDecisionCursor).toMatch(/^c:60:[1-9]\d*$/);
+
+    db.prepare(
+      "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'cron' AND owner_id = 'cron-1'",
+    ).run();
+    db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
+    db.prepare(
+      `INSERT INTO cron_run_receipts (
+         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+         status, owner_pid, started_at_ms, finished_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "cron-replacement",
+      "default",
+      "job-replacement",
+      "revision-1",
+      "main",
+      "run-2",
+      "running",
+      1,
+      60,
+      null,
+    );
+    db.prepare(
+      `INSERT INTO execution_owner_lifecycle_bindings (
+         owner_kind, owner_id, context_id, execution_id
+       ) VALUES ('cron', 'cron-replacement', 'context-1', 'execution-other')`,
+    ).run();
+
+    expect(() =>
+      presentExecutionDecisionReceipts({
+        context: executionContext(),
+        decisionCursor: firstPage.nextDecisionCursor,
+        decisionLimit: 1,
+        options,
+      }),
+    ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
+  });
+
   it("projects every owner terminal state without rederiving lifecycle precedence", () => {
     const options = createOldOwnerDatabase();
     bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options });
     bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options });
     bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options });
-    const context: ExecutionIdentityContextV1 = {
-      schemaVersion: 1,
-      contextId: "context-1",
-      executionId: "execution-1",
-      runId: "run-1",
-      createdAt: 50,
-      trustDomain: { kind: "gateway-cell", domainRef: "host-1", state: "present" },
-      invoker: { state: "unknown" },
-      ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-      agentPrincipal: { kind: "agent", domainRef: "host-1", principalRef: "main" },
-      agentDefinition: { definitionRef: "main", state: "present" },
-      runtimeInstance: { runtimeRef: "runtime-1", kind: "embedded", state: "present" },
-      applicableGrants: [],
-      assurance: [],
-      coverageState: "unattributed",
-      missingEvidence: [],
-    };
+    const context = executionContext();
     const db = openOpenClawStateDatabase(options).db;
 
     for (const status of ["ok", "error", "skipped", "interrupted", "superseded"]) {
