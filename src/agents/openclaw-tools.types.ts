@@ -54,6 +54,8 @@ export type OpenClawToolsOptions = {
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  /** Gateway-owned session policy follows runtime updates; explicit overrides stay pinned. */
+  sessionConfigSource?: "runtime" | "pinned";
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /** Capabilities declared by the gateway client that originated this run. */
