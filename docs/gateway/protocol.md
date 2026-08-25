@@ -542,7 +542,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Models and usage">
     - `models.list` returns the runtime-allowed model catalog. See "`models.list` views" below.
-    - `usage.status` returns provider usage windows/remaining quota summaries.
+    - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
     - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
     - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
