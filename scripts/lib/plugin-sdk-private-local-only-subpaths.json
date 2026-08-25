@@ -28,6 +28,7 @@
   "channel-targets",
   "channel-test-helpers",
   "chat-channel-ids",
+  "claude-model-runtime",
   "cli-backend",
   "cli-runtime",
   "codex-mcp-projection",

@@ -111,6 +111,7 @@
   "cli-argv",
   "cli-runtime",
   "cli-backend",
+  "claude-model-runtime",
   "codex-mcp-projection",
   "native-hook-relay-runtime",
   "codex-session-transcript-runtime",

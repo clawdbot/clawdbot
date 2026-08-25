@@ -791,6 +791,9 @@
     "./plugin-sdk/cli-backend": {
       "default": "./dist/plugin-sdk/cli-backend.js"
     },
+    "./plugin-sdk/claude-model-runtime": {
+      "default": "./dist/plugin-sdk/claude-model-runtime.js"
+    },
     "./plugin-sdk/codex-mcp-projection": {
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
     },

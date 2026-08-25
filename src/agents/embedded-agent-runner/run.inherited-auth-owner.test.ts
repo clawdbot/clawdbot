@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listAgentIds } from "../agent-scope-config.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -10,7 +10,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetSharedRunIntegrationHarnessMocks,
-  warmRunOverflowCompactionHarness,
+  useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 
 const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
@@ -29,11 +29,12 @@ function projectSetupExecutionConfig(source: OpenClawConfig): OpenClawConfig {
 }
 
 describe("embedded setup inference inherited auth owner", () => {
-  beforeAll(async () => {
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+  // Provider-pinned runs stay on the mocked plugin harness, so no host-route
+  // warmup is needed here; see overflowBaseRunParams for the route trap.
+  beforeEach(() => {
+    resetSharedRunIntegrationHarnessMocks();
+    useOpenAIPlatformAuthFixture();
   });
-
-  beforeEach(resetSharedRunIntegrationHarnessMocks);
 
   it.each([
     { name: "a pre-roster config", source: {} },
@@ -49,6 +50,11 @@ describe("embedded setup inference inherited auth owner", () => {
 
       await runEmbeddedAgent({
         ...overflowBaseRunParams,
+        // Auth-owner resolution is provider-agnostic. Route through the mocked
+        // plugin harness so this shard does not compile the bundled Anthropic
+        // provider policy from source just to assert an agent directory.
+        provider: "openai",
+        model: "gpt-5.6-luna",
         agentId: "main",
         config,
         runId: `run-setup-inference-owner-${name}`,
