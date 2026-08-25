@@ -19,7 +19,7 @@ let package = Package(
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.1"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
-        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.5"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
         .package(
             url: "https://github.com/openclaw/Peekaboo.git",
             revision: "028cd9eb2d7b413c26f02f169c5f6224b2fcb3e0"),
