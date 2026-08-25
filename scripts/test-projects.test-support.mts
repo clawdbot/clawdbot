@@ -2058,6 +2058,7 @@ const packageAcceptance = "package-acceptance-workflow";
 const dockerBuild = "docker-build-helper";
 const dockerE2e = "docker-e2e-plan";
 const workflowGuards = "ci-workflow-guards";
+const vcrPublish = "vercel-container-registry-publish";
 const pluginPrerelease = "plugin-prerelease-test-plan";
 const releaseCheck = "test/release-check.test.ts";
 const installDocker = "test-install-sh-docker";
@@ -2278,6 +2279,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
   ],
   [/^\.github\/workflows\/docker-release\.yml$/u, ["src/dockerfile.test.ts"]],
+  [
+    /^\.github\/workflows\/(?:docker-release|vercel-container-registry-publish)\.yml$/u,
+    ["docker-channel-promote", vcrPublish],
+  ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
   [/^\.github\/workflows\/openclaw-performance\.yml$/u, ["openclaw-performance-workflow"]],
   [/^\.github\/workflows\/plugin-prerelease\.yml$/u, [pluginPrerelease]],
@@ -2290,6 +2295,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^\.github\/workflows\/(?:openclaw-release-publish|package-acceptance)\.yml$/u,
     [packageAcceptance],
   ],
+  [/^\.github\/workflows\/openclaw-release-publish\.yml$/u, [vcrPublish]],
   [
     /^\.github\/workflows\/plugin-clawhub-new\.yml$/u,
     [packageAcceptance, "plugin-clawhub-new-workflow"],

@@ -35,7 +35,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
-  "continue-on-error"?: boolean;
+  "continue-on-error"?: boolean | string;
   environment?: string;
   if?: string;
   needs?: string | string[];
@@ -45,7 +45,7 @@ type WorkflowJob = {
   steps?: WorkflowStep[];
   "timeout-minutes"?: number;
   uses?: string;
-  with?: Record<string, string>;
+  with?: Record<string, boolean | string>;
 };
 
 type Workflow = {
@@ -55,6 +55,9 @@ type Workflow = {
     workflow_call?: {
       inputs?: Record<string, { required?: boolean; type?: string }>;
       outputs?: Record<string, { description?: string; value?: string }>;
+    };
+    workflow_dispatch?: {
+      inputs?: Record<string, { required?: boolean; type?: string }>;
     };
   };
 };
@@ -393,15 +396,59 @@ describe("Vercel Container Registry publishing", () => {
     ).toBe(false);
   });
 
+  it("transports only secret-safe digests across the VCR workflow boundary", () => {
+    const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
+    const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+    const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
+    const verifyAttestations = requireJob(dockerRelease, "verify-attestations");
+    const releasePublish = requireJob(releaseWorkflow, "publish_vcr");
+    const reusablePublish = requireJob(reusable, "publish");
+
+    expect(verifyAttestations.outputs?.vcr_source_digests).toBe(
+      "${{ steps.vcr_source_digests.outputs.value }}",
+    );
+    expect(dockerRelease.on?.workflow_call?.outputs?.vcr_source_digests).toEqual({
+      description: "Newline-delimited attestation-verified immutable GHCR source digests",
+      value: "${{ jobs.verify-attestations.outputs.vcr_source_digests }}",
+    });
+    const immutableSourceStep = verifyAttestations.steps?.find(
+      (step) => step.name === "Resolve and verify immutable VCR source refs",
+    );
+    expect(immutableSourceStep?.run).toContain("docker buildx imagetools inspect");
+    expect(immutableSourceStep?.run).toContain("${GHCR_IMAGE}@${digest}");
+    expect(immutableSourceStep?.run).toContain("verify-docker-attestations.mjs");
+    expect(immutableSourceStep?.run).toContain("${aliases[$index]}=${digest}");
+    expect(immutableSourceStep?.run).not.toContain("${aliases[$index]}=${immutable_ref}");
+
+    expect(releasePublish.with?.source_digests).toBe(
+      "${{ needs.publish_docker.outputs.vcr_source_digests }}",
+    );
+    expect(reusable.on?.workflow_call?.inputs?.source_digests).toEqual({
+      description: "Newline-delimited alias=sha256:<64 lowercase hex> entries",
+      required: true,
+      type: "string",
+    });
+    const copyStep = reusablePublish.steps?.find(
+      (step) => step.name === "Copy and verify immutable release images",
+    );
+    expect(copyStep?.env).toMatchObject({
+      SOURCE_DIGESTS: "${{ inputs.source_digests }}",
+      SOURCE_IMAGE: "ghcr.io/${{ github.repository }}",
+    });
+    expect(copyStep?.env).not.toHaveProperty("SOURCE_REFS");
+    expect(copyStep?.run).toContain("${alias}=${SOURCE_IMAGE}@${digest}");
+  });
+
   it("isolates best-effort VCR publication from Docker and GitHub release finalization", () => {
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
     const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     const manualPromotion = readWorkflow(".github/workflows/docker-channel-promote.yml");
+    const recoveryValidation = requireJob(reusable, "validate_recovery");
+    const recoveryApproval = requireJob(reusable, "approve_recovery");
     const reusablePublish = requireJob(reusable, "publish");
     const releasePublish = requireJob(releaseWorkflow, "publish_vcr");
     const finalizeRelease = requireJob(releaseWorkflow, "finalize_github_release");
-    const verifyAttestations = requireJob(dockerRelease, "verify-attestations");
     const manualResolve = requireJob(manualPromotion, "resolve");
     const manualApproval = requireJob(manualPromotion, "approve");
 
@@ -419,8 +466,8 @@ describe("Vercel Container Registry publishing", () => {
     expect(releasePublish.if).not.toContain("beta");
     expect(releasePublish.uses).toBe("./.github/workflows/vercel-container-registry-publish.yml");
     expect(releasePublish.with).toMatchObject({
+      advisory: true,
       include_browser: "${{ needs.publish_docker.outputs.include_browser == 'true' }}",
-      source_refs: "${{ needs.publish_docker.outputs.vcr_source_refs }}",
       version: "${{ needs.publish_docker.outputs.version }}",
     });
     expect(releasePublish.secrets).toEqual({
@@ -428,7 +475,28 @@ describe("Vercel Container Registry publishing", () => {
     });
     expect(finalizeRelease.needs).toEqual(["publish", "publish_docker"]);
     expect(finalizeRelease.if).not.toContain("publish_vcr");
-    expect(reusablePublish["continue-on-error"]).toBe(true);
+    expect(recoveryValidation.if).toBe("${{ !inputs.advisory }}");
+    expect(recoveryValidation.permissions).toEqual({});
+    expect(recoveryValidation.environment).toBeUndefined();
+    expect(recoveryValidation.secrets).toBeUndefined();
+    const validateRecoveryStep = recoveryValidation.steps?.find(
+      (step) => step.name === "Require a main-branch recovery dispatch",
+    );
+    expect(validateRecoveryStep?.env).toEqual({ WORKFLOW_REF: "${{ github.ref }}" });
+    expect(validateRecoveryStep?.run).toContain('"${WORKFLOW_REF}" != "refs/heads/main"');
+    expect(validateRecoveryStep?.run).toContain(
+      "::error::Vercel registry recovery must be dispatched from main",
+    );
+    expect(recoveryApproval.needs).toBe("validate_recovery");
+    expect(recoveryApproval.if).toBe("${{ !inputs.advisory }}");
+    expect(recoveryApproval.environment).toBe("docker-release");
+    expect(recoveryApproval.permissions).toEqual({});
+    expect(reusablePublish.needs).toEqual(["validate_recovery", "approve_recovery"]);
+    expect(reusablePublish.if).toBe(
+      "${{ always() && (inputs.advisory || (needs.validate_recovery.result == 'success' && needs.approve_recovery.result == 'success')) }}",
+    );
+    expect(reusablePublish["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    expect(reusablePublish.permissions).toEqual({ contents: "read" });
     expect(reusablePublish["timeout-minutes"]).toBe(30);
 
     const validateDispatch = manualResolve.steps?.find((step) =>
@@ -451,37 +519,22 @@ describe("Vercel Container Registry publishing", () => {
         ),
       );
     expect(reusableCallers).toEqual(["openclaw-release-publish.yml"]);
+    expect(reusable.on?.workflow_call?.inputs?.advisory).toEqual({
+      description: "Keep automated release mirroring non-blocking",
+      required: true,
+      type: "boolean",
+    });
     expect(reusable.on?.workflow_call?.inputs?.include_browser).toEqual({
       description: "Whether the tagged Docker release includes browser images",
       required: true,
       type: "boolean",
     });
-    expect(reusable.on?.workflow_call?.inputs?.source_refs).toEqual({
-      description: "Newline-delimited alias=immutable-ref entries verified by the caller",
-      required: true,
-      type: "string",
+    expect(reusable.on?.workflow_dispatch?.inputs).not.toHaveProperty("advisory");
+    expect(reusable.on?.workflow_dispatch?.inputs).toEqual({
+      include_browser: reusable.on?.workflow_call?.inputs?.include_browser,
+      source_digests: reusable.on?.workflow_call?.inputs?.source_digests,
+      version: reusable.on?.workflow_call?.inputs?.version,
     });
-    expect(verifyAttestations.outputs?.vcr_source_refs).toBe(
-      "${{ steps.vcr_source_refs.outputs.value }}",
-    );
-    expect(dockerRelease.on?.workflow_call?.outputs).toMatchObject({
-      include_browser: {
-        value: "${{ jobs.create-manifest.outputs.browser_supported }}",
-      },
-      vcr_source_refs: {
-        value: "${{ jobs.verify-attestations.outputs.vcr_source_refs }}",
-      },
-      version: {
-        value: "${{ jobs.resolve_release_policy.outputs.version }}",
-      },
-    });
-    const immutableSourceStep = verifyAttestations.steps?.find(
-      (step) => step.name === "Resolve and verify immutable VCR source refs",
-    );
-    expect(immutableSourceStep?.run).toContain("docker buildx imagetools inspect");
-    expect(immutableSourceStep?.run).toContain("${GHCR_IMAGE}@${digest}");
-    expect(immutableSourceStep?.run).toContain("verify-docker-attestations.mjs");
-
     expect(reusablePublish.steps?.find((step) => step.name === "Set up Docker Builder")?.uses).toBe(
       "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
     );
