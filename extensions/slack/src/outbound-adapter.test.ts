@@ -129,7 +129,19 @@ describe("slackOutbound", () => {
         },
       ],
     });
-    expect(result).toEqual({ channel: "slack", messageId: "m-final" });
+    expect(result).toMatchObject({
+      channel: "slack",
+      messageId: "m-final",
+      receipt: {
+        platformMessageIds: ["m-media-1", "m-media-2", "m-final"],
+        primaryPlatformMessageId: "m-media-1",
+        parts: [
+          { index: 0, platformMessageId: "m-media-1" },
+          { index: 1, platformMessageId: "m-media-2" },
+          { index: 2, platformMessageId: "m-final" },
+        ],
+      },
+    });
   });
 
   it("forwards forced-media intent through the core outbound adapter", async () => {

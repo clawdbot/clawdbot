@@ -70,13 +70,13 @@ let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js")
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
 let resolveProviderAuthProfileId: typeof import("./provider-runtime.js").resolveProviderAuthProfileId;
 let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
-let resolveProviderDeprecatedAuthProfileIds: typeof import("./provider-runtime.js").resolveProviderDeprecatedAuthProfileIds;
 let resolveProviderExtraParamsForTransport: typeof import("./provider-runtime.js").resolveProviderExtraParamsForTransport;
 let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js").resolveProviderFollowupFallbackRoute;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
 let resolveProviderTransportTurnStateWithPlugin: typeof import("./provider-runtime.js").resolveProviderTransportTurnStateWithPlugin;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
+let resolveProviderDeprecatedAuthProfileIds: typeof import("./provider-runtime.js").resolveProviderDeprecatedAuthProfileIds;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderSystemPromptContribution: typeof import("./provider-runtime.js").resolveProviderSystemPromptContribution;
 let resolveExternalAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
@@ -317,13 +317,13 @@ describe("provider-runtime", () => {
       prepareProviderExtraParams,
       resolveProviderAuthProfileId,
       resolveProviderConfigApiKeyWithPlugin,
-      resolveProviderDeprecatedAuthProfileIds,
       resolveProviderExtraParamsForTransport,
       resolveProviderFollowupFallbackRoute,
       resolveProviderStreamFn,
       resolveProviderTransportTurnStateWithPlugin,
       resolveProviderCacheTtlEligibility,
       resolveProviderModernModelRef,
+      resolveProviderDeprecatedAuthProfileIds,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderSystemPromptContribution,
       resolveExternalAuthProfilesWithPlugins,
@@ -1670,6 +1670,17 @@ describe("provider-runtime", () => {
     ).toBeUndefined();
 
     expect(normalizeConfig).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("reads deprecated profile ids without loading provider runtime", () => {
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      deprecatedProfileIds: ["anthropic:claude-cli"],
+    });
+
+    expect(resolveProviderDeprecatedAuthProfileIds({ provider: "anthropic" })).toEqual([
+      "anthropic:claude-cli",
+    ]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
