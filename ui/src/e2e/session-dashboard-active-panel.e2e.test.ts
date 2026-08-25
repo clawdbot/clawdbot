@@ -15,20 +15,7 @@ const boardSnapshot = {
   sessionKey,
   revision: 1,
   tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [
-    {
-      name: "status",
-      tabId: "main",
-      title: "Status",
-      contentKind: "html",
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-      frameUrl: "about:blank#status",
-    },
-  ],
+  widgets: [],
 };
 
 suite.define(() => {
