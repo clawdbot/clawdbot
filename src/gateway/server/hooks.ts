@@ -422,6 +422,10 @@ export function createGatewayHooksRequestHandler(params: {
     });
     const admissionTimeoutError = new Error(HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR);
     const startupAbortController = new AbortController();
+    const settleSuccessfulAdmission = () => {
+      startupAbortController.signal.throwIfAborted();
+      settleAdmission({ ok: true, runId });
+    };
     admissionTimer = setTimeout(() => {
       admissionTimedOut = true;
       startupAbortController.abort(admissionTimeoutError);
@@ -493,12 +497,12 @@ export function createGatewayHooksRequestHandler(params: {
                 },
               },
               abortSignal: startupAbortController.signal,
-              onExecutionStarted: () => {
-                // Existing runner-entry callbacks are the final owner-boundary fence:
-                // a deadline that wins this race prevents the runner call itself.
-                startupAbortController.signal.throwIfAborted();
-                settleAdmission({ ok: true, runId });
+              onLaneWait: (info) => {
+                if (info?.waiting === false) {
+                  settleSuccessfulAdmission();
+                }
               },
+              onExecutionStarted: settleSuccessfulAdmission,
             });
           const result = await runWithScheduledGatewayContext({
             ...(scheduledGatewayContextResolver
