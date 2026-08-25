@@ -406,17 +406,6 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       content: [documentAttachment("bundle.zip", "application/zip")],
       timestamp: baseTime + 14,
     },
-    sectionTitle("Link", baseTime + 15),
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "[OpenClaw documentation](https://docs.openclaw.ai)",
-        },
-      ],
-      timestamp: baseTime + 16,
-    },
     sectionTitle("Unavailable / failed / removed", baseTime + 17),
     {
       role: "assistant",
