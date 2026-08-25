@@ -512,6 +512,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
         ...(params.unread !== undefined ? { unread: readBooleanParam(params, "unread") } : {}),
         ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
+        ...(params.category !== undefined
+          ? { category: readClearableString(params, "category") }
+          : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),
