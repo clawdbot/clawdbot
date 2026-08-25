@@ -308,10 +308,8 @@ export function isSilentReplyPrefixText(
   }
   const tokenUpper = token.toUpperCase();
   const trimmed = text.trimStart();
-  // The `tokenUpper.startsWith(normalized)` test below can only hold for a
-  // candidate no longer than the token, and Unicode upper-casing never shortens
-  // a string, so reject over-long input before scanning it. Without this the
-  // per-delta typing check walks the whole accumulated reply buffer.
+  // Uppercasing never shortens text, so overlong candidates cannot match.
+  // Reject before scanning each streamed reply's growing buffer.
   if (!trimmed || trimmed.length > tokenUpper.length) {
     return false;
   }
