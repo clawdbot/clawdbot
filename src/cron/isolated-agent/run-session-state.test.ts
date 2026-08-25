@@ -268,6 +268,7 @@ describe("createPersistCronSessionEntry", () => {
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
+      createdActor: { type: "human", id: "profile-ada" },
       thinkingLevel: "high",
       toolsAllow: ["image_generate", "write"],
       toolsAllowIsDefault: true,
@@ -301,7 +302,7 @@ describe("createPersistCronSessionEntry", () => {
     });
     expect(store[runSessionKey]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
       sessionId: "run-session-id",
       modelProvider: "claude-cli",
@@ -385,6 +386,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:job",
+      createdActor: { type: "human", id: "profile-ada" },
       persistSessionEntry,
     });
 
@@ -392,12 +394,12 @@ describe("createPersistCronSessionEntry", () => {
 
     expect(cronSession.store["agent:main:cron:job"]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
     expect(persistedStore["agent:main:cron:job"]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();

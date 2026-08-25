@@ -340,5 +340,16 @@ describe("SQLite transcript history events", () => {
     expect(events).toHaveLength(bindingCount * 2 + 1);
     expect(historyEventId(events[0])).toBe("seed");
     expect(historyEventId(events.at(-1))).toBe(`synthetic-message-${String(bindingCount * 2 + 1)}`);
+
+    const latestPage = readRecentSessionTranscriptHistoryEvents(scope, {
+      maxBytes: 1_000_000,
+      maxLines: 2,
+      maxMessages: 2,
+    });
+    expect(latestPage.totalMessages).toBe(bindingCount * 2 + 1);
+    expect(latestPage.events.map(historyEventId)).toEqual([
+      `synthetic-boundary-${String(bindingCount * 2)}`,
+      `synthetic-message-${String(bindingCount * 2 + 1)}`,
+    ]);
   });
 });

@@ -218,43 +218,35 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const historyTarget = {
+    agentId: target.agentId,
+    sessionEntry: entry,
+    sessionId: entry.sessionId,
+    sessionKey: target.canonicalKey,
+    storePath: target.storePath,
+  };
   let boundedSnapshot:
     | Awaited<ReturnType<typeof readBoundedSessionHistorySnapshotAsync>>
     | undefined;
   let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
   try {
     boundedSnapshot =
-      cursor === undefined && typeof limit === "number"
+      typeof limit === "number"
         ? await readBoundedSessionHistorySnapshotAsync({
-            target: {
-              agentId: target.agentId,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: target.canonicalKey,
-              storePath: target.storePath,
-            },
+            cursor,
+            target: historyTarget,
             limit,
             maxChars: effectiveMaxChars,
           })
         : undefined;
-    // Cursor reads still need an arbitrary historical window. The common first
-    // page path is bounded above so `limit=1` cannot materialize huge transcripts.
+    // Requests without a limit preserve the public complete-history contract.
     fullSnapshot =
-      boundedSnapshot === undefined && entry?.sessionId
-        ? await readSessionMessagesWithSourceAsync(
-            {
-              agentId: target.agentId,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: target.canonicalKey,
-              storePath: target.storePath,
-            },
-            {
-              mode: "full",
-              reason: "session history cursor pagination",
-              allowResetArchiveFallback: true,
-            },
-          )
+      boundedSnapshot === undefined
+        ? await readSessionMessagesWithSourceAsync(historyTarget, {
+            mode: "full",
+            reason: "session history cursor pagination",
+            allowResetArchiveFallback: true,
+          })
         : undefined;
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
@@ -274,6 +266,7 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
   if (!shouldStreamSse(req)) {
     const history = buildSessionHistorySnapshot({
+      projection: boundedSnapshot?.projection,
       rawMessages: rawSnapshot,
       maxChars: effectiveMaxChars,
       limit,
@@ -288,27 +281,20 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  const transcriptCandidates = entry?.sessionId
-    ? new Set(
-        resolveSessionTranscriptCandidates(
-          entry.sessionId,
-          target.storePath,
-          undefined,
-          target.agentId,
-        )
-          .map((candidate) => resolveTranscriptPathForComparison(candidate))
-          .filter((candidate): candidate is string => typeof candidate === "string"),
-      )
-    : new Set<string>();
+  const transcriptCandidates = new Set(
+    resolveSessionTranscriptCandidates(
+      historyTarget.sessionId,
+      target.storePath,
+      undefined,
+      target.agentId,
+    )
+      .map((candidate) => resolveTranscriptPathForComparison(candidate))
+      .filter((candidate): candidate is string => typeof candidate === "string"),
+  );
 
   const sseState = SessionHistorySseState.fromRawSnapshot({
-    target: {
-      agentId: target.agentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: target.canonicalKey,
-      storePath: target.storePath,
-    },
+    projection: boundedSnapshot?.projection,
+    target: historyTarget,
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,
     totalRawMessages: boundedSnapshot?.totalMessages,
@@ -494,11 +480,8 @@ export async function handleSessionHistoryHttpRequest(
     // transcript write in the gateway would otherwise append a Promise-chain
     // entry capturing `update.message` to every open SSE stream's queue —
     // O(streams × updates) for busy deployments.
-    if (!entry?.sessionId) {
-      return;
-    }
     const updateMatchesIdentity =
-      update.target?.sessionId === entry.sessionId &&
+      update.target?.sessionId === historyTarget.sessionId &&
       normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
     const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {

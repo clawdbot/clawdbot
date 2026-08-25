@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
@@ -12,10 +13,15 @@ import {
   renderSidebarApprovalItem,
   renderSidebarAskOpenClawButton,
   renderSidebarIssueItem,
+  renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
 import "./menu-surface.ts";
+
+// Keep request orchestration behind the same lazy boundary as its Inbox UI;
+// ApplicationContext retains the activated controller across presenters.
+export { ScopeUpgradeController };
 
 export type SidebarAttentionPanelPosition = { left: number } & (
   | { anchor: "top"; top: number }
@@ -39,6 +45,7 @@ type SidebarAttentionPanelParams = {
   overflowBelow: boolean;
   panelPosition: SidebarAttentionPanelPosition;
   selectedTab: IssueTab;
+  scopeUpgrade: ApplicationContext["scopeUpgrade"];
   updateSurface: boolean;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
@@ -62,16 +69,29 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           : params.items;
   const showApprovals = params.selectedTab === "all" || params.selectedTab === "approvals";
   const showUpdate = params.updateSurface && ["all", "system"].includes(params.selectedTab);
+  const scopeUpgradeState = params.scopeUpgrade.state;
+  const showScopeUpgrade =
+    scopeUpgradeState.phase !== "hidden" && ["all", "system"].includes(params.selectedTab);
   const visibleCount =
-    (showApprovals ? params.approvalQueue.length : 0) + visibleItems.length + (showUpdate ? 1 : 0);
+    (showApprovals ? params.approvalQueue.length : 0) +
+    visibleItems.length +
+    (showUpdate ? 1 : 0) +
+    (showScopeUpgrade ? 1 : 0);
   const errorItems = visibleItems.filter((item) => item.severity === "error");
   const warningItems = visibleItems.filter((item) => item.severity === "warning");
-  const count = params.approvalQueue.length + params.items.length + (params.updateSurface ? 1 : 0);
+  const count =
+    params.approvalQueue.length +
+    params.items.length +
+    (params.updateSurface ? 1 : 0) +
+    (scopeUpgradeState.phase === "hidden" ? 0 : 1);
   const tabCounts: Record<IssueTab, number> = {
     all: count,
     approvals: params.approvalQueue.length,
     automations: automationItems.length,
-    system: systemItems.length + (params.updateSurface ? 1 : 0),
+    system:
+      systemItems.length +
+      (params.updateSurface ? 1 : 0) +
+      (scopeUpgradeState.phase === "hidden" ? 0 : 1),
   };
   const custodianItems = params.items.filter((item) => item.action.kind === "askCustodian");
   const custodianSeverity = custodianItems.some((item) => item.severity === "error")
@@ -101,6 +121,13 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
       onNavigate: () => params.onNavigate("updates"),
       visible: params.updateSurface,
       watchUpdateProgress: params.watchUpdateProgress,
+    });
+  const scopeUpgrade = () =>
+    renderSidebarScopeUpgradeItem({
+      state: scopeUpgradeState,
+      onCancel: () => params.scopeUpgrade.cancel(),
+      onRequest: () => params.scopeUpgrade.request(),
+      onRetry: () => params.scopeUpgrade.retry(),
     });
 
   return html`<button
@@ -175,7 +202,8 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
                 </div>`
               : nothing}
             ${showApprovals ? params.approvalQueue.map(renderApproval) : nothing}
-            ${showUpdate && updateError ? update() : nothing} ${errorItems.map(renderItem)}
+            ${showUpdate && updateError ? update() : nothing}
+            ${showScopeUpgrade ? scopeUpgrade() : nothing} ${errorItems.map(renderItem)}
             ${showUpdate && !updateError ? update() : nothing} ${warningItems.map(renderItem)}
           </div>
           <div

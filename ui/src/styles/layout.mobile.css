@@ -522,10 +522,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     padding: 0 0 12px;
   }
 
-  .chat-thread-inner {
-    width: calc(100% - 36px - 16px);
-  }
-
   .chat-msg {
     max-width: 90%;
   }

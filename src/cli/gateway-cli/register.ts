@@ -20,7 +20,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
-import { rethrowExpectedCliError } from "../failure-output.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
@@ -146,15 +146,14 @@ async function runGatewayCommand(
         formatGatewayClientRequestErrorJson,
         formatGatewayTransportErrorJson,
       } = await import("../../gateway/call.js");
-      const payload =
+      defaultRuntime.writeJson(
         formatGatewayAuthErrorJson(err) ??
-        formatGatewayClientRequestErrorJson(err) ??
-        formatGatewayTransportErrorJson(err);
-      if (payload) {
-        defaultRuntime.writeJson(payload);
-        defaultRuntime.exit(1);
-        return;
-      }
+          formatGatewayClientRequestErrorJson(err) ??
+          formatGatewayTransportErrorJson(err) ??
+          formatCliJsonFailure(err),
+      );
+      defaultRuntime.exit(1);
+      return;
     }
     const message = formatErrorMessage(err);
     defaultRuntime.error(label ? `${label}: ${message}` : message);

@@ -7,6 +7,7 @@ import type { SessionGitHubPublicationResult } from "../../packages/gateway-prot
 import { resolveGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import { runCommandBuffered } from "../process/exec.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -453,6 +454,15 @@ export async function executeGitHubPublication(params: {
     const currentTree = await step(
       async () => await requireCommand(["git", "rev-parse", "HEAD^{tree}"], { cwd: worktree.path }),
     );
+    const config = currentGitHubPublicationConfig();
+    const attribution = resolveGitCoauthorAttribution({
+      agentId: row.agent_id,
+      config,
+      excludeAccountId: identity.account.accountId,
+      sessionKey: row.session_key,
+      storePath: loaded.storePath,
+    });
+    const contributorCredit = attribution?.logins.map((login) => `- @${login}`).join("\n");
     const previousBranchHead = headCommit;
     let updateBranchRef: (() => Promise<void>) | undefined;
     if (markerPresent) {
@@ -471,15 +481,11 @@ export async function executeGitHubPublication(params: {
           cwd: worktree.path,
         });
       });
-      const attribution = resolveGitCoauthorAttribution({
-        agentId: row.agent_id,
-        config: currentGitHubPublicationConfig(),
-        excludeAccountId: identity.account.accountId,
-        sessionKey: row.session_key,
-        storePath: loaded.storePath,
-      });
       const title = row.title?.trim() || `Publish ${branch}`;
-      const message = appendGitHubPublicationMessage(title, [
+      const commitBody = contributorCredit
+        ? `${title}\n\nWorked on by:\n${contributorCredit}`
+        : title;
+      const message = appendGitHubPublicationMessage(commitBody, [
         ...(attribution?.trailers ?? []),
         marker,
       ]);
@@ -593,17 +599,27 @@ export async function executeGitHubPublication(params: {
     };
     let pullRequestUrl = await step(findPullRequest);
     if (!pullRequestUrl) {
-      const attribution = resolveGitCoauthorAttribution({
-        agentId: row.agent_id,
-        config: currentGitHubPublicationConfig(),
-        excludeAccountId: identity.account.accountId,
+      const sessionUrl = resolveControlUiSessionUrl(config, {
         sessionKey: row.session_key,
-        storePath: loaded.storePath,
+        fallbackAgentId: row.agent_id,
+        exactKey: true,
       });
-      const participantCredit = attribution?.logins.length
-        ? `\n\n## Participants\n\n${attribution.logins.map((login) => `- @${login}`).join("\n")}`
+      const description = (
+        row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."
+      )
+        .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
+        .replace(
+          /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
+          "",
+        )
+        .trimEnd();
+      const participantCredit = contributorCredit
+        ? `\n\n## Worked on by\n\n${contributorCredit}`
         : "";
-      const body = `${row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."}${participantCredit}\n\n<!-- openclaw-publication:${row.request_id} -->`;
+      const footer = sessionUrl?.startsWith("https://")
+        ? `\n\n---\n[View the OpenClaw team session](${sessionUrl})`
+        : "";
+      const body = `${description}${participantCredit}\n\n${pullRequestMarker}${footer}`;
       identity = await refreshIdentity();
       const created = await step(
         async () =>

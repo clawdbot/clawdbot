@@ -4403,6 +4403,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith("• Reading the Slack handler");
   });
 
+  it("keeps one partial preview across reasoning and tool boundaries", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "reasoning", text: "Checking the first path" },
+      { kind: "reasoning_end" },
+      { kind: "item", progressText: "tool one" },
+      { kind: "assistant_start" },
+      { kind: "reasoning", text: "Checking the second path" },
+      { kind: "reasoning_end" },
+      { kind: "item", progressText: "tool two" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "final answer" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: { mode: "partial", progress: { label: false } },
+        },
+      }),
+    );
+
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith("final answer");
+  });
+
   it("keeps preamble headlines and tool progress when commentary is disabled", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);

@@ -43,18 +43,41 @@ const cookieSyncMocks = vi.hoisted(() => ({
 const inspectMocks = vi.hoisted(() => ({
   registerBrowserInspectCommands: vi.fn(),
 }));
-const actionInputMocks = vi.hoisted(() => ({
-  registerBrowserActionInputCommands: vi.fn(),
-}));
+const actionInputMocks = vi.hoisted(() => {
+  const waitAction = vi.fn();
+  const registerBrowserActionInputCommands = vi.fn(
+    (browser: Command, parentOpts: (command: Command) => unknown) => {
+      browser
+        .command("wait")
+        .option("--url <pattern>")
+        .action((opts, command) => waitAction(opts, parentOpts(command)));
+    },
+  );
+  return { registerBrowserActionInputCommands, waitAction };
+});
 const actionObserveMocks = vi.hoisted(() => ({
   registerBrowserActionObserveCommands: vi.fn(),
 }));
 const debugMocks = vi.hoisted(() => ({
   registerBrowserDebugCommands: vi.fn(),
 }));
-const stateMocks = vi.hoisted(() => ({
-  registerBrowserStateCommands: vi.fn(),
-}));
+const stateMocks = vi.hoisted(() => {
+  const cookieSetAction = vi.fn();
+  const registerBrowserStateCommands = vi.fn(
+    (browser: Command, parentOpts: (command: Command) => unknown) => {
+      browser
+        .command("cookies")
+        .command("set")
+        .argument("<name>")
+        .argument("<value>")
+        .option("--url <url>")
+        .action((name, value, opts, command) =>
+          cookieSetAction(name, value, opts, parentOpts(command)),
+        );
+    },
+  );
+  return { cookieSetAction, registerBrowserStateCommands };
+});
 const extensionMocks = vi.hoisted(() => ({
   registerBrowserExtensionCommands: vi.fn(),
 }));
@@ -101,6 +124,17 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
   });
 
+  it.each(["install", "status", "uninstall-host", "pair", "cdp"])(
+    "declares explicit JSON output for extension %s",
+    (subcommand) => {
+      expect(
+        isBrowserMachineOutput({
+          argv: ["node", "openclaw", "browser", "extension", subcommand, "--json"],
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("keeps human browser commands out of machine-output mode", () => {
     expect(isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "status"] })).toBe(false);
     expect(
@@ -128,9 +162,11 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     cookieSyncMocks.registerBrowserCookieSyncCommand.mockClear();
     inspectMocks.registerBrowserInspectCommands.mockClear();
     actionInputMocks.registerBrowserActionInputCommands.mockClear();
+    actionInputMocks.waitAction.mockClear();
     actionObserveMocks.registerBrowserActionObserveCommands.mockClear();
     debugMocks.registerBrowserDebugCommands.mockClear();
     stateMocks.registerBrowserStateCommands.mockClear();
+    stateMocks.cookieSetAction.mockClear();
     extensionMocks.registerBrowserExtensionCommands.mockClear();
   });
 
@@ -215,6 +251,104 @@ describe("registerBrowserCli lazy browser subcommands", () => {
       "tabs action",
     );
     expect(tabsCommand.parent?.opts().json).toBe(true);
+  });
+
+  it("keeps wait action URLs out of Gateway transport options", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, ["node", "openclaw", "browser", "wait", "--url", "**/done"]);
+
+    await program.parseAsync(["browser", "wait", "--url", "**/done"], { from: "user" });
+
+    const [opts, parent] = requireFirstCall(actionInputMocks.waitAction, "wait action call");
+    expect(opts).toMatchObject({ url: "**/done" });
+    expect(parent).not.toHaveProperty("url");
+  });
+
+  it("keeps explicit Gateway and wait URLs under their separate owners", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "wait",
+      "--url",
+      "**/done",
+    ]);
+
+    await program.parseAsync(
+      ["browser", "--url", "ws://127.0.0.1:18789", "wait", "--url", "**/done"],
+      { from: "user" },
+    );
+
+    const [opts, parent] = requireFirstCall(actionInputMocks.waitAction, "wait action call");
+    expect(opts).toMatchObject({ url: "**/done" });
+    expect(parent).toMatchObject({ url: "ws://127.0.0.1:18789" });
+  });
+
+  it("keeps cookie action URLs out of Gateway transport options", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "cookies",
+      "set",
+      "session",
+      "abc",
+      "--url",
+      "https://example.com",
+    ]);
+
+    await program.parseAsync(
+      ["browser", "cookies", "set", "session", "abc", "--url", "https://example.com"],
+      { from: "user" },
+    );
+
+    const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
+    const opts = cookieCall[2];
+    const parent = cookieCall[3];
+    expect(opts).toMatchObject({ url: "https://example.com" });
+    expect(parent).not.toHaveProperty("url");
+  });
+
+  it("keeps explicit Gateway and cookie URLs under their separate owners", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "cookies",
+      "set",
+      "session",
+      "abc",
+      "--url",
+      "https://example.com",
+    ]);
+
+    await program.parseAsync(
+      [
+        "browser",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "cookies",
+        "set",
+        "session",
+        "abc",
+        "--url",
+        "https://example.com",
+      ],
+      { from: "user" },
+    );
+
+    const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
+    const opts = cookieCall[2];
+    const parent = cookieCall[3];
+    expect(opts).toMatchObject({ url: "https://example.com" });
+    expect(parent).toMatchObject({ url: "ws://127.0.0.1:18789" });
   });
 
   it("accepts the shipped trailing browser profile order after lazy loading", async () => {

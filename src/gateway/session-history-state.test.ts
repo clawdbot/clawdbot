@@ -625,36 +625,52 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.rawTranscriptSeq).toBe(99);
   });
 
-  test("refreshes limited SSE history from bounded async tail reads", async () => {
-    const fullReadSpy = vi
-      .spyOn(sessionTranscriptReaders, "readSessionMessagesAsync")
-      .mockResolvedValue([]);
-    const tailReadSpy = vi
-      .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
-      .mockResolvedValueOnce({
-        messages: [assistantTextMessage("tail two", 8)],
-        totalMessages: 8,
-      });
-    try {
-      const state = newState([assistantTextMessage("tail one", 7)], {
-        rawTranscriptSeq: 7,
-        totalRawMessages: 7,
-        limit: 1,
-      });
+  test.each([
+    { name: "latest page", cursor: undefined, expectedSeq: 8 },
+    { name: "older cursor page", cursor: "8", expectedSeq: 7 },
+  ])(
+    "refreshes limited SSE history from bounded async reads ($name)",
+    async ({ cursor, expectedSeq }) => {
+      const fullReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readSessionMessagesWithSourceAsync")
+        .mockResolvedValue({ messages: [] });
+      const tailReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+        .mockResolvedValueOnce({
+          messages: [assistantTextMessage("tail two", expectedSeq)],
+          totalMessages: 8,
+        });
+      const pageReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readSessionMessagesPageWithStatsAsync")
+        .mockResolvedValueOnce({ messages: [], totalMessages: 8 })
+        .mockResolvedValueOnce({
+          messages: [assistantTextMessage("tail two", expectedSeq)],
+          totalMessages: 8,
+        });
+      try {
+        const state = newState([assistantTextMessage("tail one", 7)], {
+          rawTranscriptSeq: 7,
+          totalRawMessages: 7,
+          limit: 1,
+          cursor,
+        });
 
-      expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
-      const refreshed = await state.refreshAsync();
+        expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
+        const refreshed = await state.refreshAsync();
 
-      expect(refreshed.hasMore).toBe(true);
-      expect(refreshed.nextCursor).toBe("8");
-      expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(8);
-      expect(tailReadSpy).toHaveBeenCalledTimes(1);
-      expect(fullReadSpy).not.toHaveBeenCalled();
-    } finally {
-      fullReadSpy.mockRestore();
-      tailReadSpy.mockRestore();
-    }
-  });
+        expect(refreshed.hasMore).toBe(true);
+        expect(refreshed.nextCursor).toBe(String(expectedSeq));
+        expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(expectedSeq);
+        expect(tailReadSpy).toHaveBeenCalledTimes(cursor ? 0 : 1);
+        expect(pageReadSpy).toHaveBeenCalledTimes(cursor ? 2 : 0);
+        expect(fullReadSpy).not.toHaveBeenCalled();
+      } finally {
+        fullReadSpy.mockRestore();
+        tailReadSpy.mockRestore();
+        pageReadSpy.mockRestore();
+      }
+    },
+  );
 
   test("strips legacy internal envelopes before exposing history", () => {
     const snapshot = buildSessionHistorySnapshot({

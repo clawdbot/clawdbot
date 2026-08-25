@@ -20,10 +20,16 @@ import { createCronServiceState as createCronServiceStateBase } from "./state.js
 import {
   getActiveCronTaskRunId,
   findCronTaskRunRecoveryInDatabase,
-  tryCreateCronTaskRun,
+  tryCreateCronTaskRunHandle,
   tryFinishCronTaskRun,
   tryFinishCronTaskRunWithoutHistory,
 } from "./task-runs.js";
+
+function tryCreateCronTaskRun(
+  params: Parameters<typeof tryCreateCronTaskRunHandle>[0],
+): string | undefined {
+  return tryCreateCronTaskRunHandle(params)?.runId;
+}
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 
 function createCronServiceState(

@@ -723,9 +723,9 @@ class OpenClawShell
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
-    if (this.previousGatewayPhase !== "connected" && snapshot.phase === "connected") {
-      // A reconnect can retain the browser client, so object identity alone
-      // cannot keep metadata from crossing logical Gateway connections.
+    if (this.previousGatewayPhase === "connected" && snapshot.phase !== "connected") {
+      // A disconnect can retain the browser client, so object identity alone
+      // cannot keep metadata alive across logical Gateway connections.
       if (snapshot.client) {
         invalidateChatMetadataStore(snapshot.client);
       }

@@ -142,9 +142,9 @@ export class ReefFriendManager {
     return listed;
   }
 
-  surfacePairingCandidates(issue: PairingChallenge): Promise<void> {
+  surfacePairingCandidates(issue: PairingChallenge, signal?: AbortSignal): Promise<void> {
     return this.#serialize(async () => {
-      const { friendships } = await this.transport.listFriends();
+      const { friendships } = await this.transport.listFriends(signal);
       const approvals = await this.#loadPairingApprovals(friendships);
 
       for (const friend of friendships) {
@@ -183,9 +183,9 @@ export class ReefFriendManager {
     });
   }
 
-  reconcile(): Promise<string[]> {
+  reconcile(signal?: AbortSignal): Promise<string[]> {
     return this.#serialize(async () => {
-      const { friendships } = await this.transport.listFriends();
+      const { friendships } = await this.transport.listFriends(signal);
       const approvals = await this.#loadPairingApprovals(friendships);
       const changed = new Set<string>();
 

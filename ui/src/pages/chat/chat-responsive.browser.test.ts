@@ -2207,11 +2207,18 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [393, 852],
     [1366, 900],
   ] as const)(
-    "anchors received bubbles left and sent bubbles right at %sx%s",
+    "anchors message roles and balances transcript width at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
         const roles = await page.evaluate(() => {
+          const transcriptViewport = document.querySelector<HTMLElement>(".chat-thread")!;
+          const widthProbe = document.createElement("div");
+          widthProbe.style.width = "100%";
+          widthProbe.style.height = "0";
+          transcriptViewport.append(widthProbe);
+          const transcriptAvailableWidth = widthProbe.getBoundingClientRect().width;
+          widthProbe.remove();
           const rectFor = (selector: string) => {
             const node = document.querySelector(selector) as HTMLElement | null;
             if (!node) {
@@ -2228,6 +2235,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             assistantLane: rectFor(".chat-group.assistant .chat-group-messages"),
             assistantBubble: rectFor(".chat-group.assistant .chat-bubble:first-child"),
+            transcript: rectFor(".chat-thread-inner"),
+            transcriptViewport: rectFor(".chat-thread"),
+            transcriptAvailableWidth,
             userLane: rectFor(".chat-group.user .chat-group-messages"),
             userBubble: rectFor(".chat-group.user .chat-bubble:first-child"),
           };
@@ -2235,9 +2245,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
         const assistantLane = expectControlRect(roles.assistantLane, "assistant message lane");
         const assistantBubble = expectControlRect(roles.assistantBubble, "assistant bubble");
+        const transcript = expectControlRect(roles.transcript, "transcript");
+        const transcriptViewport = expectControlRect(
+          roles.transcriptViewport,
+          "transcript viewport",
+        );
         const userLane = expectControlRect(roles.userLane, "user message lane");
         const userBubble = expectControlRect(roles.userBubble, "user bubble");
 
+        expect(
+          Math.abs(
+            transcript.x +
+              transcript.width / 2 -
+              (transcriptViewport.x + transcriptViewport.width / 2),
+          ),
+        ).toBeLessThanOrEqual(1);
+        if (width <= 768) {
+          expect(roles.transcriptAvailableWidth - transcript.width).toBeCloseTo(32, 0);
+        } else {
+          expect(transcript.width).toBeCloseTo(768, 0);
+        }
         expect(Math.abs(assistantBubble.x - assistantLane.x)).toBeLessThanOrEqual(1);
         expect(
           Math.abs(userBubble.x + userBubble.width - (userLane.x + userLane.width)),

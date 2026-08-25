@@ -269,18 +269,21 @@ function waitForChatError(events: readonly GatewayEvent[], runId: string) {
 }
 
 async function runProof(options: ProducerOptions) {
+  const state = createQaBusState();
   // openclaw-temp-dir: allow standalone QA producer owns and removes this fixture root.
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cloud-midturn-loss-"));
-  const state = createQaBusState();
-  const bus = await startQaBusServer({ state });
-  const provider = await startMidturnProvider();
-  const ssh = await createSshdFixture(fixtureRoot);
-  let sshd = await ssh.start();
+  let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+  let provider: Awaited<ReturnType<typeof startMidturnProvider>> | undefined;
+  let sshd: Parameters<typeof stopSshd>[0] = undefined;
   let gateway: Gateway | undefined;
   let operator: GatewayClient | undefined;
   let proofError: unknown;
   let verdict: Record<string, unknown> | undefined;
   try {
+    bus = await startQaBusServer({ state });
+    provider = await startMidturnProvider();
+    const ssh = await createSshdFixture(fixtureRoot);
+    sshd = await ssh.start();
     const repo = await initializeRepository(fixtureRoot);
     const sshPrivateKey = await fs.readFile(ssh.clientKeyPath, "utf8");
     const transport = createQaChannelTransport(state);
@@ -435,9 +438,10 @@ async function runProof(options: ProducerOptions) {
         : undefined;
     });
     const recoveryCounts = markerCounts(historyAfterRecovery);
+    const recoveryContext = provider.contextRequest;
     if (
-      !COMMITTED_MARKERS.every((marker) => provider.contextRequest.includes(marker)) ||
-      provider.contextRequest.includes(VOLATILE_TEXT) ||
+      !COMMITTED_MARKERS.every((marker) => recoveryContext.includes(marker)) ||
+      recoveryContext.includes(VOLATILE_TEXT) ||
       Object.values(recoveryCounts).some((count) => count !== 1)
     ) {
       throw new Error(
@@ -517,25 +521,25 @@ async function runProof(options: ProducerOptions) {
     );
   } catch (error) {
     proofError = error;
-  }
-
-  const cleanup = await Promise.allSettled([
-    operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
-    gateway?.stop() ?? Promise.resolve(),
-    stopSshd(sshd),
-    provider.stop(),
-    bus.stop(),
-    fs.rm(fixtureRoot, { recursive: true, force: true }),
-  ]);
-  const cleanupFailures = cleanup.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (cleanupFailures.length > 0) {
-    proofError = new AggregateError(
-      proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
-      "cloud worker mid-turn loss cleanup failed",
-      proofError ? { cause: proofError } : undefined,
+  } finally {
+    const cleanup = await Promise.allSettled([
+      operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
+      gateway?.stop() ?? Promise.resolve(),
+      stopSshd(sshd),
+      provider?.stop() ?? Promise.resolve(),
+      bus?.stop() ?? Promise.resolve(),
+      fs.rm(fixtureRoot, { recursive: true, force: true }),
+    ]);
+    const cleanupFailures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
     );
+    if (cleanupFailures.length > 0) {
+      proofError = new AggregateError(
+        proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
+        "cloud worker mid-turn loss cleanup failed",
+        proofError ? { cause: proofError } : undefined,
+      );
+    }
   }
   if (proofError) {
     throw proofError;

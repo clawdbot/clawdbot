@@ -95,34 +95,16 @@ describe("browser state option collisions", () => {
     expect((request as { body?: { targetId?: string } }).body?.targetId).toBe("tab-1");
   });
 
-  it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
+  it("does not inherit the parent Gateway URL as the cookie scope", async () => {
     const program = createStateProgram({ withGatewayUrl: true });
     await program.parseAsync(
-      [
-        "browser",
-        "--url",
-        "ws://gw",
-        "cookies",
-        "set",
-        "session",
-        "abc",
-        "--url",
-        "https://example.com",
-      ],
+      ["browser", "--url", "wss://gateway.example.com", "cookies", "set", "session", "abc"],
       { from: "user" },
     );
-    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
-    expect(request.body?.cookie?.url).toBe("https://example.com");
-  });
 
-  it("inherits --url from parent when subcommand does not provide it", async () => {
-    const program = createStateProgram({ withGatewayUrl: true });
-    await program.parseAsync(
-      ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
-      { from: "user" },
-    );
-    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
-    expect(request.body?.cookie?.url).toBe("https://inherited.example.com");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expectErrorMessage("Missing required --url option for cookies set");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {

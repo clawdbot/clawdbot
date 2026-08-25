@@ -102,8 +102,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.github.publish") === true;
     const diskSpace = placement?.state === "active" ? placement.diskSpace : undefined;
     const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
-    const placementRunError = terminalReason
-      ? { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) }
+    const placementFailureReason =
+      placement?.state === "failed" ? placement.recoveryError : terminalReason;
+    const placementRunError = placementFailureReason
+      ? { summary: t("chat.cloudWorkerFailed", { error: placementFailureReason }) }
       : null;
     const visibleWorkspaceConflict =
       workspaceConflict &&

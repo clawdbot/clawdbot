@@ -147,6 +147,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       availableSlots,
       callbacks: sidebarRegionCallbacks({
         state,
+        layout: sidebarLayout,
         closePanelSlot,
         openPanelSlot,
         hideBoard: () => this.handleBoardDockChange("hidden"),

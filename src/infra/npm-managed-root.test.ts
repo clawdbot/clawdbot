@@ -162,6 +162,73 @@ describe("managed npm root", () => {
     );
   });
 
+  it.each([
+    { installedState: "missing package manifest", expectedMissing: true },
+    { installedState: "invalid package manifest", expectedMissing: true },
+    { installedState: "missing native executable", expectedMissing: true },
+    {
+      installedState: "non-executable native executable",
+      expectedMissing: process.platform !== "win32",
+    },
+    { installedState: "installed native executable", expectedMissing: false },
+  ])(
+    "validates current-platform package contents: $installedState",
+    async ({ installedState, expectedMissing }) => {
+      const npmRoot = await makeTempRoot();
+      const platformPackage = "@vendor/tool-platform";
+      const canonicalPackage = "@vendor/tool";
+      const packagePath = path.join(npmRoot, "node_modules", ...platformPackage.split("/"));
+      await fs.mkdir(packagePath, { recursive: true });
+      await fs.writeFile(
+        path.join(npmRoot, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "": {},
+            [`node_modules/${canonicalPackage}`]: {
+              bin: { tool: "bin/tool.js" },
+            },
+            [`node_modules/${platformPackage}`]: {
+              name: canonicalPackage,
+              optional: true,
+              os: [process.platform],
+              cpu: [process.arch],
+            },
+          },
+        }),
+      );
+
+      if (installedState === "invalid package manifest") {
+        await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
+      } else if (installedState !== "missing package manifest") {
+        await fs.writeFile(
+          path.join(packagePath, "package.json"),
+          JSON.stringify({ name: canonicalPackage, version: "1.0.0-platform", files: ["vendor"] }),
+        );
+        const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
+        await fs.mkdir(nativeBinDir, { recursive: true });
+        await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
+        if (
+          installedState === "installed native executable" ||
+          installedState === "non-executable native executable"
+        ) {
+          const executableName = process.platform === "win32" ? "tool.exe" : "tool";
+          await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
+            encoding: "utf8",
+            mode: installedState === "installed native executable" ? 0o755 : 0o644,
+          });
+        }
+      }
+
+      await expect(
+        listMissingRequiredPlatformPackages({
+          npmRoot,
+          requiredPackageNames: [platformPackage],
+        }),
+      ).resolves.toEqual(expectedMissing ? [{ name: platformPackage, packagePath }] : []);
+    },
+  );
+
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

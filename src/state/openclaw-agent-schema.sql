@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS session_participants (
   actor_type TEXT NOT NULL,
   actor_id TEXT NOT NULL,
   actor_source TEXT,
+  contribution_count INTEGER,
   first_prompted_at INTEGER NOT NULL,
   last_prompted_at INTEGER NOT NULL,
   PRIMARY KEY (session_key, actor_type, actor_id),

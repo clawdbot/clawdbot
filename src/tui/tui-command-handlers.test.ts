@@ -404,6 +404,91 @@ describe("tui command handlers", () => {
     expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
   });
 
+  it.each([
+    {
+      name: "model",
+      command: "/models",
+      value: "private/research-only",
+      initialSession: "agent:research:incident",
+      replacementSession: "agent:ops:main",
+    },
+    {
+      name: "session",
+      command: "/sessions",
+      value: "agent:research:incident",
+      initialSession: "agent:research:incident",
+      replacementSession: "agent:ops:main",
+    },
+    {
+      name: "global model",
+      command: "/models",
+      value: "private/research-only",
+      initialSession: "global",
+      replacementSession: "global",
+    },
+    {
+      name: "global session",
+      command: "/sessions",
+      value: "agent:research:incident",
+      initialSession: "global",
+      replacementSession: "global",
+    },
+  ])(
+    "retires an open $name picker after its selected agent is replaced",
+    async ({ command, value, initialSession, replacementSession }) => {
+      const harness = createHarness({
+        currentAgentId: "research",
+        currentSessionKey: initialSession,
+        agents: [{ id: "research" }],
+        listModels: vi.fn().mockResolvedValue([{ provider: "private", id: "research-only" }]),
+        listSessions: vi
+          .fn()
+          .mockResolvedValue({ sessions: [{ key: "agent:research:incident", updatedAt: 1 }] }),
+      });
+
+      await harness.handleCommand(command);
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      harness.state.currentAgentId = "ops";
+      harness.state.currentSessionKey = replacementSession;
+      selector.onSelect?.({ value });
+      await flushAsyncSelect();
+
+      expect(harness.patchSession).not.toHaveBeenCalled();
+      expect(harness.setSession).not.toHaveBeenCalled();
+      expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+    },
+  );
+
+  it.each([
+    { name: "agent", command: "/agents", value: "ops", session: "" },
+    {
+      name: "session",
+      command: "/sessions",
+      value: "agent:research:next",
+      session: "agent:research:next",
+    },
+  ])(
+    "accepts an intentional $name picker selection for its current owner",
+    async ({ command, value, session }) => {
+      const harness = createHarness({
+        currentAgentId: "research",
+        currentSessionKey: "agent:research:incident",
+        agents: [{ id: "research" }, { id: "ops" }],
+        listSessions: vi
+          .fn()
+          .mockResolvedValue({ sessions: [{ key: "agent:research:next", updatedAt: 1 }] }),
+      });
+
+      await harness.handleCommand(command);
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      selector.onSelect?.({ value });
+      await flushAsyncSelect();
+
+      expect(harness.setSession).toHaveBeenCalledExactlyOnceWith(session);
+      expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+    },
+  );
+
   it("bounds Ctrl+P hydration to recent non-global TUI sessions", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       sessions: [

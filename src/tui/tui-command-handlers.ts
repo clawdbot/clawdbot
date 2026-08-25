@@ -308,17 +308,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openSelector = (
-    selector: {
-      onSelect?: (item: SelectItem) => void;
-      onCancel?: () => void;
-    },
+    selector: { onSelect?: (item: SelectItem) => void; onCancel?: () => void },
     onSelect: (value: string) => Promise<void>,
     request: { overlay?: OverlayHandle },
   ) => {
+    const selection = captureSessionSelection();
     selector.onSelect = (item) => {
       void (async () => {
         try {
-          await onSelect(item.value);
+          if (isCurrentSessionSelection(selection)) {
+            await onSelect(item.value);
+          }
         } catch (err) {
           // A rejected selection must not strand the overlay open with an
           // unhandled rejection; close it and surface the cause in chat.

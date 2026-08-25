@@ -107,9 +107,11 @@ OpenClaw release:
         OpenClaw detects the existing Claude CLI login. Normal agent turns use
         the official Agent SDK with the installed, authenticated Claude Code
         executable, including native-tool turns whose approvals remain under
-        OpenClaw control. Imported native OAuth profiles reuse the verified
-        Claude Code login; explicitly selected API-key or token credentials
-        still use protected file-descriptor forwarding. Isolated side-question
+        OpenClaw control. Schema-valid native calls pass through OpenClaw's
+        canonical tool policy before native approval. Imported native OAuth
+        profiles reuse the verified Claude Code login; explicitly selected
+        API-key or token credentials still use protected file-descriptor
+        forwarding. Isolated side-question
         completions and paired-node execution retain the supervised CLI path.
 
         Consecutive agent turns reuse the same warm Agent SDK query and Claude

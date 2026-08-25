@@ -18,6 +18,7 @@ export const FIRST_USE_STATE_TABLES = [
   "node_worker_launches",
   "operator_approval_execution_identities",
   "execution_decision_facts",
+  "execution_owner_lifecycle_bindings",
   "outbound_message_execution_bindings",
   "outbound_message_progress",
 ] as const;

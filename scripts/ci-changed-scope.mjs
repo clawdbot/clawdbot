@@ -50,11 +50,11 @@ const MACOS_SCRIPT_SCOPE_RE =
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 const IOS_SCREENSHOT_APP_SCOPE_RE =
   /^(?:apps\/ios\/|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
-  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
+  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;

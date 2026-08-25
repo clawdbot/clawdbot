@@ -5669,6 +5669,7 @@ describe("chat model controls", () => {
     expect(
       container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
     ).toContain("Authentication failed. Review the provider credential or sign-in, then retry.");
+    expect(container.textContent).toContain("Review connection");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
@@ -5685,6 +5686,8 @@ describe("chat model controls", () => {
       container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
     ).toContain("No models available");
     expect(container.textContent).not.toContain("Authentication failed");
+    expect(container.textContent).toContain("Manage models");
+    expect(container.textContent).not.toContain("Review connection");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
   });

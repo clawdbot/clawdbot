@@ -283,7 +283,8 @@ function threadResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/workspace",
-      cliVersion: "0.148.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -406,7 +407,7 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
         forwardedAuthProfileId: authProfileId,
         forwardedAuthProfileSource: authProfileId ? authProfileIdSource : undefined,
         forwardedAuthProfileCandidateIds: authProfileId ? [authProfileId] : undefined,
-        selectedAuthMode: authProfileId ? "token" : undefined,
+        selectedAuthMode: authProfileId ? "oauth" : undefined,
         modelRoute: {
           provider: "openai",
           modelId: "gpt-5.5",
@@ -421,10 +422,12 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
         profiles: authProfileId
           ? {
               [authProfileId]: {
-                type: "token",
+                type: "oauth",
                 provider: "openai",
-                token: "test-token",
-                expires: Date.now() + 60_000,
+                access: "test-access-token",
+                refresh: "test-refresh-token",
+                expires: Date.now() + 24 * 60 * 60_000,
+                accountId: "account-1",
               },
             }
           : {},

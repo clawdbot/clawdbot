@@ -26,8 +26,8 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
     : undefined;
 
   if (options.json) {
-    defaultRuntime.log(
-      JSON.stringify({
+    defaultRuntime.writeJson(
+      {
         featureStatsEnabled: telemetry.enabled,
         reason: telemetry.reason,
         endpoint: telemetry.endpoint,
@@ -39,7 +39,8 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
               ...(payload ? { payload } : {}),
             }
           : null,
-      }),
+      },
+      0,
     );
     return;
   }

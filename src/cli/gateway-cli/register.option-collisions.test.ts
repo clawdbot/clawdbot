@@ -372,28 +372,27 @@ describe("gateway register option collisions", () => {
     {
       name: "call",
       args: ["call", "health"],
-      failure: "Gateway call failed",
     },
     {
       name: "usage-cost",
       args: ["usage-cost"],
-      failure: "Gateway usage cost failed",
     },
     {
       name: "live stability",
       args: ["stability"],
-      failure: "Gateway stability failed",
     },
-  ])("rejects combining --url and --port for gateway $name", async ({ args, failure }) => {
+  ])("rejects combining --url and --port for gateway $name", async ({ args }) => {
     await sharedProgram.parseAsync(
       ["gateway", ...args, "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json"],
       { from: "user" },
     );
 
     expect(callGatewayCli).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      `${failure}: Use either --url or --port, not both.`,
-    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "Use either --url or --port, not both." },
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 

@@ -4,6 +4,7 @@
 import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import type { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
@@ -377,6 +378,9 @@ export function installEmbeddedAttemptStreamGuards(input: {
     model: attempt.modelId,
     api: attempt.model.api,
     transport: input.effectiveAgentTransport,
+    // No-gap local inference remains recoverable at its existing transport deadline.
+    requestTimeoutMs:
+      idleTimeoutMs || Math.min(attempt.timeoutMs, DEFAULT_UNDICI_STREAM_TIMEOUT_MS),
     ...(attempt.contextWindowInfo?.tokens
       ? { contextTokenBudget: attempt.contextWindowInfo.tokens }
       : {}),

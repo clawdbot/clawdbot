@@ -497,6 +497,10 @@ describe("worker turn launcher reclaimed placement", () => {
     });
     placements.fail({
       sessionId: SESSION_ID,
+      recoveryError: "stale terminal worker failure",
+    });
+    placements.fail({
+      sessionId: SESSION_ID,
       recoveryError: "cloud worker disappeared: environment state destroyed",
     });
     const provider = createWorkerSessionTurnPlacementProvider({

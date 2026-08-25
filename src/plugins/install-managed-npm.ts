@@ -428,9 +428,9 @@ export async function installPluginFromManagedNpmRoot(
         error: requiredPlatformPackageNames.error,
       });
     }
-    let omittedPlatformPackages: Awaited<ReturnType<typeof listMissingRequiredPlatformPackages>>;
+    let incompletePlatformPackages: Awaited<ReturnType<typeof listMissingRequiredPlatformPackages>>;
     try {
-      omittedPlatformPackages = await listMissingRequiredPlatformPackages({
+      incompletePlatformPackages = await listMissingRequiredPlatformPackages({
         npmRoot,
         requiredPackageNames: requiredPlatformPackageNames.packageNames,
       });
@@ -440,13 +440,18 @@ export async function installPluginFromManagedNpmRoot(
         error: `Failed to verify platform-specific npm dependencies for ${params.packageName}: ${String(error)}`,
       });
     }
-    if (omittedPlatformPackages.length > 0) {
-      const omittedPlatformPackageNames = omittedPlatformPackages.map((entry) => entry.name);
+    if (incompletePlatformPackages.length > 0) {
+      const incompletePlatformPackageNames = incompletePlatformPackages.map((entry) => entry.name);
       logger.warn?.(
-        `npm omitted current-platform package(s) ${omittedPlatformPackageNames.join(", ")}; retrying once with a fresh cache.`,
+        `npm left current-platform package(s) ${incompletePlatformPackageNames.join(", ")} missing or incomplete; retrying once with a fresh cache.`,
       );
       let freshCacheDir: string | undefined;
       try {
+        await Promise.all(
+          incompletePlatformPackages.map(({ packagePath }) =>
+            fs.rm(packagePath, { recursive: true, force: true }),
+          ),
+        );
         freshCacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-cache-"));
         install = await runCommandWithTimeout(npmInstallArgs, {
           ...npmInstallOptions,
@@ -459,7 +464,7 @@ export async function installPluginFromManagedNpmRoot(
       } catch (error) {
         return await rollbackFailedManagedNpmInstall({
           ok: false,
-          error: `Failed to repair omitted current-platform package(s) ${omittedPlatformPackageNames.join(", ")}: ${String(error)}`,
+          error: `Failed to repair missing or incomplete current-platform package(s) ${incompletePlatformPackageNames.join(", ")}: ${String(error)}`,
         });
       } finally {
         if (freshCacheDir) {
@@ -475,12 +480,12 @@ export async function installPluginFromManagedNpmRoot(
       if (install.code !== 0) {
         return await rollbackFailedManagedNpmInstall({
           ok: false,
-          error: `npm install failed while repairing omitted current-platform package(s) ${omittedPlatformPackageNames.join(", ")}: ${formatNpmCommandFailureOutput(install)}`,
+          error: `npm install failed while repairing missing or incomplete current-platform package(s) ${incompletePlatformPackageNames.join(", ")}: ${formatNpmCommandFailureOutput(install)}`,
         });
       }
-      let stillOmittedPlatformPackages: typeof omittedPlatformPackages;
+      let stillIncompletePlatformPackages: typeof incompletePlatformPackages;
       try {
-        stillOmittedPlatformPackages = await listMissingRequiredPlatformPackages({
+        stillIncompletePlatformPackages = await listMissingRequiredPlatformPackages({
           npmRoot,
           requiredPackageNames: requiredPlatformPackageNames.packageNames,
         });
@@ -490,10 +495,10 @@ export async function installPluginFromManagedNpmRoot(
           error: `Failed to verify repaired platform-specific npm dependencies for ${params.packageName}: ${String(error)}`,
         });
       }
-      if (stillOmittedPlatformPackages.length > 0) {
+      if (stillIncompletePlatformPackages.length > 0) {
         return await rollbackFailedManagedNpmInstall({
           ok: false,
-          error: `npm install reported success but omitted required current-platform package(s): ${stillOmittedPlatformPackages.map((entry) => entry.name).join(", ")}`,
+          error: `npm install reported success but left required current-platform package(s) missing or incomplete: ${stillIncompletePlatformPackages.map((entry) => entry.name).join(", ")}`,
         });
       }
     }

@@ -5,6 +5,7 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/web-awesome-popover.ts";
@@ -39,7 +40,6 @@ import {
   handleSessionPickerEvent,
   isPlaceTopologyEvent,
   presenceStateSignature,
-  readPresenceEntries,
 } from "./new-session-runtime.ts";
 import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
 import type { SubmissionOutcomeReason } from "./session-placement-recovery-state.ts";

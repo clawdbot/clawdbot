@@ -68,6 +68,7 @@ import {
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
+import { normalizeMattermostEmojiName } from "./mattermost/emoji.js";
 import type { MattermostSendResult } from "./mattermost/send.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
@@ -636,7 +637,7 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     throw new Error("Mattermost react requires messageId (post id)");
   }
 
-  const emojiName = normalizeOptionalString(params.emoji)?.replace(/^:+|:+$/g, "");
+  const emojiName = normalizeMattermostEmojiName(normalizeOptionalString(params.emoji));
   if (!emojiName) {
     throw new Error("Mattermost react requires emoji");
   }

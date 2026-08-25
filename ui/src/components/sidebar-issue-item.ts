@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
@@ -129,6 +130,103 @@ export function renderSidebarUpdateSurface(params: {
     .onDismiss=${params.onDismiss}
     .recoverNativeDecline=${false}
   ></openclaw-sidebar-update-card>`;
+}
+
+function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
+  switch (state.phase) {
+    case "guidance":
+      return t("connection.scopeUpgrade.guidance");
+    case "available":
+      return t("connection.scopeUpgrade.limited");
+    case "requesting":
+      return t("connection.scopeUpgrade.requesting");
+    case "pending":
+      return t("connection.scopeUpgrade.pending");
+    case "rejected":
+      return t(
+        state.expired ? "connection.scopeUpgrade.expired" : "connection.scopeUpgrade.rejected",
+      );
+    case "error":
+      return t("connection.scopeUpgrade.error", { error: state.message });
+  }
+  return state satisfies never;
+}
+
+function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
+  return state.phase === "guidance" || state.phase === "available"
+    ? t("connection.scopeUpgrade.inboxState")
+    : scopeUpgradeText(state);
+}
+
+export function renderSidebarScopeUpgradeItem(params: {
+  state: ScopeUpgradeState;
+  onCancel: () => void;
+  onRequest: () => void;
+  onRetry: () => void;
+}) {
+  if (params.state.phase === "hidden") {
+    return nothing;
+  }
+  const text = scopeUpgradeText(params.state);
+  const summary = scopeUpgradeSummaryText(params.state);
+  const retryable = ["pending", "rejected", "error"].includes(params.state.phase);
+  return html`<details
+    class="sidebar-issues-panel__details sidebar-issues-panel__details--${params.state.phase ===
+      "error" || params.state.phase === "rejected"
+      ? "error"
+      : "warning"}"
+    data-attention-kind="scopeUpgrade"
+  >
+    <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
+      <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons.shieldQuestion}</span>
+      <span class="sidebar-issues-panel__content">
+        <span class="sidebar-issues-panel__entity">${t("connection.scopeUpgrade.status")}</span>
+        <span class="sidebar-issues-panel__state" title=${summary}>${summary}</span>
+      </span>
+      <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
+    </summary>
+    <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
+      <div>${text}</div>
+      ${params.state.phase === "available"
+        ? html`<div class="sidebar-issues-panel__actions">
+            <button
+              type="button"
+              class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+              @click=${params.onRequest}
+            >
+              ${t("connection.scopeUpgrade.request")}
+            </button>
+          </div>`
+        : params.state.phase === "requesting"
+          ? html`<div class="sidebar-issues-panel__actions">
+              <button
+                type="button"
+                class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                disabled
+              >
+                ${t("connection.scopeUpgrade.requestingAction")}
+              </button>
+            </div>`
+          : retryable
+            ? html`<div class="sidebar-issues-panel__actions">
+                <button
+                  type="button"
+                  class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                  @click=${params.onRetry}
+                >
+                  ${t("connection.scopeUpgrade.retry")}
+                </button>
+                <button
+                  type="button"
+                  class="sidebar-issues-panel__action"
+                  @click=${params.onCancel}
+                >
+                  ${t("connection.scopeUpgrade.cancel")}
+                </button>
+              </div>`
+            : nothing}
+    </div>
+  </details>`;
 }
 
 function renderItemMeta(item: SidebarAttentionItem) {

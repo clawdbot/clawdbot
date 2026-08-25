@@ -24,7 +24,7 @@ import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
 import { renderSkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
-import { renderSlashMenu } from "./chat-composer-slash-menu.ts";
+import { renderSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import {
   renderChatRunStatusIndicator,
@@ -65,6 +65,7 @@ type ChatComposerViewContext = {
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
   skillMenuHost: SkillMenuHost;
+  slashMenuHost: SlashMenuHost;
   activeSlashMenuOptionId: string | null;
   activeSlashMenuOptionLabel: string;
   slashMenuListboxId: string;
@@ -101,6 +102,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuVisible,
     skillMenuVisible,
     skillMenuHost,
+    slashMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,
@@ -210,7 +212,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     : t("chat.composer.offlineHint")}
                 </div>`
               : nothing}
-            ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
+            ${slashMenuVisible
+              ? renderSlashMenu(state, slashMenuHost, visibleDraft, requestUpdate)
+              : nothing}
             ${skillMenuVisible ? renderSkillMenu(state, skillMenuHost, requestUpdate) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget
