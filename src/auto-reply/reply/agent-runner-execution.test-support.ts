@@ -4,6 +4,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
 import type { ModelFallbackRunOptions } from "../../agents/model-fallback-attempt.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
@@ -367,7 +368,7 @@ export type FallbackRunnerParams = {
   model: string;
   sessionId?: string;
   abortSignal?: AbortSignal;
-  run: (provider: string, model: string, options?: ModelFallbackRunOptions) => Promise<unknown>;
+  run: (provider: string, model: string, options: ModelFallbackRunOptions) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
     provider: string;
@@ -376,6 +377,40 @@ export type FallbackRunnerParams = {
     total: number;
   }) => Promise<unknown>;
 };
+
+export function initialFallbackAttemptOptions(
+  params: FallbackRunnerParams,
+): ModelFallbackRunOptions {
+  return {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "initial",
+    },
+  };
+}
+
+export function runInitialFallbackAttempt(
+  params: FallbackRunnerParams,
+  provider: string,
+  model: string,
+): Promise<unknown> {
+  return params.run(provider, model, initialFallbackAttemptOptions(params));
+}
+
+export function fallbackAttemptOptions(
+  params: FallbackRunnerParams,
+  fallbackReason: FailoverReason,
+): ModelFallbackRunOptions {
+  return {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      stage: "fallback",
+      fallbackReason,
+    },
+  };
+}
 
 export type EmbeddedAgentParams = {
   runId: string;
@@ -660,13 +695,7 @@ export function setupAgentRunnerExecutionTestState() {
       }),
     );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude", {
-        modelRoutingProvenance: {
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          stage: "initial",
-        },
-      }),
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: [],
