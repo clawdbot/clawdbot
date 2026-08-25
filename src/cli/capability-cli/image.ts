@@ -1,9 +1,6 @@
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { runWithImageModelFallback } from "../../agents/model-fallback-image.js";
@@ -18,6 +15,7 @@ import type {
   ImageGenerationOpenAIModeration,
   ImageGenerationOutputFormat,
   ImageGenerationQuality,
+  ImageGenerationResolution,
 } from "../../image-generation/types.js";
 import {
   describeImageFile,
@@ -37,6 +35,7 @@ import {
   formatEnvelopeForText,
   parseOptionalPositiveInteger,
   parseOptionalTimeoutMs,
+  parseUnionOption,
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
@@ -46,8 +45,11 @@ import {
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
 
-const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
-const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const IMAGE_OUTPUT_FORMATS: readonly ImageGenerationOutputFormat[] = ["png", "jpeg", "webp"];
+const IMAGE_BACKGROUNDS: readonly ImageGenerationBackground[] = ["transparent", "opaque", "auto"];
+const IMAGE_QUALITIES: readonly ImageGenerationQuality[] = ["low", "medium", "high", "auto"];
+const IMAGE_MODERATIONS: readonly ImageGenerationOpenAIModeration[] = ["low", "auto"];
+const IMAGE_RESOLUTIONS: readonly ImageGenerationResolution[] = ["1K", "2K", "4K"];
 
 async function runImageGenerate(params: {
   capability: "image.generate" | "image.edit";
@@ -56,7 +58,7 @@ async function runImageGenerate(params: {
   count?: number;
   size?: string;
   aspectRatio?: string;
-  resolution?: "1K" | "2K" | "4K";
+  resolution?: ImageGenerationResolution;
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
   openaiBackground?: ImageGenerationBackground;
@@ -232,62 +234,6 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
-function normalizeImageOutputFormat(
-  raw: string | undefined,
-): ImageGenerationOutputFormat | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if ((IMAGE_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationOutputFormat;
-  }
-  throw new Error("--output-format must be one of png, jpeg, or webp");
-}
-
-function normalizeImageBackground(
-  raw: string | undefined,
-  label = "--background",
-): ImageGenerationBackground | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if ((IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationBackground;
-  }
-  throw new Error(`${label} must be one of transparent, opaque, or auto`);
-}
-
-function normalizeImageQuality(raw: string | undefined): ImageGenerationQuality | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "low" ||
-    normalized === "medium" ||
-    normalized === "high" ||
-    normalized === "auto"
-  ) {
-    return normalized;
-  }
-  throw new Error("--quality must be one of low, medium, high, or auto");
-}
-
-function normalizeOpenAIModeration(
-  raw: string | undefined,
-): ImageGenerationOpenAIModeration | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "low" || normalized === "auto") {
-    return normalized;
-  }
-  throw new Error("--openai-moderation must be one of low or auto");
-}
-
 function resolveImageDescribeInput(filePath: string): string {
   const trimmed = filePath.trim();
   return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
@@ -321,15 +267,20 @@ function resolveImageGenerationOptions(opts: Record<string, unknown>, command: C
     count: parseOptionalPositiveInteger(opts.count, "--count"),
     size: opts.size as string | undefined,
     aspectRatio: opts.aspectRatio as string | undefined,
-    resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
-    outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
-    background: normalizeImageBackground(opts.background as string | undefined),
-    openaiBackground: normalizeImageBackground(
-      opts.openaiBackground as string | undefined,
+    resolution: parseUnionOption(opts.resolution, IMAGE_RESOLUTIONS, "--resolution"),
+    outputFormat: parseUnionOption(opts.outputFormat, IMAGE_OUTPUT_FORMATS, "--output-format"),
+    background: parseUnionOption(opts.background, IMAGE_BACKGROUNDS, "--background"),
+    openaiBackground: parseUnionOption(
+      opts.openaiBackground,
+      IMAGE_BACKGROUNDS,
       "--openai-background",
     ),
-    openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
-    quality: normalizeImageQuality(opts.quality as string | undefined),
+    openaiModeration: parseUnionOption(
+      opts.openaiModeration,
+      IMAGE_MODERATIONS,
+      "--openai-moderation",
+    ),
+    quality: parseUnionOption(opts.quality, IMAGE_QUALITIES, "--quality"),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
   };

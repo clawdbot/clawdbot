@@ -37,6 +37,7 @@ import {
   formatEnvelopeForText,
   parseOptionalFiniteNumber,
   parseOptionalTimeoutMs,
+  parseUnionOption,
   providerHasGenericConfig,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
@@ -46,24 +47,14 @@ import {
 } from "./shared.js";
 
 const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
-
-function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
-  const normalized = raw?.trim().toUpperCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "360P" ||
-    normalized === "480P" ||
-    normalized === "540P" ||
-    normalized === "720P" ||
-    normalized === "768P" ||
-    normalized === "1080P"
-  ) {
-    return normalized;
-  }
-  throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
-}
+const VIDEO_RESOLUTIONS: readonly VideoGenerationResolution[] = [
+  "360P",
+  "480P",
+  "540P",
+  "720P",
+  "768P",
+  "1080P",
+];
 
 async function fetchGeneratedVideoDownload(params: {
   cfg: OpenClawConfig;
@@ -298,7 +289,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           output: opts.output as string | undefined,
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
-          resolution: normalizeVideoResolution(opts.resolution as string | undefined),
+          resolution: parseUnionOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution"),
           durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
