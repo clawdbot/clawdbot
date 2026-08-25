@@ -401,6 +401,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           value: showReasoning ? effortLabel : fastMode.label,
         }
       : undefined;
+  // Floating UI deliberately tracks a live anchor. Keep the eventual effort
+  // control in layout while catalog state is transient (and until an open model
+  // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
+  const reserveEffortPicker =
+    !hasResolvableModel &&
+    (catalogLoadingWithoutSnapshot ||
+      managedCatalog.status === "refreshing" ||
+       props.modelPickerOpen === true);
+  const showEffortPicker = hasResolvableModel || reserveEffortPicker;
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
@@ -438,7 +447,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
-      ${!hasResolvableModel
+      ${!showEffortPicker
         ? nothing
         : renderChatEffortPicker({
             disabled: effortDisabled,
@@ -456,6 +465,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
             onRequestUpdate: props.onRequestUpdate,
             onThinkingSelect: async (next, targetSessionKey) =>
               props.onThinkingSelect?.(next, targetSessionKey),
+            reserved: reserveEffortPicker,
           })}
     </div>
   `;

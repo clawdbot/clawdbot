@@ -5734,7 +5734,7 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("renders an accessible skeleton and hides effort before the first catalog snapshot", () => {
+  it("renders an accessible skeleton and reserves hidden effort geometry before the snapshot", () => {
     const { state } = createChatHeaderState();
     const container = renderModelControls(state, {
       modelCatalogState: { hasSnapshot: false, status: "loading" },
@@ -5746,7 +5746,9 @@ describe("chat model controls", () => {
     expect(trigger.getAttribute("aria-disabled")).toBe("false");
     expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).not.toBeNull();
     expect(trigger.textContent).not.toContain("Loading models");
-    expect(container.querySelector(".chat-controls__effort-picker")).toBeNull();
+    const effort = container.querySelector(".chat-controls__effort-picker");
+    expect(effort?.getAttribute("aria-hidden")).toBe("true");
+    expect(effort?.hasAttribute("inert")).toBe(true);
   });
 
   it("shows disabled configured models and model setup when no model has authentication", () => {
@@ -5999,24 +6001,28 @@ describe("chat model controls", () => {
     expect(onModelPickerOpen).toHaveBeenCalledOnce();
   });
 
-  it("keeps the model picker open through catalog refresh renders", () => {
+  it("keeps the model picker geometry stable when its open catalog resolves", () => {
     const { state } = createOpenAiHeaderState();
-    const container = renderModelControls(state, { modelPickerOpen: true });
+    const container = renderModelControls(state, {
+      modelCatalog: [],
+      modelCatalogState: { hasSnapshot: false, status: "refreshing" },
+      modelPickerOpen: true,
+      modelsLoading: true,
+    });
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
     expect(picker?.open).toBe(true);
+    expect(effort?.getAttribute("aria-hidden")).toBe("true");
+    expect(effort?.hasAttribute("inert")).toBe(true);
 
-    renderModelControls(
-      state,
-      {
-        modelCatalogState: { hasSnapshot: true, status: "refreshing" },
-        modelPickerOpen: true,
-        modelsLoading: true,
-      },
-      container,
-    );
+    renderModelControls(state, { modelPickerOpen: true }, container);
 
     expect(container.querySelector(".chat-controls__model-picker")).toBe(picker);
     expect(picker?.open).toBe(true);
+    expect(container.querySelector(".chat-controls__effort-picker")).toBe(effort);
+    expect(effort?.getAttribute("aria-hidden")).toBe("false");
+    expect(effort?.hasAttribute("inert")).toBe(false);
+    expect(effort?.textContent).toContain("Medium");
   });
 
   it("keeps model enabled while write-only access disables effort controls", () => {

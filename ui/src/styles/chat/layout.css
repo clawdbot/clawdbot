@@ -6079,6 +6079,11 @@ button.chat-pr__diff {
   width: auto;
 }
 
+.chat-controls__effort-picker--reserved {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .chat-controls__inline-select {
   min-width: 0;
 }
