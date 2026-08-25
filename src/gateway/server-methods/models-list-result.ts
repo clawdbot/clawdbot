@@ -45,7 +45,8 @@ import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-ru
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { isActivatedManifestOwner } from "../../plugins/manifest-owner-policy.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -72,33 +73,34 @@ type ModelsListResult = {
 
 let loggedSlowModelsListCatalog = false;
 
-function resolvePreparedCliRuntimeProvider(params: {
+function resolvePreparedSyntheticCliRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
   entry: ModelCatalogEntry;
   metadataSnapshot: PluginMetadataSnapshot;
+  activatedPluginIds: ReadonlySet<string>;
 }): string | undefined {
-  const runtime = resolveModelChoiceAgentRuntime({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    entry: params.entry,
-  })?.id;
+  const runtime = normalizeProviderId(
+    resolveModelChoiceAgentRuntime({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry: params.entry,
+    })?.id ?? "",
+  );
   if (!runtime || runtime === "openclaw") {
     return undefined;
   }
   const provider = normalizeProviderId(params.entry.provider);
-  const runtimeOwners = params.metadataSnapshot.owners.cliBackends.get(runtime) ?? [];
   const providerOwners = new Set(params.metadataSnapshot.owners.providers.get(provider) ?? []);
-  const ownerId = runtimeOwners.find((pluginId) => providerOwners.has(pluginId));
-  const owner = ownerId ? params.metadataSnapshot.byPluginId.get(ownerId) : undefined;
-  return owner &&
-    isManifestPluginAvailableForControlPlane({
-      snapshot: params.metadataSnapshot,
-      plugin: owner,
-      config: params.cfg,
-    })
-    ? runtime
-    : undefined;
+  const owners = (params.metadataSnapshot.owners.cliBackends.get(runtime) ?? []).filter(
+    (pluginId) =>
+      providerOwners.has(pluginId) &&
+      params.activatedPluginIds.has(pluginId) &&
+      params.metadataSnapshot.byPluginId
+        .get(pluginId)
+        ?.syntheticAuthRefs?.some((candidate) => normalizeProviderId(candidate) === runtime),
+  );
+  return owners.length === 1 ? runtime : undefined;
 }
 
 function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
@@ -113,11 +115,19 @@ function resolveLegacyEntryAvailability(params: {
   cfg: OpenClawConfig;
   agentId: string;
   metadataSnapshot: PluginMetadataSnapshot;
+  activatedPluginIds: ReadonlySet<string>;
 }): ModelAuthAvailability {
   if (params.primaryAvailability === true) {
     return true;
   }
   let available = params.primaryAvailability;
+  const preparedSyntheticRuntime = resolvePreparedSyntheticCliRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entry: params.entry,
+    metadataSnapshot: params.metadataSnapshot,
+    activatedPluginIds: params.activatedPluginIds,
+  });
   const runtimeProvider =
     resolveCliRuntimeExecutionProvider({
       provider: params.entry.provider,
@@ -125,19 +135,13 @@ function resolveLegacyEntryAvailability(params: {
       agentId: params.agentId,
       modelId: params.entry.id,
       metadataSnapshot: params.metadataSnapshot,
-    }) ??
-    resolvePreparedCliRuntimeProvider({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      entry: params.entry,
-      metadataSnapshot: params.metadataSnapshot,
-    });
+    }) ?? preparedSyntheticRuntime;
   if (
     runtimeProvider &&
     normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
   ) {
     const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
-    if (runtimeAvailable === true || params.authResolver.hasSyntheticAuth(runtimeProvider)) {
+    if (runtimeAvailable === true || preparedSyntheticRuntime === runtimeProvider) {
       return true;
     }
     if (available === false && runtimeAvailable === undefined) {
@@ -159,6 +163,18 @@ function createModelsListEntryEvaluator(params: {
   entry: ModelCatalogEntry,
   routeVariants?: readonly ModelCatalogEntry[],
 ) => Promise<ModelAuthAvailabilityEvaluation> {
+  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
+  const activatedPluginIds = new Set(
+    params.metadataSnapshot.plugins
+      .filter((plugin) =>
+        isActivatedManifestOwner({
+          plugin,
+          normalizedConfig: normalizedPluginConfig,
+          rootConfig: params.cfg,
+        }),
+      )
+      .map((plugin) => plugin.id),
+  );
   const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   return (entry, routeVariants = [entry]) => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
@@ -188,6 +204,7 @@ function createModelsListEntryEvaluator(params: {
                 cfg: params.cfg,
                 agentId: params.agentId,
                 metadataSnapshot: params.metadataSnapshot,
+                activatedPluginIds,
               }),
             }
           : evaluation;
