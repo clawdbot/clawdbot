@@ -219,8 +219,8 @@ export class ReefTransportClient {
     }
     return { peer: friend.peer, status };
   }
-  listFriends(): Promise<{ friendships: RelayFriend[] }> {
-    return this.signed("GET", "/v1/friends");
+  listFriends(signal?: AbortSignal): Promise<{ friendships: RelayFriend[] }> {
+    return this.signed("GET", "/v1/friends", undefined, signal);
   }
   removeFriend(peer: string): Promise<void> {
     return this.signed("DELETE", `/v1/friends/${encodeURIComponent(peer)}`);

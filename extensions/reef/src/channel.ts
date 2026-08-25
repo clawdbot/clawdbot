@@ -426,8 +426,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           signal: ctx.abortSignal,
         },
       );
-      const reconcile = async () => {
-        await friends.reconcile();
+      const reconcile = async (signal: AbortSignal) => {
+        await friends.reconcile(signal);
         await friends.surfacePairingCandidates(async ({ peer, fingerprint, approvalToken }) => {
           await pairing.issueChallenge({
             senderId: peer,
@@ -435,7 +435,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             meta: { reefApproval: approvalToken },
             sendPairingReply: async () => {},
           });
-        });
+        }, signal);
       };
       // Attempt the peer-key refresh before recovery can dispatch an agent
       // turn. The lifecycle activates only after that attempt is classified.
@@ -488,16 +488,17 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         await runReefChannelLifecycle({
           parentSignal: ctx.abortSignal,
           startInbox: (signal) => inbox.start(signal),
-          reconcile: async () => {
+          reconcile: async (signal) => {
             // The overdue sweep must run even while the relay is unreachable:
             // that outage is exactly when queued sends go unconfirmed, and the
             // notices themselves are local.
             let reconcileError: Error | undefined;
             try {
-              await reconcile();
+              await reconcile(signal);
             } catch (error) {
               reconcileError = error instanceof Error ? error : new Error(String(error));
             }
+            signal.throwIfAborted();
             await notifyOverdueReefDeliveries({ trust, ownerNotice });
             if (reconcileError) {
               throw reconcileError;
