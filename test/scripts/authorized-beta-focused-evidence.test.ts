@@ -134,6 +134,254 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
   };
 }
 
+function runFocusedValidatorLogProbe(outcome: "flagged" | "legacy" | "unrelated") {
+  const { policy, root } = fixturePolicy();
+  const trustedRoot = tempDirs.make("authorized-beta-focused-job-log-");
+  const validatorPath = stageValidatorClosure(trustedRoot, false);
+  const artifactPath = join(trustedRoot, "evidence.json");
+  const callsPath = join(trustedRoot, "gh-log-calls.jsonl");
+  const historical = policy.historicalFrv;
+  const focused = policy.focusedProof;
+  const producerSha = "a".repeat(40);
+  const producerRef = "release-publish/aaaaaaaaaaaa-1";
+  const producer: AuthorizedBetaFocusedProducerIdentity = {
+    repository: "openclaw/openclaw",
+    runId: "123",
+    runAttempt: 1,
+    workflowPath: ".github/workflows/authorized-beta-focused-validation.yml",
+    workflowFullRef: `refs/tags/${producerRef}`,
+    workflowRef: producerRef,
+    workflowSha: producerSha,
+  };
+  const createRun = (
+    id: string,
+    name: string,
+    path: string,
+    headBranch: string,
+    headSha: string,
+    conclusion = "success",
+  ) => ({
+    id,
+    run_attempt: 1,
+    name,
+    path,
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion,
+    head_branch: headBranch,
+    head_sha: headSha,
+  });
+  const createJob = (id: string, runId: string, name: string, conclusion: string) => ({
+    id,
+    run_id: runId,
+    name,
+    status: "completed",
+    conclusion,
+    head_sha: policy.historicalToolingSha,
+  });
+  const historicalTitle = `full-release-validation-${historical.runId}-${historical.runAttempt}`;
+  const historicalRun = (id: string, name: string, path: string, conclusion = "success") =>
+    createRun(id, name, path, historical.workflowRef, policy.historicalToolingSha, conclusion);
+  const focusedRun = (id: string, name: string, path: string, conclusion = "success") =>
+    createRun(
+      id,
+      name,
+      path,
+      policy.historicalToolingRef.replace("refs/tags/", ""),
+      policy.historicalToolingSha,
+      conclusion,
+    );
+  const runs = [
+    createRun(
+      producer.runId,
+      "Authorized Beta Focused Validation",
+      producer.workflowPath,
+      producerRef,
+      producerSha,
+    ),
+    historicalRun(historical.runId, "Full Release Validation", historical.workflowPath, "failure"),
+    historicalRun(
+      historical.ciRunId,
+      `CI ${historicalTitle}-ci`,
+      ".github/workflows/ci.yml",
+      "failure",
+    ),
+    historicalRun(
+      historical.pluginRunId,
+      `Plugin Prerelease ${historicalTitle}-plugin-prerelease`,
+      ".github/workflows/plugin-prerelease.yml",
+      "failure",
+    ),
+    historicalRun(
+      historical.releaseChecksRunId,
+      `OpenClaw Release Checks ${historicalTitle}-release-checks`,
+      ".github/workflows/openclaw-release-checks.yml",
+    ),
+    historicalRun(
+      historical.performanceRunId,
+      `OpenClaw Performance ${historicalTitle}`,
+      ".github/workflows/openclaw-performance.yml",
+      "failure",
+    ),
+    focusedRun(focused.ciRunId, "CI beta3-slack-proof-e347223a", ".github/workflows/ci.yml"),
+    focusedRun(
+      focused.pluginRunId,
+      "Plugin Prerelease beta3-slack-proof-e347223a",
+      ".github/workflows/plugin-prerelease.yml",
+      "failure",
+    ),
+  ];
+  const jobs = [
+    createJob(historical.ciFailedJobId, historical.ciRunId, "check-lint", "failure"),
+    createJob(historical.ciAggregateJobId, historical.ciRunId, "openclaw/ci-gate", "failure"),
+    createJob(
+      historical.pluginFailedJobId,
+      historical.pluginRunId,
+      "checks-node-extensions-shard-7",
+      "failure",
+    ),
+    createJob(
+      historical.pluginAggregateJobId,
+      historical.pluginRunId,
+      "plugin-prerelease-suite",
+      "failure",
+    ),
+    createJob(
+      historical.releaseChecksVerifierJobId,
+      historical.releaseChecksRunId,
+      "Verify release checks",
+      "success",
+    ),
+    createJob(
+      historical.performanceFailedJobId,
+      historical.performanceRunId,
+      "OpenClaw source performance probes",
+      "failure",
+    ),
+    createJob(focused.ciSuccessJobId, focused.ciRunId, "check-lint", "success"),
+    createJob(focused.ciTargetLogJobId, focused.ciRunId, "preflight", "success"),
+    createJob(
+      focused.pluginSuccessJobId,
+      focused.pluginRunId,
+      "checks-node-extensions-shard-7",
+      "success",
+    ),
+    createJob(
+      focused.pluginTargetLogJobId,
+      focused.pluginRunId,
+      "Build plugin prerelease plan",
+      "success",
+    ),
+  ];
+  const plan = {
+    parentRunId: historical.runId,
+    parentRunAttempt: historical.runAttempt,
+    workflowRef: historical.workflowRef,
+    workflowSha: policy.historicalToolingSha,
+    targetSha: historical.targetSha,
+    releaseProfile: "beta",
+    rerunGroup: "all",
+    children: [
+      { key: "normalCi", selected: true, runId: historical.ciRunId },
+      { key: "pluginPrerelease", selected: true, runId: historical.pluginRunId },
+      { key: "releaseChecks", selected: true, runId: historical.releaseChecksRunId },
+      { key: "productPerformance", selected: true, runId: historical.performanceRunId },
+    ],
+  };
+  const evidence: AuthorizedBetaFocusedEvidence = {
+    schema: "openclaw.authorized-beta-focused-evidence.v1",
+    mode: "authorized-beta-focused-v1",
+    policySha256: digestAuthorizedBetaFocusedPolicy(policy),
+    releaseTag: policy.releaseTag,
+    candidate: {
+      sha: policy.candidateSha,
+      parentSha: policy.baseCandidateSha,
+      treeSha: policy.candidateTreeSha,
+      packageProjectionSha256: policy.packageProjectionSha256,
+      changedPaths: policy.changedPaths,
+    },
+    producer,
+    historical: {
+      frvRunId: historical.runId,
+      frvRunAttempt: historical.runAttempt,
+      releaseChecksRunId: historical.releaseChecksRunId,
+      performanceRunId: historical.performanceRunId,
+    },
+    focused: {
+      ciRunId: focused.ciRunId,
+      ciJobId: focused.ciSuccessJobId,
+      pluginRunId: focused.pluginRunId,
+      pluginJobId: focused.pluginSuccessJobId,
+      reviewedHeadSha: policy.reviewedHeadSha,
+    },
+    inventory: { eligibilityPlanDigest: policy.eligibilityPlanDigest, ...policy.inventory },
+  };
+  writeFileSync(join(trustedRoot, "authorized-beta-focused-policy.json"), JSON.stringify(policy));
+  writeFileSync(artifactPath, JSON.stringify(evidence));
+  writeFileSync(
+    join(trustedRoot, "gh"),
+    [
+      "#!/usr/bin/env node",
+      'import { appendFileSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const [command, route, ...args] = process.argv.slice(2);",
+      `const runs = ${JSON.stringify(Object.fromEntries(runs.map((run) => [run.id, run])))};`,
+      `const jobs = ${JSON.stringify(Object.fromEntries(jobs.map((job) => [job.id, job])))};`,
+      'if (command === "run" && route === "download") {',
+      '  const directory = args[args.indexOf("--dir") + 1];',
+      `  writeFileSync(join(directory, "full-release-execution-plan.json"), JSON.stringify(${JSON.stringify(plan)}));`,
+      '} else if (command === "api" && route.endsWith("/logs")) {',
+      `  appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");`,
+      `  const firstFocusedLog = route.endsWith("/${focused.ciTargetLogJobId}/logs");`,
+      `  if (firstFocusedLog && args.includes("--allow-escape-sequences") && ${JSON.stringify(outcome)} !== "flagged") {`,
+      `    process.stderr.write(${JSON.stringify(outcome)} === "legacy" ? "unknown flag: --allow-escape-sequences\\r\\n\\r\\nUsage: gh api <endpoint> [flags]\\r\\n" : "error: unknown flag: --allow-escape-sequences\\n");`,
+      "    process.exit(1);",
+      "  }",
+      `  process.stdout.write("\\u001b[32m${policy.reviewedHeadSha}\\u001b[0m");`,
+      '} else if (command === "api" && route.includes("/git/ref/tags/")) {',
+      `  process.stdout.write(JSON.stringify({ object: { type: "commit", sha: ${JSON.stringify(producerSha)} } }));`,
+      '} else if (command === "api") {',
+      '  const id = route.slice(route.lastIndexOf("/") + 1);',
+      '  const value = route.includes("/actions/runs/") ? runs[id] : jobs[id];',
+      "  if (!value) throw new Error(`unexpected GitHub API route: ${route}`);",
+      "  process.stdout.write(JSON.stringify(value));",
+      "} else {",
+      "  throw new Error(`unexpected gh invocation: ${JSON.stringify(process.argv.slice(2))}`);",
+      "}",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      validatorPath,
+      "verify",
+      "--candidate-root",
+      root,
+      "--artifact",
+      artifactPath,
+      "--producer-run-id",
+      producer.runId,
+      "--producer-run-attempt",
+      String(producer.runAttempt),
+      "--producer-workflow-full-ref",
+      producer.workflowFullRef,
+      "--producer-workflow-sha",
+      producer.workflowSha,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${trustedRoot}:${process.env.PATH ?? ""}` },
+    },
+  );
+  const calls = readFileSync(callsPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[]);
+  return { calls, policy, result };
+}
+
 function stageCandidateVerifier(policy: AuthorizedBetaFocusedPolicy, shouldFail = false) {
   const trustedRoot = tempDirs.make("authorized-beta-focused-trusted-");
   const validatorPath = stageValidatorClosure(trustedRoot, false);
@@ -520,12 +768,47 @@ describe("authorized beta focused evidence", () => {
     expect(result.stderr).not.toContain("historical execution plan child run id");
   });
 
-  it("allows ANSI-bearing Actions logs with legacy gh fallback", () => {
-    const source = readFileSync("scripts/validate-authorized-beta-focused-evidence.mts", "utf8");
+  it.each([
+    { outcome: "flagged" as const, description: "accepts ANSI-bearing flagged Actions logs" },
+    { outcome: "legacy" as const, description: "retries once for the exact legacy gh flag error" },
+    {
+      outcome: "unrelated" as const,
+      description: "propagates unrelated gh errors without retrying",
+    },
+  ])("$description", ({ outcome }) => {
+    const { calls, policy, result } = runFocusedValidatorLogProbe(outcome);
+    const ciLogArgs = [
+      "api",
+      `repos/openclaw/openclaw/actions/jobs/${policy.focusedProof.ciTargetLogJobId}/logs`,
+    ];
+    const pluginLogArgs = [
+      "api",
+      `repos/openclaw/openclaw/actions/jobs/${policy.focusedProof.pluginTargetLogJobId}/logs`,
+    ];
+    const flaggedCiLogArgs = [...ciLogArgs, "--allow-escape-sequences"];
+    const flaggedPluginLogArgs = [...pluginLogArgs, "--allow-escape-sequences"];
 
-    expect(source).toContain('args.push("--allow-escape-sequences")');
-    expect(source).toContain('includes("unknown flag: --allow-escape-sequences")');
-    expect(source).toContain("log = gh(jobLogArgs(jobId, false))");
+    if (outcome === "unrelated") {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("error: unknown flag: --allow-escape-sequences");
+      expect(calls).toEqual([flaggedCiLogArgs]);
+      return;
+    }
+
+    expect(result.stderr).toBe(
+      outcome === "legacy"
+        ? "unknown flag: --allow-escape-sequences\r\n\r\nUsage: gh api <endpoint> [flags]\r\n"
+        : "",
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(
+      `authorized beta focused evidence verified for ${policy.releaseTag} at ${policy.candidateSha}\n`,
+    );
+    expect(calls).toEqual(
+      outcome === "legacy"
+        ? [flaggedCiLogArgs, ciLogArgs, flaggedPluginLogArgs]
+        : [flaggedCiLogArgs, flaggedPluginLogArgs],
+    );
   });
 
   it("binds the direct-child tree, exact diff, and unchanged published projection", () => {
