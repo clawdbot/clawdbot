@@ -551,6 +551,9 @@ export async function updateGitCheckout(params: {
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
+    if (afterShaStep.exitCode !== 0) {
+      return await rollbackError("head-verification-failed");
+    }
     if (
       devTarget?.mode === "tracked" &&
       devPreflight?.status === "ok" &&

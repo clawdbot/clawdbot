@@ -2,6 +2,7 @@
  * Provider-policy API for Anthropic and Claude CLI. Core calls this lightweight
  * path for config defaults and thinking profiles.
  */
+import { CLAUDE_CLI_PROFILE_ID } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -13,6 +14,9 @@ import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
+
+/** Profile ids that native Claude auth has retired from OpenClaw ownership. */
+export const deprecatedProfileIds = [CLAUDE_CLI_PROFILE_ID] as const;
 
 /** Normalize Anthropic provider config without importing runtime registration. */
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {

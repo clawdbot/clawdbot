@@ -5758,19 +5758,18 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* Sized to its glyphs. The old 24px box matched the action button this used to
-   trade places with, which padded a 7px unread dot with 8.5px a side and broke
-   the endcap's even 6px rhythm. Nothing trades now, so it sizes to content. */
+/* One 14px track per glyph puts the 16px PR icon, 11px ring, and 7px unread dot
+   each on the action-icon axis the endcap padding aligns to. Centring them as
+   one box held only for a single glyph: a PR icon ahead of the trailing dot
+   pushed it 3.5px inboard of the dot-only rows. 14px, not the 24px action-button
+   box, which padded a 7px dot with 8.5px a side and broke the 6px rhythm. */
 .session-row-state {
-  display: inline-flex;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 14px;
   align-items: center;
-  justify-content: center;
+  justify-items: center;
   gap: var(--row-glyph-gap, 6px);
-  /* The ring and the unread dot are bare shapes, not icons in a box, so
-     right-flush they hung 2-4px past the icon column above them. One glyph-wide
-     floor plus the centring above puts whatever the row is showing on the same
-     axis as the icons. */
-  min-width: 14px;
   pointer-events: none;
 }
 
