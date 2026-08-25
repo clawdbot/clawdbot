@@ -411,6 +411,7 @@ export class CodexAssistantProjection {
       !completedItemIds.has(itemId) ||
       itemIndex < this.persistableAssistantBarrier ||
       !text ||
+      isSilentReplyPayloadText(text) ||
       this.isToolProgressEchoText(itemId, text)
     ) {
       return undefined;
