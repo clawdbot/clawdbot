@@ -181,12 +181,14 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     const next: Extract<CronPayload, { kind: "command" }> = {
       kind: "command",
       argv: patch.argv,
-      cwd: patch.cwd,
-      env: patch.env,
-      input: patch.input,
-      timeoutSeconds: patch.timeoutSeconds,
-      noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds,
-      outputMaxBytes: patch.outputMaxBytes,
+      ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+      ...(patch.env !== undefined ? { env: patch.env } : {}),
+      ...(patch.input !== undefined ? { input: patch.input } : {}),
+      ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+      ...(patch.noOutputTimeoutSeconds !== undefined
+        ? { noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds }
+        : {}),
+      ...(patch.outputMaxBytes !== undefined ? { outputMaxBytes: patch.outputMaxBytes } : {}),
     };
     applyToolsAllowPatch(next, patch);
     return next;
@@ -199,8 +201,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     const next: Extract<CronPayload, { kind: "script" }> = {
       kind: "script",
       script: patch.script,
-      timeoutSeconds: patch.timeoutSeconds,
-      toolBudget: patch.toolBudget,
+      ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+      ...(patch.toolBudget !== undefined ? { toolBudget: patch.toolBudget } : {}),
     };
     applyToolsAllowPatch(next, patch);
     return next;
@@ -217,12 +219,14 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   const next: CronAgentTurnPayload = {
     kind: "agentTurn",
     message: patch.message,
-    model: typeof patch.model === "string" ? patch.model : undefined,
-    fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
-    thinking: typeof patch.thinking === "string" ? patch.thinking : undefined,
-    timeoutSeconds: patch.timeoutSeconds,
-    lightContext: patch.lightContext,
-    allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
+    ...(typeof patch.model === "string" ? { model: patch.model } : {}),
+    ...(Array.isArray(patch.fallbacks) ? { fallbacks: patch.fallbacks } : {}),
+    ...(typeof patch.thinking === "string" ? { thinking: patch.thinking } : {}),
+    ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+    ...(typeof patch.lightContext === "boolean" ? { lightContext: patch.lightContext } : {}),
+    ...(typeof patch.allowUnsafeExternalContent === "boolean"
+      ? { allowUnsafeExternalContent: patch.allowUnsafeExternalContent }
+      : {}),
   };
   applyToolsAllowPatch(next, patch);
   return next;
