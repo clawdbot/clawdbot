@@ -8,6 +8,7 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
+import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
@@ -381,7 +382,7 @@ type RichMessageParams = {
   chat_id?: string | number;
   message_id?: number;
   rich_message?: {
-    blocks?: Array<{ type?: string; text?: unknown }>;
+    blocks?: InputRichBlock[];
     markdown?: string;
     html?: string;
   };
@@ -394,15 +395,11 @@ function getRichMessageText(params: RichMessageParams): string {
     return "";
   }
   if (rich.blocks) {
-    // Test harness only needs a readable plain-ish projection for assertions.
-    return rich.blocks
-      .map((block) => {
-        if (typeof block.text === "string") {
-          return block.text;
-        }
-        return JSON.stringify(block.text ?? "");
-      })
-      .join("\n");
+    // Reuse the production plain-text projector so array-shaped/typed
+    // `RichText` (bold, links, etc.) flattens the same way a real Telegram
+    // client would render it, instead of a shallow string-only special case
+    // that JSON-stringifies anything else.
+    return inputRichBlocksToPlainText(rich.blocks);
   }
   return rich.markdown ?? rich.html ?? "";
 }

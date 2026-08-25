@@ -371,18 +371,22 @@ describe("Telegram topic transport payloads", () => {
       editMessage.mockRestore();
     }
 
+    // Send-before-delete: the replacement is sent first so a send failure never
+    // destroys the picker before its replacement lands (see
+    // deleteAndReplyCallbackMessage's ordering comment in
+    // bot-handlers.callback-actions.ts).
     expect(requests.map((request) => request.method)).toEqual([
-      "deleteBusinessMessages",
       "sendMessage",
+      "deleteBusinessMessages",
     ]);
-    expect(requests[0] && parseJsonBody(requests[0])).toEqual({
-      business_connection_id: "business-media-1",
-      message_ids: [41],
-    });
-    expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
+    expect(requests[0] && parseJsonBody(requests[0])).toMatchObject({
       business_connection_id: "business-media-1",
       direct_messages_topic_id: DIRECT_TOPIC_ID,
       text: "Replacement",
+    });
+    expect(requests[1] && parseJsonBody(requests[1])).toEqual({
+      business_connection_id: "business-media-1",
+      message_ids: [41],
     });
   });
 });

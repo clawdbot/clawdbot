@@ -2866,6 +2866,136 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
   });
 
+  it("routes the final model selection confirmation through the rich edit funnel when richMessages is enabled", async () => {
+    // Regression for #123886: the picker's provider/model-list edits stay on the
+    // legacy HTML funnel (no richTextOverride supplied), same as every other
+    // callback step. Only this terminal confirmation opts into the rich funnel.
+    // Editing a rich-sent message through the legacy text API leaves the
+    // message's prior rich body visible underneath the new plain text instead of
+    // replacing it, so this edit must land on editMessageTextSpy via the rich raw path
+    // (see the harness's `raw.editMessageText` wiring), not the legacy parse_mode HTML
+    // path with no rich_message payload.
+    const storePath = createTelegramTestStorePath("model-rich");
+    const config = makeModelPickerConfig(storePath, {
+      telegram: { dmPolicy: "open", allowFrom: ["*"], richMessages: true },
+    });
+
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({
+      token: "tok",
+      config,
+    });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+
+    await callbackHandler(
+      createTelegramCallbackContext({
+        id: "cbq-model-rich-1",
+        data: "mdl_sel_openai/gpt-5.4",
+        message: { message_id: 18 },
+      }),
+    );
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const editCall = mockCall(
+      editMessageTextSpy as unknown as MockCallSource,
+      0,
+      "edit message text",
+    );
+    expect(editCall[0]).toBe(1234);
+    expect(editCall[1]).toBe(18);
+    // Rendered from the harness's rich-block plain-text projection: no HTML entities
+    // (e.g. no `&lt;`/`&gt;`), and the provider/model id renders literally.
+    expect(editCall[2]).toBe(
+      `${CHECK_MARK_EMOJI} Model changed to openai/gpt-5.4\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime <runtime> -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
+    );
+    expect(requireRecord(editCall[3], "edit params").parse_mode).toBeUndefined();
+
+    const entry = readOnlySessionEntry(storePath);
+    expect(entry?.providerOverride).toBe("openai");
+    expect(entry?.modelOverride).toBe("gpt-5.4");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-rich-1");
+  });
+
+  it("retries the rich model confirmation edit after a transient replacement-send failure instead of reporting a permanent failure", async () => {
+    // Regression for the ClawSweeper P2 finding on #124222: the rich confirmation
+    // edit runs after applySessionModelSelection has already taken effect, so a
+    // transient failure here must bubble as TelegramRetryableCallbackError into the
+    // router's retry path -- not get caught locally and rewritten into a misleading
+    // "Failed to change model" edit while the selection silently stays applied.
+    //
+    // A bare rich-edit failure alone isn't enough to reproduce the bug: editCallbackMessage
+    // (bot-handlers.callback-actions.ts) catches a non-"not modified" rich-edit error and
+    // falls back to deleteAndReplyCallbackMessage (send-then-delete), which absorbs the
+    // failure whenever the replacement send succeeds. The failure this fix protects against
+    // only surfaces when that fallback's own replacement send also fails.
+    const storePath = createTelegramTestStorePath("model-rich-retry");
+    const config = makeModelPickerConfig(storePath, {
+      telegram: { dmPolicy: "open", allowFrom: ["*"], richMessages: true },
+    });
+
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({
+      token: "tok",
+      config,
+    });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+
+    editMessageTextSpy.mockRejectedValueOnce(new Error("rich edit boom"));
+    sendMessageSpy.mockRejectedValueOnce(new Error("replacement send boom"));
+
+    await expect(
+      callbackHandler(
+        createTelegramCallbackContext({
+          id: "cbq-model-rich-retry-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          message: { message_id: 19 },
+        }),
+      ),
+    ).rejects.toThrow("replacement send boom");
+
+    // The selection is already applied by the time the confirmation edit fails --
+    // this is the state the retry path must be able to re-confirm without redoing
+    // applySessionModelSelection, since it already ran to completion.
+    expect(readOnlySessionEntry(storePath)?.providerOverride).toBe("openai");
+    expect(readOnlySessionEntry(storePath)?.modelOverride).toBe("gpt-5.4");
+    // No misleading permanent-failure edit was sent for the already-applied selection.
+    expect(
+      editMessageTextSpy.mock.calls.some((call) =>
+        (typeof call[2] === "string" ? call[2] : "").includes("Failed to change model"),
+      ),
+    ).toBe(false);
+    expect(
+      sendMessageSpy.mock.calls.some((call) =>
+        (typeof call[1] === "string" ? call[1] : "").includes("Failed to change model"),
+      ),
+    ).toBe(false);
+    // The failed replacement send's original message was never deleted -- the old picker
+    // stays visible rather than leaving the chat with neither picker nor confirmation.
+    expect(deleteMessageSpy).not.toHaveBeenCalled();
+
+    await callbackHandler(
+      createTelegramCallbackContext({
+        id: "cbq-model-rich-retry-2",
+        data: "mdl_sel_openai/gpt-5.4",
+        message: { message_id: 19 },
+      }),
+    );
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
+    const editCall = mockCall(
+      editMessageTextSpy as unknown as MockCallSource,
+      1,
+      "edit message text",
+    );
+    expect(editCall[0]).toBe(1234);
+    expect(editCall[1]).toBe(19);
+    expect(editCall[2]).toBe(
+      `${CHECK_MARK_EMOJI} Model changed to openai/gpt-5.4\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime <runtime> -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
+    );
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-rich-retry-2");
+  });
+
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {
     // Regression: the callback handler used the startup `cfg` snapshot for
     // store path and default-model resolution.  If the config was reloaded
