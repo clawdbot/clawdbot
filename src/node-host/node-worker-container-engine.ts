@@ -33,6 +33,12 @@ const LAUNCH_LABEL = "openclaw.node-worker.launch";
 const CONTAINER_NODE_EXECUTABLE = "node";
 const CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{64}$/u;
+// `.State.Running` is false for a container that has never started and for one
+// that already exited; collapsing the two hands a container the engine is still
+// starting to the terminal path, so `.State.Status` disambiguates it. Podman
+// spells its pre-start states `configured`/`initialized`, Docker `created`.
+const CONTAINER_PRESTART_STATUSES = new Set(["configured", "created", "initialized"]);
+const CONTAINER_STATE_FORMAT = "{{.State.Status}}\t{{.State.Running}}";
 const ENCODED_LAUNCH_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
 function hostNamespace(bundleRoot: string): string {
@@ -340,11 +346,11 @@ export async function inspectNodeWorkerContainer(
   engine: NodeWorkerContainerEngine,
   containerId: string,
   expected?: NodeWorkerContainerExpectedOwner,
-): Promise<"live" | "dead" | "reused" | "unknown"> {
+): Promise<"live" | "created" | "dead" | "reused" | "unknown"> {
   try {
     const format = expected
-      ? `{{.State.Running}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
-      : "{{.State.Running}}";
+      ? `${CONTAINER_STATE_FORMAT}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
+      : CONTAINER_STATE_FORMAT;
     const state = await runContainerCommand(engine, [
       "inspect",
       "--type",
@@ -353,7 +359,7 @@ export async function inspectNodeWorkerContainer(
       format,
       containerId,
     ]);
-    const [running, owner, gateway, launch, extra] = state.split("\t");
+    const [status, running, owner, gateway, launch, extra] = state.split("\t");
     if (expected) {
       if (
         extra !== undefined ||
@@ -365,6 +371,9 @@ export async function inspectNodeWorkerContainer(
       }
     } else if (owner !== undefined) {
       return "unknown";
+    }
+    if (CONTAINER_PRESTART_STATUSES.has(status ?? "")) {
+      return "created";
     }
     return running === "true" ? "live" : running === "false" ? "dead" : "unknown";
   } catch (error) {

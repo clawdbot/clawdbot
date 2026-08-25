@@ -217,7 +217,9 @@ class NodeWorkerSupervisor {
         if (inspection === "reused") {
           throw new Error(`node worker launch ${launchId} lost its container ownership`);
         }
-        if (inspection === "live") {
+        // A container the engine has not started yet is not a finished one; only a
+        // dead attach client can fence it, never the terminal-cleanup path below.
+        if (inspection === "live" || inspection === "created") {
           const clientState = inspectNodeWorkerProcessIdentity(active.worker);
           if (clientState !== "dead" && clientState !== "reused") {
             return this.store.get(launchId);

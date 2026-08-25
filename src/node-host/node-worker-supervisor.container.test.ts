@@ -147,7 +147,7 @@ if (command === "version") {
   }
   const entry = args.at(-1);
   const image = args.at(-2);
-  const container = { id, labels, env, mounts, image, entry, running: false, pid: null };
+  const container = { id, labels, env, mounts, image, entry, status: "created", pid: null };
   save(container);
   record({ argv: args, container, journal: journalState(launchIdFor(container)) });
   releaseAfterMarker("hold-create", () => process.stdout.write(id + "\n"));
@@ -167,12 +167,18 @@ if (command === "version") {
       process.stderr.write("container worker executed before its exact identity was journaled\n");
       process.exit(67);
     }
+    // Hold the container in its created state until the marker clears, or until
+    // it is removed: a real engine fails a start whose container disappeared.
+    while (fs.existsSync(path.join(engineRoot, "hold-start")) && fs.existsSync(statePath(container.id))) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    readContainer(container.id);
     const child = spawn(process.execPath, [container.entry], {
       detached: process.platform !== "win32",
       env: container.env,
       stdio: ["pipe", "inherit", "inherit"],
     });
-    container.running = true;
+    container.status = "running";
     container.pid = child.pid;
     save(container);
     child.stdin.end(descriptor);
@@ -183,7 +189,7 @@ if (command === "version") {
     child.once("exit", (code, signal) => {
       if (fs.existsSync(statePath(container.id))) {
         const current = load(container.id);
-        current.running = false;
+        current.status = "exited";
         current.pid = null;
         save(current);
       }
@@ -198,7 +204,14 @@ if (command === "version") {
   record({ argv: args });
   const container = readContainer(id);
   const format = args[args.indexOf("--format") + 1];
-  const columns = [String(container.running)];
+  // Render the requested state fields the way the engines do: State.Running is
+  // false for a created container as well as an exited one.
+  const columns = format
+    .split("\t")
+    .filter((field) => field.startsWith("{{.State."))
+    .map((field) =>
+      field === "{{.State.Status}}" ? container.status : String(container.status === "running")
+    );
   if (format.includes("openclaw.node-worker.host")) {
     columns.push(
       container.labels["openclaw.node-worker.host"] ?? "",
@@ -210,11 +223,11 @@ if (command === "version") {
 } else if (command === "kill") {
   const container = readContainer(args.at(-1));
   record({ argv: args, journal: journalState(launchIdFor(container)) });
-  if (!container.running) {
+  if (container.status !== "running") {
     process.stderr.write("container is not running\n");
     process.exit(1);
   }
-  container.running = false;
+  container.status = "exited";
   save(container);
   if (container.pid) {
     try {
@@ -263,7 +276,7 @@ type FakeContainer = {
   mounts: string[];
   image: string;
   entry: string;
-  running: boolean;
+  status: "created" | "running" | "exited";
   pid: number | null;
 };
 
@@ -339,7 +352,12 @@ function containerFixture(
         .split("\n")
         .map((line) => JSON.parse(line) as EngineEvent);
     },
-    seed(params: { id: string; launchId: string; owner?: string; running?: boolean }) {
+    seed(params: {
+      id: string;
+      launchId: string;
+      owner?: string;
+      status?: FakeContainer["status"];
+    }) {
       const container: FakeContainer = {
         id: params.id,
         labels: {
@@ -351,7 +369,7 @@ function containerFixture(
         mounts: [],
         image: "node:22-slim",
         entry: bundleEntry,
-        running: params.running ?? true,
+        status: params.status ?? "running",
         pid: null,
       };
       fs.writeFileSync(
@@ -479,6 +497,26 @@ describe("node worker supervisor container isolation", () => {
         state: "running",
         container_json: JSON.stringify(running.container),
       });
+    } finally {
+      await fixture.supervisor.close();
+    }
+  });
+
+  it("keeps a created container's launch running until the engine starts it", async () => {
+    const fixture = containerFixture();
+    const hold = path.join(fixture.engineRoot, "hold-start");
+    fs.writeFileSync(hold, "");
+    const input = testWorkerLaunchInput(fixture.workspaceDir, "container-created-status");
+    try {
+      const running = await fixture.supervisor.launch(input, endpoint);
+      expect(running.state).toBe("running");
+      const created = await fixture.supervisor.status(input.launchId);
+      expect(created?.state).toBe("running");
+      expect(fixture.exists(running.container!.containerId)).toBe(true);
+      fs.unlinkSync(hold);
+      const completed = await waitForTerminal(fixture.supervisor, input.launchId);
+      expect(completed?.state).toBe("completed");
+      expect(fixture.events().some((event) => event.argv[0] === "rm")).toBe(true);
     } finally {
       await fixture.supervisor.close();
     }
@@ -667,7 +705,7 @@ describe("node worker supervisor container isolation", () => {
   it("interrupts a stale running journal after verifying its dead container identity", async () => {
     const fixture = containerFixture();
     const launchId = "container-dead-recovery";
-    const container = fixture.seed({ id: "c".repeat(64), launchId, running: false });
+    const container = fixture.seed({ id: "c".repeat(64), launchId, status: "exited" });
     claimFixtureLaunch(fixture, launchId, container.id);
 
     try {
