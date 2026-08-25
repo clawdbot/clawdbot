@@ -6,7 +6,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { LogService } from "../sdk/logger.js";
-import { awaitMatrixStartupWithAbort } from "../startup-abort.js";
+import { awaitMatrixStartupWithAbort, throwIfMatrixStartupAborted } from "../startup-abort.js";
 import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
 import type { MatrixAuth } from "./types.js";
 
@@ -171,7 +171,8 @@ async function ensureSharedClientStarted(
       }
     }
 
-    await awaitMatrixStartupWithAbort(state.client.start({ abortSignal }), abortSignal);
+    await state.client.start({ abortSignal });
+    throwIfMatrixStartupAborted(abortSignal);
     state.started = true;
   })();
   const guardedStart = startPromise.finally(() => {
@@ -363,6 +364,9 @@ function beginGenerationRetirement(params: {
   state.phase = "quiescing";
   state.retirementPromise = Promise.resolve().then(async () => {
     let poisonDisposition: PoisonDisposition = "replace-after-stop";
+    // Startup owns SDK initialization until its underlying task settles. Joining
+    // it prevents a canceled generation from starting or persisting after stop.
+    await state.startPromise?.catch(() => undefined);
     try {
       await state.client.quiesceSync();
       state.started = false;

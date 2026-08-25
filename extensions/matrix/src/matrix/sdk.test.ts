@@ -23,6 +23,7 @@ import {
   readMatrixRecoveryKeyStateForPath,
 } from "./crypto-state-store.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
+import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import { LogService } from "./sdk/logger.js";
 
 const createSharedMatrixClientMock = vi.hoisted(() => vi.fn());
@@ -2639,6 +2640,53 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(matrixJsClient.initRustCrypto).toHaveBeenCalledWith({
       cryptoDatabasePrefix: "openclaw-matrix-test",
     });
+  });
+
+  it("does not persist or start sync when startup aborts during crypto initialization", async () => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
+    const tempDir = tempDirs.make("matrix-idb-startup-abort-");
+    const databasePrefix = "openclaw-matrix-startup-abort";
+    const initCrypto = createDeferred<void>();
+    const pendingDatabases = createDeferred<IDBDatabaseInfo[]>();
+    matrixJsClient.initRustCrypto.mockReturnValue(initCrypto.promise);
+    const databasesSpy = vi.spyOn(indexedDB, "databases").mockReturnValue(pendingDatabases.promise);
+    const abortController = new AbortController();
+
+    try {
+      const client = new MatrixClient("https://matrix.example.org", "token", {
+        encryption: true,
+        idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
+        cryptoDatabasePrefix: databasePrefix,
+      });
+      const startup = client.start({ abortSignal: abortController.signal });
+
+      await vi.waitFor(() => {
+        expect(matrixJsClient.initRustCrypto).toHaveBeenCalledTimes(1);
+      });
+      initCrypto.resolve();
+      await vi.waitFor(() => {
+        expect(databasesSpy).toHaveBeenCalledTimes(1);
+      });
+
+      abortController.abort();
+      pendingDatabases.resolve([
+        {
+          name: `${databasePrefix}::matrix-sdk-crypto`,
+          version: 1,
+        },
+      ]);
+
+      await expectAbortError(startup);
+      expect(readMatrixIdbSnapshotJson(tempDir)).toBeNull();
+      expect(matrixJsClient.startClient).not.toHaveBeenCalled();
+    } finally {
+      initCrypto.resolve();
+      pendingDatabases.resolve([]);
+      databasesSpy.mockRestore();
+      await clearAllIndexedDbState({ databasePrefix });
+      resetPluginStateStoreForTests();
+    }
   });
 
   it("bootstraps cross-signing with setupNewCrossSigning enabled", async () => {

@@ -515,6 +515,7 @@ export abstract class MatrixClientBase {
     throwIfMatrixStartupAborted(opts.abortSignal);
     this.registerBridge();
     await this.initializeCryptoIfNeeded(opts.abortSignal);
+    throwIfMatrixStartupAborted(opts.abortSignal);
 
     await this.client.startClient({
       initialSyncLimit: this.initialSyncLimit,
@@ -730,6 +731,7 @@ export abstract class MatrixClientBase {
       await persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
         databasePrefix: this.cryptoDatabasePrefix,
+        abortSignal,
       });
       throwIfMatrixStartupAborted(abortSignal);
 
@@ -739,6 +741,7 @@ export abstract class MatrixClientBase {
       }, MATRIX_IDB_PERSIST_INTERVAL_MS);
       this.idbPersistTimer.unref?.();
     } catch (err) {
+      throwIfMatrixStartupAborted(abortSignal);
       LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
     }
   }

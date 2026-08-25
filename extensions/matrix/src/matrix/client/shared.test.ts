@@ -891,14 +891,24 @@ describe("shared Matrix client generations", () => {
     const ownerAbort = expectMatrixStartupAbort(ownerStart);
     const waiterAbort = expectMatrixStartupAbort(waiterStart);
 
-    await Promise.all([stopSharedClientForAccount(auth), ownerAbort, waiterAbort]);
+    const retirement = stopSharedClientForAccount(auth);
+    await Promise.all([ownerAbort, waiterAbort]);
     expect(callerAbort.signal.aborted).toBe(false);
     expect(startupSignal?.aborted).toBe(true);
     expect(owner.abortSignal.aborted).toBe(true);
     expect(waiter.abortSignal.aborted).toBe(true);
+    expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
+
+    let retirementSettled = false;
+    void retirement.then(() => {
+      retirementSettled = true;
+    });
+    await Promise.resolve();
+    expect(retirementSettled).toBe(false);
 
     start.resolve();
-    await Promise.resolve();
+    await retirement;
+    expect(firstClient.stopAndPersist).toHaveBeenCalledTimes(1);
     const replacement = await acquireSharedMatrixClient({ auth, startClient: false });
     expect(replacement.client).toBe(replacementClient);
     await replacement.release({ mode: "discard" });
