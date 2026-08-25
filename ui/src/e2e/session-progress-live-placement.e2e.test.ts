@@ -112,14 +112,15 @@ suite.define(() => {
             const composerBounds = await visiblePane
               .locator(".agent-chat__composer-shell")
               .boundingBox();
-            if (!dockBounds || !composerBounds) {
+            const threadBounds = await visiblePane.locator(".chat-thread").boundingBox();
+            if (!dockBounds || !composerBounds || !threadBounds) {
               return false;
             }
+            // Clear of the centered composer, and anchored to the top of the
+            // conversation rather than floating above the composer.
             return (
               dockBounds.x >= composerBounds.x + composerBounds.width &&
-              Math.abs(
-                dockBounds.y + dockBounds.height - (composerBounds.y + composerBounds.height),
-              ) <= 1
+              dockBounds.y < threadBounds.y + threadBounds.height / 2
             );
           })
           .toBe(true);
@@ -162,6 +163,80 @@ suite.define(() => {
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').isVisible())
           .toBe(true);
         await captureProof(page, "composer-adjacent.png");
+      },
+    );
+  });
+
+  it("stacks the docked card under a suggestion tray instead of letting it be covered", async () => {
+    const sessionKey = "agent:main:progress-stacked";
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1600 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "progressCard.get",
+            "taskSuggestions.list",
+            "taskSuggestions.accept",
+            "taskSuggestions.dismiss",
+          ],
+          methodResponses: {
+            "progressCard.get": {
+              card: {
+                revision: 1,
+                sessionKey,
+                steps: [
+                  { step: "Inspect", status: "completed" },
+                  { step: "Implement", status: "in_progress" },
+                ],
+                updatedAt: 1,
+              },
+            },
+            "taskSuggestions.list": {
+              suggestions: [
+                {
+                  id: "task_stacked",
+                  title: "Follow-up worth keeping",
+                  prompt: "Inspect the related implementation and tests.",
+                  tldr: "This tray must not cover the progress card.",
+                  cwd: "/projects/example",
+                  sessionKey: "main",
+                  agentId: "main",
+                  createdAt: 1,
+                },
+              ],
+            },
+            "sessions.list": chatSessionListResponse([
+              { key: sessionKey, kind: "direct", label: "Stacked progress", updatedAt: 1 },
+            ]),
+          },
+          sessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        const tray = visiblePane.locator(".task-suggestions");
+        const dock = visiblePane.locator('[data-progress-card-placement="dock"]');
+        await tray.waitFor({ state: "visible", timeout: 10_000 });
+        await expect.poll(() => dock.count()).toBe(1);
+        await expect
+          .poll(async () => {
+            const trayBounds = await tray.boundingBox();
+            const dockBounds = await dock.boundingBox();
+            if (!trayBounds || !dockBounds) {
+              return false;
+            }
+            // The card sits fully below the tray, not underneath it.
+            return dockBounds.y >= trayBounds.y + trayBounds.height;
+          })
+          .toBe(true);
+        await captureProof(page, "stacked-under-tray.png");
       },
     );
   });
