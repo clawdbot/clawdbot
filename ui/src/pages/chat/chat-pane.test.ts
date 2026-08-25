@@ -221,17 +221,18 @@ describe("chat pane header state", () => {
     );
   });
 
-  it("cancels and skips unchanged labels", () => {
+  it("cancels and skips an unchanged generated dashboard title", () => {
     const patch = vi.fn(async () => ({}));
     const sessions = createSessionCapabilityFixture({ patch });
     const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
-    pane.paneTitle = "Derived title";
     const session = {
-      key: "agent:main:current",
+      key: "agent:main:dashboard:generated",
       kind: "direct",
+      displayName: "Generated title",
       updatedAt: 0,
     } satisfies GatewaySessionRow;
     pane.beginHeaderRename(session);
+    expect(pane.headerRenameValue).toBe("Generated title");
     pane.commitHeaderRename();
     pane.beginHeaderRename(session);
     pane.cancelHeaderRename();

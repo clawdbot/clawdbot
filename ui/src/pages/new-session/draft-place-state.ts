@@ -606,17 +606,6 @@ export class DraftPlaceState {
   }
 
   restorePreferenceSelections() {
-    const selectedCloudProfile = this.gateway.cloudProfiles.find(
-      (profile) => profile.id === this.cloudProfileIdValue,
-    );
-    if (
-      selectedCloudProfile &&
-      this.modelControl.cloudRuntimeUnsupportedReason(selectedCloudProfile) &&
-      !this.read().pendingPlacementSessionKey
-    ) {
-      this.selectDevice("");
-      return;
-    }
     let changed = false;
     const preferredWhere = this.whereSelectedByUser ? null : this.preferredWhereRestore;
     let preferredProject = this.projectSelectedByUser ? "" : this.preferredProjectRestore;

@@ -122,6 +122,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForChatScrollIdle(page);
+      await gateway.waitForRequest("agent.identity.get");
+      const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       await expect.poll(() => thread.count()).toBe(1);
       const initialDistance = await thread.evaluate((element) => {
@@ -145,6 +147,9 @@ suite.define(() => {
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
+        initialIdentityRequestCount,
+      );
       const firstVisitDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
