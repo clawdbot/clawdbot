@@ -1,10 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { replaceComposerPopoverAnchor } from "./chat-composer-dom.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
@@ -184,11 +186,15 @@ export function renderChatSwarmProgress({
           (task) => task.status === "done" || task.status === "failed",
         ).length;
         const hasFailure = allTasks.some((task) => task.status === "failed");
+        let popoverAnchor: HTMLElement | null = null;
         return html`
           <div
             class="chat-swarm__group ${hasFailure ? "chat-swarm__group--failed" : ""}"
             data-swarm-group=${group.groupId}
             tabindex="0"
+            ${ref((element) => {
+              popoverAnchor = replaceComposerPopoverAnchor(popoverAnchor, element);
+            })}
           >
             <div class="chat-swarm__header">
               <strong title=${group.groupId}>${group.label}</strong>

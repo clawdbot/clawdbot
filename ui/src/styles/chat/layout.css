@@ -2584,7 +2584,7 @@ button.chat-reply-preview--message:disabled {
   bottom: calc(100% + 8px);
   display: grid;
   gap: 2px;
-  max-height: calc(100dvh - 116px);
+  max-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 8px;

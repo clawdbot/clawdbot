@@ -22,7 +22,7 @@ describeBrowserLayout("chat swarm progress browser layout", () => {
     await browser?.close();
   });
 
-  it("keeps long task popovers reachable inside the viewport", async () => {
+  it("keeps long task popovers reachable above the in-flow mobile composer", async () => {
     if (!browser) {
       throw new Error("expected browser");
     }
@@ -31,19 +31,46 @@ describeBrowserLayout("chat swarm progress browser layout", () => {
       { length: 256 },
       (_, index) => `<div class="chat-swarm__task">Worker ${index + 1}</div>`,
     ).join("");
-    const styles = ["ui/src/styles/base.css", "ui/src/styles/chat/layout.css"]
+    const styles = [
+      "ui/src/styles/base.css",
+      "ui/src/styles/chat/layout.css",
+      "ui/src/styles/chat/sidebar.css",
+    ]
       .map((file) => readStyleSheet(file))
       .join("\n");
     await page.setContent(`<!doctype html><html><head><style>${styles}</style></head><body>
-      <aside class="chat-swarm" style="position:fixed;right:0;bottom:16px;left:0">
-        <div class="chat-swarm__group">
-          <div class="chat-swarm__header"><strong>Active swarm</strong></div>
-          <div class="chat-swarm__tasks" style="visibility:visible;opacity:1;transform:none">
-            ${tasks}
+      <section class="card chat">
+        <div class="chat-workbench">
+          <div class="chat-workbench__main">
+            <div class="chat-split-container">
+              <div class="chat-main">
+                <div class="chat-main__conversation-column">
+                  <div class="chat-main__conversation">
+                    <div class="chat-thread" role="log">Conversation</div>
+                    <aside class="chat-swarm">
+                      <div class="chat-swarm__group">
+                        <div class="chat-swarm__header"><strong>Active swarm</strong></div>
+                        <div class="chat-swarm__tasks" style="visibility:visible;opacity:1;transform:none">
+                          ${tasks}
+                        </div>
+                      </div>
+                    </aside>
+                    <div class="agent-chat__composer-shell">
+                      <div class="agent-chat__input agent-chat__input--chat"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </aside>
+      </section>
     </body></html>`);
+
+    await page.locator(".chat-swarm__group").evaluate((element) => {
+      const availableHeight = element.getBoundingClientRect().top - 28;
+      element.style.setProperty("--chat-composer-popover-max-height", `${availableHeight}px`);
+    });
 
     const layout = await page.locator(".chat-swarm__tasks").evaluate((element) => {
       const style = getComputedStyle(element);
