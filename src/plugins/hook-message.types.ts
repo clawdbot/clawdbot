@@ -119,6 +119,11 @@ export type PluginHookInboundClaimContext = PluginHookMessageContext & {
   senderId?: string;
   messageId?: string;
   pluginBinding?: PluginConversationBinding;
+  /**
+   * Resolve host-owned run progress while this targeted conversation-binding claim is active.
+   * Retained references fail closed after the claim handler settles.
+   */
+  resolveRunProgressState?: (sessionId: string) => Promise<"queued" | "running" | undefined>;
 };
 
 export type PluginHookInboundClaimEvent = {

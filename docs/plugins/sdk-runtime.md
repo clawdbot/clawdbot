@@ -167,9 +167,6 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     // Get agent identity
     const identity = api.runtime.agent.resolveAgentIdentity(cfg);
 
-    // Inspect host-owned execution without treating admission as execution
-    const runState = await api.runtime.agent.resolveRunProgressState(sessionId);
-
     // Get default thinking level
     const thinking = api.runtime.agent.resolveThinkingDefault({
       cfg,
@@ -208,12 +205,6 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
     });
     ```
-
-    `api.runtime.agent.resolveRunProgressState(sessionId)` returns `queued` while an admitted reply
-    operation is waiting to start, `running` after backend execution starts or
-    while a concrete embedded run handle is live, and `undefined` when the host
-    has no active work for that session. It is a read-only process-local
-    lifecycle projection; do not use it as durable session state.
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 

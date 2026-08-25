@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
+import type { PluginHookInboundClaimContext } from "../../plugins/hook-types.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -724,7 +725,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("resolves one matching inbound claim pair for a plugin-owned binding", async () => {
+  it("scopes the run-state resolver to one matching inbound claim", async () => {
     setNoAbort();
     let resolveCalls = 0;
     setActivePluginRegistry(
@@ -752,10 +753,19 @@ describe("dispatchReplyFromConfig", () => {
         hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
     );
     hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
+    let retainedResolveRunProgressState:
+      | PluginHookInboundClaimContext["resolveRunProgressState"]
+      | undefined;
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+      async (_pluginId, _event, context) => {
+        const resolveRunProgressState = (context as PluginHookInboundClaimContext)
+          .resolveRunProgressState;
+        expect(resolveRunProgressState).toBeTypeOf("function");
+        expect(await resolveRunProgressState?.("missing-source-session")).toBeUndefined();
+        retainedResolveRunProgressState = resolveRunProgressState;
+        return { status: "handled", result: { handled: true } };
+      },
+    );
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
@@ -847,6 +857,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[2]?.pluginBinding?.bindingId).toBe("binding-1");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(await retainedResolveRunProgressState?.("missing-source-session")).toBe("running");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });

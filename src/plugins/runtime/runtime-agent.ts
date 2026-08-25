@@ -91,9 +91,6 @@ type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
-const loadAgentRunLifecycleRuntime = createLazyRuntimeModule(
-  () => import("../../agents/embedded-agent-runner/runs.js"),
-);
 
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
@@ -632,20 +629,8 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
-  } satisfies Omit<
-    PluginRuntime["agent"],
-    "resolveRunProgressState" | "runEmbeddedAgent" | "session"
-  > &
-    Partial<
-      Pick<PluginRuntime["agent"], "resolveRunProgressState" | "runEmbeddedAgent" | "session">
-    >;
-
-  defineCachedValue(agentRuntime, "resolveRunProgressState", () =>
-    createLazyRuntimeMethod(
-      loadAgentRunLifecycleRuntime,
-      (runtime) => runtime.resolveEmbeddedAgentRunProgressState,
-    ),
-  );
+  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "session"> &
+    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "session">>;
 
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),

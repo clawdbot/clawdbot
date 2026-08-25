@@ -184,6 +184,13 @@ suppress an ordinary agent turn before model input without retaining the
 original prompt in transcript, use `before_agent_run`. To short-circuit an agent
 turn with a synthetic reply or silence, use `before_agent_reply`.
 
+For a core-managed conversation binding, `ctx.resolveRunProgressState(sessionId)`
+returns `queued` while an admitted reply is waiting to start, `running` after
+backend execution starts or while an embedded run handle is live, and
+`undefined` when the host has no active work for that session. This read-only,
+process-local capability exists only for the active `inbound_claim` invocation;
+a retained callback fails closed by returning `running` after the handler settles.
+
 **Sessions and compaction**
 
 | Hook                                     | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
