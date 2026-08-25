@@ -67,7 +67,8 @@
 
 .chat-main__conversation {
   --chat-composer-top-margin: 8px;
-  --chat-transcript-composer-underlap: 10px;
+  --chat-transcript-composer-underlap: 30px;
+  --chat-transcript-fade-height: 24px;
 
   position: relative;
   display: flex;

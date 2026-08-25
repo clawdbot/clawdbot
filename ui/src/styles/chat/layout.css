@@ -600,7 +600,10 @@ openclaw-chat-page {
      scroll container's padding, which floats the thumb away from the pane
      edge (visible next to the sidebar divider). The side inset lives on
      .chat-thread-inner instead so the scrollbar hugs the edge. */
-  padding: clamp(20px, 3vh, 28px) 0 6px;
+  padding: clamp(20px, 3vh, 28px) 0
+    calc(
+      6px + var(--chat-transcript-composer-underlap, 0px) + var(--chat-transcript-fade-height, 0px)
+    );
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -609,7 +612,8 @@ openclaw-chat-page {
 }
 
 /* Extend only the scroll viewport behind the composer's own surface. The
-   following zero-height anchor keeps its original layout position. */
+   bottom padding keeps resting content above the fade; the following
+   zero-height anchor keeps its original layout position. */
 .chat-main__conversation > .chat-thread {
   margin-bottom: calc(
     0px - var(--chat-composer-top-margin) - var(--chat-transcript-composer-underlap)
@@ -2044,8 +2048,8 @@ button.chat-reply-preview--message:disabled {
    The chat-surface endpoint stays invisible when there is no content behind. */
 .agent-chat__composer-shell::before {
   position: absolute;
-  inset: -20px 0 auto;
-  height: 20px;
+  inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
+  height: var(--chat-transcript-fade-height, 20px);
   background: linear-gradient(to bottom, transparent, var(--chat-surface));
   content: "";
   pointer-events: none;
