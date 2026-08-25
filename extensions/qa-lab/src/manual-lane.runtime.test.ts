@@ -177,6 +177,30 @@ describe("runQaManualLane", () => {
       reply: "   ",
       error: "manual lane did not produce a successful reply",
     },
+    {
+      label: "legacy completed run without an outbound reply",
+      waited: { status: "error", error: "completed" },
+      reply: null,
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "legacy completed run with a whitespace-only reply",
+      waited: { status: "error", error: " completed " },
+      reply: "   ",
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "timed-out run without an outbound reply",
+      waited: { status: "timeout", error: "provider stalled" },
+      reply: null,
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "failed run with a whitespace-only reply",
+      waited: { status: "error", error: "authentication failed" },
+      reply: "   ",
+      error: "manual lane did not produce a successful reply",
+    },
   ])("rejects a $label after resource cleanup", async ({ waited, reply, error }) => {
     outboundReply = reply;
     gatewayCall.mockReset().mockResolvedValueOnce({ runId: "run-1" }).mockResolvedValueOnce(waited);

@@ -209,7 +209,8 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       ? result.waited.error?.trim().toLowerCase() !== "completed"
       : !["ok", "completed", "succeeded"].includes(result.waited.status ?? ""))
   ) {
-    throw new Error(result?.waited.error ?? "manual lane did not produce a successful reply");
+    const providerError = result?.reply?.trim() && result.waited.error;
+    throw new Error(providerError || "manual lane did not produce a successful reply");
   }
   return result;
 }
