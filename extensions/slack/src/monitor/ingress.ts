@@ -25,7 +25,9 @@ const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 export type SlackIngressTurnLifecycle = Omit<
   ChannelIngressMonitorLifecycle,
   "onAdoptionFinalizing"
->;
+> & {
+  onSessionRouted?: (sessionKey: string) => Promise<void>;
+};
 
 type SlackIngressPayload = {
   version: number;
@@ -223,6 +225,7 @@ export function createSlackDurableIngress(
 ): SlackDurableIngress {
   let app: App | undefined;
   let relayDispatch: SlackRelayIngressDispatch | undefined;
+  const activeSessionTurns = new Map<string, Promise<void>>();
   const monitor = createChannelIngressMonitor<
     SlackIngressRawEvent,
     SlackIngressBody,
@@ -273,33 +276,104 @@ export function createSlackDurableIngress(
       }
     },
     deliver: async (raw, lifecycle) => {
-      if (raw.kind === "relay") {
-        if (!relayDispatch) {
-          // Transient by design: a claim recovered before the relay source
-          // reattaches must retry, not dead-letter, or restart recovery loses it.
-          throw new Error("Slack relay ingress dispatcher is not attached.");
-        }
-        await relayDispatch(raw.message, lifecycle);
-        return;
-      }
-      if (!app) {
-        throw new Error("Slack ingress receiver is not attached to a Bolt app.");
-      }
-      await app.processEvent({
-        body: raw.body as ReceiverEvent["body"],
-        ack: async () => {},
-        ...(raw.retryNum === undefined ? {} : { retryNum: raw.retryNum }),
-        ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
-        customProperties: {
-          [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: lifecycle,
+      let releaseSession: (() => void) | undefined;
+      let routedSession: string | undefined;
+      let downstreamDeferred = false;
+      let settled = false;
+      const settleSession = () => {
+        settled = true;
+        releaseSession?.();
+      };
+      const routedLifecycle: SlackIngressTurnLifecycle = {
+        ...lifecycle,
+        onSessionRouted: async (sessionKey) => {
+          if (routedSession !== undefined) {
+            if (routedSession !== sessionKey) {
+              throw new Error("Slack ingress session ownership changed after routing.");
+            }
+            return;
+          }
+          lifecycle.abortSignal.throwIfAborted();
+          routedSession = sessionKey;
+          const previousTurn = activeSessionTurns.get(sessionKey);
+          let resolveCurrentTurn: () => void = () => {};
+          const currentTurn = new Promise<void>((resolve) => {
+            resolveCurrentTurn = resolve;
+          });
+          activeSessionTurns.set(sessionKey, currentTurn);
+          const releaseCurrentSession = () => {
+            if (activeSessionTurns.get(sessionKey) === currentTurn) {
+              activeSessionTurns.delete(sessionKey);
+            }
+            lifecycle.abortSignal.removeEventListener("abort", releaseCurrentSession);
+            resolveCurrentTurn();
+          };
+          releaseSession = releaseCurrentSession;
+          lifecycle.abortSignal.addEventListener("abort", releaseSession, { once: true });
+          // Preserve shipped channel lanes until the prepared route proves its
+          // session; channel-ID migration therefore still fences all traffic.
+          lifecycle.onDeferred();
+          monitor.requestDrain();
+          await previousTurn;
+          lifecycle.abortSignal.throwIfAborted();
         },
-      });
+        onAdopted: async () => {
+          try {
+            await lifecycle.onAdopted();
+          } finally {
+            settleSession();
+          }
+        },
+        onDeferred: () => {
+          downstreamDeferred = true;
+          lifecycle.onDeferred();
+          settleSession();
+          monitor.requestDrain();
+        },
+        onAbandoned: async () => {
+          try {
+            await lifecycle.onAbandoned();
+          } finally {
+            settleSession();
+          }
+        },
+      };
+      try {
+        if (raw.kind === "relay") {
+          if (!relayDispatch) {
+            // Transient by design: a claim recovered before the relay source
+            // reattaches must retry, not dead-letter, or restart recovery loses it.
+            throw new Error("Slack relay ingress dispatcher is not attached.");
+          }
+          await relayDispatch(raw.message, routedLifecycle);
+        } else {
+          if (!app) {
+            throw new Error("Slack ingress receiver is not attached to a Bolt app.");
+          }
+          await app.processEvent({
+            body: raw.body as ReceiverEvent["body"],
+            ack: async () => {},
+            ...(raw.retryNum === undefined ? {} : { retryNum: raw.retryNum }),
+            ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
+            customProperties: {
+              [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: routedLifecycle,
+            },
+          });
+        }
+        if (routedSession !== undefined && !settled && !downstreamDeferred) {
+          await routedLifecycle.onAdopted();
+        }
+      } catch (error) {
+        settleSession();
+        throw error;
+      }
     },
     pollIntervalMs: options.pollIntervalMs ?? SLACK_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     appendRetryDelaysMs: [0],
     drain: {
       resolveNonRetryableFailure: resolveSlackIngressNonRetryableFailure,
+      deferredLaneOccupancy: "release",
       // Shipped Slack rows did not store lanes, so replay still derives them from payloads.
       deriveLaneKey: (record) =>
         record.payload.kind === "relay"

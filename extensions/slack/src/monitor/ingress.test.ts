@@ -302,6 +302,119 @@ describe("Slack durable ingress", () => {
     });
   });
 
+  it("dispatches independently routed threads concurrently after session ownership is established", async () => {
+    await withQueue(async (queue) => {
+      let releaseFirstDispatch: () => void = () => {};
+      const firstDispatchGate = new Promise<void>((resolve) => {
+        releaseFirstDispatch = resolve;
+      });
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const event = (receiverEvent.body as { event: { thread_ts: string } }).event;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties);
+        await lifecycle?.onSessionRouted?.(`agent:main:slack:thread:${event.thread_ts}`);
+        starts.push(event.thread_ts);
+        if (event.thread_ts === "1700000000.000100") {
+          await firstDispatchGate;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+
+      try {
+        for (const [eventId, threadTs, ts] of [
+          ["Ev-thread-one", "1700000000.000100", "1700000000.000101"],
+          ["Ev-thread-two", "1700000000.000200", "1700000000.000201"],
+        ]) {
+          await receive(
+            createReceiverEvent(eventId, undefined, {
+              event: {
+                type: "message",
+                channel: "C_TEST",
+                channel_type: "channel",
+                user: "U_TEST",
+                thread_ts: threadTs,
+                ts,
+                text: "thread reply",
+              },
+            }),
+          );
+        }
+
+        await vi.waitFor(() => expect(starts).toHaveLength(2), { timeout: 500 });
+        expect(starts).toEqual(["1700000000.000100", "1700000000.000200"]);
+      } finally {
+        releaseFirstDispatch();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it.each([
+    {
+      name: "top-level channel messages",
+      firstEvent: { ts: "1700000000.000100" },
+      secondEvent: { ts: "1700000000.000200" },
+    },
+    {
+      name: "threads bound to the same configured session",
+      firstEvent: { ts: "1700000000.000101", thread_ts: "1700000000.000100" },
+      secondEvent: { ts: "1700000000.000201", thread_ts: "1700000000.000200" },
+    },
+  ])("serializes $name by their authoritative session", async ({ firstEvent, secondEvent }) => {
+    await withQueue(async (queue) => {
+      let releaseFirstDispatch: () => void = () => {};
+      const firstDispatchGate = new Promise<void>((resolve) => {
+        releaseFirstDispatch = resolve;
+      });
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const event = (receiverEvent.body as { event: { ts: string } }).event;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:shared-session");
+        starts.push(event.ts);
+        if (event.ts === firstEvent.ts) {
+          await firstDispatchGate;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+
+      try {
+        for (const [eventId, event] of [
+          ["Ev-shared-first", firstEvent],
+          ["Ev-shared-second", secondEvent],
+        ] as const) {
+          await receive(
+            createReceiverEvent(eventId, undefined, {
+              event: {
+                type: "message",
+                channel: "C_TEST",
+                channel_type: "channel",
+                user: "U_TEST",
+                text: "shared session",
+                ...event,
+              },
+            }),
+          );
+        }
+
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2), { timeout: 500 });
+        expect(starts).toEqual([firstEvent.ts]);
+        releaseFirstDispatch();
+        await ingress.waitForIdle();
+        expect(starts).toEqual([firstEvent.ts, secondEvent.ts]);
+      } finally {
+        releaseFirstDispatch();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
+    });
+  });
+
   it("serializes new-channel messages behind channel-ID migration", async () => {
     await withQueue(async (queue) => {
       let markMigrationStarted: () => void = () => {};
@@ -337,8 +450,10 @@ describe("Slack durable ingress", () => {
           event: {
             type: "message",
             channel: "C_NEW",
+            channel_type: "channel",
             user: "U_TEST",
             ts: "1700000000.000200",
+            thread_ts: "1700000000.000100",
             text: "after migration",
           },
         }),
@@ -398,9 +513,20 @@ describe("Slack durable ingress", () => {
     });
   });
 
-  it("recovers a shipped row whose lane was derived only at drain time", async () => {
+  it.each([
+    { name: "a lane derived only at drain time", laneKey: undefined },
+    { name: "its persisted channel-only lane", laneKey: "team:T_TEST:conversation:C_TEST" },
+  ])("recovers a shipped threaded row with $name", async ({ laneKey }) => {
     await withQueue(async (queue) => {
-      const body = createSlackEnvelope("Ev-legacy-lane");
+      const body = createSlackEnvelope("Ev-legacy-lane", undefined, {
+        type: "message",
+        channel: "C_TEST",
+        channel_type: "channel",
+        user: "U_TEST",
+        ts: "1700000000.000101",
+        thread_ts: "1700000000.000100",
+        text: "persisted thread reply",
+      });
       await queue.enqueue(
         "Ev-legacy-lane",
         {
@@ -409,7 +535,7 @@ describe("Slack durable ingress", () => {
           kind: "events-api",
           body,
         },
-        { receivedAt: 1_700_000_000_000 },
+        { receivedAt: 1_700_000_000_000, ...(laneKey ? { laneKey } : {}) },
       );
       const dispatch = vi.fn(async (event: ReceiverEvent) => {
         await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
