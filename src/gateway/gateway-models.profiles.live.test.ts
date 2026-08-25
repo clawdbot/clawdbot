@@ -2909,8 +2909,9 @@ function createGatewayLiveModelSession(params: {
   const key = `agent:${params.agentId}:${params.label}:model-${params.modelIndex + 1}:attempt-${params.credentialAttempt + 1}`;
   return {
     key,
-    // Session creation accepts thinking selection at write scope; patching it requires admin.
-    method: params.thinkingLevel ? ("sessions.create" as const) : ("sessions.patch" as const),
+    // Every attempt owns a fresh key, so create the session and its model/thinking
+    // selection through the single write-scoped lifecycle owner.
+    method: "sessions.create" as const,
     request: {
       key,
       model: params.modelKey,
@@ -2934,11 +2935,13 @@ describe("gateway live model session policy", () => {
     expect(GATEWAY_LIVE_OPERATOR_SCOPES).toEqual([READ_SCOPE, WRITE_SCOPE]);
   });
 
-  it("isolates every model credential retry in a fresh session", () => {
+  it("isolates every model credential retry in a fresh write-scoped session", () => {
     const first = modelSession(0);
     const retry = modelSession(1);
 
     expect(first.key).not.toBe(retry.key);
+    expect(first.method).toBe("sessions.create");
+    expect(retry.method).toBe("sessions.create");
     expect(first.request).toMatchObject({ key: first.key, model: "openai/gpt-5.6-luna" });
     expect(retry.request).toMatchObject({ key: retry.key, model: "openai/gpt-5.6-luna" });
   });
@@ -6156,20 +6159,18 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
       }
 
-      const sessionKey = `agent:${agentId}:live-zai-fallback`;
+      const initialSession = createGatewayLiveModelSession({
+        agentId,
+        credentialAttempt: 0,
+        label: "live-zai-fallback",
+        modelIndex: 0,
+        modelKey: "anthropic/claude-opus-4-6",
+      });
+      const sessionKey = initialSession.key;
 
       await withGatewayLiveSessionControlTimeout(
-        client.request("sessions.patch", {
-          key: sessionKey,
-          model: "anthropic/claude-opus-4-6",
-        }),
-        "zai-fallback: sessions-patch-anthropic",
-      );
-      await withGatewayLiveSessionControlTimeout(
-        client.request("sessions.reset", {
-          key: sessionKey,
-        }),
-        "zai-fallback: sessions-reset",
+        client.request(initialSession.method, initialSession.request),
+        "zai-fallback: sessions-create-anthropic",
       );
 
       const toolText = await requestGatewayAgentText({
