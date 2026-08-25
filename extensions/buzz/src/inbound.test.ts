@@ -253,6 +253,74 @@ describe("handleBuzzInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "restricts an otherwise open account to the room allowlist",
+      accountPolicy: "open",
+      accountAllowFrom: undefined,
+      room: { groupPolicy: "allowlist", groupAllowFrom: [OTHER_PUBLIC_KEY] },
+      dispatches: false,
+    },
+    {
+      name: "opens one room without changing the account allowlist",
+      accountPolicy: "allowlist",
+      accountAllowFrom: [OTHER_PUBLIC_KEY],
+      room: { groupPolicy: "open" },
+      dispatches: true,
+    },
+    {
+      name: "inherits the account policy with a room-specific allowlist",
+      accountPolicy: "allowlist",
+      accountAllowFrom: [OTHER_PUBLIC_KEY],
+      room: { groupAllowFrom: [SENDER_PUBLIC_KEY] },
+      dispatches: true,
+    },
+    {
+      name: "keeps an explicitly empty room allowlist fail-closed",
+      accountPolicy: "allowlist",
+      accountAllowFrom: [SENDER_PUBLIC_KEY],
+      room: { groupAllowFrom: [] },
+      dispatches: false,
+    },
+    {
+      name: "inherits the account allowlist when a room only sets its policy",
+      accountPolicy: "open",
+      accountAllowFrom: [SENDER_PUBLIC_KEY],
+      room: { groupPolicy: "allowlist" },
+      dispatches: true,
+    },
+    {
+      name: "disables one room without changing the account policy",
+      accountPolicy: "open",
+      accountAllowFrom: undefined,
+      room: { groupPolicy: "disabled" },
+      dispatches: false,
+    },
+  ] as const)("$name", async ({ accountPolicy, accountAllowFrom, room, dispatches }) => {
+    const runtime = createPluginRuntimeMock();
+    setBuzzRuntime(runtime);
+
+    await handleBuzzInbound({
+      account: createAccount({
+        groupPolicy: accountPolicy,
+        groupAllowFrom: accountAllowFrom ? [...accountAllowFrom] : undefined,
+        groups: {
+          [ROOM_ID]: {
+            requireMention: false,
+            ...room,
+            groupAllowFrom: room.groupAllowFrom ? [...room.groupAllowFrom] : undefined,
+          },
+        },
+      }),
+      cfg: {} satisfies OpenClawConfig,
+      bus: createBus(),
+      message: createMessage(),
+      signal: createSignal(),
+    });
+
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(dispatches ? 1 : 0);
+  });
+
   it("authorizes commands from an allowlisted room sender", async () => {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
@@ -262,7 +330,8 @@ describe("handleBuzzInbound", () => {
     await handleBuzzInbound({
       account: createAccount({
         groupPolicy: "allowlist",
-        groupAllowFrom: [SENDER_PUBLIC_KEY],
+        groupAllowFrom: [OTHER_PUBLIC_KEY],
+        groups: { [ROOM_ID]: { requireMention: true, groupAllowFrom: [SENDER_PUBLIC_KEY] } },
       }),
       cfg: {} satisfies OpenClawConfig,
       bus: createBus(),

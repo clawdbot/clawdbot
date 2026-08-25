@@ -67,8 +67,8 @@ export async function handleBuzzInbound(params: {
       inboundEventKind: "user_request",
     },
     mentionFacts: { canDetectMention: true, wasMentioned },
-    groupPolicy: account.config.groupPolicy,
-    groupAllowFrom: account.config.groupAllowFrom,
+    groupPolicy: groupConfig?.groupPolicy ?? account.config.groupPolicy,
+    groupAllowFrom: groupConfig?.groupAllowFrom ?? account.config.groupAllowFrom,
     policy: {
       activation: {
         requireMention: groupConfig?.requireMention ?? true,
