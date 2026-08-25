@@ -156,12 +156,6 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   });
 }
 
-async function readSqliteHistoryMessages(target: ResolvedTranscriptReadTarget): Promise<unknown[]> {
-  return projectSqliteHistoryEvents(
-    readSessionTranscriptHistoryEvents(toTranscriptReadScope(target)),
-  );
-}
-
 function readSqliteMessagesSync(target: ResolvedTranscriptReadTarget): unknown[] {
   return readSqliteMessageRecords(target).map(sqliteRecordMessageWithSeq);
 }
@@ -260,21 +254,7 @@ export async function readSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
-  const target = resolveTranscriptReadTarget(scope);
-  if (opts.mode === "recent") {
-    const { messages } = await readRecentSqliteMessageRecords(target, opts);
-    if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
-      return (await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true }))
-        .messages;
-    }
-    return messages;
-  }
-  const messages = await readSqliteHistoryMessages(target);
-  if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
-    return (await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true }))
-      .messages;
-  }
-  return messages;
+  return (await readSessionMessagesWithSourceAsync(scope, opts)).messages;
 }
 
 /** Reads display messages with source metadata through the reader seam. */
@@ -286,7 +266,9 @@ export async function readSessionMessagesWithSourceAsync(
   const messages =
     opts.mode === "recent"
       ? (await readRecentSqliteMessageRecords(target, opts)).messages
-      : await readSqliteHistoryMessages(target);
+      : projectSqliteHistoryEvents(
+          readSessionTranscriptHistoryEvents(toTranscriptReadScope(target)),
+        );
   if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true });
   }

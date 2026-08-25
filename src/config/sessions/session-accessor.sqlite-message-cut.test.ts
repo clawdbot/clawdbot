@@ -17,7 +17,7 @@ import {
   listSessionBranches,
   loadSessionEntry,
   loadTranscriptEvents,
-  readSessionTranscriptMessageEventCount,
+  readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   rewindSessionToMessage,
   switchSessionBranch,
@@ -480,7 +480,10 @@ describe("SQLite session message cuts", () => {
       throw new Error("expected rewind result");
     }
     expect(
-      readSessionTranscriptMessageEventCount({ agentId, env, sessionId: result.entry.sessionId }),
+      readSessionTranscriptMessageEventPage(
+        { agentId, env, sessionId: result.entry.sessionId },
+        { maxMessages: 0, offset: 0 },
+      ).totalMessages,
     ).toBe(2);
     expect(loadSessionEntry({ agentId, env, sessionKey })?.sessionId).toBe(result.entry.sessionId);
     expect(result.entry).toMatchObject({

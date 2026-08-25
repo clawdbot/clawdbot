@@ -235,16 +235,11 @@ async function appendVisibleAssistantMessage(params: {
   text: string;
   storePath: string;
 }) {
-  const appended = await appendExactAssistantMessageToSessionTranscript({
+  return await appendTranscriptMessage({
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     message: makeTranscriptAssistantMessage({ text: params.text }),
   });
-  expect(appended.ok).toBe(true);
-  if (!appended.ok) {
-    throw new Error(`append failed: ${appended.reason}`);
-  }
-  return appended.messageId;
 }
 
 async function fetchSessionHistory(

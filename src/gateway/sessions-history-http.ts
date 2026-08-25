@@ -36,13 +36,12 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import {
   buildSessionHistorySnapshot,
-  readBoundedSessionHistorySnapshotAsync,
+  readSessionHistoryRawSnapshotAsync,
   resolveCursorSeq,
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
-import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -225,29 +224,14 @@ export async function handleSessionHistoryHttpRequest(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
-  let boundedSnapshot:
-    | Awaited<ReturnType<typeof readBoundedSessionHistorySnapshotAsync>>
-    | undefined;
-  let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
+  let rawSnapshot: Awaited<ReturnType<typeof readSessionHistoryRawSnapshotAsync>>;
   try {
-    boundedSnapshot =
-      typeof limit === "number"
-        ? await readBoundedSessionHistorySnapshotAsync({
-            cursor,
-            target: historyTarget,
-            limit,
-            maxChars: effectiveMaxChars,
-          })
-        : undefined;
-    // Requests without a limit preserve the public complete-history contract.
-    fullSnapshot =
-      boundedSnapshot === undefined
-        ? await readSessionMessagesWithSourceAsync(historyTarget, {
-            mode: "full",
-            reason: "session history cursor pagination",
-            allowResetArchiveFallback: true,
-          })
-        : undefined;
+    rawSnapshot = await readSessionHistoryRawSnapshotAsync({
+      cursor,
+      target: historyTarget,
+      limit,
+      maxChars: effectiveMaxChars,
+    });
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
@@ -263,17 +247,9 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
+  const historySnapshot = { ...rawSnapshot, maxChars: effectiveMaxChars, limit, cursor };
   if (!shouldStreamSse(req)) {
-    const history = buildSessionHistorySnapshot({
-      projection: boundedSnapshot?.projection,
-      rawMessages: rawSnapshot,
-      maxChars: effectiveMaxChars,
-      limit,
-      cursor,
-      rawTranscriptSeq: boundedSnapshot?.totalMessages,
-      totalRawMessages: boundedSnapshot?.totalMessages,
-    }).history;
+    const history = buildSessionHistorySnapshot(historySnapshot).history;
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
@@ -293,15 +269,8 @@ export async function handleSessionHistoryHttpRequest(
   );
 
   const sseState = SessionHistorySseState.fromRawSnapshot({
-    projection: boundedSnapshot?.projection,
+    ...historySnapshot,
     target: historyTarget,
-    rawMessages: rawSnapshot,
-    rawTranscriptSeq: boundedSnapshot?.totalMessages,
-    totalRawMessages: boundedSnapshot?.totalMessages,
-    transcriptPath: boundedSnapshot?.transcriptPath ?? fullSnapshot?.transcriptPath,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
   });
   let sentHistory = sseState.snapshot();
   let streamStopped = false;
