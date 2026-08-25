@@ -269,6 +269,7 @@ async function forEachUpgradeSurvivorSystemctlShim(
     run: (command: "is-active" | "stop", procStat?: string) => number | null;
     scriptPath: string;
   }) => void | Promise<void>,
+  targetPid?: number,
 ): Promise<void> {
   for (const scriptPath of [
     UPGRADE_SURVIVOR_RUN_SCRIPT,
@@ -278,14 +279,19 @@ async function forEachUpgradeSurvivorSystemctlShim(
     const binDir = join(workDir, "bin");
     const pidPath = join(workDir, "gateway.pid");
     const childPidPath = join(workDir, "child.pid");
-    const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
-      env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
-      stdio: "ignore",
-    });
-    for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
-      await delay(10);
+    const child =
+      targetPid === undefined
+        ? spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
+            env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
+            stdio: "ignore",
+          })
+        : undefined;
+    if (child) {
+      for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
+        await delay(10);
+      }
     }
-    const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+    const pid = targetPid ?? Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
     writeFileSync(pidPath, `${pid}\n`);
     const shimPath = join(workDir, "systemctl");
     writeFileSync(shimPath, extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")), {
@@ -324,10 +330,12 @@ esac
     try {
       await callback({ pid, run, scriptPath });
     } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
+      if (child) {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        await waitForProcessExit(child).catch(() => undefined);
       }
-      await waitForProcessExit(child).catch(() => undefined);
     }
   }
 }
@@ -3181,7 +3189,7 @@ fi
         for (const procStat of [undefined, `${pid} (gateway) Z`]) {
           expect(run("is-active", procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(0);
         }
-      });
+      }, process.pid);
     },
   );
 

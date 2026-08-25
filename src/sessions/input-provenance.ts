@@ -127,16 +127,6 @@ export function hasInterSessionUserProvenance(
   return isInterSessionInputProvenance(message.provenance);
 }
 
-export function isSessionsSendInterSessionUserMessage(
-  message: { role?: unknown; provenance?: unknown } | undefined,
-): boolean {
-  if (!message || message.role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance(message.provenance);
-  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-}
-
 // Prefix text is model-facing safety context for inter-session handoffs. It
 // states source metadata and explicitly prevents treating the payload as direct
 // end-user instruction.

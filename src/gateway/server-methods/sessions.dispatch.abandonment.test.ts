@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorkerPlacementMoveService } from "../worker-environments/placement-move-service.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { readSessionsMutationVersion } from "./session-change-event.js";
 import {
   dispatchTestSessionId as sessionId,
   dispatchTestSessionKey as sessionKey,
@@ -103,16 +104,20 @@ describe("sessions.move abandonment", () => {
       resolveDestination: vi.fn(),
     });
 
-    const respond = await invokeSessionMove(
-      makeDispatchTestContext({
-        getSessionEventSubscriberConnIds: () => new Set(),
-        workerPlacementDispatchService: { dispatch: vi.fn(), move: moves.move } as never,
-        workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, existing]]),
-        },
-      }),
-      { expected: source, target: { kind: "gateway" }, abandonSource: true },
-    );
+    const context = makeDispatchTestContext({
+      getSessionEventSubscriberConnIds: () => {
+        throw new Error("session subscribers unavailable");
+      },
+      workerPlacementDispatchService: { dispatch: vi.fn(), move: moves.move } as never,
+      workerSessionPlacementService: {
+        getMany: () => new Map([[sessionId, existing]]),
+      },
+    });
+    const respond = await invokeSessionMove(context, {
+      expected: source,
+      target: { kind: "gateway" },
+      abandonSource: true,
+    });
 
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -125,6 +130,7 @@ describe("sessions.move abandonment", () => {
       undefined,
     );
     expect(validateAbandonSource).toHaveBeenCalledTimes(joined ? 0 : 1);
+    expect(readSessionsMutationVersion(context)).toBe(2);
     expect(recordPlacementMoveError).not.toHaveBeenCalled();
     expect(remoteSettlementObserved).toBe(false);
   });

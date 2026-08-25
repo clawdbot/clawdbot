@@ -305,8 +305,6 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   now?: number;
   /** Existing transcript event id owned by a caller with its own session tree. */
   eventId?: string;
-  /** Opt into synchronous display projection maintenance for an adopted display reader. */
-  maintainDisplayProjection?: boolean;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
   /** Optional finalizer that runs after duplicate detection but before persistence. */

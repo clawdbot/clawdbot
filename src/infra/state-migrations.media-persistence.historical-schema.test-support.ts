@@ -41,7 +41,6 @@ function removeSchemaRange(sql: string, startMarker: string, endMarker: string):
 /** Exact schema bytes from 509a5f0373764, derived from current SQL with later additions removed. */
 export function historicalV15AgentSchemaSql(): string {
   let sql = restoreHistoricalAgentLeaseSchema(OPENCLAW_AGENT_SCHEMA_SQL)
-    .replaceAll("  source_generation TEXT,\n", "")
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
     .replace("  project_id TEXT,\n", "")
     .replace("  route_context_json TEXT,\n", "")
@@ -83,11 +82,6 @@ export function historicalV15AgentSchemaSql(): string {
     sql,
     "-- Canonical cold-tier owner for reclaimed transcript generations.",
     "CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE TABLE IF NOT EXISTS session_transcript_display_state (",
-    "CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(",
   );
   return removeSchemaRange(
     sql,

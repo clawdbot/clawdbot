@@ -7,8 +7,8 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { readSessionTranscriptSourceGenerationInTransaction } from "./session-transcript-source-generation.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type TranscriptMessageAnchorRewriteResult<TMessage> = {
@@ -52,10 +52,7 @@ export async function rewriteTranscriptMessageAtAnchor<TMessage>(
             seq: anchor.rawSeq,
           },
         ]);
-        const generation = readSessionTranscriptSourceGenerationInTransaction(
-          database.db,
-          resolved.sessionId,
-        )?.generation;
+        const generation = readTranscriptGenerationInTransaction(database, resolved.sessionId);
         if (generation) {
           result = { generation, message };
         }

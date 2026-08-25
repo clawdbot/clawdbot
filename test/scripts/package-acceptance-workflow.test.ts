@@ -2659,6 +2659,7 @@ describe("package acceptance workflow", () => {
     expect(packageTelegram.with?.advisory).toBe(
       "${{ inputs.advisory || inputs.telegram_advisory || false }}",
     );
+    expect(packageTelegram.with).not.toHaveProperty("allow_older_binary_destructive_actions");
     expect(workflow).toContain(
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
     );
@@ -4198,6 +4199,49 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("run_package_telegram_e2e:");
   });
 
+  it("forwards optional RTT scenario selection from manual and reusable Telegram inputs", () => {
+    const workflow = readWorkflow(NPM_TELEGRAM_WORKFLOW);
+    const expectedInput = {
+      default: "",
+      description: "Optional Telegram QA scenario id for repeated RTT sampling",
+      required: false,
+      type: "string",
+    };
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.rtt_scenario).toEqual(expectedInput);
+    expect(workflow.on?.workflow_call?.inputs?.rtt_scenario).toEqual(expectedInput);
+    expect(
+      workflowStep(
+        workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e"),
+        "Run package Telegram E2E",
+      ).env?.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS,
+    ).toBe("${{ inputs.rtt_scenario }}");
+  });
+
+  it("requires explicit approval for historical package destructive actions", () => {
+    const workflow = readWorkflow(NPM_TELEGRAM_WORKFLOW);
+    const expectedInput = {
+      default: false,
+      description:
+        "Allow destructive actions for intentional historical downgrade or recovery proof",
+      required: false,
+      type: "boolean",
+    };
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.allow_older_binary_destructive_actions).toEqual(
+      expectedInput,
+    );
+    expect(workflow.on?.workflow_call?.inputs?.allow_older_binary_destructive_actions).toEqual(
+      expectedInput,
+    );
+    expect(
+      workflowStep(
+        workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e"),
+        "Run package Telegram E2E",
+      ).env?.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS,
+    ).toBe("${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}");
+  });
+
   it.each(["stable", "full"])(
     "rejects Package Acceptance Telegram deferral for direct %s release checks",
     (releaseProfile) => {
@@ -5555,6 +5599,7 @@ describe("package artifact reuse", () => {
       'args+=(-f scenario="$SCENARIO")',
     ]);
     expect(dispatchStep.run).not.toContain("package_artifact");
+    expect(dispatchStep.run).not.toContain("allow_older_binary_destructive_actions");
     expectTextToIncludeAll(workflow, [
       '-f rerun_group="$RERUN_GROUP"',
       'args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")',

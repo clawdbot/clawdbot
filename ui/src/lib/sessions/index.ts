@@ -104,6 +104,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const createdListeners = new Set<(key: string) => void>();
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
+  let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | null = null;
@@ -340,6 +341,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
+    const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
     connectionClient = next.client;
     if (connectionChanged) {
@@ -360,6 +362,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     if (!connected || !next.client) {
       hydratedClient = null;
+      hydratedSelfUserId = null;
       publish({
         result: null,
         agentId: null,
@@ -373,12 +376,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (hydratedClient !== next.client) {
+    if (hydratedClient !== next.client || hydratedSelfUserId !== selfUserId) {
       const scope = connection.capture();
       if (!scope) {
         return;
       }
       hydratedClient = scope.client;
+      hydratedSelfUserId = selfUserId;
       void (async () => {
         await sessionEventSubscription.ensure(scope);
         if (connection.isCurrent(scope)) {
@@ -571,6 +575,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       connection.dispose();
       groups.dispose();
       hydratedClient = null;
+      hydratedSelfUserId = null;
       mutations.dispose();
       swarmActivity.clear();
       pullRequestSummaries.clear();

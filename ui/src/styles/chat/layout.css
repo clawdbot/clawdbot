@@ -3157,6 +3157,24 @@ button.chat-pr__diff {
   background: var(--bg-hover);
 }
 
+.agent-chat__input-btn--selected:not(:disabled) {
+  position: relative;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.agent-chat__input-btn--selected::after {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--bg);
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
 .agent-chat__input-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;

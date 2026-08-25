@@ -71,7 +71,7 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   text-align: left;
 }
 
-.new-session-page__visibility {
+.new-session-page__selection-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -79,40 +79,23 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   padding: 2px 8px;
   border: 0;
   border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
   font: inherit;
   font-size: 11px;
   cursor: var(--cursor-action);
-  opacity: 0;
-  transition: opacity 120ms ease;
 }
 
-.new-session-page__visibility:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
+.new-session-page__selection-status:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-.new-session-page__composer:hover .new-session-page__visibility,
-.new-session-page__composer:focus-within .new-session-page__visibility,
-.new-session-page__visibility--active {
-  opacity: 1;
-}
-
-/* Active mode must read as toggled-on even while hovered: hover on an
-   inactive pill already shows a neutral fill, so active gets an accent
-   tint to stay distinguishable under the cursor. */
-.new-session-page__visibility--active,
-.new-session-page__visibility--active:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-}
-
-.new-session-page__visibility:disabled {
+.new-session-page__selection-status:disabled {
   cursor: default;
+  opacity: 0.5;
 }
 
-.new-session-page__visibility svg {
+.new-session-page__selection-status svg {
   width: 12px;
   height: 12px;
   fill: none;
@@ -709,8 +692,7 @@ wa-dropdown.new-session-page__start-menu {
   }
 
   .new-session-page__composer::after,
-  .new-session-page__composer > *,
-  .new-session-page__visibility {
+  .new-session-page__composer > * {
     transition-duration: 0ms;
   }
 }

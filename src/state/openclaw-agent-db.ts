@@ -43,7 +43,6 @@ import {
 import {
   assertCanonicalAgentMediaPersistenceVersion,
   assertExistingAgentSchemaOwner,
-  assertOpenClawAgentCurrentRuntimeSchema,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
@@ -325,8 +324,8 @@ export function openOpenClawAgentDatabase(
       let maintenance: OpenClawAgentDatabase["walMaintenance"] | undefined;
       try {
         db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-        assertSupportedAgentSchemaVersion(db, pathname);
         if (!isValidatedReopen) {
+          assertSupportedAgentSchemaVersion(db, pathname);
           assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
         }
         // Integrity is not process-stable: the file can be damaged while evicted.
@@ -344,11 +343,7 @@ export function openOpenClawAgentDatabase(
           synchronous: "NORMAL",
         });
         openedWalMaintenance = maintenance;
-        if (isValidatedReopen) {
-          // The process cache skips write-capable convergence, not shape validation:
-          // same-version lazy groups can drift while a physical handle is closed.
-          assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
-        } else {
+        if (!isValidatedReopen) {
           ensureOpenClawAgentSchema(db, agentId, pathname);
         }
         return maintenance;

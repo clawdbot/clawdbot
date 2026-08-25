@@ -21,17 +21,11 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
-  appendSessionTranscriptDisplayChunkInTransaction,
-  deleteSessionTranscriptDisplayChunkInTransaction,
-} from "./session-transcript-display.js";
-import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
   listSessionsNeedingTranscriptIndexReconcile,
-  listSessionsNeedingTranscriptProjectionReconcile,
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import {
-  abandonPreparedSessionTranscriptProjectionInTransaction,
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
   deletePreparedSessionTranscriptProjectionChunkInTransaction,
@@ -43,14 +37,12 @@ import type {
   SessionTranscriptReconcileWorkerInput,
   SessionTranscriptReconcileWorkerMessage,
 } from "./session-transcript-reconcile.worker.js";
-import { ensureAllSessionTranscriptSourceGenerationsInTransaction } from "./session-transcript-source-generation.js";
 
 const log = createSubsystemLogger("sessions/transcript-index");
 const PROJECTION_WRITE_CHUNK_ROWS = 512;
 const PROJECTION_READY_POLL_MS = 10;
 
 type RunningReconcile = {
-  includeDisplayProjection: boolean;
   pending: boolean;
   preferredSessionId?: string;
   promise?: Promise<SessionTranscriptReconcileResult>;
@@ -131,46 +123,21 @@ async function claimPreparedSessionTranscriptProjection(
     return undefined;
   }
 
-  let deleteResult = { hasMore: plan.activeNeedsRebuild, owned: true };
-  let displayDeleteResult = { hasMore: plan.displayNeedsRebuild, owned: true };
-  while (
-    (deleteResult.hasMore || displayDeleteResult.hasMore) &&
-    deleteResult.owned &&
-    displayDeleteResult.owned
-  ) {
-    if (plan.activeNeedsRebuild) {
-      deleteResult = await runProjectionWrite(
-        databaseOptions,
-        "sessions.transcript-index.delete-chunk",
-        (database) =>
-          deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
-            claimId,
-            maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
-            sessionId: plan.sessionId,
-            sourceGeneration: plan.sourceGeneration,
-            sourceIndexedSeq: plan.sourceIndexedSeq,
-          }),
-      );
-    }
-    if (plan.displayNeedsRebuild) {
-      displayDeleteResult = await runProjectionWrite(
-        databaseOptions,
-        "sessions.transcript-display.delete-chunk",
-        (database) =>
-          deleteSessionTranscriptDisplayChunkInTransaction(database.db, {
-            claimId,
-            generation: plan.displayGeneration,
-            maxRows: PROJECTION_WRITE_CHUNK_ROWS,
-            sessionId: plan.sessionId,
-            sourceGeneration: plan.sourceGeneration,
-            sourceIndexedSeq: plan.sourceIndexedSeq,
-          }),
-      );
-    }
+  let deleteResult = { hasMore: true, owned: true };
+  while (deleteResult.hasMore && deleteResult.owned) {
+    deleteResult = await runProjectionWrite(
+      databaseOptions,
+      "sessions.transcript-index.delete-chunk",
+      (database) =>
+        deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
+          maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
+          sessionId: plan.sessionId,
+          claimId,
+        }),
+    );
     await yieldToGateway();
   }
-  if (!deleteResult.owned || !displayDeleteResult.owned) {
-    await abandonPreparedProjection(databaseOptions, { claimId, plan });
+  if (!deleteResult.owned) {
     return undefined;
   }
   return { claimId, plan };
@@ -198,9 +165,6 @@ async function appendPreparedProjectionChunk(
         >[1]["activeRows"];
       }
     | {
-        displayRows: Parameters<typeof appendSessionTranscriptDisplayChunkInTransaction>[1]["rows"];
-      }
-    | {
         ftsRows: Parameters<
           typeof appendPreparedSessionTranscriptProjectionChunkInTransaction
         >[1]["ftsRows"];
@@ -210,28 +174,13 @@ async function appendPreparedProjectionChunk(
     databaseOptions,
     "activeRows" in rows
       ? "sessions.transcript-index.active-chunk"
-      : "displayRows" in rows
-        ? "sessions.transcript-display.row-chunk"
-        : "sessions.transcript-index.fts-chunk",
-    (database) => {
-      if ("displayRows" in rows) {
-        return appendSessionTranscriptDisplayChunkInTransaction(database.db, {
-          claimId: active.claimId,
-          generation: active.plan.displayGeneration,
-          rows: rows.displayRows,
-          sessionId: active.plan.sessionId,
-          sourceGeneration: active.plan.sourceGeneration,
-          sourceIndexedSeq: active.plan.sourceIndexedSeq,
-        });
-      }
-      return appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
+      : "sessions.transcript-index.fts-chunk",
+    (database) =>
+      appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, {
         ...rows,
         claimId: active.claimId,
         sessionId: active.plan.sessionId,
-        sourceGeneration: active.plan.sourceGeneration,
-        sourceIndexedSeq: active.plan.sourceIndexedSeq,
-      });
-    },
+      }),
   );
   await yieldToGateway();
   return owned;
@@ -253,36 +202,9 @@ async function finalizePreparedProjection(
   );
 }
 
-async function abandonPreparedProjection(
-  databaseOptions: OpenClawAgentDatabaseOptions,
-  active: ActivePreparedProjection,
-): Promise<void> {
-  await runProjectionWrite(databaseOptions, "sessions.transcript-index.abandon", (database) =>
-    abandonPreparedSessionTranscriptProjectionInTransaction(
-      database.db,
-      active.plan,
-      active.claimId,
-    ),
-  );
-}
-
 /** Prepares full trees off-thread, then commits bounded chunks through the runtime writer owner. */
 export async function reconcileSessionTranscriptIndexes(
   params: SessionTranscriptReconcileParams,
-): Promise<SessionTranscriptReconcileResult> {
-  return await reconcileSessionTranscriptProjections(params, false);
-}
-
-/** Reconciles explicitly adopted display state alongside the active/search projection. */
-export async function reconcileSessionTranscriptDisplayProjection(
-  params: SessionTranscriptReconcileParams,
-): Promise<SessionTranscriptReconcileResult> {
-  return await reconcileSessionTranscriptProjections(params, true);
-}
-
-async function reconcileSessionTranscriptProjections(
-  params: SessionTranscriptReconcileParams,
-  includeDisplayProjection: boolean,
 ): Promise<SessionTranscriptReconcileResult> {
   const databasePath = resolveOpenClawAgentSqlitePath(params);
   const databaseOptions: OpenClawAgentDatabaseOptions = {
@@ -296,14 +218,8 @@ async function reconcileSessionTranscriptProjections(
     databaseOptions,
     "sessions.transcript-index.preflight",
     (database) => {
-      ensureAllSessionTranscriptSourceGenerationsInTransaction(database);
       deleteOrphanedTranscriptIndexRowsInTransaction(database.db);
-      return (
-        (includeDisplayProjection
-          ? listSessionsNeedingTranscriptProjectionReconcile(database.db)
-          : listSessionsNeedingTranscriptIndexReconcile(database.db)
-        ).length > 0
-      );
+      return listSessionsNeedingTranscriptIndexReconcile(database.db).length > 0;
     },
   );
   if (!needsWorker) {
@@ -313,7 +229,6 @@ async function reconcileSessionTranscriptProjections(
   const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const input: SessionTranscriptReconcileWorkerInput = {
     agentId: params.agentId,
-    includeDisplayProjection,
     path: databasePath,
     ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
   };
@@ -326,15 +241,11 @@ async function reconcileSessionTranscriptProjections(
   } catch (error) {
     throw toStringifiedError(error);
   }
-  const workerExit = new Promise<void>((resolveExit) => {
-    worker.once("exit", () => resolveExit());
-  });
 
   return new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
     let active: ActivePreparedProjection | undefined;
     let doneReceived = false;
     let reconciledSessions = 0;
-    let settling = false;
     let settled = false;
     const settle = (finish: () => void, terminate: boolean) => {
       if (settled) {
@@ -347,37 +258,18 @@ async function reconcileSessionTranscriptProjections(
       }
       finish();
     };
-    const fail = async (error: unknown, terminate: boolean) => {
-      if (settled || settling) {
-        return;
-      }
-      settling = true;
-      let failure = toStringifiedError(error);
-      const claimed = active;
-      active = undefined;
-      if (claimed) {
-        try {
-          await abandonPreparedProjection(databaseOptions, claimed);
-        } catch (abandonError) {
-          failure = new Error(
-            `${failure.message}; transcript projection claim abandonment failed: ${toStringifiedError(abandonError).message}`,
-          );
-        }
-      }
-      settle(() => reject(failure), terminate);
-    };
     const handleMessage = async (message: SessionTranscriptReconcileWorkerMessage) => {
-      if (settled || settling) {
-        return;
-      }
       if (message.type === "failed") {
-        await fail(new Error(message.error), false);
+        settle(() => reject(new Error(message.error)), false);
         return;
       }
       if (message.type === "done") {
         doneReceived = true;
         if (active) {
-          await fail(new Error("session transcript reconcile worker ended mid-plan"), true);
+          settle(
+            () => reject(new Error("session transcript reconcile worker ended mid-plan")),
+            true,
+          );
           return;
         }
         try {
@@ -387,10 +279,9 @@ async function reconcileSessionTranscriptProjections(
             (database) => deleteOrphanedTranscriptIndexRowsInTransaction(database.db),
           );
         } catch (error) {
-          await fail(error, true);
+          settle(() => reject(toStringifiedError(error)), true);
           return;
         }
-        await workerExit;
         settle(() => resolve({ reconciledSessions }), false);
         return;
       }
@@ -407,11 +298,7 @@ async function reconcileSessionTranscriptProjections(
           throw new Error("session transcript reconcile worker sent a chunk for no active plan");
         }
         if (message.type === "plan-finish") {
-          const claimed = active;
-          const finalized = await finalizePreparedProjection(databaseOptions, claimed);
-          if (!finalized) {
-            await abandonPreparedProjection(databaseOptions, claimed);
-          }
+          const finalized = await finalizePreparedProjection(databaseOptions, active);
           active = undefined;
           if (finalized) {
             reconciledSessions += 1;
@@ -424,30 +311,30 @@ async function reconcileSessionTranscriptProjections(
           active,
           message.type === "active-chunk"
             ? { activeRows: message.rows }
-            : message.type === "display-chunk"
-              ? { displayRows: message.rows }
-              : { ftsRows: decodeFtsChunk(message.chunk) },
+            : { ftsRows: decodeFtsChunk(message.chunk) },
         );
         if (!owned) {
-          await abandonPreparedProjection(databaseOptions, active);
           active = undefined;
         }
         continueProjectionWorker(worker, owned);
       } catch (error) {
-        await fail(error, true);
+        settle(() => reject(toStringifiedError(error)), true);
       }
     };
     worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
       void handleMessage(message);
     });
     worker.once("error", (error) => {
-      void fail(error, true);
+      settle(() => reject(toStringifiedError(error)), true);
     });
     worker.once("exit", (code) => {
       if (doneReceived && code === 0) {
         return;
       }
-      void fail(new Error(`session transcript reconcile worker exited with code ${code}`), false);
+      settle(
+        () => reject(new Error(`session transcript reconcile worker exited with code ${code}`)),
+        false,
+      );
     });
   });
 }
@@ -456,32 +343,16 @@ async function reconcileSessionTranscriptProjections(
 export function startSessionTranscriptIndexReconcile(
   params: SessionTranscriptReconcileParams,
 ): void {
-  startSessionTranscriptReconcile(params, false);
-}
-
-/** Starts one deferred reconcile that includes explicitly adopted display state. */
-export function startSessionTranscriptDisplayReconcile(
-  params: SessionTranscriptReconcileParams,
-): void {
-  startSessionTranscriptReconcile(params, true);
-}
-
-function startSessionTranscriptReconcile(
-  params: SessionTranscriptReconcileParams,
-  includeDisplayProjection: boolean,
-): void {
   const key = reconcileKey(params);
   const running = runningReconciles.get(key);
   if (running) {
     // The active pass snapshots dirty sessions. Latch later writes so it
     // rescans before ownership is released instead of losing their work.
     running.pending = true;
-    running.includeDisplayProjection ||= includeDisplayProjection;
     running.preferredSessionId ??= params.preferredSessionId;
     return;
   }
   const state: RunningReconcile = {
-    includeDisplayProjection,
     pending: false,
     ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
   };
@@ -490,17 +361,12 @@ function startSessionTranscriptReconcile(
       let reconciledSessions = 0;
       while (true) {
         state.pending = false;
-        const reconcileDisplayProjection = state.includeDisplayProjection;
-        state.includeDisplayProjection = false;
         const preferredSessionId = state.preferredSessionId;
         delete state.preferredSessionId;
-        const result = await reconcileSessionTranscriptProjections(
-          {
-            ...params,
-            ...(preferredSessionId ? { preferredSessionId } : {}),
-          },
-          reconcileDisplayProjection,
-        );
+        const result = await reconcileSessionTranscriptIndexes({
+          ...params,
+          ...(preferredSessionId ? { preferredSessionId } : {}),
+        });
         reconciledSessions += result.reconciledSessions;
         if (state.pending) {
           continue;
@@ -518,19 +384,15 @@ function startSessionTranscriptReconcile(
         `session transcript reconcile failed agent=${params.agentId} error=${error instanceof Error ? error.message : String(error)}`,
       );
       const shouldHandoff = state.pending;
-      const reconcileDisplayProjection = state.includeDisplayProjection;
       const preferredSessionId = state.preferredSessionId;
       if (runningReconciles.get(key) === state) {
         runningReconciles.delete(key);
       }
       if (shouldHandoff) {
-        startSessionTranscriptReconcile(
-          {
-            ...params,
-            ...(preferredSessionId ? { preferredSessionId } : {}),
-          },
-          reconcileDisplayProjection,
-        );
+        startSessionTranscriptIndexReconcile({
+          ...params,
+          ...(preferredSessionId ? { preferredSessionId } : {}),
+        });
         await waitForSessionTranscriptIndexReconcile(params);
       }
       return { reconciledSessions: 0 };

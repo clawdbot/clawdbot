@@ -345,6 +345,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
               resolvedWorkspace: input.resolvedWorkspace,
             }),
       config: params.config,
+      githubPublicationAvailable: params.githubPublicationAvailable,
       authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
       abortSignal: input.runAbortController.signal,
       emitBeforeToolCallDiagnostics: false,

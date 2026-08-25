@@ -23,7 +23,7 @@ import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
 import type {
-  ChatComposerPlusMenuProps,
+  ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
 import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
@@ -40,17 +40,7 @@ export type ChatQueuedEditProps = {
   onCancel: () => void;
 };
 
-export type CapabilityMenuProps = Omit<
-  ChatComposerPlusMenuProps,
-  | "attachments"
-  | "disabled"
-  | "open"
-  | "view"
-  | "toolOverrides"
-  | "onOpenChange"
-  | "onViewChange"
-  | "showCapabilities"
->;
+export type CapabilityMenuProps = ChatComposerCapabilityMenuProps;
 
 type ChatComposerDisabledBannerContent = {
   title?: string;

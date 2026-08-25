@@ -114,9 +114,6 @@ export function collectSqliteSchemaIssues(
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
   const allowedMissingIndexes = new Set(compatibility.allowedMissingIndexes ?? []);
-  const compatibleAdditiveColumnTables = new Set(
-    compatibility.compatibleAdditiveColumnTables ?? [],
-  );
 
   const issues: SqliteSchemaIssue[] = [];
   const add = (code: SqliteSchemaIssueCode, objectName: string, message?: string) => {
@@ -138,7 +135,7 @@ export function collectSqliteSchemaIssues(
         actualTable.definition,
         expectedTable.definition,
         compatibility,
-        !allowedMissingTables.has(tableName) || compatibleAdditiveColumnTables.has(tableName),
+        !allowedMissingTables.has(tableName),
       ),
     );
     for (const expectedIndex of expectedTable.indexes) {

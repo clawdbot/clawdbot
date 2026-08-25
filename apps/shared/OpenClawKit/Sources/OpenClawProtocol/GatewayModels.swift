@@ -9005,6 +9005,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let contextwindow: String?
     public let thinkinglevel: String?
     public let permissionmode: SessionPermissionMode?
+    public let tooloverrides: [String: AnyCodable]?
     public let incognito: Bool?
     public let visibility: SessionVisibility?
     public let catalogid: String?
@@ -9034,6 +9035,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         contextwindow: String? = nil,
         thinkinglevel: String? = nil,
         permissionmode: SessionPermissionMode? = nil,
+        tooloverrides: [String: AnyCodable]? = nil,
         incognito: Bool? = nil,
         visibility: SessionVisibility? = nil,
         catalogid: String? = nil,
@@ -9062,6 +9064,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
         self.permissionmode = permissionmode
+        self.tooloverrides = tooloverrides
         self.incognito = incognito
         self.visibility = visibility
         self.catalogid = catalogid
@@ -9092,6 +9095,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
         case permissionmode = "permissionMode"
+        case tooloverrides = "toolOverrides"
         case incognito
         case visibility
         case catalogid = "catalogId"
@@ -20457,6 +20461,7 @@ public struct UpdateRunParams: Codable, Sendable {
     public let continuationmessage: String?
     public let restartdelayms: Int?
     public let timeoutms: Int?
+    public let target: [String: AnyCodable]?
 
     public init(
         sessionkey: String? = nil,
@@ -20464,7 +20469,8 @@ public struct UpdateRunParams: Codable, Sendable {
         note: String? = nil,
         continuationmessage: String? = nil,
         restartdelayms: Int? = nil,
-        timeoutms: Int? = nil)
+        timeoutms: Int? = nil,
+        target: [String: AnyCodable]? = nil)
     {
         self.sessionkey = sessionkey
         self.deliverycontext = deliverycontext
@@ -20472,6 +20478,7 @@ public struct UpdateRunParams: Codable, Sendable {
         self.continuationmessage = continuationmessage
         self.restartdelayms = restartdelayms
         self.timeoutms = timeoutms
+        self.target = target
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -20481,6 +20488,7 @@ public struct UpdateRunParams: Codable, Sendable {
         case continuationmessage = "continuationMessage"
         case restartdelayms = "restartDelayMs"
         case timeoutms = "timeoutMs"
+        case target
     }
 }
 

@@ -23,6 +23,11 @@ import {
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 
 const standaloneBundledChannelSmokeFiles = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
@@ -108,6 +113,7 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     const rootPackageJson = {
       dependencies: { "@openclaw/ai": "workspace:*" },
       name: "openclaw-source-pack-regression",
+      packageManager: rootPackageManager,
       version,
     };
     mkdirSync(aiDir, { recursive: true });
@@ -213,6 +219,7 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     const originalPackageJson = `${JSON.stringify(
       {
         name: "openclaw-direct-pack-manifest",
+        packageManager: rootPackageManager,
         version: "2099.1.2-test.0",
         scripts: {
           prepack: "node scripts/package-manifest.mjs prepare",

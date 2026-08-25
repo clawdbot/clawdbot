@@ -6,7 +6,6 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { ensureOpenClawAgentTranscriptProjectionSourceColumns } from "../../state/openclaw-agent-transcript-projection-source-schema.js";
 import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
@@ -61,7 +60,6 @@ function readTitleProbeChunk(
   database: OpenClawAgentDatabase,
   sessionIds: readonly string[],
 ): Map<string, SessionTranscriptTitleProbe> {
-  ensureOpenClawAgentTranscriptProjectionSourceColumns(database.db);
   const db = getTitleProbeKysely(database);
   const rows = runSqliteDeferredTransactionSync(
     database.db,
@@ -106,7 +104,6 @@ function readTitleProbeChunk(
             "state.indexed_seq",
             "state.needs_rebuild",
             "rewrite.generation",
-            "state.source_generation",
             "active.message_position",
             "event.event_json",
             eb
@@ -141,12 +138,7 @@ function readTitleProbeChunk(
   const probes = new Map<string, SessionTranscriptTitleProbe>();
   for (const row of rows) {
     const emptyTranscript = row.latest_seq === null;
-    const projectionCurrent =
-      typeof row.generation === "string" &&
-      typeof row.source_generation === "string" &&
-      row.needs_rebuild === 0 &&
-      row.indexed_seq === row.latest_seq &&
-      row.source_generation === row.generation;
+    const projectionCurrent = row.needs_rebuild === 0 && row.indexed_seq === row.latest_seq;
     if (
       (!emptyTranscript && !projectionCurrent) ||
       parseEventType(row.latest_boundary_json) === "reset"

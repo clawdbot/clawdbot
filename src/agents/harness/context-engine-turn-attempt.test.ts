@@ -355,7 +355,7 @@ describe("accepted context-engine turn finalization", () => {
     if (siblingIdentity?.seq === undefined) {
       throw new Error("expected sibling transcript identity");
     }
-    // Model a published malformed projection that assigns a later active position
+    // Model a stale/concurrent projection that assigns a later active position
     // to a sibling. Position order alone must not make it an accepted descendant.
     database.db
       .prepare(
@@ -369,9 +369,9 @@ describe("accepted context-engine turn finalization", () => {
       );
     database.db
       .prepare(
-        "UPDATE session_transcript_index_state SET indexed_seq = ?, needs_rebuild = 0, source_generation = ? WHERE session_id = ?",
+        "UPDATE session_transcript_index_state SET indexed_seq = ?, needs_rebuild = 0 WHERE session_id = ?",
       )
-      .run(siblingIdentity.seq, terminal.anchor.generation, target.sessionId);
+      .run(siblingIdentity.seq, target.sessionId);
     const siblingAnchor = readActiveTranscriptEntryAnchor({
       ...target,
       entryId: sibling.messageId,

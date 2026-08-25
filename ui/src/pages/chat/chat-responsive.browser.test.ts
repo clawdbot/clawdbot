@@ -1299,10 +1299,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    [430, 720],
-    [1366, 900],
-  ] as const)("keeps activity disclosures compact at %sx%s", async (width, height) => {
-    const page = await openBrowserPage(width, height);
+    { label: "narrow desktop", width: 430, height: 720, hasTouch: false },
+    { label: "desktop", width: 1366, height: 900, hasTouch: false },
+    { label: "mobile touch", width: 430, height: 720, hasTouch: true },
+  ])("keeps activity disclosures compact on $label", async ({ width, height, hasTouch }) => {
+    const page = await openBrowserPage(width, height, { hasTouch, isolated: true });
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityAlignmentHtml()}</body></html>`,
@@ -1320,21 +1321,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
         const chevron = activity.querySelector<HTMLElement>(".chat-tool-row__chevron")!;
+        const toolRows = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".chat-activity-group__body .chat-tool-msg-summary",
+          ),
+        ];
+        const firstToolStyle = getComputedStyle(toolRows[0]!);
+        const firstToolRect = toolRows[0]!.getBoundingClientRect();
+        const secondToolRect = toolRows[1]!.getBoundingClientRect();
         return {
           activity: getComputedStyle(activity).userSelect,
           activityBackground: getComputedStyle(activity).backgroundColor,
+          activityPaddingBlock: [
+            getComputedStyle(activity).paddingTop,
+            getComputedStyle(activity).paddingBottom,
+          ],
           chevronGap: chevron.getBoundingClientRect().left - label.getBoundingClientRect().right,
-          tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
-            .userSelect,
+          tool: firstToolStyle.userSelect,
+          toolPaddingBlock: [firstToolStyle.paddingTop, firstToolStyle.paddingBottom],
+          toolRowGap: secondToolRect.top - firstToolRect.bottom,
         };
       });
-      expect(styles).toEqual({
+      const { toolRowGap, ...disclosureStyles } = styles;
+      expect(disclosureStyles).toEqual({
         activity: "text",
         activityBackground: "rgba(0, 0, 0, 0)",
+        activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
         // Summary gap (8px) less the chevron's own -3px inset.
         chevronGap: 5,
         tool: "text",
+        toolPaddingBlock: ["3px", "3px"],
       });
+      expect(toolRowGap).toBeGreaterThanOrEqual(0);
+      expect(toolRowGap).toBeLessThanOrEqual(2);
     } finally {
       await closeBrowserPage(page);
     }

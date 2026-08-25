@@ -3,11 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -97,10 +93,7 @@ function agentKysely() {
     kysely: getNodeSqliteKysely<
       Pick<
         OpenClawAgentKyselyDatabase,
-        | "session_transcript_fts"
-        | "session_transcript_index_state"
-        | "transcript_events"
-        | "transcript_rewrite_watermarks"
+        "session_transcript_fts" | "session_transcript_index_state" | "transcript_events"
       >
     >(database.db),
   };
@@ -215,24 +208,6 @@ describe("searchSessionTranscripts", () => {
     expect(search("alpha").hits).toHaveLength(1);
   });
 
-  it("hides same-generation FTS rows until their frontier is current", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "frontier guarded");
-    const { db, kysely } = agentKysely();
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("session_transcript_index_state")
-        .set({ indexed_seq: -1 })
-        .where("session_id", "=", "session-1"),
-    );
-
-    const lagging = search("frontier");
-    expect(lagging.indexing).toBe(true);
-    expect(lagging.hits).toEqual([]);
-    await waitForSearchReconcile("frontier");
-    expect(search("frontier").hits).toHaveLength(1);
-  });
-
   it("streams large searchable projections to the writer in bounded chunks", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
     const largeText = "x".repeat(140 * 1024);
@@ -273,29 +248,12 @@ describe("searchSessionTranscripts", () => {
     expect(result.hits).toHaveLength(1);
   });
 
-  it("detects missing source, dirty, and lagging transcript index watermarks", async () => {
+  it("detects missing, dirty, and lagging transcript index watermarks", async () => {
     await appendUserMessage("session-1", "agent:main:main", "indexed message");
     const { db, kysely } = agentKysely();
     const pending = () => listSessionsNeedingTranscriptIndexReconcile(db);
 
     expect(pending()).toEqual([]);
-
-    const source = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .deleteFrom("transcript_rewrite_watermarks")
-        .where("session_id", "=", "session-1")
-        .returning(["generation", "updated_at"]),
-    );
-    expect(pending()).toEqual(["session-1"]);
-    executeSqliteQuerySync(
-      db,
-      kysely.insertInto("transcript_rewrite_watermarks").values({
-        generation: source!.generation,
-        session_id: "session-1",
-        updated_at: source!.updated_at,
-      }),
-    );
 
     executeSqliteQuerySync(
       db,

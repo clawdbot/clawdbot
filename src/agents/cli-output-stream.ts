@@ -1,4 +1,3 @@
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -13,6 +12,7 @@ import type {
   CliStreamJsonOutputLimits,
   CliUsage,
 } from "./cli-output-contracts.js";
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import type { CliEventProjectionState } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
@@ -100,44 +100,6 @@ function frameBoundedCliJsonlChunk(
     }
   }
   return true;
-}
-
-/** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
-function normalizeClaudeCliStreamJsonRecord(
-  parsed: Record<string, unknown>,
-): { line: string; omittedRawChars: number } | undefined {
-  if (parsed.type !== "user" || !isRecord(parsed.message)) {
-    return undefined;
-  }
-  const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
-  let normalized = false;
-  let omittedRawChars = 0;
-  for (const result of content) {
-    if (!isRecord(result) || result.type !== "tool_result" || !Array.isArray(result.content)) {
-      continue;
-    }
-    for (const block of result.content) {
-      if (!isRecord(block) || !isRecord(block.source) || block.source.type !== "base64") {
-        continue;
-      }
-      if (
-        block.type !== "image" &&
-        !(block.type === "document" && block.source.media_type === "application/pdf")
-      ) {
-        continue;
-      }
-      const { data, ...source } = block.source;
-      if (typeof data !== "string") {
-        continue;
-      }
-      block.source = source;
-      block.omitted = true;
-      block.bytes = estimateBase64DecodedBytes(data);
-      omittedRawChars += data.length;
-      normalized = true;
-    }
-  }
-  return normalized ? { line: JSON.stringify(parsed), omittedRawChars } : undefined;
 }
 
 function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {

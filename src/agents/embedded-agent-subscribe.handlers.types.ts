@@ -60,6 +60,7 @@ type AssistantStreamData = {
   replace?: true;
   mediaUrls?: string[];
   phase?: AssistantPhase;
+  itemId?: string;
 };
 
 /** Deferred assistant stream event plus whether it should emit partial replies. */

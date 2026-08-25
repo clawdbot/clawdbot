@@ -821,14 +821,6 @@ describe("session transcript reader facade", () => {
     vi.clearAllMocks();
 
     expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: null,
-      lastMessagePreview: null,
-    });
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
       firstUserMessage: "generation prompt",
       lastMessagePreview: "generation reply",
     });

@@ -484,6 +484,14 @@ export function createGatewayHooksRequestHandler(params: {
               // cannot starve them. Aggregate capacity stays bounded by the lane
               // group that owns both lanes.
               lane: CommandLane.HookDispatch,
+              executionIdentity: {
+                ingress: {
+                  kind: "webhook",
+                  boundary: "gateway.hooks.agent",
+                  state: "present",
+                  ...(acceptedValue.mappingId ? { rawSourceRef: acceptedValue.mappingId } : {}),
+                },
+              },
               abortSignal: startupAbortController.signal,
               onExecutionStarted: () => {
                 // Existing runner-entry callbacks are the final owner-boundary fence:

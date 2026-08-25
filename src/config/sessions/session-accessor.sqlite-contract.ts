@@ -131,7 +131,6 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   message: TMessage;
   now?: number;
   eventId?: string;
-  maintainDisplayProjection?: boolean;
   parentId?: string | null;
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   useRawWhenLinear?: boolean;

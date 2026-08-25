@@ -117,6 +117,12 @@ import {
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -2641,7 +2647,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+        JSON.stringify({
+          files: ["dist/"],
+          name: "openclaw-fixture",
+          packageManager: rootPackageManager,
+          version: "0.0.0",
+        }),
         "utf8",
       );
       writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
