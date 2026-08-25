@@ -1964,6 +1964,7 @@
     "test:startup:bench:update": "node --import tsx scripts/test-update-cli-startup-bench.mts",
     "test:startup:gateway": "node --import tsx scripts/bench-gateway-startup.ts",
     "test:restart:gateway": "node --import tsx scripts/bench-gateway-restart.ts",
+    "test:sessions:hydration-memory": "node --import tsx scripts/bench-session-manager-hydration-memory.ts",
     "test:startup:memory": "node --import tsx scripts/ensure-cli-startup-build.mts && node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && node --import tsx scripts/ensure-playwright-chromium.mts && pnpm --dir ui test",
     "test:ui:e2e": "node --import tsx scripts/ensure-playwright-chromium.mts && node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner",

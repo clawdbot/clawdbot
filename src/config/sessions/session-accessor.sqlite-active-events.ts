@@ -207,6 +207,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .select([
           "active.active_position",
           "active.event_seq",
+          /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
           sql<number>`LENGTH(CAST(event.event_json AS BLOB)) + 1`.as("serialized_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId)
