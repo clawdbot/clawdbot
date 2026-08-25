@@ -772,6 +772,56 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("keeps a hidden retained session current without requesting a transcript redraw", () => {
+    const { pane, requestUpdate, state } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.presented = false;
+    requestUpdate.mockClear();
+    const result = {
+      count: 1,
+      path: "",
+      sessions: [{ key: state.sessionKey, kind: "direct", updatedAt: 1 }],
+    } as NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+
+    pane.applySessionsState({
+      agentId: "main",
+      deletedSessions: [],
+      error: null,
+      groups: [],
+      groupSettings: [],
+      loading: false,
+      modelOverrides: {},
+      result,
+      sectionOrder: [],
+    });
+
+    expect(state.sessionsResult).toBe(result);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not redraw a retained transcript when its navigation callback is replaced", async () => {
+    const { pane } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const lifecycle = pane as TestChatPane & {
+      hasUpdated: boolean;
+      render: () => unknown;
+    };
+    lifecycle.render = () => null;
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    const performUpdate = vi.spyOn(lifecycle, "performUpdate");
+
+    lifecycle.onPaneSessionChange = () => undefined;
+    await lifecycle.updateComplete;
+
+    expect(performUpdate).not.toHaveBeenCalled();
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+  });
+
   it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
     let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);

@@ -254,7 +254,7 @@ suite.define(() => {
       await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
-      await activeThread.getByText("Assistant history answer 69").waitFor({
+      await activeThread.locator(".chat-bubble").getByText("Assistant history answer 69").waitFor({
         timeout: 10_000,
       });
       await expect

@@ -171,7 +171,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.reconcileWaitingApprovalSnapshot();
     if (reconciledLocalCompletion) {
       void retryReconnectableQueuedChatSends(state);
-    } else {
+    } else if (this.presented) {
       state.requestUpdate?.();
     }
   }

@@ -167,7 +167,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     face: BoardFace,
   ) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
-  @property({ attribute: false }) onPaneSessionChange?: (
+  onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,

@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI session switching:** warm recent chat histories promptly and concurrently, preserve retained transcripts without redraws while hidden, and avoid unnecessary renders when navigation callbacks change.
 - **Control UI terminal transcript settlement:** retire live commentary, tool, and streamed reply projections atomically when the matching durable terminal message arrives, preventing duplicated final responses and transient row overlap after steering. Fixes #127209. Thanks @shakkernerd.
 - **Control UI Codex compaction history:** preserve successful native context compactions as durable, model-excluded activity inside completed work traces after the composer status clears or the session reloads. Fixes #127206. Thanks @shakkernerd.
 - **Control UI Codex steering:** preserve pre-steer commentary and tool activity in durable transcript order, keep it visible while active, and collapse it before the steering message after completion. Fixes #126938. Thanks @shakkernerd.
