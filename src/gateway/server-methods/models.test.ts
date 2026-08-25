@@ -59,6 +59,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       skills: [],
       hooks: [],
       origin: "bundled",
+      enabledByDefault: true,
       rootDir: "/test/anthropic",
       source: "/test/anthropic/index.js",
       manifestPath: "/test/anthropic/openclaw.plugin.json",

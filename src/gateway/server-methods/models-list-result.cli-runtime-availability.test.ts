@@ -21,14 +21,20 @@ const config = {
 } satisfies OpenClawConfig;
 
 async function listClaudeCliModel(
-  params: { authenticated?: boolean; pluginDisabled?: boolean } = {},
+  params: {
+    authenticated?: boolean;
+    pluginDisabled?: boolean;
+    cfg?: OpenClawConfig;
+  } = {},
 ) {
   return await listModels({
     catalog: [],
     staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
-    cfg: params.pluginDisabled
-      ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
-      : config,
+    cfg:
+      params.cfg ??
+      (params.pluginDisabled
+        ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
+        : config),
     preparedAuthModes:
       params.authenticated && !params.pluginDisabled ? { "claude-cli": "api_key" } : {},
     view: "configured",
@@ -56,4 +62,16 @@ describe("models.list CLI runtime availability", () => {
       });
     },
   );
+  it("does not use synthetic auth when plugins are globally disabled", async () => {
+    await expect(
+      listClaudeCliModel({
+        cfg: {
+          ...config,
+          plugins: { enabled: false },
+        },
+      }),
+    ).resolves.toEqual({
+      models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
+    });
+  });
 });

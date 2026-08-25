@@ -84,7 +84,7 @@ async function prepareTelegramSendPayload({
   ) {
     return null;
   }
-  const quoteText = readStringParam(ctx.params, "quoteText");
+  const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
   if (!quoteText) {
     return payload;
   }
