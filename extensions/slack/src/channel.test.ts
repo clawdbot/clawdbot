@@ -1671,6 +1671,58 @@ describe("slackPlugin outbound", () => {
     expectRecordFields(options[1], "production option", { value: "production" });
     expect(result).toEqual({ channel: "slack", messageId: "m-interactive" });
   });
+
+  it.each([
+    { surface: "interactive", type: "text" },
+    { surface: "presentation", type: "text" },
+    { surface: "presentation", type: "context" },
+  ] as const)(
+    "delivers oversized $surface $type in order across the real Slack outbound adapter",
+    async ({ surface, type }) => {
+      const sendSlack = vi
+        .fn()
+        .mockResolvedValueOnce({ messageId: "m-chunk-1" })
+        .mockResolvedValueOnce({ messageId: "m-chunk-2" });
+      const text = "x".repeat(3_000 * 50 + 1);
+      const structured = {
+        blocks: [
+          { type, text },
+          { type: "buttons" as const, buttons: [{ label: "Continue", value: "continue" }] },
+        ],
+      };
+      const payload =
+        surface === "interactive"
+          ? { text: "", interactive: structured }
+          : { text: "", presentation: structured };
+
+      const result = await requireSlackSendPayload()({
+        cfg,
+        to: "channel:C123",
+        text: "",
+        payload,
+        accountId: "default",
+        deps: { sendSlack },
+      });
+      const batches = sendSlack.mock.calls.map((_call, index) =>
+        requireArray(requireMockCallArg(sendSlack, index, 2).blocks, "Slack blocks"),
+      );
+      const delivered = batches.flat().flatMap((entry) => {
+        const block = requireRecord(entry, "Slack block");
+        const textObject =
+          block.type === "context"
+            ? requireArray(block.elements, "context elements")[0]
+            : block.type === "section"
+              ? block.text
+              : undefined;
+        return textObject ? [String(requireRecord(textObject, "Slack text").text)] : [];
+      });
+
+      expect(batches.map((blocks) => blocks.length)).toEqual([50, 2]);
+      expect(delivered.join("")).toBe(text);
+      expect(batches[1]?.[1]).toMatchObject({ type: "actions" });
+      expect(result).toEqual({ channel: "slack", messageId: "m-chunk-2" });
+    },
+  );
 });
 
 describe("slackPlugin directory", () => {
