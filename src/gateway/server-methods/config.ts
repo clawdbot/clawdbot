@@ -978,7 +978,18 @@ export const configHandlers: GatewayRequestHandlers = {
         getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
         // readConfigGetResponse hands the snapshot's authored sourceConfig, so the config it
         // loads hints for is its own authored counterpart.
-        loadUiHints: (config) => buildRuntimeConfigSchemaForConfig(config, config).uiHints,
+        //
+        // Unioned with the active runtime schema for the same reason the write acknowledgement
+        // unions the pre-write hints: an ownership-changing write can drop a claimant from
+        // discovery while the value it marked sensitive stays in the file. Projecting hints from
+        // the newly persisted registry alone returns that value in plaintext whenever the
+        // replacement's schema accepts the field without marking it sensitive — and with
+        // `gateway.reload.mode=off` the departing owner is still the runtime serving it.
+        loadUiHints: (config) =>
+          unionRedactionUiHints(
+            loadSchemaWithPlugins().uiHints,
+            buildRuntimeConfigSchemaForConfig(config, config).uiHints,
+          ),
         revisionProjector: context.configRevisionProjector,
       }),
       undefined,
@@ -1235,18 +1246,6 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const actor = resolveControlPlaneActor(client);
-    if (restoredChangedPaths.length === 0) {
-      respondConfigPatchNoop({
-        snapshot,
-        config: snapshot.config,
-        uiHints: buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
-        actor,
-        context,
-        respond,
-      });
-      return;
-    }
     // Same patch, applied to the authored snapshot: channel schema ownership inside validation
     // must read explicit selection from what the operator wrote, and `restoredMerge.result` is
     // built on `snapshot.config`, which carries validation-seeded entry configs. Sentinel values
@@ -1258,6 +1257,32 @@ export const configHandlers: GatewayRequestHandlers = {
         replaceArrayPaths: replacePaths,
       }),
     );
+    // An edit can move ownership while leaving the materialized config byte-identical: adding an
+    // explicit selection auto-enable already materialized, or removing one that re-materializes to
+    // the same effective config. Both diffs above compare runtime shapes only, so such an edit was
+    // reported as applied and never written. Ownership reads the authored config, so the authored
+    // diff decides the no-op alongside them.
+    // Scoped to the authored surface explicit selection is read from — `plugins.*` entries,
+    // allow/deny and slots, plus `channels.<id>.enabled` for a bundled claimant. A patch validation
+    // normalizes away is still a no-op: persisting the authored value there would write back
+    // exactly what validation rejected. Only an ownership input can be materially identical and
+    // still change which plugin serves a channel, which is the case both diffs above miss.
+    const authoredChangedPaths = diffConfigLeafPaths(
+      snapshot.sourceConfig,
+      authoredCandidate,
+    ).filter((path) => path === "plugins" || /^(?:plugins|channels)\./u.test(path));
+    const actor = resolveControlPlaneActor(client);
+    if (restoredChangedPaths.length === 0 && authoredChangedPaths.length === 0) {
+      respondConfigPatchNoop({
+        snapshot,
+        config: snapshot.config,
+        uiHints: buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+        actor,
+        context,
+        respond,
+      });
+      return;
+    }
     const validatedSubmission = validateSubmittedConfigOrRespond({
       candidate: restoredMerge.result,
       sourceConfig: snapshot.sourceConfig,
@@ -1283,7 +1308,7 @@ export const configHandlers: GatewayRequestHandlers = {
     // skip the file write and SIGUSR1 restart entirely. This avoids a full
     // gateway restart (and the resulting connection drop) when a control-plane
     // client re-sends the same config (e.g. hot-apply with no actual changes).
-    if (changedPaths.length === 0) {
+    if (changedPaths.length === 0 && authoredChangedPaths.length === 0) {
       respondConfigPatchNoop({
         snapshot,
         config: validatedConfig,

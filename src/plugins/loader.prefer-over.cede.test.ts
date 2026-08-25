@@ -426,6 +426,70 @@ describe("plugin loader preferOver cede", () => {
     });
   });
 
+  // Codex review P2 on #128904: a plugin that registers the contested channel without declaring it
+  // in its manifest never enters the claimant set, so it receives no cede. Loading after a
+  // replacement that rolled back, it takes the vacant channel — and matching the registration by
+  // channel id alone read that unrelated owner as success, silencing the one diagnostic that
+  // reports a channel served by the wrong plugin.
+  it("reports a ceded channel taken by a plugin that never claimed it", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+      throwOnRegister: true,
+    });
+    const squatterDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-squatter",
+      channelIds: ["zzgamma"],
+      registeredChannelIds: ["zzalpha"],
+      toolName: "zz_squatter_tool",
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: {
+        zzalpha: { token: "alpha" },
+        zzbeta: { token: "beta" },
+        zzgamma: { token: "gamma" },
+      },
+      plugins: { load: { paths: [fallbackDir, replacementDir, squatterDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
+      "zz-squatter",
+    );
+    const diagnostic = registry.diagnostics.find((diag) =>
+      diag.message.includes("zzalpha (ceded to zz-replacement)"),
+    );
+    expect(diagnostic).toMatchObject({
+      level: "error",
+      pluginId: "zz-fallback",
+      message:
+        "ceded channel is registered by zz-squatter, not its declared owner: zzalpha (ceded to zz-replacement)",
+    });
+  });
+
   // The shape above keeps the fallback loaded through a second channel. The ordinary shape is one
   // contested channel, where auto-enable turns the fallback off entirely — so the only record
   // carrying the cede never loads, and a diagnostic that reads activation status would go quiet in

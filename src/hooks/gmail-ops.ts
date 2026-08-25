@@ -236,7 +236,15 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
     },
   };
 
-  const validated = validateConfigObjectWithPlugins(nextConfig);
+  // `nextConfig` is built on the materialized snapshot, so channel schema ownership needs the
+  // authored counterpart explicitly: without it the fallback reads validation-seeded
+  // `plugins.entries.<id>.config` records as operator selection, sets aside `preferOver`, and can
+  // reject a replacement-only channel field that was valid before this command ran. The Gmail
+  // edits live under `hooks.gmail` and move no ownership input, so the snapshot's authored config
+  // is that counterpart unchanged.
+  const validated = validateConfigObjectWithPlugins(nextConfig, {
+    sourceConfig: configSnapshot.sourceConfig,
+  });
   if (!validated.ok) {
     throw new Error(`Config validation failed: ${validated.issues[0]?.message ?? "invalid"}`);
   }

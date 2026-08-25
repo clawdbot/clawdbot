@@ -860,6 +860,36 @@ describe("config.patch authored validation half", () => {
       expect(call?.[1]).toEqual({ sourceConfig: expectedSourceConfig });
     }
   });
+
+  // Codex review P1 on #128904: an edit can move ownership while leaving the materialized config
+  // byte-identical. Here the operator hand-selects a plugin auto-enable had already materialized as
+  // enabled, so both no-op checks — which compared runtime shapes only — saw no change and the RPC
+  // reported success without ever writing the authored selection. Explicit selection is exactly
+  // what sets a replacement's `preferOver` aside, so dropping it silently changes channel ownership.
+  it("persists a source-only selection the materialized config already reflects", async () => {
+    storedConfig = {
+      plugins: { entries: { "voxchat-classic": { enabled: true } } },
+    } as OpenClawConfig;
+    // Authored: the operator never wrote the entry; auto-enable materialized it.
+    const authored = { plugins: {} } as OpenClawConfig;
+    configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+      const result = currentWriteSnapshot();
+      result.snapshot.sourceConfig = authored;
+      return result;
+    });
+
+    const { respond } = await invokeConfigPatch({
+      raw: { plugins: { entries: { "voxchat-classic": { enabled: true } } } },
+      baseHash: "base-hash",
+    });
+
+    expect(respond).not.toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ noop: true }),
+      undefined,
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalled();
+  });
 });
 
 describe("config.patch ID-keyed arrays", () => {

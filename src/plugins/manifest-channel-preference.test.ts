@@ -34,6 +34,29 @@ describe("resolveManifestChannelPreferOverIds", () => {
     expect(resolveManifestChannelPreferOverIds(record, "clickclack")).toEqual(["legacy"]);
   });
 
+  // Codex review P2 on #128904: a custom channel id is unknown to `normalizeChatChannelId`, so the
+  // fallback returned it unchanged while runtime lookup and the cede comparator both fold its case.
+  // A manifest claiming `acmechat` while declaring `channelConfigs.AcmeChat` names one serving
+  // channel, and keeping the two spellings distinct dropped the replacement edge, leaving ownership
+  // decided by registration order.
+  it("reads a custom-channel declaration written under a different case", () => {
+    const record = {
+      id: "modern",
+      channelConfigs: { AcmeChat: { preferOver: ["legacy"] } },
+    } as unknown as PluginManifestRecord;
+
+    expect(resolveManifestChannelPreferOverIds(record, "acmechat")).toEqual(["legacy"]);
+  });
+
+  it("reads custom-channel catalog metadata written under a different case", () => {
+    const record = {
+      id: "modern",
+      channelCatalogMeta: { id: "AcmeChat", preferOver: ["legacy"] },
+    } as unknown as PluginManifestRecord;
+
+    expect(resolveManifestChannelPreferOverIds(record, "acmechat")).toEqual(["legacy"]);
+  });
+
   it("still refuses catalog metadata for a different channel", () => {
     const record = {
       id: "modern",

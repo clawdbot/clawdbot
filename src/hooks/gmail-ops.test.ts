@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   ensureTailscaleEndpoint: vi.fn(),
   getRuntimeConfig: vi.fn(),
   runCommandWithTimeout: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
+  replaceConfigFile: vi.fn(),
+  validateConfigObjectWithPlugins: vi.fn(),
   spawn: vi.fn(),
   defaultRuntime: {
     log: vi.fn(),
@@ -32,6 +35,9 @@ vi.mock("../config/config.js", async () => {
   return {
     ...actual,
     getRuntimeConfig: mocks.getRuntimeConfig,
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    replaceConfigFile: mocks.replaceConfigFile,
+    validateConfigObjectWithPlugins: mocks.validateConfigObjectWithPlugins,
   };
 });
 
@@ -53,7 +59,7 @@ vi.mock("../infra/executable-path.js", () => ({
   resolveExecutable: vi.fn((name: string) => name),
 }));
 
-const { runGmailService } = await import("./gmail-ops.js");
+const { runGmailService, runGmailSetup } = await import("./gmail-ops.js");
 
 function createGmailConfig(account = "me@example.com", renewEveryMinutes?: number) {
   return {
@@ -154,5 +160,47 @@ describe("runGmailService", () => {
     } finally {
       shutdown?.();
     }
+  });
+});
+
+describe("runGmailSetup config validation", () => {
+  beforeEach(() => {
+    mocks.ensureDependency.mockResolvedValue(undefined);
+    mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    mocks.replaceConfigFile.mockResolvedValue({ path: "/tmp/openclaw.json" });
+    mocks.validateConfigObjectWithPlugins.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+      warnings: [],
+    }));
+  });
+
+  // Codex review P2 on #128904: setup builds its next config on the MATERIALIZED snapshot, so
+  // channel schema ownership needs the authored counterpart passed explicitly. Without it the
+  // fallback reads validation-seeded `plugins.entries.<id>.config` records as operator selection,
+  // sets aside `preferOver`, and can reject a replacement-only channel field that validated fine
+  // before the command ran — after it has already created GCP resources.
+  it("hands validation the authored snapshot as its source half", async () => {
+    const authored = { hooks: { enabled: true, token: "hook-token" } };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      // Runtime-shaped: carries a seeded entry the operator never wrote.
+      config: {
+        hooks: { enabled: true, token: "hook-token" },
+        plugins: { entries: { "voxchat-classic": { config: {} } } },
+      },
+      sourceConfig: authored,
+      path: "/tmp/openclaw.json",
+    });
+
+    await runGmailSetup({
+      account: "me@example.com",
+      project: "demo",
+      pushEndpoint: "https://example.test/hook",
+      tailscale: "off",
+    } as never);
+
+    const call = mocks.validateConfigObjectWithPlugins.mock.calls[0];
+    expect(call?.[1]).toEqual({ sourceConfig: authored });
   });
 });

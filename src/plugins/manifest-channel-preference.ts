@@ -1,10 +1,18 @@
 // Reads a manifest record's channel replacement preference without pulling in the registry builder.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
 /** The canonical spelling of a declared channel id, or the id itself when it names no known channel. */
 function canonicalChannelId(channelId: string): string {
-  return normalizeChatChannelId(channelId) ?? channelId;
+  // Lowercased like `normalizeCededChannelId`, not left raw: a custom channel id is unknown to
+  // `normalizeChatChannelId`, and runtime lookup and the cede comparator both fold its case. A
+  // manifest that claims `channels: ["acmechat"]` while declaring `channelConfigs.AcmeChat` names
+  // one serving channel, so keeping the two spellings distinct here dropped the replacement edge
+  // and left ownership decided by registration order.
+  return (
+    normalizeChatChannelId(channelId) ?? normalizeOptionalLowercaseString(channelId) ?? channelId
+  );
 }
 
 /**

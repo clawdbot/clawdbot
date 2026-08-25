@@ -423,19 +423,25 @@ export function pushCededChannelWithoutOwnerDiagnostics(params: {
     }
     for (const channelId of record.cededChannelIds ?? []) {
       const claimedId = normalizeCededChannelId(channelId);
-      const registered =
-        params.registry.channels.some(
-          (entry) => normalizeCededChannelId(entry.plugin.id) === claimedId,
-        ) ||
-        params.registry.channelSetups.some(
-          (entry) => normalizeCededChannelId(entry.plugin.id) === claimedId,
-        );
-      if (registered) {
-        continue;
-      }
       const cededTo = params.cededChannelOwners.get(claimedId);
       const cededToRecord = params.registry.plugins.find((entry) => entry.id === cededTo);
       if (cededTo === undefined || cededToRecord?.format === "bundle") {
+        continue;
+      }
+      // The registration has to be the declared winner's, not merely one whose channel id matches.
+      // A plugin that registers the contested channel without claiming it in its manifest is absent
+      // from the claimant set and so receives no cede; loading between the ceding fallback and the
+      // replacement, it takes the vacant channel and the replacement is rejected as a duplicate.
+      // Matching on channel id alone read that unrelated registration as success and suppressed the
+      // one diagnostic that reports a channel served by the wrong plugin.
+      const servedBy =
+        params.registry.channels.find(
+          (entry) => normalizeCededChannelId(entry.plugin.id) === claimedId,
+        )?.pluginId ??
+        params.registry.channelSetups.find(
+          (entry) => normalizeCededChannelId(entry.plugin.id) === claimedId,
+        )?.pluginId;
+      if (servedBy === cededTo) {
         continue;
       }
       if (reported.has(claimedId)) {
@@ -446,7 +452,10 @@ export function pushCededChannelWithoutOwnerDiagnostics(params: {
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `ceded channel has no registered owner: ${channelId} (ceded to ${cededTo})`,
+        message:
+          servedBy === undefined
+            ? `ceded channel has no registered owner: ${channelId} (ceded to ${cededTo})`
+            : `ceded channel is registered by ${servedBy}, not its declared owner: ${channelId} (ceded to ${cededTo})`,
       });
     }
   }
