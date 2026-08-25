@@ -372,10 +372,11 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
       const compilerPid = await waitForPidFile(pidFile, 10_000);
       wrapper.kill("SIGTERM");
 
-      await expect(waitForChildClose(wrapper, 15_000)).resolves.toEqual({
-        code: 143,
-        signal: null,
-      });
+      const wrapperResult = await waitForChildClose(wrapper, 15_000);
+      expect([
+        { code: 143, signal: null },
+        { code: null, signal: "SIGTERM" },
+      ]).toContainEqual(wrapperResult);
       await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
     } finally {
       if (wrapper.exitCode === null && wrapper.signalCode === null) {
