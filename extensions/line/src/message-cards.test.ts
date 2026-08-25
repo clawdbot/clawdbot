@@ -514,6 +514,80 @@ describe("action label/data surrogate-safe truncation", () => {
     });
   });
 
+  it.each([
+    { kind: "message", data: "/status", expected: { type: "message", text: "/status" } },
+    {
+      kind: "postback",
+      data: "action=status",
+      expected: { type: "postback", data: "action=status" },
+    },
+    {
+      kind: "uri",
+      data: "https://example.test/status",
+      expected: { type: "uri", uri: "https://example.test/status" },
+    },
+  ])("/card action preserves 40-character $kind labels", async ({ data, expected }) => {
+    const label = "x".repeat(40);
+    const message = await runLineFlexCardCommand(
+      `action "Menu" "Body" --actions "${label}|${data},${label}y|${data}"`,
+    );
+    const footer = message.contents.footer as {
+      contents: Array<{ action: { label: string } }>;
+    };
+
+    expect(footer.contents).toMatchObject([
+      { action: { ...expected, label } },
+      { action: { ...expected, label } },
+    ]);
+  });
+
+  it("/card action preserves Unicode labels without splitting the 40-grapheme boundary", async () => {
+    const label = `${"x".repeat(39)}😀`;
+    const message = await runLineFlexCardCommand(
+      `action "Menu" "Body" --actions "${label}|/status"`,
+    );
+    const footer = message.contents.footer as { contents: Array<{ action: { label: string } }> };
+    const action = expectDefined(footer.contents[0], "LINE flex-message footer action").action;
+
+    expect(action.label).toBe(label);
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
+  });
+
+  it("/card buttons retains the template-specific 20-character action label limit", async () => {
+    const label = "x".repeat(40);
+    const result = (await registerCommandWithHandler((command: unknown) => {
+      const { handler } = command as {
+        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
+      };
+      return handler({
+        channel: "line",
+        args: `buttons "Menu" "Body" --actions "${label}|/status"`,
+      });
+    })) as {
+      channelData: {
+        line: { templateMessage: Parameters<typeof buildTemplateMessageFromPayload>[0] };
+      };
+    };
+    const template = expectDefined(
+      buildTemplateMessageFromPayload(result.channelData.line.templateMessage),
+      "LINE buttons template message",
+    ).template as { actions: Array<{ label: string }> };
+
+    expect(template.actions).toMatchObject([{ type: "message", label: "x".repeat(20) }]);
+  });
+
+  it("/card action visibly disables an oversized URI at the Flex action owner", async () => {
+    const uri = `https://example.test/${"u".repeat(1_000)}`;
+    const message = await runLineFlexCardCommand(`action "Menu" "Body" --actions "Open|${uri}"`);
+    const footer = message.contents.footer as { contents: Array<{ action: unknown }> };
+
+    expect(footer.contents[0]?.action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    });
+  });
+
   it.each(lineFlexCardCommandScenarios)(
     "/card $kind preserves provider-valid Flex alternative text",
     async (scenario) => {
