@@ -44,6 +44,7 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     configForm: null,
     configUiHints: {},
     configSaving: false,
+    configError: null,
     configFormDirty: false,
     showAdvancedSettings: false,
     nostrProfileFormState: null,
@@ -160,6 +161,7 @@ function renderChannelDetailFixture(
   options: {
     label?: string;
     loading?: boolean;
+    configError?: string;
     onRefresh?: ChannelsProps["onRefresh"];
   } = {},
 ) {
@@ -175,6 +177,7 @@ function renderChannelDetailFixture(
     channelDefaultAccountId: accounts?.length ? { [channelId]: accounts[0]!.accountId } : {},
   });
   props.loading = options.loading ?? false;
+  props.configError = options.configError ?? null;
   if (options.onRefresh) {
     props.onRefresh = options.onRefresh;
   }
@@ -301,6 +304,24 @@ describe("channel config advanced tier", () => {
 });
 
 describe("channel detail", () => {
+  it.each(["telegram", "whatsapp", "nostr"] as const)(
+    "shows an escaped configuration save error inside the %s editor",
+    (channelId) => {
+      const data: ChannelsChannelData =
+        channelId === "whatsapp"
+          ? { whatsapp: createWhatsAppStatus() }
+          : channelId === "nostr"
+            ? { nostr: null }
+            : { telegram: { configured: true, running: true } };
+      const message = 'Gateway rejected <img src="x" onerror="alert(1)">';
+      const container = renderChannelDetailFixture(channelId, data, { configError: message });
+      const alert = container.querySelector(".channels-detail [role=alert]");
+
+      expect(alert?.textContent).toBe(message);
+      expect(alert?.querySelector("img")).toBeNull();
+    },
+  );
+
   it("links every channel to its docs page", () => {
     const props = createProps({
       ts: Date.now(),
