@@ -2720,56 +2720,67 @@ describe("Crabbox worker provider", () => {
     await expect(cliMissing.inspect(lease)).rejects.toThrow("inspect could not start");
   });
 
-  it("retains the redacted terminal provider failure after verbose provisioning progress", async () => {
-    const secret = ["sk", "abcdefghijklmnop"].join("-");
-    const terminalCause = "machine0 provider rejected authenticated provisioning";
-    const failurePrefix = "Crabbox warmup failed with exit code 5: ";
-    const provider = providerWithRunner(async () =>
-      commandResult({
-        code: 5,
-        stderr: [
-          "coordinator lease class=standard preferred_type=machine0",
-          "provisioning progress ".repeat(100),
-          `token=${secret}`,
-          terminalCause,
-        ].join("\n"),
-        stdout: "stdout must not replace stderr",
-      }),
-    );
-
-    const error = await provider
-      .provision({ ...PROFILE, provider: "machine0" }, OPERATION_ID)
-      .catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(Error);
-    const message = error instanceof Error ? error.message : "";
-    expect(message).toContain(terminalCause);
-    expect(message).not.toContain(secret);
-    expect(message).not.toContain("stdout must not replace stderr");
-    expect(message).toHaveLength(failurePrefix.length + 512);
-    expect(message.startsWith(failurePrefix)).toBe(true);
-  });
-
-  it("preserves UTF-16 boundaries at the start of terminal provider failure details", async () => {
-    const suffix = "x".repeat(511);
-    const provider = providerWithRunner(async () =>
-      commandResult({ code: 2, stderr: `progress😀${suffix}` }),
-    );
-
-    const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(Error);
-    const message = error instanceof Error ? error.message : "";
-    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${suffix}`);
-    expect(hasLoneSurrogate(message)).toBe(false);
-  });
-
   it.each([
-    { name: "exactly at the bound", prefix: "" },
-    { name: "beyond the bound", prefix: "earlier progress " },
-  ])("keeps a complete stdout boundary pair $name", async ({ prefix }) => {
+    { action: "warmup", termination: "exit", code: 5 },
+    { action: "inspect", termination: "timeout", code: null },
+  ] as const)(
+    "preserves bounded, redacted terminal diagnostics for $action $termination failures",
+    async ({ action, termination, code }) => {
+      const secret = ["sk", "abcdefghijklmnop"].join("-");
+      const terminalStderr = "Machine0 terminal stderr: provider quota exhausted";
+      const terminalStdout = "Machine0 terminal stdout: quota window has not reset";
+      const provider = providerWithRunner(async () =>
+        commandResult({
+          code,
+          termination,
+          killed: termination !== "exit",
+          stderr: `provider warning ${secret} ${"provider progress ".repeat(90)}${terminalStderr}`,
+          stdout: terminalStdout,
+        }),
+      );
+      const operation =
+        action === "warmup"
+          ? provider.provision({ ...PROFILE, provider: "machine0" }, OPERATION_ID)
+          : provider.inspect(lifecycleLease());
+
+      const error = await operation.catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      const message = error instanceof Error ? error.message : "";
+      const failurePrefix =
+        action === "warmup"
+          ? "Crabbox warmup failed with exit code 5: "
+          : "Crabbox inspect did not exit normally (timeout): ";
+      expect(message).toContain("provider warning");
+      expect(message).toContain(terminalStderr);
+      expect(message).toContain(terminalStdout);
+      expect(message).not.toContain(secret);
+      expect(message.length).toBeLessThanOrEqual(failurePrefix.length + 512);
+      expect(hasLoneSurrogate(message)).toBe(false);
+    },
+  );
+
+  it.each(["stderr", "stdout"] as const)(
+    "preserves UTF-16 boundaries and terminal detail from %s",
+    async (stream) => {
+      const provider = providerWithRunner(async () =>
+        commandResult({
+          code: 2,
+          [stream]: `${"x".repeat(253)}😀${"y".repeat(300)}😀 terminal failure`,
+        }),
+      );
+
+      const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      const message = error instanceof Error ? error.message : "";
+      expect(message).toContain("😀 terminal failure");
+      expect(message.length).toBeLessThanOrEqual(INSPECT_FAILURE_PREFIX.length + 512);
+      expect(hasLoneSurrogate(message)).toBe(false);
+    },
+  );
+
+  it("keeps a complete stdout boundary pair exactly at the bound", async () => {
     const detail = `${"x".repeat(510)}😀`;
-    const provider = providerWithRunner(async () =>
-      commandResult({ code: 2, stdout: `${prefix}${detail}` }),
-    );
+    const provider = providerWithRunner(async () => commandResult({ code: 2, stdout: detail }));
 
     const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
