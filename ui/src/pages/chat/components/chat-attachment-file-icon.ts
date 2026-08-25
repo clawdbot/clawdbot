@@ -3,7 +3,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
-export type AttachmentFileIconFamily =
+type AttachmentFileIconFamily =
   | "unknown"
   | "pdf"
   | "document"

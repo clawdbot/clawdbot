@@ -233,6 +233,7 @@ export function renderGroupedMessage(
     canvasPluginSurfaceUrl?: string | null;
     resourceBasePath?: string;
     localMediaPreviewRoots?: readonly string[];
+    connectionEpoch?: number;
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
     onAssistantAttachmentLoaded?: () => void;
@@ -267,6 +268,7 @@ export function renderGroupedMessage(
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
   const imageRenderOptions = {
+    connectionEpoch: opts.connectionEpoch,
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,

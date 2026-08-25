@@ -27,6 +27,28 @@ import "./chat-sidebar.ts";
 
 const localStorageValues = new Map<string, string>();
 const documentPreviewSubscribers = new Set<() => void>();
+
+function autoIntersectAttachmentPreviews(): void {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      private readonly callback: IntersectionObserverCallback;
+
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+      }
+
+      observe() {
+        this.callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+
+      disconnect() {}
+    },
+  );
+}
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
@@ -4189,9 +4211,10 @@ describe("grouped chat rendering", () => {
   });
 
   it("truncates CSV preview downloads at 16 KiB", async () => {
+    autoIntersectAttachmentPreviews();
     const fetchMock = vi.fn(async () => new Response(`header\n${"x".repeat(17 * 1024)}`));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const message = createAssistantMessage(
       [
         createAttachmentBlock(
@@ -4221,7 +4244,8 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels an unknown-size CSV stream at the preview budget", async () => {
+  it("falls back to a compact card when an unknown-size CSV exceeds the byte budget", async () => {
+    autoIntersectAttachmentPreviews();
     const chunkBytes = new TextEncoder().encode("y".repeat(1024));
     let pulls = 0;
     let cancelled = false;
@@ -4236,7 +4260,7 @@ describe("grouped chat rendering", () => {
     });
     const fetchMock = vi.fn(async () => new Response(endlessBody));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const message = createAssistantMessage(
       [
         createAttachmentBlock(
@@ -4258,17 +4282,16 @@ describe("grouped chat rendering", () => {
     rerender();
 
     await vi.waitFor(() => {
-      expect(
-        container.querySelector(".chat-assistant-attachment-card__table")?.textContent,
-      ).toContain("header");
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
     });
+    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
     expect(cancelled).toBe(true);
-    // The preview budget is ~17 KiB of 1 KiB chunks; an unbounded read would
-    // keep pulling forever. Allow generous readahead slack.
-    expect(pulls).toBeLessThan(64);
+    // The shared preview budget is 256 KiB; an unbounded read would keep pulling forever.
+    expect(pulls).toBeLessThanOrEqual(258);
   });
 
-  it("decodes only the preview budget from a single oversized chunk", async () => {
+  it("rejects a single oversized CSV chunk before decoding it", async () => {
+    autoIntersectAttachmentPreviews();
     const giantChunk = new TextEncoder().encode(`header\n${"z".repeat(1024 * 1024)}`);
     const giantBody = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -4288,7 +4311,7 @@ describe("grouped chat rendering", () => {
       }
     }
     vi.stubGlobal("TextDecoder", TrackingTextDecoder);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const message = createAssistantMessage(
       [
         createAttachmentBlock(
@@ -4310,12 +4333,10 @@ describe("grouped chat rendering", () => {
     rerender();
 
     await vi.waitFor(() => {
-      expect(
-        container.querySelector(".chat-assistant-attachment-card__table")?.textContent,
-      ).toContain("header");
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
     });
-    // The 1 MiB chunk must be sliced to the byte budget before decoding.
-    expect(Math.max(...decodedByteLengths)).toBeLessThanOrEqual((16 * 1024 + 1) * 4);
+    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
+    expect(decodedByteLengths).toEqual([]);
   });
 
   it("omits attachment anchors for unsafe transcript URLs", async () => {

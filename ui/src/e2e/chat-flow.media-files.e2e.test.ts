@@ -62,8 +62,12 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const link = page.getByRole("link", { name: "测试 report.pdf", exact: true });
+      const card = page
+        .locator(".chat-assistant-attachment-card--document")
+        .filter({ hasText: "测试 report.pdf" });
+      const link = card.locator(".chat-assistant-attachment-card__download");
       await link.waitFor({ state: "visible", timeout: 10_000 });
+      await card.hover();
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
 
       expect(download.suggestedFilename()).toBe("测试 report.pdf");
@@ -272,9 +276,9 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page
-          .getByText(reason, { exact: true })
-          .waitFor({ state: "visible", timeout: 10_000 });
+        const status = page.locator(".chat-assistant-attachment-card__status-meta");
+        await status.waitFor({ state: "visible", timeout: 10_000 });
+        await expect.poll(() => status.textContent()).toContain(reason);
         expect(requestedMediaUrls).toHaveLength(1);
         expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
         expect(await page.locator(".chat-assistant-attachment-card__link").count()).toBe(0);

@@ -398,7 +398,7 @@ describe("markdown sidebar", () => {
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).toContain("playback=1");
+    expect(url instanceof Request ? url.url : url?.toString()).toContain("playback=1");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
     const player = panel.querySelector("openclaw-chat-video-player");
     expect(player?.mediaWidth).toBe(9);
@@ -480,6 +480,41 @@ describe("markdown sidebar", () => {
     expect(await previewBlob?.text()).toContain(
       'http-equiv="Content-Security-Policy" content="default-src \'none\'',
     );
+    panel.remove();
+  });
+
+  it("renders a complete same-origin CSV table without an iframe", async () => {
+    const csv = Array.from({ length: 10 }, (_row, row) =>
+      Array.from({ length: 64 }, (_column, column) => `${row}:${column}`).join(","),
+    ).join("\n");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(csv)),
+    );
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "wide.csv",
+      src: "/__openclaw__/media/wide.csv",
+      mimeType: "text/csv",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    await vi.waitFor(() =>
+      expect(panel.querySelector(".chat-assistant-attachment-card__table")).not.toBeNull(),
+    );
+    expect(panel.querySelector("iframe")).toBeNull();
+    expect(panel.querySelectorAll("thead th")).toHaveLength(64);
+    expect(panel.querySelectorAll("tbody tr")).toHaveLength(9);
+    const tableWrap = panel.querySelector(".chat-assistant-attachment-card__table-wrap");
+    expect(tableWrap?.getAttribute("data-display")).toBe("full");
+    expect(tableWrap?.hasAttribute("data-right-truncated")).toBe(false);
+    expect(tableWrap?.hasAttribute("data-bottom-truncated")).toBe(false);
     panel.remove();
   });
 

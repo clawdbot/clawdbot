@@ -44,7 +44,7 @@ type ImageSidebarContent = {
   rawText?: string | null;
 };
 
-export type AttachmentSidebarSource = {
+type AttachmentSidebarSource = {
   src: string;
   playback?: ChatMediaPlaybackMode;
   authToken?: string | null;
@@ -55,6 +55,7 @@ export type AttachmentSidebarSource = {
 };
 
 export type AttachmentSidebarRuntime = {
+  connectionEpoch?: number;
   authToken?: string | null;
   localMediaPreviewRoots: readonly string[];
   resourceBasePath?: string;

@@ -25,54 +25,13 @@ import {
 } from "./chat-audio-waveform.ts";
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SEEK_STEP_SECONDS = 5;
 const WAVEFORM_FETCH_TIMEOUT_MS = 30_000;
 const WAVEFORM_DECODE_DURATION_TOLERANCE = 1.2;
 const WAVEFORM_MIN_BAR_WIDTH_PX = 2.5;
 const WAVEFORM_MIN_GAP_PX = 2.5;
-
-async function readResponseBytesWithinLimit(
-  response: Response,
-  maxBytes: number,
-): Promise<ArrayBuffer | null> {
-  const contentLengthHeader = response.headers.get("Content-Length");
-  const contentLength = contentLengthHeader === null ? undefined : Number(contentLengthHeader);
-  if (contentLength !== undefined && Number.isFinite(contentLength) && contentLength > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    return null;
-  }
-  if (!response.body) {
-    const bytes = await response.arrayBuffer();
-    return bytes.byteLength <= maxBytes ? bytes : null;
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return null;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const combined = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return combined.buffer;
-}
 
 function formatChatMediaTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) {

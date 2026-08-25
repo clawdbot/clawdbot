@@ -30,6 +30,7 @@ type StreamMessageOptions = Pick<
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "localMediaPreviewRoots"
+  | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
   | "onAssistantAttachmentLoaded"

@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { deflateRawSync } from "node:zlib";
 import type { Plugin } from "vite";
 
-export const CHAT_ATTACHMENT_FIXTURE_PATH = "/__fixtures/chat-attachments/";
+const CHAT_ATTACHMENT_FIXTURE_PATH = "/__fixtures/chat-attachments/";
 const MANAGED_IMAGE_FIXTURE_PATH = "/api/chat/media/outgoing/chat-attachment-fixture/";
 const ASSISTANT_MEDIA_FIXTURE_PATH = "/__openclaw__/assistant-media";
 const FIXTURE_MEDIA_TICKET = "chat-attachment-fixture";
@@ -249,6 +249,13 @@ function managedImageUrl(fileName: string): string {
 
 export function buildChatAttachmentHistory(baseTime: number): unknown[] {
   const assets = getChatAttachmentAssets();
+  const assetSize = (fileName: string): number => {
+    const asset = assets[fileName];
+    if (!asset) {
+      throw new Error(`Missing chat attachment fixture asset: ${fileName}`);
+    }
+    return asset.body.byteLength;
+  };
   const documentAttachment = (fileName: string, mimeType: string) => ({
     type: "attachment",
     attachment: {
@@ -256,7 +263,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       label: fileName,
       mimeType,
       url: fixtureUrl(fileName),
-      sizeBytes: assets[fileName].body.byteLength,
+      sizeBytes: assetSize(fileName),
     },
   });
   const sectionTitle = (text: string, timestamp: number) => ({
@@ -277,14 +284,14 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           url: managedImageUrl("sample-image.svg"),
           alt: "Attachment preview",
           fileName: "sample-image.svg",
-          sizeBytes: assets["sample-image.svg"].body.byteLength,
+          sizeBytes: assetSize("sample-image.svg"),
         },
         {
           type: "image",
           url: managedImageUrl("sample-image-secondary.svg"),
           alt: "Secondary attachment preview",
           fileName: "sample-image-secondary.svg",
-          sizeBytes: assets["sample-image-secondary.svg"].body.byteLength,
+          sizeBytes: assetSize("sample-image-secondary.svg"),
         },
       ],
       timestamp: baseTime,
@@ -351,7 +358,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             label: "sample-audio.wav",
             mimeType: "audio/wav",
             url: fixtureUrl("sample-audio.wav"),
-            sizeBytes: assets["sample-audio.wav"].body.byteLength,
+            sizeBytes: assetSize("sample-audio.wav"),
             durationMs: 2_000,
           },
         },
@@ -362,7 +369,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             label: "sample-audio-secondary.wav",
             mimeType: "audio/wav",
             url: fixtureUrl("sample-audio-secondary.wav"),
-            sizeBytes: assets["sample-audio-secondary.wav"].body.byteLength,
+            sizeBytes: assetSize("sample-audio-secondary.wav"),
             durationMs: 2_000,
           },
         },
@@ -380,7 +387,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             label: "sample-video.mp4",
             mimeType: "video/mp4",
             url: fixtureUrl("sample-video.mp4"),
-            sizeBytes: assets["sample-video.mp4"].body.byteLength,
+            sizeBytes: assetSize("sample-video.mp4"),
             durationMs: 1_500,
             width: 640,
             height: 360,
@@ -393,7 +400,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             label: "renewing-ticket-video.mp4",
             mimeType: "video/mp4",
             url: `${RENEWING_MEDIA_FIXTURE_ROOT}sample-video.mp4`,
-            sizeBytes: assets["sample-video.mp4"].body.byteLength,
+            sizeBytes: assetSize("sample-video.mp4"),
             durationMs: 1_500,
             width: 640,
             height: 360,
@@ -572,7 +579,7 @@ export function createChatAttachmentFixturePlugin(): Plugin {
         }
         if (pathname.startsWith(MANAGED_IMAGE_FIXTURE_PATH)) {
           const fileName = pathname.slice(MANAGED_IMAGE_FIXTURE_PATH.length).split("/", 1)[0];
-          if (getChatAttachmentAssets()[fileName]?.contentType.startsWith("image/")) {
+          if (fileName && getChatAttachmentAssets()[fileName]?.contentType.startsWith("image/")) {
             serveFixtureAsset(fileName, req, res, next);
             return;
           }

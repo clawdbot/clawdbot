@@ -33,7 +33,11 @@ import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachmen
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
-import { loadDocumentFramePreview } from "./chat-message-document-preview.ts";
+import {
+  loadDocumentFramePreview,
+  renderAttachmentDocumentPreview,
+  resolveDocumentPreviewText,
+} from "./chat-message-document-preview.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
@@ -56,6 +60,11 @@ function renderSidebarAttachment(
   const extension = content.title.split(".").pop()?.toLowerCase() ?? "";
   const isHtml = mimeType === "text/html" || extension === "html" || extension === "htm";
   const isPdf = mimeType === "application/pdf" || extension === "pdf";
+  const isDelimited =
+    mimeType === "text/csv" ||
+    mimeType === "text/tab-separated-values" ||
+    extension === "csv" ||
+    extension === "tsv";
   if (!src) {
     return html`<div class="sidebar-attachment-preview__unavailable">
       ${t("chat.attachments.previewUnavailable")}
@@ -90,17 +99,44 @@ function renderSidebarAttachment(
   if (content.attachmentKind === "image" || mimeType.startsWith("image/")) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
   }
+  if (isDelimited && isSameOriginAttachmentHref(src, window.location.href)) {
+    const sourceIdentity = content.sourceIdentity ?? content.src ?? src;
+    const previewText = resolveDocumentPreviewText(
+      src,
+      sourceIdentity,
+      source?.sizeBytes ?? content.sizeBytes,
+      onRequestUpdate,
+      "full",
+    );
+    if (previewText !== null) {
+      return renderAttachmentDocumentPreview(
+        "table",
+        {
+          kind: "document",
+          label: content.title,
+          mimeType: content.mimeType ?? undefined,
+          url: sourceIdentity,
+        },
+        src,
+        previewText,
+        undefined,
+        "full",
+      );
+    }
+  }
   const canFrame =
-    mimeType.startsWith("text/") ||
-    mimeType === "application/json" ||
-    mimeType === "application/pdf" ||
-    ["csv", "htm", "html", "js", "json", "md", "pdf", "txt"].includes(extension);
+    !isDelimited &&
+    (mimeType.startsWith("text/") ||
+      mimeType === "application/json" ||
+      mimeType === "application/pdf" ||
+      ["htm", "html", "js", "json", "md", "pdf", "txt"].includes(extension));
   if (canFrame && isSameOriginAttachmentHref(src, window.location.href)) {
     const frameState = loadDocumentFramePreview(
       src,
       content.sourceIdentity ?? content.src ?? src,
       onRequestUpdate,
       isHtml,
+      source?.sizeBytes ?? content.sizeBytes,
     );
     if (typeof frameState === "object") {
       return html`<iframe

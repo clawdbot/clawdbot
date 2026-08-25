@@ -100,6 +100,7 @@ type RenderMessageGroupOptions = {
   showAssistantAvatar?: boolean;
   resourceBasePath?: string;
   localMediaPreviewRoots?: readonly string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -184,6 +185,7 @@ function buildGroupedMessageRenderOptions(
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     resourceBasePath: opts.resourceBasePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    connectionEpoch: opts.connectionEpoch,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,

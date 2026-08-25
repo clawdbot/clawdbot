@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import {
   parseAttachmentDelimitedPreview,
-  parseDelimitedPreview,
   renderAttachmentDocumentPreview,
   resolveDocumentPreviewKind,
 } from "./chat-message-document-preview.ts";
@@ -50,10 +49,7 @@ function stubPreviewIntersection(): () => Promise<void> {
     if (!callback) {
       throw new Error("No attachment preview is waiting for viewport intersection");
     }
-    callback(
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
+    callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
   };
 }
 
@@ -72,7 +68,10 @@ describe("parseDelimitedPreview", () => {
 
   it("bounds columns and total cells for a wide CSV row", () => {
     const wideRow = Array.from({ length: 8_192 }, () => "x").join(",");
-    const preview = parseDelimitedPreview(Array.from({ length: 8 }, () => wideRow).join("\n"));
+    const preview = parseAttachmentDelimitedPreview(
+      Array.from({ length: 8 }, () => wideRow).join("\n"),
+      documentAttachment("wide.csv", "text/csv").attachment,
+    );
     const cellCount = preview.rows.reduce((total, row) => total + row.length, 0);
 
     expect(Math.max(...preview.rows.map((row) => row.length))).toBeLessThanOrEqual(24);
@@ -103,6 +102,26 @@ describe("parseDelimitedPreview", () => {
     expect(tableWrap?.hasAttribute("data-right-truncated")).toBe(true);
     expect(tableWrap?.hasAttribute("data-bottom-truncated")).toBe(true);
     expect(container.textContent).not.toContain("Preview truncated");
+  });
+
+  it("refuses a partial Files table when its safe cell budget is exceeded", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const oversizedCsv = Array.from({ length: 4_097 }, (_, row) => String(row)).join("\n");
+
+    render(
+      renderAttachmentDocumentPreview(
+        "table",
+        documentAttachment("oversized.csv", "text/csv").attachment,
+        "https://example.com/oversized.csv",
+        oversizedCsv,
+        undefined,
+        "full",
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
+    expect(container.textContent).toContain("Preview unavailable");
   });
 
   it("loads a CSV preview only when its card reaches the viewport", async () => {
@@ -145,6 +164,125 @@ describe("parseDelimitedPreview", () => {
     ["brief.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
   ])("keeps %s as a compact document card", (label, mimeType) => {
     expect(resolveDocumentPreviewKind({ label, mimeType })).toBeNull();
+  });
+
+  it("places the HTML preview CSP in the real head despite hostile head-like text", async () => {
+    const intersectPreview = stubPreviewIntersection();
+    const hostileHtml =
+      '<!-- <head><img src="https://leak.example/comment.png"></head> -->' +
+      '<html data-fake="<head>"><img src="https://leak.example/before-head.png">' +
+      "<head><title>Hostile preview</title></head><body>safe</body></html>";
+    let previewBlob: Blob | undefined;
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn((object: Blob | MediaSource) => {
+          if (object instanceof Blob) {
+            previewBlob = object;
+          }
+          return "blob:hostile-html-preview";
+        });
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(hostileHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } }),
+      ) as unknown as typeof fetch,
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const attachment = documentAttachment(
+      "hostile.html",
+      "text/html",
+      "/__openclaw__/media/hostile.html",
+    );
+    const rerender = () =>
+      render(
+        renderAssistantAttachments([attachment], { onRequestUpdate: rerender }, undefined, vi.fn()),
+        container,
+      );
+    subscribers.add(rerender);
+    rerender();
+
+    await intersectPreview();
+    await vi.waitFor(() => expect(previewBlob).toBeDefined());
+
+    const serialized = await previewBlob!.text();
+    const parsed = new DOMParser().parseFromString(serialized, "text/html");
+    const policy = parsed.head.firstElementChild;
+    expect(policy?.tagName).toBe("META");
+    expect(policy?.getAttribute("http-equiv")).toBe("Content-Security-Policy");
+    expect(policy?.getAttribute("content")).toContain("default-src 'none'");
+    expect(serialized.indexOf("Content-Security-Policy")).toBeLessThan(
+      serialized.indexOf("https://leak.example/before-head.png"),
+    );
+  });
+
+  it("keeps a known oversized HTML attachment compact without fetching it", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.body.appendChild(document.createElement("div"));
+    const attachment = documentAttachment(
+      "oversized.html",
+      "text/html",
+      "/__openclaw__/media/oversized.html",
+    );
+    attachment.attachment.sizeBytes = 256 * 1024 + 1;
+
+    render(renderAssistantAttachments([attachment], {}, undefined, vi.fn()), container);
+
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+    expect(container.querySelector("openclaw-chat-document-preview")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a PDF whose Content-Length exceeds the preview budget", async () => {
+    const intersectPreview = stubPreviewIntersection();
+    const cancel = vi.fn();
+    const createObjectURL = vi.fn();
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new ReadableStream({ cancel }), {
+            headers: {
+              "Content-Length": String(256 * 1024 + 1),
+              "Content-Type": "application/pdf",
+            },
+          }),
+      ) as unknown as typeof fetch,
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const attachment = documentAttachment(
+      "oversized.pdf",
+      "application/pdf",
+      "/__openclaw__/media/oversized.pdf",
+    );
+    const rerender = () =>
+      render(
+        renderAssistantAttachments([attachment], { onRequestUpdate: rerender }, undefined, vi.fn()),
+        container,
+      );
+    subscribers.add(rerender);
+    rerender();
+
+    await intersectPreview();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(createObjectURL).not.toHaveBeenCalled();
   });
 
   it.each([

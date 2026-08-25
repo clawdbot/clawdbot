@@ -2,10 +2,7 @@ const CHAT_ATTACHMENT_VIEWPORT_MARGIN = "240px 0px";
 
 // Start bounded preview work just before the card enters view so decoded media
 // is ready without doing attachment-body work for the whole transcript.
-export function observeChatAttachmentViewport(
-  element: Element,
-  onVisible: () => void,
-): () => void {
+export function observeChatAttachmentViewport(element: Element, onVisible: () => void): () => void {
   if (typeof IntersectionObserver !== "function") {
     onVisible();
     return () => undefined;

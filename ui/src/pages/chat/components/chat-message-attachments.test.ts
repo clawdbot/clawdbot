@@ -29,6 +29,27 @@ async function flushAttachmentResolution() {
 
 const subscribers = new Set<() => void>();
 
+function stubAttachmentIntersection(): () => Promise<void> {
+  const callbacks: IntersectionObserverCallback[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: IntersectionObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  return async () => {
+    await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
+    callbacks.shift()?.(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    );
+  };
+}
+
 afterEach(() => {
   for (const subscriber of subscribers) {
     releaseChatMediaResourceSubscriber(subscriber);
@@ -70,9 +91,11 @@ describe("attachment sidebar source ownership", () => {
   });
 
   it("loads SVG attachments through an image object URL", async () => {
+    const intersectAttachment = stubAttachmentIntersection();
     const source = "https://example.com/vector.svg";
     const objectUrl = "blob:svg-attachment";
     let objectBlob: Blob | undefined;
+    const revokeObjectURL = vi.fn();
     const NativeUrl = URL;
     vi.stubGlobal(
       "URL",
@@ -83,13 +106,14 @@ describe("attachment sidebar source ownership", () => {
           }
           return objectUrl;
         });
-        static override revokeObjectURL = vi.fn();
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      new Response('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>', {
-        headers: { "Content-Type": "image/svg+xml" },
-      }),
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>', {
+          headers: { "Content-Type": "image/svg+xml" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const container = document.body.appendChild(document.createElement("div"));
@@ -112,6 +136,9 @@ describe("attachment sidebar source ownership", () => {
       container,
     );
 
+    expect(fetchMock).not.toHaveBeenCalled();
+    await intersectAttachment();
+
     await vi.waitFor(() =>
       expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(
         objectUrl,
@@ -131,6 +158,99 @@ describe("attachment sidebar source ownership", () => {
     expect(onOpenImage).toHaveBeenCalledWith(
       expect.objectContaining({ src: objectUrl, title: "vector.svg" }),
     );
+    const lightboxItem = onOpenImage.mock.calls[0]?.[0] as { release?: () => void } | undefined;
+    expect(lightboxItem?.release).toBeTypeOf("function");
+    container.remove();
+    expect(revokeObjectURL).not.toHaveBeenCalledWith(objectUrl);
+    lightboxItem?.release?.();
+    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+  });
+
+  it("keeps a known oversized SVG compact without fetching it", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "oversized.svg",
+              mimeType: "image/svg+xml",
+              sizeBytes: 256 * 1024 + 1,
+              url: "https://example.com/oversized.svg",
+            },
+          },
+        ],
+        {},
+        undefined,
+        vi.fn(),
+      ),
+      container,
+    );
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels one oversized SVG chunk without creating an object URL", async () => {
+    const intersectAttachment = stubAttachmentIntersection();
+    const cancel = vi.fn();
+    const createObjectURL = vi.fn();
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array(256 * 1024 + 1));
+              },
+              cancel,
+            }),
+            { headers: { "Content-Type": "image/svg+xml" } },
+          ),
+      ) as unknown as typeof fetch,
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "chunked.svg",
+              mimeType: "image/svg+xml",
+              url: "https://example.com/chunked.svg",
+            },
+          },
+        ],
+        {},
+        undefined,
+        vi.fn(),
+      ),
+      container,
+    );
+
+    await intersectAttachment();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(createObjectURL).not.toHaveBeenCalled();
   });
 
   it("falls back to a compact file card when an SVG image cannot render", async () => {
@@ -144,8 +264,8 @@ describe("attachment sidebar source ownership", () => {
     );
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>(async () =>
-        new Response("<svg><broken", { headers: { "Content-Type": "image/svg+xml" } }),
+      vi.fn<typeof fetch>(
+        async () => new Response("<svg><broken", { headers: { "Content-Type": "image/svg+xml" } }),
       ),
     );
     const container = document.body.appendChild(document.createElement("div"));
@@ -181,9 +301,9 @@ describe("attachment sidebar source ownership", () => {
       expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
     );
     expect(container.querySelector("img.chat-message-image")).toBeNull();
-    expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toContain(
-      "broken.svg",
-    );
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__title")?.textContent,
+    ).toContain("broken.svg");
     container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
     expect(onOpenSidebar).toHaveBeenCalledOnce();
   });
@@ -269,7 +389,7 @@ describe("attachment sidebar source ownership", () => {
       render(
         renderAssistantAttachments(
           [managedAttachment(source, artifactId)],
-          { onRequestUpdate: transcriptUpdate, resolveArtifactDownload },
+          { connectionEpoch: 1, onRequestUpdate: transcriptUpdate, resolveArtifactDownload },
           undefined,
           (content) => {
             if (content.kind === "attachment") {
@@ -291,6 +411,7 @@ describe("attachment sidebar source ownership", () => {
     const sidebarUpdate = vi.fn();
     subscribers.add(sidebarUpdate);
     const runtime = {
+      connectionEpoch: 1,
       localMediaPreviewRoots: [],
       resolveArtifactDownload,
     };
@@ -300,6 +421,100 @@ describe("attachment sidebar source ownership", () => {
     expect(sidebarUpdate).toHaveBeenCalled();
     expect(sidebarContent?.resolveSource?.(sidebarUpdate, runtime)?.src).toBe(renewedTicket);
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    container.remove();
+  });
+
+  it("resolves an open managed sidebar attachment again after the connection epoch changes", async () => {
+    const attachmentId = crypto.randomUUID();
+    const artifactId = `artifact_managed_video_${attachmentId}`;
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const firstTicket = `${source}?mediaTicket=authority-A`;
+    const secondTicket = `${source}?mediaTicket=authority-B`;
+    const firstResolver = vi.fn(async () => ({ url: firstTicket }));
+    const secondResolver = vi.fn(async () => ({ url: secondTicket }));
+    const container = document.body.appendChild(document.createElement("div"));
+    let sidebarContent: AttachmentSidebarContent | undefined;
+    const transcriptUpdate = () => rerender();
+    const rerender = () =>
+      render(
+        renderAssistantAttachments(
+          [managedAttachment(source, artifactId)],
+          {
+            connectionEpoch: 1,
+            onRequestUpdate: transcriptUpdate,
+            resolveArtifactDownload: firstResolver,
+          },
+          undefined,
+          (content) => {
+            if (content.kind === "attachment") {
+              sidebarContent = content;
+            }
+          },
+        ),
+        container,
+      );
+    subscribers.add(transcriptUpdate);
+
+    rerender();
+    await flushAttachmentResolution();
+    rerender();
+    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+
+    const sidebarUpdate = vi.fn();
+    subscribers.add(sidebarUpdate);
+    expect(
+      sidebarContent?.resolveSource?.(sidebarUpdate, {
+        connectionEpoch: 1,
+        localMediaPreviewRoots: [],
+        resolveArtifactDownload: firstResolver,
+      })?.src,
+    ).toBe(firstTicket);
+    expect(
+      sidebarContent?.resolveSource?.(sidebarUpdate, {
+        connectionEpoch: 2,
+        localMediaPreviewRoots: [],
+        resolveArtifactDownload: secondResolver,
+      }),
+    ).toBeNull();
+    await flushAttachmentResolution();
+
+    expect(
+      sidebarContent?.resolveSource?.(sidebarUpdate, {
+        connectionEpoch: 2,
+        localMediaPreviewRoots: [],
+        resolveArtifactDownload: secondResolver,
+      })?.src,
+    ).toBe(secondTicket);
+    expect(secondResolver).toHaveBeenCalledOnce();
+    container.remove();
+  });
+
+  it("keeps data URL audio playable without offering a dead-end Files action", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "audio",
+              label: "inline.wav",
+              mimeType: "audio/wav",
+              url: "data:audio/wav;base64,UklGRg==",
+            },
+          },
+        ],
+        {},
+        undefined,
+        onOpenSidebar,
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
+    expect(onOpenSidebar).not.toHaveBeenCalled();
     container.remove();
   });
 

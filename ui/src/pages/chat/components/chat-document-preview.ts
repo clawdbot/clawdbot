@@ -60,6 +60,7 @@ class ChatDocumentPreview extends OpenClawLightDomContentsElement {
       this.attachment.url,
       this.requestPreviewUpdate,
       this.previewKind === "html",
+      this.sizeBytes,
     );
   }
 
@@ -99,6 +100,7 @@ class ChatDocumentPreview extends OpenClawLightDomContentsElement {
             this.attachment.url,
             this.requestPreviewUpdate,
             this.previewKind === "html",
+            this.sizeBytes,
           )
         : undefined;
     return html`<div class="chat-document-preview" ${ref(this.setViewportElement)}>

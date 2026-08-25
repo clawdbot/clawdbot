@@ -7,6 +7,7 @@ import {
   observeChatMediaResource,
   type AttachmentItem,
 } from "./chat-message-media.ts";
+import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const DOCUMENT_PREVIEW_MAX_BYTES = 256 * 1024;
 const DOCUMENT_PREVIEW_MAX_CHARS = 16 * 1024;
@@ -15,6 +16,9 @@ const DOCUMENT_PREVIEW_MAX_COLUMNS = 24;
 const DOCUMENT_PREVIEW_MAX_CELLS = 128;
 const DOCUMENT_PREVIEW_VISIBLE_ROWS = 4;
 const DOCUMENT_PREVIEW_VISIBLE_COLUMNS = 8;
+const DOCUMENT_PANEL_MAX_ROWS = 4_096;
+const DOCUMENT_PANEL_MAX_COLUMNS = 256;
+const DOCUMENT_PANEL_MAX_CELLS = 4_096;
 const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
 const HTML_PREVIEW_CONTENT_SECURITY_POLICY =
   "default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -48,7 +52,29 @@ export type DelimitedPreview = {
   truncated: boolean;
 };
 
-export function parseDelimitedPreview(text: string, delimiter: "," | "\t" = ","): DelimitedPreview {
+type DelimitedPreviewLimits = {
+  maxRows: number;
+  maxColumns: number;
+  maxCells: number;
+};
+
+const COMPACT_DELIMITED_PREVIEW_LIMITS: DelimitedPreviewLimits = {
+  maxRows: DOCUMENT_PREVIEW_MAX_ROWS,
+  maxColumns: DOCUMENT_PREVIEW_MAX_COLUMNS,
+  maxCells: DOCUMENT_PREVIEW_MAX_CELLS,
+};
+
+const FULL_DELIMITED_PREVIEW_LIMITS: DelimitedPreviewLimits = {
+  maxRows: DOCUMENT_PANEL_MAX_ROWS,
+  maxColumns: DOCUMENT_PANEL_MAX_COLUMNS,
+  maxCells: DOCUMENT_PANEL_MAX_CELLS,
+};
+
+function parseDelimitedPreview(
+  text: string,
+  delimiter: "," | "\t",
+  limits: DelimitedPreviewLimits,
+): DelimitedPreview {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -56,7 +82,7 @@ export function parseDelimitedPreview(text: string, delimiter: "," | "\t" = ",")
   let quoted = false;
   let truncated = false;
   const commitCell = () => {
-    if (row.length < DOCUMENT_PREVIEW_MAX_COLUMNS && cellCount < DOCUMENT_PREVIEW_MAX_CELLS) {
+    if (row.length < limits.maxColumns && cellCount < limits.maxCells) {
       row.push(cell.trim());
       cellCount += 1;
     } else {
@@ -72,14 +98,14 @@ export function parseDelimitedPreview(text: string, delimiter: "," | "\t" = ",")
     row = [];
   };
   let index = 0;
-  for (; index < text.length && rows.length < DOCUMENT_PREVIEW_MAX_ROWS; index += 1) {
-    if (cellCount >= DOCUMENT_PREVIEW_MAX_CELLS) {
+  for (; index < text.length && rows.length < limits.maxRows; index += 1) {
+    if (cellCount >= limits.maxCells) {
       break;
     }
     const character = text[index];
     if (character === '"') {
       if (quoted && text[index + 1] === '"') {
-        if (row.length < DOCUMENT_PREVIEW_MAX_COLUMNS) {
+        if (row.length < limits.maxColumns) {
           cell += '"';
         }
         index += 1;
@@ -99,14 +125,14 @@ export function parseDelimitedPreview(text: string, delimiter: "," | "\t" = ",")
       commitRow();
       continue;
     }
-    if (row.length < DOCUMENT_PREVIEW_MAX_COLUMNS) {
+    if (row.length < limits.maxColumns) {
       cell += character;
     }
   }
   if (index < text.length) {
     truncated = true;
   }
-  if ((cell.length > 0 || row.length > 0) && rows.length < DOCUMENT_PREVIEW_MAX_ROWS) {
+  if ((cell.length > 0 || row.length > 0) && rows.length < limits.maxRows) {
     commitRow();
   }
   return { rows, truncated };
@@ -116,25 +142,31 @@ export function parseAttachmentDelimitedPreview(
   text: string,
   attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
 ): DelimitedPreview {
+  return parseAttachmentDelimitedText(text, attachment, COMPACT_DELIMITED_PREVIEW_LIMITS);
+}
+
+function parseAttachmentDelimitedText(
+  text: string,
+  attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
+  limits: DelimitedPreviewLimits,
+): DelimitedPreview {
   const extension = getMediaFileExtension(attachment.label);
   const mimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   return parseDelimitedPreview(
     text,
     extension === "tsv" || mimeType === "text/tab-separated-values" ? "\t" : ",",
+    limits,
   );
 }
 
 function blockHtmlPreviewNetwork(documentText: string): string {
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CONTENT_SECURITY_POLICY}">`;
-  const head = /<head(?:\s[^>]*)?>/iu.exec(documentText);
-  if (head) {
-    return documentText.replace(head[0], `${head[0]}${policy}`);
-  }
-  const root = /<html(?:\s[^>]*)?>/iu.exec(documentText);
-  if (root) {
-    return documentText.replace(root[0], `${root[0]}<head>${policy}</head>`);
-  }
-  return `<head>${policy}</head>${documentText}`;
+  const parsed = new DOMParser().parseFromString(documentText, "text/html");
+  const policy = parsed.createElement("meta");
+  policy.httpEquiv = "Content-Security-Policy";
+  policy.content = HTML_PREVIEW_CONTENT_SECURITY_POLICY;
+  parsed.head.prepend(policy);
+  const doctype = parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : "<!DOCTYPE html>";
+  return `${doctype}\n${parsed.documentElement.outerHTML}`;
 }
 
 async function fetchDocumentPreviewObjectUrl(
@@ -152,12 +184,15 @@ async function fetchDocumentPreviewObjectUrl(
     await response.body?.cancel().catch(() => undefined);
     return null;
   }
-  if (!blockNetwork) {
-    return URL.createObjectURL(await response.blob());
+  const bytes = await readResponseBytesWithinLimit(response, DOCUMENT_PREVIEW_MAX_BYTES);
+  if (!bytes) {
+    return null;
   }
-  return URL.createObjectURL(
-    new Blob([blockHtmlPreviewNetwork(await response.text())], { type: "text/html" }),
-  );
+  const contentType =
+    response.headers.get("Content-Type")?.split(";", 1)[0]?.trim() ||
+    (blockNetwork ? "text/html" : "application/octet-stream");
+  const body = blockNetwork ? blockHtmlPreviewNetwork(new TextDecoder().decode(bytes)) : bytes;
+  return URL.createObjectURL(new Blob([body], { type: contentType }));
 }
 
 function documentFramePreviewCacheKey(source: string, blockNetwork: boolean): string {
@@ -169,7 +204,11 @@ export function resolveDocumentFramePreviewState(
   sourceIdentity: string,
   onRequestUpdate: (() => void) | undefined,
   blockNetwork = false,
+  sizeBytes?: number,
 ): DocumentFramePreviewState {
+  if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
+    return "failed";
+  }
   return observeChatMediaResource<DocumentFramePreviewState>(
     "document-frame",
     documentFramePreviewCacheKey(attachmentUrl, blockNetwork),
@@ -242,13 +281,18 @@ export function loadDocumentFramePreview(
   sourceIdentity: string,
   onRequestUpdate: (() => void) | undefined,
   blockNetwork = false,
+  sizeBytes?: number,
 ): DocumentFramePreviewState {
+  if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
+    return "failed";
+  }
   return startDocumentFramePreview(source, sourceIdentity, onRequestUpdate, blockNetwork).value;
 }
 
 function renderAttachmentTablePreview(
   attachment: AttachmentItem["attachment"],
   previewText: string | null | undefined,
+  display: "compact" | "full",
 ) {
   if (previewText === undefined) {
     return html`<div class="chat-assistant-attachment-card__preview-unavailable">
@@ -256,17 +300,22 @@ function renderAttachmentTablePreview(
     </div>`;
   }
   const preview = previewText
-    ? parseAttachmentDelimitedPreview(previewText, attachment)
+    ? parseAttachmentDelimitedText(
+        previewText,
+        attachment,
+        display === "full" ? FULL_DELIMITED_PREVIEW_LIMITS : COMPACT_DELIMITED_PREVIEW_LIMITS,
+      )
     : { rows: [], truncated: false };
   const { rows } = preview;
-  if (rows.length === 0) {
+  if (rows.length === 0 || (display === "full" && preview.truncated)) {
     return html`<div class="chat-assistant-attachment-card__preview-unavailable">
       ${t("chat.attachments.previewUnavailable")}
     </div>`;
   }
   const columnCount = Math.max(...rows.map((row) => row.length));
-  const visibleColumnCount = Math.min(columnCount, DOCUMENT_PREVIEW_VISIBLE_COLUMNS);
-  const visibleRows = rows.slice(0, DOCUMENT_PREVIEW_VISIBLE_ROWS);
+  const visibleColumnCount =
+    display === "full" ? columnCount : Math.min(columnCount, DOCUMENT_PREVIEW_VISIBLE_COLUMNS);
+  const visibleRows = display === "full" ? rows : rows.slice(0, DOCUMENT_PREVIEW_VISIBLE_ROWS);
   const alwaysTruncated =
     preview.truncated ||
     rows.length > DOCUMENT_PREVIEW_VISIBLE_ROWS ||
@@ -277,10 +326,11 @@ function renderAttachmentTablePreview(
   return html`
     <div
       class="chat-assistant-attachment-card__table-wrap"
-      ?data-right-truncated=${alwaysTruncated}
-      ?data-bottom-truncated=${bottomTruncated}
-      ?data-medium-truncated=${mediumTruncated}
-      ?data-narrow-truncated=${narrowTruncated}
+      data-display=${display}
+      ?data-right-truncated=${display === "compact" && alwaysTruncated}
+      ?data-bottom-truncated=${display === "compact" && bottomTruncated}
+      ?data-medium-truncated=${display === "compact" && mediumTruncated}
+      ?data-narrow-truncated=${display === "compact" && narrowTruncated}
     >
       <table class="chat-assistant-attachment-card__table">
         <thead>
@@ -314,6 +364,7 @@ export function renderAttachmentDocumentPreview(
   attachmentUrl: string,
   previewText: string | null | undefined,
   framePreviewState: DocumentFramePreviewState,
+  display: "compact" | "full" = "compact",
 ) {
   const frameSource = typeof framePreviewState === "object" ? framePreviewState.src : null;
   if (previewKind === "html") {
@@ -337,7 +388,7 @@ export function renderAttachmentDocumentPreview(
     </div>`;
   }
   if (previewKind === "table") {
-    return renderAttachmentTablePreview(attachment, previewText);
+    return renderAttachmentTablePreview(attachment, previewText, display);
   }
   const previewUrl = `${frameSource ?? attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">
@@ -364,44 +415,27 @@ function capPreviewText(text: string): string {
     : text;
 }
 
-// Reads at most the preview budget from the body and cancels the rest so an
-// unknown-size or endless text attachment cannot buffer fully just by rendering.
-async function readBoundedPreviewText(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return capPreviewText(await response.text());
+async function readBoundedPreviewText(
+  response: Response,
+  display: "compact" | "full",
+): Promise<string | null> {
+  const bytes = await readResponseBytesWithinLimit(response, DOCUMENT_PREVIEW_MAX_BYTES);
+  if (!bytes) {
+    return null;
   }
-  const decoder = new TextDecoder();
-  let text = "";
-  try {
-    while (text.length <= DOCUMENT_PREVIEW_MAX_CHARS) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return capPreviewText(text + decoder.decode());
-      }
-      // Slice before decoding: a blob/misbehaving source can deliver one giant
-      // chunk, and UTF-8 spends at most 4 bytes per char, so this byte budget
-      // still yields enough chars to exit the loop. A partial trailing code
-      // point stays pending in the decoder and is discarded with the cancel.
-      const remainingChars = DOCUMENT_PREVIEW_MAX_CHARS + 1 - text.length;
-      const bounded =
-        value.byteLength > remainingChars * 4 ? value.subarray(0, remainingChars * 4) : value;
-      text += decoder.decode(bounded, { stream: true });
-    }
-  } finally {
-    void reader.cancel().catch(() => {});
-  }
-  return capPreviewText(text);
+  const text = new TextDecoder().decode(bytes);
+  return display === "compact" ? capPreviewText(text) : text;
 }
 
 function observeDocumentPreviewText(
   attachmentUrl: string,
   sourceIdentity: string,
   onRequestUpdate: (() => void) | undefined,
+  display: "compact" | "full",
 ) {
   return observeChatMediaResource<string | null>(
     "document-preview",
-    attachmentUrl,
+    `${attachmentUrl}::${display}`,
     onRequestUpdate,
     sourceIdentity,
   );
@@ -415,7 +449,7 @@ export function peekDocumentPreviewText(
   if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
     return null;
   }
-  return observeDocumentPreviewText(attachmentUrl, sourceIdentity, undefined).value;
+  return observeDocumentPreviewText(attachmentUrl, sourceIdentity, undefined, "compact").value;
 }
 
 export function resolveDocumentPreviewText(
@@ -423,11 +457,17 @@ export function resolveDocumentPreviewText(
   sourceIdentity: string,
   sizeBytes: number | undefined,
   onRequestUpdate: (() => void) | undefined,
+  display: "compact" | "full" = "compact",
 ): string | null | undefined {
   if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
     return null;
   }
-  const resource = observeDocumentPreviewText(attachmentUrl, sourceIdentity, onRequestUpdate);
+  const resource = observeDocumentPreviewText(
+    attachmentUrl,
+    sourceIdentity,
+    onRequestUpdate,
+    display,
+  );
   if (resource.value !== undefined) {
     return resource.value;
   }
@@ -454,7 +494,7 @@ export function resolveDocumentPreviewText(
         resource.value = null;
         return null;
       }
-      const preview = await readBoundedPreviewText(response);
+      const preview = await readBoundedPreviewText(response, display);
       if (!isChatMediaResourceCurrent(resource)) {
         return null;
       }

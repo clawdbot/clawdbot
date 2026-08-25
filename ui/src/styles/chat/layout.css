@@ -1469,7 +1469,7 @@ openclaw-chat-video-player {
 }
 
 .chat-assistant-attachment-card[data-openable] {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 :root[data-theme-mode="light"] .chat-assistant-attachment-card:hover {
@@ -1571,16 +1571,13 @@ openclaw-chat-video-player {
 
 .chat-assistant-attachment-card__title,
 .chat-assistant-attachment-card__link {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
   text-decoration: none;
-}
-
-.chat-assistant-attachment-card__title {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
