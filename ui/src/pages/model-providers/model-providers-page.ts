@@ -70,7 +70,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultModelSelection | null = null;
   @state() private selectedAgentId = "";
-
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
   // Null Task runs supersede stale work without counting as a real load.
@@ -108,6 +107,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.loadClient !== null,
     reload: () => void this.refresh({ force: false }),
+    onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -153,6 +153,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
+    this.refreshPolicy.dispose();
     super.disconnectedCallback();
   }
 
@@ -202,7 +203,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
     this.data = data;
     this.dataClient = client;
-    this.refreshPolicy.setLastLoadedAtMs(data.providerUsage?.ok ? data.updatedAt : null);
+    this.refreshPolicy.markProviderUsage(data.providerUsage, data.updatedAt, this.gateway.epoch);
   }
 
   private invalidateRequests() {
@@ -277,6 +278,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!this.gateway.connected || !client) {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
+    }
+    if (opts.force) {
+      this.refreshPolicy.resetPayload();
     }
     this.loadClient = client;
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
@@ -603,11 +607,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const modelBehavior = readModelBehaviorConfig(agentsDefaults);
     // This keeps the pre-move General busy gate sourced from the same update state.
-    const configBusy = this.configBusy();
-    const providerUsage = data.providerUsage?.ok ? data.providerUsage.value : null;
     const cards = buildModelProviderCards({
       ...data,
-      providerUsage,
+      providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
       configProviderIds: config.providerIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
@@ -619,8 +621,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         .map((provider) => provider.provider) ?? []),
     ]);
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
-    const blockedReason = this.mutationBlockedReason();
-    const configuredModels = buildSelectableDefaultModels(data.models, defaults);
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
@@ -631,18 +631,19 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,
       cards,
-      configuredModels,
+      configuredModels: buildSelectableDefaultModels(data.models, defaults),
       defaultModels: defaults,
       defaultModelsDirty: this.defaultsDraft !== null,
       ...modelBehavior,
-      configBusy,
+      configBusy: this.configBusy(),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         data.authStatus?.providerCapabilities,
         configuredProviderIds,
       ),
       canMutate: this.canMutate(),
-      mutationBlockedReason: blockedReason,
+      mutationBlockedReason: this.mutationBlockedReason(),
+      providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
       busy: this.busy,
       messages: this.messages,
