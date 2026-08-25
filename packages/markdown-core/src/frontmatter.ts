@@ -113,7 +113,7 @@ function normalizeFreeformFieldAtError(block: string): string {
     return block;
   }
   const rawValue = match?.[4]?.trim();
-  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue) || !/: /.test(rawValue)) {
+  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue) || !rawValue.includes(": ")) {
     return block;
   }
   const replacement = `${keyName}: ${JSON.stringify(stripQuotes(rawValue))}`;
