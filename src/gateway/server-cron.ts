@@ -8,6 +8,7 @@ import {
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { getAvailablePreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
+import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -775,7 +776,7 @@ export function buildGatewayCronService(params: {
 
   // Cron job changes flip session automation badges; push refreshed rows so
   // subscribed session lists update without waiting for unrelated session events.
-  const broadcastCronBoundSessionChanges = (evt: CronEvent) => {
+  const broadcastCronBoundSessionChanges = async (evt: CronEvent) => {
     const job = evt.job ?? cron.getJob(evt.jobId);
     if (!job) {
       return;
@@ -791,7 +792,24 @@ export function buildGatewayCronService(params: {
       const sessionAgentId =
         parseAgentSessionKey(sessionKey)?.agentId ??
         normalizeAgentId(job.agentId ?? cron.getDefaultAgentId());
-      const modelCatalog = getAvailablePreparedModelCatalogSnapshot({
+      let modelCatalog:
+        | Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>
+        | undefined;
+      const gatewayContext =
+        job.sessionTarget === "isolated"
+          ? getInProcessGatewayToolContext()
+          : (getInProcessGatewayToolContext() ?? params.resolveGatewayContext?.());
+      if (gatewayContext) {
+        try {
+          modelCatalog = await gatewayContext.loadGatewayModelCatalog({ agentId: sessionAgentId });
+        } catch (error) {
+          cronLogger.warn(
+            { err: formatErrorMessage(error), agentId: sessionAgentId },
+            "cron: failed to load model catalog for session event",
+          );
+        }
+      }
+      modelCatalog ??= getAvailablePreparedModelCatalogSnapshot({
         agentId: sessionAgentId,
         config: getRuntimeConfig(),
       })?.entries;
@@ -1179,7 +1197,7 @@ export function buildGatewayCronService(params: {
       runCronChangedHook(hookEvt);
       // Re-arm / cancel scheduler-owned process watchers when the job set changes.
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
-        broadcastCronBoundSessionChanges(evt);
+        void broadcastCronBoundSessionChanges(evt);
         void reconcileExitWatchers();
         // cron.update and cron.add (including declarative convergence) route
         // lifecycle after the mutation. Ignoring state-only update events keeps
@@ -1202,7 +1220,7 @@ export function buildGatewayCronService(params: {
         // Fully deleted jobs emit their own "removed" event instead.
         const finishedJob = evt.job ?? cron.getJob(evt.jobId);
         if (finishedJob?.enabled === false) {
-          broadcastCronBoundSessionChanges(evt);
+          void broadcastCronBoundSessionChanges(evt);
           void routeStreamWatcherMutation(evt.jobId, finishedJob, "finished").catch(
             (err: unknown) => {
               cronLogger.warn(
