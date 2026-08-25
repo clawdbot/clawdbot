@@ -9,7 +9,7 @@ import { truncateUtf16Safe } from "../utils.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
-const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
+const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost", "blocked"]);
 /** Window for showing recently completed tasks in compact status output. */
 const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 const TASK_STATUS_TITLE_MAX_CHARS = 80;
@@ -19,8 +19,14 @@ function isActiveTask(task: TaskRecord): boolean {
   return ACTIVE_TASK_STATUSES.has(task.status);
 }
 
-function isFailureTask(task: TaskRecord): boolean {
-  return FAILURE_TASK_STATUSES.has(task.status);
+export function formatTaskStatus(task: Pick<TaskRecord, "status" | "terminalOutcome">) {
+  return task.status === "succeeded" && task.terminalOutcome === "blocked"
+    ? "blocked"
+    : task.status;
+}
+
+export function isTaskStatusIssue(task: Pick<TaskRecord, "status" | "terminalOutcome">): boolean {
+  return FAILURE_TASK_STATUSES.has(formatTaskStatus(task));
 }
 
 function resolveTaskReferenceAt(task: TaskRecord): number {
@@ -181,8 +187,7 @@ export function buildTaskStatusSnapshot(
   const active = visibleCandidates.filter(isActiveTask);
   const recentTerminal = visibleCandidates.filter((task) => isRecentTerminalTask(task, now));
   const visible = active.length > 0 ? [...active, ...recentTerminal] : recentTerminal;
-  const focus =
-    active[0] ?? recentTerminal.find((task) => isFailureTask(task)) ?? recentTerminal[0];
+  const focus = active[0] ?? recentTerminal.find(isTaskStatusIssue) ?? recentTerminal[0];
   return {
     latest: active[0] ?? recentTerminal[0],
     focus,
@@ -191,6 +196,6 @@ export function buildTaskStatusSnapshot(
     recentTerminal,
     activeCount: active.length,
     totalCount: visible.length,
-    recentFailureCount: recentTerminal.filter(isFailureTask).length,
+    recentFailureCount: recentTerminal.filter(isTaskStatusIssue).length,
   };
 }

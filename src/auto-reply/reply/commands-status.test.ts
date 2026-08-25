@@ -496,25 +496,25 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("done a while ago");
   });
 
-  it("shows a recent failure when no active tasks remain", async () => {
+  it("shows blocked completion outcomes when no active tasks remain", async () => {
     createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:acp:status-task-failed",
-      runId: "run-status-task-failed",
-      task: "failed background task",
+      runId: "run-status-task-blocked",
+      task: "blocked background task",
     });
-    failTaskRunByRunIdCore({
-      runId: "run-status-task-failed",
+    completeTaskRunByRunIdCore({
+      runId: "run-status-task-blocked",
       endedAt: Date.now(),
-      error: "approval denied",
+      terminalOutcome: "blocked",
+      terminalSummary: "Additional input required.",
     });
 
     const reply = await buildStatusReplyForTest({});
 
-    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
-    expect(reply?.text).toContain("failed background task");
-    expect(reply?.text).toContain("approval denied");
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(reply?.text).toContain("blocked background task");
+    expect(reply?.text).toContain("Additional input required.");
   });
 
   it("does not leak internal runtime context through the task status line", async () => {

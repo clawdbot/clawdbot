@@ -484,17 +484,51 @@ describe("flows commands", () => {
         endedAt: Date.now(),
         terminalSummary: "Provider metadata refreshed",
       });
+      const blocked = createRunningTaskRunCore({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:flow-child-blocked",
+        runId: "run-flow-child-blocked",
+        label: "Inspect blocked child",
+        task: "Inspect blocked child",
+        notifyPolicy: "silent",
+        startedAt: Date.now(),
+      });
+      markTaskTerminalById({
+        taskId: blocked.taskId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        endedAt: Date.now(),
+        terminalSummary: "Required completion did not produce a final deliverable.",
+      });
 
       const runtime = createRuntime();
       await flowsShowCommand({ lookup: flow.flowId }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      expect(lines).toContain("tasks: 3 total · 1 active · 1 issues");
       expect(lines.find((line) => line.startsWith(`- ${running.taskId} `))).toContain(
         "Downloading provider metadata",
       );
       expect(lines.find((line) => line.startsWith(`- ${completed.taskId} `))).toContain(
         "Provider metadata refreshed",
       );
+      expect(lines.find((line) => line.startsWith(`- ${blocked.taskId} `))).toContain(" blocked ");
+
+      const jsonRuntime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
+      expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        tasks: expect.arrayContaining([
+          expect.objectContaining({
+            taskId: blocked.taskId,
+            status: "succeeded",
+            terminalOutcome: "blocked",
+          }),
+        ]),
+        taskSummary: expect.objectContaining({ failures: 0 }),
+      });
     });
   });
 

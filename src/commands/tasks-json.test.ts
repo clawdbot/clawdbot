@@ -5,7 +5,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import * as taskRuntime from "../tasks/runtime-internal.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
-import { createTaskRecord as createTaskRecordOrNull } from "../tasks/task-registry.js";
+import {
+  createTaskRecord as createTaskRecordOrNull,
+  markTaskTerminalById,
+} from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
@@ -19,6 +22,7 @@ import type {
 } from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
+import { tasksListCommand, tasksShowCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -125,6 +129,43 @@ describe("tasks JSON commands", () => {
         runtime: "subagent",
         status: null,
         tasks: [],
+      });
+    });
+  });
+
+  it("shows blocked completion outcomes without changing task JSON or filters", async () => {
+    await withTaskJsonStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        status: "running",
+        runId: "task-list-blocked",
+        task: "Inspect an incomplete background task",
+      });
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Required completion did not produce a final deliverable.",
+        endedAt: Date.now(),
+      });
+
+      const listRuntime = createRuntime();
+      await tasksListCommand({ status: "succeeded" }, listRuntime);
+      const listOutput = vi.mocked(listRuntime.log).mock.calls.flat().join("\n");
+      expect(listOutput).toContain("Task pressure: 0 queued · 0 running · 1 issues");
+      expect(listOutput).toMatch(/\bblocked\s+pending\b/);
+
+      const showRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId }, showRuntime);
+      expect(vi.mocked(showRuntime.log).mock.calls.flat().join("\n")).toContain("status: blocked");
+
+      const jsonRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId, json: true }, jsonRuntime);
+      expect(readJsonLog(jsonRuntime)).toMatchObject({
+        status: "succeeded",
+        terminalOutcome: "blocked",
       });
     });
   });
