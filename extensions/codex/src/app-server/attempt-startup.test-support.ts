@@ -1,4 +1,8 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, vi } from "vitest";
+import type { startCodexAttemptThread } from "./attempt-startup.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerSpawnIdentity } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 
 export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
@@ -58,4 +62,50 @@ export async function waitForRequest(
 
 export async function waitForThreadStart(harness: AttemptClientHarness): Promise<{ id?: number }> {
   return waitForRequest(harness, "thread/start");
+}
+
+export async function captureExpectedRuntimeArtifact(
+  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+) {
+  const { captureCodexAppServerRuntimeArtifactBeforeStart, finalizeCodexAppServerRuntimeArtifact } =
+    await import("./runtime-artifact.js");
+  const spawnIdentity = resolveCodexAppServerSpawnIdentity(appServer.start);
+  const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
+    startOptions: appServer.start,
+    spawnIdentity,
+  });
+  return finalizeCodexAppServerRuntimeArtifact({
+    before,
+    startOptions: appServer.start,
+    spawnIdentity,
+    runtimeIdentity: { serverVersion: "0.149.0", userAgent: "openclaw/0.149.0 (macOS; test)" },
+  });
+}
+
+export function createPairedAttemptRuntime() {
+  const channels: Array<{ close: ReturnType<typeof vi.fn>; sessionId: string }> = [];
+  const openDuplex = vi.fn<
+    NonNullable<Parameters<typeof startCodexAttemptThread>[0]["runtime"]>["nodes"]["openDuplex"]
+  >(async (request) => {
+    let resolveClosed: (value: unknown) => void = () => undefined;
+    const closed = new Promise<unknown>((resolve) => {
+      resolveClosed = resolve;
+    });
+    const channel = {
+      send: vi.fn(async () => undefined),
+      onMessage: vi.fn(() => () => undefined),
+      closed,
+      close: vi.fn(() => resolveClosed({ ok: true })),
+    };
+    channels.push({
+      close: channel.close,
+      sessionId: (request.params as { sessionId: string }).sessionId,
+    });
+    return channel;
+  });
+  return {
+    runtime: createPluginRuntimeMock({ nodes: { openDuplex } }),
+    channels,
+    openDuplex,
+  };
 }

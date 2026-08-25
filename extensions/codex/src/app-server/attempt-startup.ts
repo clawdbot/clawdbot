@@ -319,7 +319,10 @@ export async function startCodexAttemptThread(params: {
                 signal: startupAbandonController.signal,
               });
             } catch (error) {
-              if (startupAbandonController.signal.aborted) {
+              if (
+                startupAbandonController.signal.aborted ||
+                isCodexAppServerStartSelectionChangedError(error)
+              ) {
                 throw error;
               }
               throw new AgentHarnessPreflightError(

@@ -3,7 +3,7 @@ import path from "node:path";
 // Codex tests cover computer use plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, resolveCodexComputerUseConfig } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
@@ -77,6 +77,7 @@ import {
   ensureCodexComputerUse,
   installCodexComputerUse,
   readCodexComputerUseStatus,
+  runCodexComputerUseLiveTest,
   type CodexComputerUseStatus,
 } from "./computer-use.js";
 
@@ -557,6 +558,39 @@ describe("Codex Computer Use setup", () => {
     expect(status.warnings).toContain(
       "Could not reload Computer Use MCP servers: MCP runtime reload failed",
     );
+  });
+
+  it("propagates a desktop selection change without retrying the stale client", async () => {
+    const selectionChanged = Object.assign(new Error("desktop selection changed"), {
+      code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return { thread: { id: "probe-thread" } };
+      }
+      if (method === "mcpServer/tool/call") {
+        throw selectionChanged;
+      }
+      if (method === "thread/unsubscribe" || method === "thread/archive") {
+        return undefined;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    }) as CodexComputerUseRequest;
+
+    await expect(
+      runCodexComputerUseLiveTest({
+        request,
+        config: resolveCodexComputerUseConfig({
+          pluginConfig: { computerUse: { enabled: true, autoRepair: true } },
+        }),
+      }),
+    ).rejects.toBe(selectionChanged);
+    expect(requestCalls(request).map(([method]) => method)).toEqual([
+      "thread/start",
+      "mcpServer/tool/call",
+      "thread/unsubscribe",
+      "thread/archive",
+    ]);
   });
 
   it("fails fast when the named MCP server exposes no tools", async () => {

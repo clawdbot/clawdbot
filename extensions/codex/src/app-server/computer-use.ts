@@ -39,6 +39,7 @@ import { requestCodexAppServerJson } from "./request.js";
 import {
   assertCodexAppServerClientStartSelectionCurrent,
   getLeasedSharedCodexAppServerClient,
+  isCodexAppServerStartSelectionChangedError,
   readCodexAppServerClientDesktopGeneration,
   readCodexAppServerClientProcessIdentity,
   releaseLeasedSharedCodexAppServerClient,
@@ -726,6 +727,9 @@ export async function runCodexComputerUseLiveTest(params: {
         ...(repair ? { repair } : {}),
       };
     } catch (error) {
+      if (isCodexAppServerStartSelectionChangedError(error)) {
+        throw error;
+      }
       lastError = error;
     } finally {
       if (threadId) {
