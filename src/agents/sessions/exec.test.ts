@@ -321,6 +321,78 @@ describe("execCommand", () => {
     expect(result.killed).toBe(true);
   });
 
+  it("rejects instead of resolving when the caller's AbortSignal fires", async () => {
+    // ctx.exec's documented cancellation contract is AbortSignal semantics: a
+    // cancelled run must reject, not resolve as if it had completed normally
+    // (matches the sibling find/grep session tools' abort handling).
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const controller = new AbortController();
+    const resultPromise = execCommand("cmd", [], "/tmp", { signal: controller.signal });
+    controller.abort();
+    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, {
+      detached: process.platform !== "win32",
+      graceMs: 5000,
+    });
+
+    wait.resolve(0);
+    await expect(resultPromise).rejects.toThrow("Operation aborted");
+  });
+
+  it("rejects on abort even if the child never reports completion", async () => {
+    // The caller must not wait on child exit to see the rejection: killing
+    // a stuck process (or one still inside killProcessTree's grace period)
+    // can take arbitrarily long, and the promise must settle at abort
+    // time, not at eventual-exit time. Deliberately never resolves the
+    // deferred child completion, unlike the sibling test above. A short
+    // explicit timeout makes a regression fail fast instead of consuming
+    // vitest's full default budget.
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const controller = new AbortController();
+    const resultPromise = execCommand("cmd", [], "/tmp", { signal: controller.signal });
+    controller.abort();
+
+    await expect(resultPromise).rejects.toThrow("Operation aborted");
+  }, 2_000);
+
+  it("rejects immediately without spawning when the signal is already aborted", async () => {
+    // Sibling session tools (find/grep) never spawn work for a signal that was
+    // already aborted before the call; execCommand must match that contract
+    // instead of spawning a process only to immediately kill it.
+    const controller = new AbortController();
+    controller.abort();
+    const { execCommand } = await import("./exec.js");
+
+    await expect(execCommand("cmd", [], "/tmp", { signal: controller.signal })).rejects.toThrow(
+      "Operation aborted",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("still resolves a timeout-triggered kill (not treated as caller abort)", async () => {
+    vi.useFakeTimers();
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
+    await vi.advanceTimersByTimeAsync(10);
+    wait.resolve(null);
+
+    await expect(resultPromise).resolves.toMatchObject({ killed: true });
+  });
+
   it("does not crash when stdout or stderr emit an error event", async () => {
     const child = createStubChild();
     const wait = createDeferred<number | null>();

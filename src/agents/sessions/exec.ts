@@ -15,7 +15,11 @@ const FORCE_KILL_GRACE_MS = 5000;
  * Options for executing shell commands.
  */
 export interface ExecOptions {
-  /** AbortSignal to cancel the command */
+  /**
+   * AbortSignal to cancel the command. Firing this signal rejects the
+   * returned promise with an "Operation aborted" error (the process is
+   * killed first); it never resolves as a completed/killed result.
+   */
   signal?: AbortSignal;
   /** Timeout in milliseconds */
   timeout?: number;
@@ -35,6 +39,7 @@ export interface ExecResult {
   stderrTruncatedChars?: number;
   outputLimitExceeded?: "stdout" | "stderr";
   code: number;
+  /** True when `timeout` or the output-limit guard killed the process. Caller-initiated `signal` cancellation rejects instead of resolving here. */
   killed: boolean;
 }
 
@@ -89,7 +94,11 @@ export async function execCommand(
   cwd: string,
   options?: ExecOptions,
 ): Promise<ExecResult> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    if (options?.signal?.aborted) {
+      reject(new Error("Operation aborted"));
+      return;
+    }
     const proc = spawnCommand([command, ...args], {
       buffer: false,
       cwd,
@@ -107,6 +116,11 @@ export async function execCommand(
     let timeoutId: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
     let settled = false;
+    // Distinct from `settled`: abortRequested() now settles the caller's
+    // promise immediately, before the OS process has actually exited, so the
+    // SIGKILL-fallback guard in killProcess() needs its own signal for "has
+    // the process actually exited" rather than "has the promise settled".
+    let processExited = false;
     const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
     const truncateOutput = options?.maxOutputChars !== undefined;
     let outputLimitExceeded: "stdout" | "stderr" | undefined;
@@ -117,6 +131,7 @@ export async function execCommand(
       }
     };
     const finish = (code: number) => {
+      processExited = true;
       if (settled) {
         return;
       }
@@ -128,7 +143,7 @@ export async function execCommand(
         clearTimeout(forceKillTimer);
       }
       if (options?.signal) {
-        options.signal.removeEventListener("abort", killProcess);
+        options.signal.removeEventListener("abort", abortRequested);
       }
       const stdoutBeforeFlush = stdout.truncatedChars;
       stdout = appendCapturedOutput(stdout, stdoutDecoder.flush(), maxOutputChars, truncateOutput);
@@ -170,7 +185,7 @@ export async function execCommand(
         } else {
           proc.kill("SIGTERM");
           forceKillTimer = setTimeout(() => {
-            if (!settled) {
+            if (!processExited) {
               proc.kill("SIGKILL");
             }
           }, FORCE_KILL_GRACE_MS);
@@ -179,14 +194,29 @@ export async function execCommand(
       }
     };
 
-    // Handle abort signal
-    if (options?.signal) {
-      if (options.signal.aborted) {
-        killProcess();
-      } else {
-        options.signal.addEventListener("abort", killProcess, { once: true });
+    // Handle abort signal. Already-aborted signals are rejected before spawning
+    // (see top of this Promise executor), so by this point the signal, if any,
+    // is guaranteed not yet aborted -- only a later `abort` event can fire.
+    //
+    // Settle the caller here, not in `finish()`: `finish()` only runs once the
+    // child process actually exits, so a caller cancelling mid-grace-period
+    // (killProcessTree's SIGTERM-then-SIGKILL window, or a genuinely stuck
+    // process) would otherwise stay pending well past the point they cancelled.
+    // Don't clear `forceKillTimer` here -- that timer's SIGKILL fallback must
+    // keep running against the real OS process regardless of promise state.
+    const abortRequested = () => {
+      killProcess();
+      if (settled) {
+        return;
       }
-    }
+      settled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      options?.signal?.removeEventListener("abort", abortRequested);
+      reject(new Error("Operation aborted"));
+    };
+    options?.signal?.addEventListener("abort", abortRequested, { once: true });
 
     // Handle timeout
     if (options?.timeout && options.timeout > 0) {

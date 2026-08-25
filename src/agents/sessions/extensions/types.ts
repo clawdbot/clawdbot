@@ -1328,7 +1328,7 @@ export interface ExtensionAPI {
   /** Set or clear a label on an entry. Labels are user-defined markers for bookmarking/navigation. */
   setLabel(entryId: string, label: string | undefined): void;
 
-  /** Execute a shell command. */
+  /** Execute a shell command. `options.signal` cancellation rejects the promise; it does not resolve a killed result. */
   exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
   /** Get the list of currently active tool names. */
