@@ -197,38 +197,45 @@ describe("plugins cli inspect", () => {
     expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
   });
 
-  it("explains a policy-hidden built-in Skill Workshop at the legacy inspect surface", async () => {
+  it.each([
+    { label: "an implicit agent", agentIds: ["main"], entries: undefined },
+    {
+      label: "a multi-agent roster",
+      agentIds: ["main", "venus"],
+      entries: { main: {}, venus: {} },
+    },
+  ])("explains policy-hidden Skill Workshop for $label", async ({ agentIds, entries }) => {
     const config: OpenClawConfig = {
       tools: { profile: "messaging" },
+      ...(entries ? { agents: { ownership: "explicit" as const, entries } } : {}),
     };
     pluginCliConfigMock.mockReturnValue(config);
-    workshopMocks.detectToolPolicyDiagnostic.mockReturnValue({
-      agentId: "main",
-      source: "tools.profile",
-      detail: 'tools.profile: "messaging" does not include "skill_workshop".',
-      fix: 'Add tools.alsoAllow: ["skill_workshop"].',
-      message:
-        'Skill Workshop is active, but "skill_workshop" is hidden for agent "main": tools.profile: "messaging" does not include "skill_workshop". Add tools.alsoAllow: ["skill_workshop"].',
-    });
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
+    workshopMocks.detectToolPolicyDiagnostic.mockImplementation(
+      ({ agentId }: { agentId: string }) => ({
+        agentId,
+        message:
+          `Skill Workshop is active, but "skill_workshop" is hidden for agent "${agentId}": ` +
+          'tools.profile: "messaging" does not include "skill_workshop". ' +
+          'Add tools.alsoAllow: ["skill_workshop"].',
+      }),
+    );
+    buildPluginSnapshotReportMock.mockReturnValue({ plugins: [], diagnostics: [] });
 
     await expect(runPluginsCommand(["plugins", "inspect", "skill-workshop"])).rejects.toThrow(
       "__exit__:1",
     );
 
-    expect(runtimeErrors.at(-1)).toContain(
-      "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
-    );
-    expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
-      config,
-      workshopEnabled: true,
-    });
-    expect(runtimeErrors.at(-1)).toContain(
-      'tools.profile: "messaging" does not include "skill_workshop".',
-    );
-    expect(runtimeErrors.at(-1)).toContain('Add tools.alsoAllow: ["skill_workshop"].');
+    const output = runtimeErrors.at(-1);
+    expect(output).toContain("Skill Workshop is built into OpenClaw, not a plugin");
+    expect(output).toContain('tools.profile: "messaging" does not include "skill_workshop".');
+    expect(output).toContain('Add tools.alsoAllow: ["skill_workshop"].');
+    for (const agentId of agentIds) {
+      expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
+        config,
+        workshopEnabled: true,
+        agentId,
+      });
+      expect(output).toContain(`hidden for agent "${agentId}"`);
+    }
   });
 });
