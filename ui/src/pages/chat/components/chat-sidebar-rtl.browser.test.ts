@@ -37,11 +37,17 @@ const HEBREW_DOCUMENT = [
   "",
   "- פריט ראשון",
   "- פריט שני",
+  "- [ ] משימה פתוחה",
 ].join("\n");
 
-const ENGLISH_DOCUMENT = ["## Document heading", "", "> An English quote", "", "- First item"].join(
-  "\n",
-);
+const ENGLISH_DOCUMENT = [
+  "## Document heading",
+  "",
+  "> An English quote",
+  "",
+  "- First item",
+  "- [ ] An open task",
+].join("\n");
 
 describe.runIf(browserMode)("chat sidebar markdown direction", () => {
   it("mirrors the rendered document for a right-to-left language", async () => {
@@ -52,8 +58,9 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       const reader = panel.querySelector<HTMLElement>(".sidebar-markdown-reader");
       expect(reader?.getAttribute("dir")).toBe("rtl");
 
-      // The quote bar and the list indent are the two physical offsets a
-      // right-to-left document gets wrong when styles use left/right directly.
+      // The quote bar, the list indent and the task-list checkbox gap are the
+      // three physical offsets a right-to-left document gets wrong when styles
+      // use left/right directly.
       const quote = getComputedStyle(reader!.querySelector("blockquote")!);
       expect(quote.borderRightWidth).toBe("3px");
       expect(quote.borderLeftWidth).toBe("0px");
@@ -61,6 +68,13 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       const list = getComputedStyle(reader!.querySelector("ul")!);
       expect(Number.parseFloat(list.paddingRight)).toBeGreaterThan(0);
       expect(Number.parseFloat(list.paddingLeft)).toBe(0);
+
+      // The gap belongs between the box and its label. In RTL the label sits to
+      // the left of the box, so a physical margin-right would push it out to
+      // the far side of the row instead.
+      const checkbox = getComputedStyle(reader!.querySelector(".task-list-item-checkbox")!);
+      expect(Number.parseFloat(checkbox.marginLeft)).toBeGreaterThan(0);
+      expect(Number.parseFloat(checkbox.marginRight)).toBe(0);
     } finally {
       release();
     }
@@ -81,6 +95,10 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       const list = getComputedStyle(reader!.querySelector("ul")!);
       expect(Number.parseFloat(list.paddingLeft)).toBeGreaterThan(0);
       expect(Number.parseFloat(list.paddingRight)).toBe(0);
+
+      const checkbox = getComputedStyle(reader!.querySelector(".task-list-item-checkbox")!);
+      expect(Number.parseFloat(checkbox.marginRight)).toBeGreaterThan(0);
+      expect(Number.parseFloat(checkbox.marginLeft)).toBe(0);
     } finally {
       release();
     }

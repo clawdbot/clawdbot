@@ -82,7 +82,7 @@
 }
 
 .sidebar-markdown :where(.task-list-item-checkbox) {
-  margin-right: 0.4em;
+  margin-inline-end: 0.4em;
   vertical-align: middle;
 }
 
