@@ -321,6 +321,21 @@ describe("Responses output token limits", () => {
 
     expect(params.max_output_tokens).toBe(expected);
   });
+
+  it("clamps oversized maxTokens to the model catalog capacity while keeping the floor", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { maxTokens: 200_000 });
+
+    expect(nativeOpenAIModel.maxTokens).toBe(8192);
+    expect(params.max_output_tokens).toBe(8192);
+  });
+
+  it("keeps a below-cap request unchanged above the floor", () => {
+    const params = {} as ResponseCreateParamsStreaming;
+    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { maxTokens: 8_192 });
+
+    expect(params.max_output_tokens).toBe(8_192);
+  });
 });
 
 describe("Responses reasoning effort", () => {

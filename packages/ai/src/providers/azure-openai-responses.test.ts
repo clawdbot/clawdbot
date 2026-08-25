@@ -164,6 +164,26 @@ describe("azure-openai-responses", () => {
     }
   });
 
+  it("clamps oversized output limits to the model capacity", async () => {
+    let sentParams: { max_output_tokens?: unknown } | undefined;
+    const hostFetch: typeof fetch = async (input, init) => {
+      sentParams = (await new Request(input, init).json()) as typeof sentParams;
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    };
+
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    try {
+      await streamSimpleAzureOpenAIResponses(azureResponsesModel, context, {
+        apiKey: "test-api-key",
+        maxTokens: 200_000,
+      }).result();
+
+      expect(sentParams?.max_output_tokens).toBe(8192);
+    } finally {
+      configureAiTransportHost({});
+    }
+  });
+
   it("fences compaction replay by the resolved Azure endpoint", async () => {
     const routeA = "https://route-a.openai.azure.com/openai/v1";
     const routeB = "https://route-b.openai.azure.com/openai/v1";
