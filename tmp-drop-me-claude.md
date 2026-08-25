@@ -194,3 +194,75 @@ The pre-merge classification SHA-256 is
 `b6b1c43e069957d279687bbad49aadafe7484e45d25983116bf4f96cf542b328`;
 the final classification SHA-256 is
 `bd4b9ff2972dd543ac413c9f7eb76dd5b135675a0db0a29f24688b597265b45e`.
+
+## 2026-08-25T13:31Z - §3 local acceptance and independent review
+
+Three additional merge interactions surfaced only when the canonical gates
+composed the full tree:
+
+| Rejected SHA / gate                                               | Deterministic negative control                                                                                                      | Baseline classification                                                                                                                                                                                | Successor                                                                                                                                                                                                         |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2f4b7be93812b96c4e5a780959cedb46955f59fa`, Gateway intersections | `server-methods.test.ts` failed with `ReferenceError: projectRecentChatDisplayMessages is not defined`.                             | Exact upstream `1ba243c8` passed its 218-test file; pure had renamed the projection owner while upstream added this assertion.                                                                         | `3b969b145340c65c3be919890be400393da99566` uses `projectChatDisplayMessages`; 220/220 and the six-file 847-test Gateway set pass.                                                                                 |
+| `2f4b7be93812b96c4e5a780959cedb46955f59fa`, release harness       | The upstream-added parent-status test ran worktree Git against a bare origin and failed.                                            | Exact upstream reproduced the bare-origin class in three tests. Pure already supplied `runBareGit` and repaired two call sites, so applying it to the new case is part of this merge's owner boundary. | `3b969b145340c65c3be919890be400393da99566` passes 31/31.                                                                                                                                                          |
+| `4792db5fec2c875a793f0bce8b66ae8fcd5c4feb`, `pnpm tsgo:test`      | Upstream-only `openclaw-state-db-readonly.test.ts` imported removed `withTempDir`.                                                  | Pinned upstream keeps that export; pure canonicalized the shared helper to `withTestDir`.                                                                                                              | `1dd8edffff60d8c3f00ea82e4e7adbb1b5631cc3` passes 3/3 and test typecheck proceeds.                                                                                                                                |
+| `1dd8edffff60d8c3f00ea82e4e7adbb1b5631cc3`, extension test types  | Upstream-only Codex desktop-generation coverage imported removed `withTempDir`.                                                     | Pinned-upstream `pnpm tsgo:extensions:test` passes with its old helper.                                                                                                                                | `650566cb37fa38309e8f52b370de114b567a9cf6` uses `withTestDir`, passes 6/6, and full test typecheck passes.                                                                                                        |
+| `650566cb37fa38309e8f52b370de114b567a9cf6`, `pnpm check`          | Exact pure-plus-upstream composition made `embedded-agent-subscribe.handlers.tools.results.ts` exceed the effective 700-line limit. | Pinned upstream's targeted lint passes; neither parent exceeded the effective limit independently.                                                                                                     | `71a324b27b60b38b522d8a54dfc1b935a7122ac9` moves process-terminal parsing into existing owner `tool-error-summary.ts`; result delivery is 672 physical lines, targeted lint passes, and owner tests pass 185/185. |
+
+The max-lines repair changes production by +91/-88 (net +3) across the existing
+error-summary owner and two imports. It adds no behavior or compatibility path;
+the small growth is import/formatter overhead for a responsibility-preserving
+move. Test repairs are +11/-11. The journal is tracked separately.
+
+At exact code head `71a324b27b60b38b522d8a54dfc1b935a7122ac9`:
+
+- Gate 3a: `pnpm install --frozen-lockfile` passed in the normal same-host clone
+  at the exact candidate manifest/lock SHA; the linked worktree points to that
+  clone's `node_modules`.
+- Gate 3b: `pnpm tsgo` passed.
+- Gate 3c: `pnpm tsgo:test` passed.
+- Gate 3d: `pnpm check` passed, including all preflight, production/script/root
+  type checks, three lint shards, formatting, and policy guards.
+- Gate 3e: 40 focused files ran through explicit owner configs at one worker;
+  4,106 assertions passed and two platform-specific cases skipped.
+- Gate 3f: `pnpm build` passed. The only build diagnostics were the existing
+  ineffective-dynamic-import notices for Control UI modules.
+- Gate 3g was not fired: current bootstrap `main@342cc9c6` defines it as an
+  exceptional no-network or explicitly authorized fallback, while this
+  workorder explicitly forbids Mode-B and permits a `focused-only` handoff.
+  Broad acceptance therefore remains for the scribe after independent
+  exact-SHA reproof.
+
+The refreshed 85-path ledger at the code head contains 66 exact projected blobs
+and 19 manually reviewed paths; the two additional manual rows are the
+responsibility-preserving import move in
+`embedded-agent-subscribe.handlers.tools.completion.ts` and function move in
+`embedded-agent-subscribe.handlers.tools.results.ts`. Its SHA-256 is
+`28408806609c86dc4cf7a101208f1995f4b3a03ed9d682dbb9348ab062011d6e`.
+
+Refreshed Gate 2.7 examined 948 files with `FROZEN-STALE=0`,
+`MIXED-CLOBBER=354`, `GENUINE=294`, and `SAFE-NEW=300`. Relative to the pure
+baseline: 311 MIXED rows are unchanged, 40 decreased, two are the deliberate
+`withTestDir` adaptations, and one is the process-terminal owner move. There
+are no undispositioned rows. The 354-row disposition ledger SHA-256 is
+`4a9340a0d491556cce60ab4db99ac4466413bea7dc323a39daac1a3dba5dc2b3`;
+the refreshed classification SHA-256 is
+`9bb7df371da315bbfba3ecf68ab31c929da40e26527ade1b8eca175a813ba78d`.
+
+The mandatory whole-branch autoreview failed closed before model review because
+the inherited 947-file feature bundle exceeds its eight-pass cap. No verdict
+was taken from that attempt. The authored decision surface was then reviewed
+without omission in two bounded passes: synthetic manual-resolution commit
+`2625ede782427a1c9977e1e7e629ae193ca60460` (15 changed files representing all
+17 manual overlap dispositions) and branch range
+`4792db5fec2c875a793f0bce8b66ae8fcd5c4feb..71a324b27b60b38b522d8a54dfc1b935a7122ac9`.
+Both Codex `gpt-5.6-sol` high-effort reviews returned no accepted/actionable
+findings.
+
+GitNexus was available only with a stale index
+(`openclaw@fabc84d31ff67ac6c52a6761184ea67ef2644644`), so no graph verdict was
+credited. The installed prebuilt fork was
+`/home/figs/flesh_beast_best_beast/source/GitNexus` at
+`3c1e686edfc1acaac882927cada121ddd7c47bcc` (`gitnexus 1.6.5`,
+`karmaterminal/GitNexus`). Direct imports, callers, sibling owners, parent
+blobs, focused tests, and exact dependency source were used as the documented
+fallback.
