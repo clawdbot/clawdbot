@@ -28,7 +28,10 @@ import { runAgentAttempt } from "./attempt-execution.js";
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const runCliAgentMock = vi.hoisted(() => vi.fn());
-const continuationRuntimeState = vi.hoisted(() => ({ failScheduling: false }));
+const continuationRuntimeState = vi.hoisted(() => ({
+  enqueueConcurrentAfterScheduling: false,
+  failScheduling: false,
+}));
 const sessionAccessorState = vi.hoisted(() => ({
   failPatch: false,
   failPatchCall: undefined as number | undefined,
@@ -49,7 +52,27 @@ vi.mock("../../auto-reply/continuation/lazy.runtime.js", async (importOriginal) 
       if (continuationRuntimeState.failScheduling) {
         throw new Error("synthetic continuation scheduling failure");
       }
-      return await actual.scheduleContinuationWorkBatch(...args);
+      const result = await actual.scheduleContinuationWorkBatch(...args);
+      if (continuationRuntimeState.enqueueConcurrentAfterScheduling) {
+        continuationRuntimeState.enqueueConcurrentAfterScheduling = false;
+        const { enqueuePendingWork } = await import("../../auto-reply/continuation/work-store.js");
+        const now = Date.now();
+        enqueuePendingWork({
+          sessionKey: args[0].sessionKey,
+          hop: 99,
+          delayMs: 30_000,
+          electedAt: now,
+          dueAt: now + 30_000,
+          maxChainLength: 200,
+          chainStartedAt: now,
+          accumulatedChainTokens: 0,
+          reason: "concurrent same-owner work",
+          originRunId: "concurrent-run",
+          originTurnId: "concurrent-turn",
+          anchorFinalizedAt: now,
+        });
+      }
+      return result;
     },
   };
 });
@@ -231,6 +254,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     storePath = path.join(tmpDir, "sessions.json");
     runEmbeddedAgentMock.mockReset();
     runCliAgentMock.mockReset();
+    continuationRuntimeState.enqueueConcurrentAfterScheduling = false;
     continuationRuntimeState.failScheduling = false;
     sessionAccessorState.failPatch = false;
     sessionAccessorState.failPatchCall = undefined;
@@ -542,6 +566,93 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
         event.includes("wake was scheduled, but chain-state finalization failed"),
       ),
     ).toBe(true);
+  });
+
+  it("leaves concurrent same-owner work untouched when finalization fails", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "attempt-owned work", delaySeconds: 30 });
+      continuationRuntimeState.enqueueConcurrentAfterScheduling = true;
+      sessionAccessorState.failPatchCall = 2;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(2);
+    expect(flows.find((flow) => flow.stateJson?.reason === "attempt-owned work")).toMatchObject({
+      status: "failed",
+    });
+    expect(
+      flows.find((flow) => flow.stateJson?.reason === "concurrent same-owner work"),
+    ).toMatchObject({ status: "queued" });
+  });
+
+  it("leaves prior parked work untouched when finalization fails", async () => {
+    await enqueuePriorParkedWork("prior parked work");
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "replacement work", delaySeconds: 30 });
+      sessionAccessorState.failPatchCall = 2;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(2);
+    expect(flows.find((flow) => flow.stateJson?.reason === "prior parked work")).toMatchObject({
+      status: "queued",
+    });
+    expect(flows.find((flow) => flow.stateJson?.reason === "replacement work")).toMatchObject({
+      status: "failed",
+    });
+  });
+
+  it("leaves prior parked work untouched when the finalization guard is stale", async () => {
+    await enqueuePriorParkedWork("prior parked work");
+    const replacementChainId = crypto.randomUUID();
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "replacement work", delaySeconds: 30 });
+      sessionAccessorState.replaceChainBeforePatchCall = 2;
+      sessionAccessorState.replacementChainId = replacementChainId;
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(2);
+    expect(flows.find((flow) => flow.stateJson?.reason === "prior parked work")).toMatchObject({
+      status: "queued",
+    });
+    expect(flows.find((flow) => flow.stateJson?.reason === "replacement work")).toMatchObject({
+      status: "failed",
+    });
+    expect(sessionStore[sessionKey]?.continuationChainId).toBe(replacementChainId);
   });
 
   it("does not create durable spawn-init work without a durable session store", async () => {

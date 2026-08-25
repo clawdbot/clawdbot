@@ -50,8 +50,8 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
   requests: SpawnInitContinueWorkRequest[];
   cfg: OpenClawConfig;
   runResult: EmbeddedAgentRunResult;
-  originRunId?: string;
-  originTurnId?: string;
+  originRunId: string;
+  originTurnId: string;
 }): Promise<void> {
   const [
     { resolveLiveContinuationRuntimeConfig },
@@ -242,6 +242,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
       : null;
   let result: Awaited<ReturnType<typeof scheduleContinuationWorkBatch>>;
   let failCreatedWork: ((summary: string) => void) | undefined;
+  let supersedePriorParkedWork: (() => string[]) | undefined;
   if (reservedRequests.length === 0 || liveBudgetRejection) {
     result = {
       scheduledCount: 0,
@@ -253,19 +254,53 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
     try {
       const [
         { failFlow, getTaskFlowById, listTaskFlowsForOwnerKey, requestFlowCancel },
-        { isContinuationWorkFlow },
+        { decodeWorkState, isContinuationWorkFlow, workToRuntime },
+        { markPendingWorkSuperseded },
       ] = await Promise.all([
         import("../../tasks/task-flow-registry.js"),
         import("../../auto-reply/continuation/work-flow-state.js"),
+        import("../../auto-reply/continuation/work-store.js"),
       ]);
-      const existingFlowIds = new Set(
-        listTaskFlowsForOwnerKey(params.sessionKey).map((flow) => flow.flowId),
-      );
+      const existingFlows = listTaskFlowsForOwnerKey(params.sessionKey);
+      const existingFlowIds = new Set(existingFlows.map((flow) => flow.flowId));
+      const priorParkedFlows = existingFlows.flatMap((flow) => {
+        const state = isContinuationWorkFlow(flow) ? decodeWorkState(flow) : undefined;
+        return flow.status === "queued" && state?.idleRetry?.trigger === "reply-run-ended"
+          ? [{ flowId: flow.flowId, revision: flow.revision }]
+          : [];
+      });
+      supersedePriorParkedWork = () => {
+        const unresolvedFlowIds: string[] = [];
+        for (const priorParked of priorParkedFlows) {
+          const flow = getTaskFlowById(priorParked.flowId);
+          if (!flow || flow.status !== "queued" || !isContinuationWorkFlow(flow)) {
+            continue;
+          }
+          const state = decodeWorkState(flow);
+          if (state?.idleRetry?.trigger !== "reply-run-ended") {
+            continue;
+          }
+          if (
+            flow.revision !== priorParked.revision ||
+            !markPendingWorkSuperseded(
+              workToRuntime(flow, state, "queued"),
+              "Superseded by a newer continue_work election after its chain state finalized.",
+            )
+          ) {
+            unresolvedFlowIds.push(flow.flowId);
+          }
+        }
+        return unresolvedFlowIds;
+      };
       failCreatedWork = (summary) => {
+        const unresolvedFlowIds: string[] = [];
         for (const flow of listTaskFlowsForOwnerKey(params.sessionKey)) {
+          const state = isContinuationWorkFlow(flow) ? decodeWorkState(flow) : undefined;
           if (
             existingFlowIds.has(flow.flowId) ||
-            !isContinuationWorkFlow(flow) ||
+            !state ||
+            state.originRunId !== params.originRunId ||
+            state.originTurnId !== params.originTurnId ||
             (flow.status !== "queued" && flow.status !== "running")
           ) {
             continue;
@@ -279,17 +314,42 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
           });
           if (!failed.applied) {
             const fresh = getTaskFlowById(flow.flowId);
+            const freshState =
+              fresh && isContinuationWorkFlow(fresh) ? decodeWorkState(fresh) : undefined;
             if (
-              fresh &&
-              isContinuationWorkFlow(fresh) &&
-              (fresh.status === "queued" || fresh.status === "running")
+              !fresh ||
+              (fresh.status !== "queued" && fresh.status !== "running") ||
+              fresh.cancelRequestedAt !== undefined
             ) {
-              requestFlowCancel({
-                flowId: fresh.flowId,
-                expectedRevision: fresh.revision,
-              });
+              continue;
+            }
+            if (
+              freshState?.originRunId !== params.originRunId ||
+              freshState.originTurnId !== params.originTurnId
+            ) {
+              unresolvedFlowIds.push(fresh.flowId);
+              continue;
+            }
+            const cancelled = requestFlowCancel({
+              flowId: fresh.flowId,
+              expectedRevision: fresh.revision,
+            });
+            if (!cancelled.applied) {
+              const latest = getTaskFlowById(fresh.flowId);
+              if (
+                latest &&
+                (latest.status === "queued" || latest.status === "running") &&
+                latest.cancelRequestedAt === undefined
+              ) {
+                unresolvedFlowIds.push(latest.flowId);
+              }
             }
           }
+        }
+        if (unresolvedFlowIds.length > 0) {
+          throw new Error(
+            `failed to terminalize or cancel continuation flow(s): ${unresolvedFlowIds.join(", ")}`,
+          );
         }
       };
       result = await scheduleContinuationWorkBatch({
@@ -306,10 +366,11 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
           return scheduledRequest;
         }),
         config: liveSchedulingConfig,
+        coalescePriorParkedWork: false,
         // Same-session own-turn work has no spawning parent. Adding parentRunId
         // would let orphan recovery reap the row after its electing turn settles.
-        ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
-        ...(params.originTurnId !== undefined ? { originTurnId: params.originTurnId } : {}),
+        originRunId: params.originRunId,
+        originTurnId: params.originTurnId,
         log: (message) => log.info(message),
       });
       result.cappedCount += unreservedRequestCount;
@@ -364,11 +425,49 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
       throw new Error("spawn-init chain finalization guard did not apply");
     }
   } catch (error) {
-    failCreatedWork?.("continue_work chain-state finalization did not commit.");
+    let cleanupError: unknown;
+    try {
+      failCreatedWork?.("continue_work chain-state finalization did not commit.");
+    } catch (caught) {
+      cleanupError = caught;
+    }
     enqueueSystemEvent(
       "[continuation] continue_work wake was scheduled, but chain-state finalization failed; the reserved budget remains fail-closed.",
       { sessionKey: params.sessionKey, trusted: true },
     );
+    if (cleanupError) {
+      const combinedError = new Error(
+        "spawn-init chain finalization and wake cleanup both failed",
+        {
+          cause: error,
+        },
+      );
+      Object.assign(combinedError, { cleanupError });
+      throw combinedError;
+    }
     throw error;
+  }
+
+  let unresolvedPriorFlowIds: string[];
+  try {
+    unresolvedPriorFlowIds = supersedePriorParkedWork?.() ?? [];
+  } catch (error) {
+    log.warn(
+      `[continuation] Failed while superseding prior parked work after spawn-init chain finalization for session ${sanitizeForLog(params.sessionKey)}: ${sanitizeForLog(String(error))}`,
+    );
+    enqueueSystemEvent(
+      "[continuation] A newer continue_work wake was scheduled, but prior parked-wake cleanup failed and one or more prior wakes may also run.",
+      { sessionKey: params.sessionKey, trusted: true },
+    );
+    return;
+  }
+  if (unresolvedPriorFlowIds.length > 0) {
+    log.warn(
+      `[continuation] Could not supersede prior parked flow(s) after spawn-init chain finalization for session ${sanitizeForLog(params.sessionKey)}: ${unresolvedPriorFlowIds.map(sanitizeForLog).join(", ")}`,
+    );
+    enqueueSystemEvent(
+      "[continuation] A newer continue_work wake was scheduled, but one or more prior parked wakes could not be superseded and may also run.",
+      { sessionKey: params.sessionKey, trusted: true },
+    );
   }
 }

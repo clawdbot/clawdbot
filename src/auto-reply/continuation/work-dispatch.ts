@@ -769,6 +769,7 @@ export async function scheduleContinuationWorkBatch(params: {
   parentRunId?: string;
   originRunId?: string;
   originTurnId?: string;
+  coalescePriorParkedWork?: boolean;
   log?: (message: string) => void;
 }): Promise<ContinuationWorkBatchResult> {
   let chainState = params.chainState;
@@ -779,10 +780,13 @@ export async function scheduleContinuationWorkBatch(params: {
   // carries the live intent and fires once at finalization. Folded BEFORE the
   // batch loop so distinct elections WITHIN this turn are preserved; only
   // prior-turn parked duplicates are folded.
-  const folded = supersedeQueuedTurnEndParkedWork(
-    params.sessionKey,
-    "Superseded by a newer continue_work election before its end-of-turn wake fired.",
-  );
+  const folded =
+    params.coalescePriorParkedWork === false
+      ? 0
+      : supersedeQueuedTurnEndParkedWork(
+          params.sessionKey,
+          "Superseded by a newer continue_work election before its end-of-turn wake fired.",
+        );
   if (folded > 0) {
     params.log?.(
       `[continuation:work-turn-end-parked-coalesced] session=${params.sessionKey} folded=${folded}`,
