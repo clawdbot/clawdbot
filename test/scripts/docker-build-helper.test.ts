@@ -3766,7 +3766,6 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
         timeout: "90",
         json: true,
         sourceReplyDeliveryMode: "message_tool_only",
-        senderIsOwner: true,
         allowModelOverride: true,
         cleanupBundleMcpOnRunEnd: true,
         cleanupCliLiveSessionOnRunEnd: true,

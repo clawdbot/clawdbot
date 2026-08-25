@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -134,6 +135,56 @@ function inspect(context: object) {
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
+    const runtime = createPluginRuntime();
+    const command = vi.fn(async () => ({ payloads: [] }));
+    Object.defineProperty(runtime.agent, "runCommandFromIngress", {
+      configurable: true,
+      value: command,
+    });
+    const registryBuilder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime,
+      activateGlobalSideEffects: false,
+    });
+    const owner = createPluginRecord({ id: "discord", origin: "bundled" });
+    const foreign = createPluginRecord({ id: "foreign", origin: "bundled" });
+    const untrusted = createPluginRecord({ id: "impostor", origin: "workspace" });
+    const ownerApi = registryBuilder.createApi(owner, { config: {} as OpenClawConfig });
+    const foreignApi = registryBuilder.createApi(foreign, { config: {} as OpenClawConfig });
+    const untrustedApi = registryBuilder.createApi(untrusted, { config: {} as OpenClawConfig });
+    registryBuilder.registry.plugins.push(owner, foreign, untrusted);
+    registryBuilder.registry.channels.push({
+      pluginId: "discord",
+      plugin: { id: "discord" },
+      source: owner.source,
+    } as never);
+    markPluginRegistryActive(registryBuilder.registry);
+    const options = {
+      message: "owner turn",
+      messageChannel: "discord" as const,
+      senderIsOwner: true,
+      allowModelOverride: false,
+    };
+    const commandRuntime = { log: vi.fn(), error: vi.fn() } as never;
+    const retained = ownerApi.runtime.agent.runCommandFromIngress;
+
+    await expect(retained(options, commandRuntime)).resolves.toEqual({ payloads: [] });
+    expect(command).toHaveBeenCalledWith(options, commandRuntime);
+    await expect(
+      foreignApi.runtime.agent.runCommandFromIngress(options, commandRuntime),
+    ).rejects.toThrow('Plugin "foreign" cannot admit authenticated owner authority');
+    await expect(
+      untrustedApi.runtime.agent.runCommandFromIngress(options, commandRuntime),
+    ).rejects.toThrow('Plugin "impostor" cannot admit authenticated owner authority');
+
+    registryBuilder.rollbackPluginGlobalSideEffects(owner.id, owner);
+    await expect(retained(options, commandRuntime)).rejects.toThrow(
+      'Plugin "discord" cannot admit authenticated owner authority',
+    );
+    expect(command).toHaveBeenCalledOnce();
+  });
+
   it("defers and preserves the exact active runtime across an inactive prepared load", async () => {
     let channelReads = 0;
     const channel = { inbound: { buildContext: buildChannelInboundEventContext } };

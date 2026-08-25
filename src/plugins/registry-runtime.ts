@@ -968,11 +968,44 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return await agent.runEmbeddedAgent(runParams);
             });
           };
+          const channelOwnerRecord = pluginRuntimeRecordById.get(pluginId);
+          const runCommandFromIngress: PluginRuntime["agent"]["runCommandFromIngress"] = async (
+            params,
+            commandRuntime,
+          ) => {
+            if (
+              !channelOwnerRecord ||
+              (channelOwnerRecord.origin !== "bundled" &&
+                channelOwnerRecord.trustedOfficialInstall !== true) ||
+              pluginRuntimeRecordById.get(pluginId) !== channelOwnerRecord ||
+              !activePluginRuntimeRecords.has(channelOwnerRecord) ||
+              isPluginRegistryRetired(registry) ||
+              !registry.plugins.some(
+                (record) => record === channelOwnerRecord && record.status === "loaded",
+              ) ||
+              !registry.channels.some(
+                (channel) =>
+                  channel.pluginId === pluginId && channel.plugin.id === params.messageChannel,
+              )
+            ) {
+              throw new Error(
+                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${params.messageChannel ?? "unknown"}".`,
+              );
+            }
+            return await runWithPluginScope(() =>
+              agent.runCommandFromIngress(params, commandRuntime),
+            );
+          };
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),
             Object.getOwnPropertyDescriptors(agent),
           ) as PluginRuntime["agent"];
           Object.defineProperties(scopedAgent, {
+            runCommandFromIngress: {
+              configurable: true,
+              enumerable: true,
+              value: runCommandFromIngress,
+            },
             runEmbeddedAgent: {
               configurable: true,
               enumerable: true,
