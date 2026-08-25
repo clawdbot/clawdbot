@@ -94,7 +94,9 @@ describe("browser navigation commands", () => {
         successMessage: "resized to 1024x768",
       }),
     );
-    expect(mocks.runBrowserResizeWithOutput.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
   });
 
   it("rejects non-decimal resize dimensions before dispatch", async () => {
