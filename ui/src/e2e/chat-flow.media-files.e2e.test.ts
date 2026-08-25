@@ -951,6 +951,12 @@ suite.define(() => {
 
       await page.getByRole("button", { name: "Close Files" }).click();
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
+      await gateway.emitChatFinal({
+        runId: "workspace-closed-run",
+        text: "Workspace stayed closed.",
+      });
+      await expect.poll(() => page.getByText("Workspace stayed closed.").count()).toBe(1);
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
       await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({

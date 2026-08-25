@@ -119,7 +119,7 @@ describe("session workspace state", () => {
     const pending = createSessionWorkspaceProps(state, { expanded: true });
 
     expect(pending.list).toBeNull();
-    expect(pending.onOpenDiff).toBeUndefined();
+    expect(pending.onOpenDiff).toBeTypeOf("function");
     expect(listFiles).toHaveBeenCalledTimes(2);
     expect(state.sidebarContent).toBeNull();
 
@@ -185,7 +185,7 @@ describe("session workspace state", () => {
     const oldDiff = resolveSessionDiffSidebarContent(state)!;
     createSessionWorkspaceProps(state, { expanded: true }).onOpenDiff?.();
 
-    refreshSessionWorkspace(state);
+    refreshSessionWorkspace(state, true);
 
     expect(createSessionWorkspaceProps(state).list?.root).toBe("/checkout/a");
     expect(state.sidebarContent).toMatchObject({ kind: "session-diff" });

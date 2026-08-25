@@ -305,7 +305,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.hello = snapshot.hello;
     state.selfUser = snapshot.selfUser ?? null;
     if (sourceChanged) {
-      retireSessionWorkspaceCheckout(state, this.presented);
+      retireSessionWorkspaceCheckout(state);
     }
     if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);

@@ -191,7 +191,10 @@ export function loadSessionWorkspace(
 }
 
 /** Refresh workspace facts after a run, which may have created a git checkout. */
-export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boolean {
+export function refreshSessionWorkspaceState(
+  state: SessionWorkspaceHost,
+  refreshFiles: boolean,
+): boolean {
   const workspace = state.sessionWorkspaceState;
   if (!workspace || workspace.sessionKey !== state.sessionKey) {
     return false;
@@ -199,6 +202,9 @@ export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boole
   const diffOpen =
     workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
   delete workspace.diffContent;
+  if (!refreshFiles) {
+    return diffOpen;
+  }
   if (workspace.loading) {
     workspace.pendingReload = true;
   } else {
@@ -208,7 +214,7 @@ export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boole
 }
 
 /** Retire facts owned by one checkout without disturbing panel layout or retained drafts. */
-export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost, presented = true) {
+export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   const current = state.sessionWorkspaceState;
   if (!current || current.sessionKey !== state.sessionKey) {
     return;
@@ -217,8 +223,5 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost, pres
   clearWorkspaceTimer(current);
   const next = createSessionWorkspaceState(state, current);
   state.sessionWorkspaceState = next;
-  if (presented && state.client && state.connected) {
-    loadSessionWorkspace(state, next);
-  }
   requestWorkspaceUpdate(state);
 }
