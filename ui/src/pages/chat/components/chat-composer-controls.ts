@@ -399,12 +399,17 @@ export function renderComposerDictationStatus(dictation?: ComposerDictationContr
   if (!dictation?.active) {
     return nothing;
   }
+  const listening = !dictation.connecting && !dictation.finalizing;
   return html`
     <div class="agent-chat__composer-status-stack">
       <div
         class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
       >
-        <span class="agent-chat__dictation-phase">
+        <span
+          class="agent-chat__dictation-phase${listening
+            ? " agent-chat__dictation-phase--listening"
+            : ""}"
+        >
           ${dictation.connecting
             ? t("chat.composer.dictationConnecting")
             : dictation.finalizing

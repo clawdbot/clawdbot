@@ -4340,6 +4340,34 @@ button.chat-pr__diff {
   white-space: nowrap;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .agent-chat__dictation-phase--listening {
+    background-image: linear-gradient(
+      90deg,
+      var(--muted) 0%,
+      var(--muted) 38%,
+      color-mix(in srgb, var(--muted) 45%, var(--text-strong) 55%) 50%,
+      var(--muted) 62%,
+      var(--muted) 100%
+    );
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: chat-dictation-listening-shimmer 2s ease-in-out infinite;
+  }
+}
+
+@keyframes chat-dictation-listening-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
 .agent-chat__dictation-status--finalizing .agent-chat__voice-activity-bar {
   background: var(--muted);
   box-shadow: none;

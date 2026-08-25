@@ -821,6 +821,9 @@ describe("renderChatComposer controls", () => {
     expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
     expect(rerenderedButton).toBe(capturedButton);
     expect(rerenderedButton?.classList.contains("chat-send-btn--dictating")).toBe(true);
+    expect(
+      container.querySelector(".agent-chat__dictation-phase--listening")?.textContent?.trim(),
+    ).toBe(t("chat.composer.dictationListening"));
     expect(rerenderedButton?.hasPointerCapture(9)).toBe(false);
   });
 
