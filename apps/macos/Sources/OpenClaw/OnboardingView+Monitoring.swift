@@ -162,9 +162,8 @@ extension OnboardingView {
             (false, "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
         case let .failed(reason):
             (false, Self.gatewayStartFailureMessage(
-                prefix: afterFreshInstall
-                    ? "OpenClaw was installed, but the Gateway did not start. Retry setup."
-                    : "OpenClaw is installed, but the Gateway did not start. Retry setup.",
+                prefix: "OpenClaw \(afterFreshInstall ? "was" : "is") installed, " +
+                    "but the Gateway did not start. Retry setup.",
                 reason: reason))
         }
     }
