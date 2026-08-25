@@ -227,7 +227,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
 
   it.each([
     { name: "non-numeric", embedding: [0.1, "bad"] },
-    { name: "sparse", embedding: Object.assign(new Array(2), { 1: 0.1 }) },
+    { name: "sparse", embedding: Object.assign(Array.of<number>(), { 1: 0.1 }) },
     { name: "non-finite", embedding: [Number.POSITIVE_INFINITY] },
   ])("rejects $name embedding coordinates", async ({ embedding }) => {
     postJsonMock.mockImplementationOnce(async (params) => {
