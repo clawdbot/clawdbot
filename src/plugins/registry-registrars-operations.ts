@@ -389,6 +389,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
           : `${kind} registration missing id`,
       });
     }
+    return undefined;
   };
 
   const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
