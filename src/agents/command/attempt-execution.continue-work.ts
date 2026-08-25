@@ -258,7 +258,7 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
         { decodeWorkState, isContinuationWorkFlow, workToRuntime },
         { markPendingWorkSuperseded },
       ] = await Promise.all([
-        import("../../tasks/task-flow-registry.js"),
+        import("../../tasks/task-flow-runtime-internal.js"),
         import("../../auto-reply/continuation/work-flow-state.js"),
         import("../../auto-reply/continuation/work-store.js"),
       ]);
