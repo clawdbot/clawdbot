@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDispatcher,
   emptyConfig,
@@ -12,7 +12,7 @@ import {
 } from "./dispatch-from-config.test-harness.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-beforeAll(globalBeforeAll0);
+await globalBeforeAll0();
 
 describe("dispatchReplyFromConfig fast-abort model selection", () => {
   beforeEach(describe0BeforeEach0);
