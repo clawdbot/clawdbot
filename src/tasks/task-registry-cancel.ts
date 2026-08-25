@@ -162,14 +162,26 @@ function handleSubagentKillResultForTask(params: {
       },
     };
   }
-  if ((!params.result.found || !params.result.killed) && !isProvisionalSubagentKill) {
+  if (params.result.found && !params.result.killed && params.result.error) {
     return {
       handled: true,
       isProvisionalSubagentKill,
       result: {
         found: true,
         cancelled: false,
-        reason: params.result.found ? "Subagent was not running." : "Subagent task not found.",
+        reason: formatErrorMessage(params.result.error),
+        task: cloneTaskRecord(current ?? params.task),
+      },
+    };
+  }
+  if (!params.result.found && !isProvisionalSubagentKill) {
+    return {
+      handled: true,
+      isProvisionalSubagentKill,
+      result: {
+        found: true,
+        cancelled: false,
+        reason: "Subagent task not found.",
         task: cloneTaskRecord(current ?? params.task),
       },
     };

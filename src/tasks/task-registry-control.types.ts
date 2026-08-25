@@ -23,6 +23,7 @@ type KillSubagentRunAdminResult =
       sessionKey: string;
       cascadeKilled: number;
       cascadeLabels?: string[];
+      error?: unknown;
     };
 
 type KillSubagentRunAdmin = (params: {
