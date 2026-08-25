@@ -13,6 +13,8 @@ const DOCUMENT_PREVIEW_MAX_CHARS = 16 * 1024;
 const DOCUMENT_PREVIEW_MAX_ROWS = 8;
 const DOCUMENT_PREVIEW_MAX_COLUMNS = 24;
 const DOCUMENT_PREVIEW_MAX_CELLS = 128;
+const DOCUMENT_PREVIEW_VISIBLE_ROWS = 4;
+const DOCUMENT_PREVIEW_VISIBLE_COLUMNS = 8;
 const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
 const TEXTY_DOCUMENT_MIME_TYPES = new Set([
   "application/json",
@@ -179,30 +181,46 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
     </div>`;
   }
   const columnCount = Math.max(...rows.map((row) => row.length));
+  const visibleColumnCount = Math.min(columnCount, DOCUMENT_PREVIEW_VISIBLE_COLUMNS);
+  const visibleRows = rows.slice(0, DOCUMENT_PREVIEW_VISIBLE_ROWS);
+  const alwaysTruncated =
+    preview.truncated ||
+    rows.length > DOCUMENT_PREVIEW_VISIBLE_ROWS ||
+    columnCount > DOCUMENT_PREVIEW_VISIBLE_COLUMNS;
+  const mediumTruncated = columnCount > 5;
+  const narrowTruncated = columnCount > 3;
   return html`
     <div class="chat-assistant-attachment-card__table-wrap">
       <table class="chat-assistant-attachment-card__table">
         <thead>
           <tr>
             ${Array.from(
-              { length: columnCount },
-              (_, index) => html`<th>${rows[0]?.[index] ?? ""}</th>`,
+              { length: visibleColumnCount },
+              (_, index) => html`<th title=${visibleRows[0]?.[index] ?? ""}>
+                ${visibleRows[0]?.[index] ?? ""}
+              </th>`,
             )}
           </tr>
         </thead>
         <tbody>
-          ${rows.slice(1).map(
+          ${visibleRows.slice(1).map(
             (row) => html`<tr>
               ${Array.from(
-                { length: columnCount },
-                (_, index) => html`<td>${row[index] ?? ""}</td>`,
+                { length: visibleColumnCount },
+                (_, index) => html`<td title=${row[index] ?? ""}>${row[index] ?? ""}</td>`,
               )}
             </tr>`,
           )}
         </tbody>
       </table>
-      ${preview.truncated
-        ? html`<div class="chat-assistant-attachment-card__table-truncated" role="note">
+      ${alwaysTruncated || mediumTruncated || narrowTruncated
+        ? html`<div
+            class="chat-assistant-attachment-card__table-truncated"
+            role="note"
+            ?data-always-truncated=${alwaysTruncated}
+            ?data-medium-truncated=${mediumTruncated}
+            ?data-narrow-truncated=${narrowTruncated}
+          >
             ${t("chat.attachments.previewTruncated")}
           </div>`
         : null}

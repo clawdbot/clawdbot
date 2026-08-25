@@ -2085,54 +2085,41 @@ openclaw-chat-video-player {
   background: linear-gradient(to bottom, transparent, var(--media-foreground));
 }
 
-:is(
-  .chat-assistant-attachment-card__html-preview,
-  .chat-assistant-attachment-card__table-wrap
-) {
+.chat-assistant-attachment-card__html-preview {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted) 28%, transparent) transparent;
 }
 
-:is(
-  .chat-assistant-attachment-card__html-preview,
-  .chat-assistant-attachment-card__table-wrap
-)::-webkit-scrollbar {
+.chat-assistant-attachment-card__html-preview::-webkit-scrollbar {
   width: 7px;
   height: 7px;
 }
 
-:is(
-  .chat-assistant-attachment-card__html-preview,
-  .chat-assistant-attachment-card__table-wrap
-)::-webkit-scrollbar-track {
+.chat-assistant-attachment-card__html-preview::-webkit-scrollbar-track {
   background: transparent;
 }
 
-:is(
-  .chat-assistant-attachment-card__html-preview,
-  .chat-assistant-attachment-card__table-wrap
-)::-webkit-scrollbar-thumb {
+.chat-assistant-attachment-card__html-preview::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
   background: color-mix(in srgb, var(--muted) 28%, transparent);
   background-clip: padding-box;
 }
 
-  :is(
-    .chat-assistant-attachment-card__html-preview,
-    .chat-assistant-attachment-card__table-wrap
-  ):hover::-webkit-scrollbar-thumb {
+.chat-assistant-attachment-card__html-preview:hover::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--muted) 52%, transparent);
   background-clip: padding-box;
 }
 
 .chat-assistant-attachment-card__table-wrap {
+  container-type: inline-size;
   width: 100%;
-  overflow-x: auto;
+  overflow: hidden;
   border-radius: 0;
 }
 
 .chat-assistant-attachment-card__table-truncated {
+  display: none;
   padding: 7px 16px;
   border-top: 1px solid var(--chat-attachment-border);
   color: var(--muted);
@@ -2140,9 +2127,14 @@ openclaw-chat-video-player {
   text-align: right;
 }
 
+.chat-assistant-attachment-card__table-truncated[data-always-truncated] {
+  display: block;
+}
+
 .chat-assistant-attachment-card__table {
   width: 100%;
-  min-width: 360px;
+  min-width: 0;
+  table-layout: fixed;
   border-collapse: collapse;
   color: var(--text);
   font-size: 12px;
@@ -2154,6 +2146,8 @@ openclaw-chat-video-player {
   padding: 11px 16px;
   border-bottom: 1px solid var(--chat-attachment-border);
   border-right: 1px solid var(--chat-attachment-border);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2170,6 +2164,26 @@ openclaw-chat-video-player {
 
 .chat-assistant-attachment-card__table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+@container (max-width: 540px) {
+  .chat-assistant-attachment-card__table :is(th, td):nth-child(n + 6) {
+    display: none;
+  }
+
+  .chat-assistant-attachment-card__table-truncated[data-medium-truncated] {
+    display: block;
+  }
+}
+
+@container (max-width: 360px) {
+  .chat-assistant-attachment-card__table :is(th, td):nth-child(n + 4) {
+    display: none;
+  }
+
+  .chat-assistant-attachment-card__table-truncated[data-narrow-truncated] {
+    display: block;
+  }
 }
 
 .chat-assistant-attachment-card__preview-unavailable {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import {
   parseDelimitedPreview,
+  renderAttachmentDocumentPreview,
   resolveDocumentPreviewKind,
 } from "./chat-message-document-preview.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
@@ -28,6 +29,29 @@ describe("parseDelimitedPreview", () => {
     expect(Math.max(...preview.rows.map((row) => row.length))).toBeLessThanOrEqual(24);
     expect(cellCount).toBeLessThanOrEqual(128);
     expect(preview.truncated).toBe(true);
+  });
+
+  it("bounds the rendered CSV grid separately from the parse budget", () => {
+    const container = document.createElement("div");
+    const wideCsv = Array.from({ length: 8 }, (_, row) =>
+      Array.from({ length: 24 }, (_, column) => `${row}:${column}`).join(","),
+    ).join("\n");
+
+    render(
+      renderAttachmentDocumentPreview(
+        "table",
+        documentAttachment("wide.csv", "text/csv").attachment,
+        "https://example.com/wide.csv",
+        wideCsv,
+      ),
+      container,
+    );
+
+    expect(container.querySelectorAll("thead th")).toHaveLength(8);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__table-truncated"),
+    ).not.toBeNull();
   });
 
   it("retains the bounded inline preview for text documents", () => {
