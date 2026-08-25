@@ -13,6 +13,7 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { log } from "../logger.js";
@@ -26,7 +27,6 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
-import { resolveUnknownToolGuardThreshold } from "./attempt-run-decisions.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
@@ -92,9 +92,6 @@ export function installEmbeddedAttemptStreamGuards(input: {
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
   isYieldDetected: () => boolean;
-  clientToolLoopDetection: ReturnType<
-    typeof import("../../agent-tools.js").resolveToolLoopDetectionConfig
-  >;
   anthropicPayloadLogger: AnthropicPayloadLogger;
   onRejectedProviderReplayRepaired: () => void;
   onIdleTimeout: (error: Error) => void;
@@ -267,7 +264,8 @@ export function installEmbeddedAttemptStreamGuards(input: {
     session.agent.streamFn,
     input.liveAllowedToolNames,
     {
-      unknownToolThreshold: resolveUnknownToolGuardThreshold(input.clientToolLoopDetection),
+      // Unknown-tool recovery stays active even when configurable loop detection is disabled.
+      unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
     },
   );
 
