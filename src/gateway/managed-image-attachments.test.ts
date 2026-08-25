@@ -1357,7 +1357,7 @@ describe("createManagedOutgoingImageBlocks", () => {
 
       const { result } = await requestManagedImage({
         stateDir,
-        pathName: block.url,
+        pathName: String(block.url),
         authResponse: { authMethod: "token" },
       });
 
