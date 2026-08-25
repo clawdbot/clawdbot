@@ -445,7 +445,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         content,
         mediaUrl: mediaUrl ?? undefined,
         replyTo: replyTo ?? undefined,
-        silent: readBooleanParam(actionParams, "silent") === true,
+        ...(readBooleanParam(actionParams, "silent") === true ? { silent: true } : {}),
       },
       cfg,
       actionOptions,

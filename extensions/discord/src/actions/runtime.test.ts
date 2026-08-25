@@ -2130,15 +2130,24 @@ describe("handleDiscordMessagingAction", () => {
       label: "sendMessageDiscord",
     },
   ])(
-    "preserves silent delivery for the $action message action",
+    "preserves silent delivery and default options for the $action message action",
     async ({ action, params, sender, label }) => {
-      await handleDiscordMessageAction({
-        action,
-        params: { ...params, silent: true },
-        cfg: DISCORD_TEST_CFG,
-      });
+      for (const silent of [true, false, undefined]) {
+        const send = sender();
+        send.mockClear();
+        await handleDiscordMessageAction({
+          action,
+          params: { ...params, ...(silent === undefined ? {} : { silent }) },
+          cfg: DISCORD_TEST_CFG,
+        });
 
-      expect(mockObjectArg(sender(), label, 0, 2).silent).toBe(true);
+        const sendOptions = mockObjectArg(send, label, 0, 2);
+        if (silent === true) {
+          expect(sendOptions.silent).toBe(true);
+        } else {
+          expect(sendOptions).not.toHaveProperty("silent");
+        }
+      }
     },
   );
 
