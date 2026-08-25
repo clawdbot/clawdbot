@@ -90,6 +90,7 @@ import {
   trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -3292,6 +3293,13 @@ describe("session accessor seam", () => {
           appendParentId: "existing-message",
         },
       ]);
+      // Replace defers the projection rebuild to the reconcile worker; committed
+      // cursors are provable only once the projection converges.
+      await waitForSessionTranscriptProjection({
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        storePath,
+      });
 
       const updates: Array<{
         target: unknown;
