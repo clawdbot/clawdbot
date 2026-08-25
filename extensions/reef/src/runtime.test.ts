@@ -31,9 +31,20 @@ describe("Reef runtime state", () => {
     const active = { flow: {}, friends: {}, reviews: {} } as never;
 
     first.setReefRuntime(runtime);
-    first.setActiveReef(active);
+    const releaseFirst = first.setActiveReef(active);
 
     expect(second.getReefRuntime()).toBe(runtime);
     expect(second.getActiveReef()).toBe(active);
+
+    const replacement = { flow: {}, friends: {}, reviews: {} } as never;
+    const releaseReplacement = second.setActiveReef(replacement);
+    releaseFirst();
+
+    expect(first.getActiveReef()).toBe(replacement);
+
+    releaseReplacement();
+    releaseReplacement();
+
+    expect(() => first.getActiveReef()).toThrow("Reef channel is not running");
   });
 });

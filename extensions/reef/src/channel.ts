@@ -440,12 +440,19 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       // Attempt the peer-key refresh before recovery can dispatch an agent
       // turn. The lifecycle activates only after that attempt is classified.
       // The lifecycle owns both the ordering and the reconcile failure policy.
+      let releaseActiveReef: (() => void) | undefined;
+      const retireActiveReef = () => releaseActiveReef?.();
       const activate = async () => {
         await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
         if (ctx.abortSignal.aborted) {
           return;
         }
-        setActiveReef({ flow, friends, reviews });
+        releaseActiveReef = setActiveReef({ flow, friends, reviews });
+        ctx.abortSignal.addEventListener("abort", retireActiveReef, { once: true });
+        if (ctx.abortSignal.aborted) {
+          retireActiveReef();
+          return;
+        }
         ctx.setStatus({ accountId: "default", running: true, connected: false });
       };
       const inbox = new ReefInboxConnection(
@@ -510,6 +517,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           onReady: activate,
         });
       } finally {
+        ctx.abortSignal.removeEventListener("abort", retireActiveReef);
+        retireActiveReef();
         ctx.setStatus({ accountId: "default", running: false, connected: false });
       }
     },
