@@ -77,7 +77,7 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
 
   it.each([
     { channel: "stable" as const, expectedVersion: "2026.7.1" },
-    { channel: "extended-stable" as const, expectedVersion: "2026.7.1-2" },
+    { channel: "extended-stable" as const, expectedVersion: "2026.7.1" },
   ])("preserves the $channel release-cohort contract", ({ channel, expectedVersion }) => {
     expect(
       resolveNpmInstallSpecsForUpdateChannel({

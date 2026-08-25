@@ -60,10 +60,9 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
           `${policy} plugin resolution for ${target.name} requires an exact core version.`,
         );
       }
-      const installVersion =
-        params.updateChannel === "stable"
-          ? resolveOpenClawReleaseCohortVersion(coreVersion)
-          : coreVersion;
+      const installVersion = params.versionBoundToCore
+        ? resolveOpenClawReleaseCohortVersion(coreVersion)
+        : coreVersion;
       return {
         installSpec: `${target.name}@${installVersion}`,
         recordSpec: params.spec,
