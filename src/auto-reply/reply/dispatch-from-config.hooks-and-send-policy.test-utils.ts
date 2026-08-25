@@ -1438,6 +1438,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
     expect(deliveredTexts).toEqual([NO_VISIBLE_REPLY_FALLBACK_TEXT]);
+    expect(deliver).toHaveBeenCalledOnce();
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 

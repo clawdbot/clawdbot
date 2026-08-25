@@ -291,7 +291,7 @@ function maybeWrapInlineCode(value: string, markdown: boolean): string {
 function resolveToolErrorWarningPolicy(params: {
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
@@ -299,7 +299,9 @@ function resolveToolErrorWarningPolicy(params: {
     showWarning:
       !params.hasUserFacingReply &&
       !params.suppressToolErrors &&
-      params.suppressToolErrorWarnings !== true,
+      (typeof params.suppressToolErrorWarnings === "function"
+        ? params.suppressToolErrorWarnings()
+        : params.suppressToolErrorWarnings) !== true,
     includeDetails,
   };
 }
@@ -308,7 +310,7 @@ export function buildFailureWarning(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   verboseLevel?: VerboseLevel;
   useMarkdown: boolean;
 }): { text: string; nonTerminalToolErrorWarning: boolean } | undefined {

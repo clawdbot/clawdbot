@@ -302,7 +302,7 @@ async function sendFollowupPayloads(params: {
   kind: ReplyDispatchKind;
   mirror?: boolean;
   resolved?: { provider: string; model: string };
-}): Promise<void> {
+}): Promise<boolean> {
   const { turn, defaults } = params;
   const { originatingChannel, originatingTo } = turn.queued;
   const originRoutable = Boolean(isRoutableChannel(originatingChannel) && originatingTo);
@@ -320,13 +320,13 @@ async function sendFollowupPayloads(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (payloads.length === 0) {
-    return;
+    return false;
   }
   if (!originRoutable && !defaults.opts?.onBlockReply) {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
-    return;
+    return false;
   }
   const typing = createTypingSignaler({
     typing: defaults.typing,
@@ -335,6 +335,7 @@ async function sendFollowupPayloads(params: {
   });
   const crossChannelFailures: ReplyPayload[] = [];
   let deliveredCrossChannelOrigin = false;
+  let visibleDelivery = false;
   const provider = resolveOriginMessageProvider({
     provider: turn.queued.run.messageProvider,
   });
@@ -363,6 +364,8 @@ async function sendFollowupPayloads(params: {
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
       await defaults.opts?.onBlockReply?.(payload);
+      const delivered = (await defaults.opts?.settleBlockReplyDelivery?.(payload)) === true;
+      visibleDelivery = delivered || visibleDelivery;
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
       const metadata = getReplyPayloadMetadata(payload);
       const result = await routeReply({
@@ -390,12 +393,15 @@ async function sendFollowupPayloads(params: {
         logVerbose(`followup queue: route-reply failed: ${routeError}`);
         if (sameChannelOrigin && defaults.opts?.onBlockReply) {
           await defaults.opts.onBlockReply(payload);
+          visibleDelivery =
+            (await defaults.opts.settleBlockReplyDelivery?.(payload)) === true || visibleDelivery;
         } else if (defaults.opts?.onBlockReply) {
           crossChannelFailures.push(payload);
         } else {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
       } else if (result.delivered) {
+        visibleDelivery = true;
         if (!result.ok) {
           logVerbose(
             `followup queue: route-reply partially failed after delivery: ${
@@ -414,13 +420,17 @@ async function sendFollowupPayloads(params: {
     (terminalFailure || (crossChannelFailures.length > 0 && !deliveredCrossChannelOrigin)) &&
     defaults.opts?.onBlockReply
   ) {
-    await defaults.opts.onBlockReply({
+    const diagnostic = {
       text:
         "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
         "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
       isError: true,
-    });
+    };
+    await defaults.opts.onBlockReply(diagnostic);
+    visibleDelivery =
+      (await defaults.opts.settleBlockReplyDelivery?.(diagnostic)) === true || visibleDelivery;
   }
+  return visibleDelivery;
 }
 
 /** Performs the already-resolved follow-up delivery action. */
@@ -431,11 +441,11 @@ export async function deliverFollowupDecision(params: {
   runId: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
   kind?: ReplyDispatchKind;
-}): Promise<void> {
+}): Promise<boolean> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
-    return;
+    return false;
   }
   if (decision.kind === "retry-source-delivery") {
     warnPrivateMessageToolFinal({
@@ -463,7 +473,7 @@ export async function deliverFollowupDecision(params: {
         { position: "front" },
       );
     if (enqueued) {
-      return;
+      return false;
     }
     const diagnosticPayloads = resolveFollowupDeliveryPayloads({
       cfg: turn.config,
@@ -476,7 +486,7 @@ export async function deliverFollowupDecision(params: {
       originatingTo: turn.queued.originatingTo,
       originatingThreadId: turn.queued.originatingThreadId,
     });
-    await sendFollowupPayloads({
+    return await sendFollowupPayloads({
       payloads: diagnosticPayloads,
       turn,
       defaults,
@@ -484,9 +494,8 @@ export async function deliverFollowupDecision(params: {
       kind: params.kind ?? "final",
       resolved: decision.resolved,
     });
-    return;
   }
-  await sendFollowupPayloads({
+  return await sendFollowupPayloads({
     payloads: decision.kind === "deliver" ? decision.payloads : [decision.payload],
     turn,
     defaults,

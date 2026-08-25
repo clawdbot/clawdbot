@@ -101,8 +101,6 @@ describe("createReplyTurnLedger", () => {
   });
 
   it("conservatively counts a started-then-failed delivery as visible", async () => {
-    // Chunked transports may show partial content before rejecting; core cannot
-    // prove invisibility, so the fallback must stay quiet.
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         throw new Error("transport down mid-send");

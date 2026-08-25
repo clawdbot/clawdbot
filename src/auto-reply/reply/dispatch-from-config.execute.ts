@@ -14,6 +14,7 @@ import {
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { createBlockReplySettlementRegistry } from "./block-reply-settlement-registry.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
@@ -82,6 +83,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
+  const blockReplySettlements = createBlockReplySettlementRegistry();
   const flushDeferredFinalText = async () => {
     if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
       return false;
@@ -149,6 +151,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   params.replyOptions?.onAssistantMessageStart,
                 ),
                 onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
+                settleBlockReplyDelivery: (payload) => blockReplySettlements.settle(payload),
                 onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
                   allowWhenToolSummariesHidden:
                     params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
@@ -549,6 +552,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         "block",
                       );
                       state.recordRoutedBlockReplyDelivery(normalizedPayload, result);
+                      blockReplySettlements.register(inputPayload, () =>
+                        Promise.resolve(result?.delivered === true),
+                      );
                       if (result?.delivered === true && !state.suppressAutomaticSourceDelivery) {
                         await params.replyOptions?.onBlockReplyQueued?.(
                           visiblePayload,
@@ -561,6 +567,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       if (admitted) {
                         state.progressState.hasPendingDirectBlockReplyDelivery = true;
                       }
+                      const settle = blockReplySettlements.register(inputPayload, () =>
+                        admitted
+                          ? wasReplyDeliveredAsBlock(normalizedPayload, context?.abortSignal)
+                          : Promise.resolve(false),
+                      );
                       if (
                         admitted &&
                         !state.suppressAutomaticSourceDelivery &&
@@ -569,16 +580,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         // Block callbacks are delivery facts, not queue-admission facts.
                         // Resolve them after beforeDeliver hooks without stalling streaming.
                         trackDispatchLifecycleWork(
-                          wasReplyDeliveredAsBlock(normalizedPayload, context?.abortSignal).then(
-                            async (delivered) => {
-                              if (delivered) {
-                                await params.replyOptions?.onBlockReplyQueued?.(
-                                  visiblePayload,
-                                  queuedContext,
-                                );
-                              }
-                            },
-                          ),
+                          settle().then(async (delivered) => {
+                            if (delivered) {
+                              await params.replyOptions?.onBlockReplyQueued?.(
+                                visiblePayload,
+                                queuedContext,
+                              );
+                            }
+                          }),
                         );
                       }
                     }
