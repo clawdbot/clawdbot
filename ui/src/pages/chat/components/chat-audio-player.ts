@@ -7,6 +7,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -113,6 +114,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   private releaseWaveformBlob: (() => void) | undefined;
   private waveformController: AbortController | null = null;
   private waveformAttempted = false;
+  private waveformVisible = false;
+  private viewportElement: HTMLElement | null = null;
+  private stopObservingViewport: (() => void) | undefined;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -120,6 +124,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
+    this.stopObservingViewport?.();
+    this.stopObservingViewport = undefined;
+    this.viewportElement = null;
     this.sourceController.cancel();
     this.releaseWaveformBlob?.();
     this.releaseWaveformBlob = undefined;
@@ -143,7 +150,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       changedProperties.has("src") ||
       changedProperties.has("sourceIdentity") ||
       changedProperties.has("playback") ||
-      changedProperties.has("authToken")
+      changedProperties.has("authToken") ||
+      changedProperties.has("sizeBytes") ||
+      changedProperties.has("serverDurationMs")
     ) {
       const sourceIdentityChanged =
         changedProperties.has("sourceIdentity") &&
@@ -169,6 +178,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         }
       }
       this.syncSource();
+      if (this.waveformVisible) {
+        void this.prepareWaveformAudio().catch(() => undefined);
+      }
     }
   }
 
@@ -178,6 +190,23 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.media.muted = this.muted;
     }
     this.syncSource();
+  };
+
+  private setViewportElement = (element: Element | undefined) => {
+    const viewportElement = element instanceof HTMLElement ? element : null;
+    if (this.viewportElement === viewportElement) {
+      return;
+    }
+    this.stopObservingViewport?.();
+    this.stopObservingViewport = undefined;
+    this.viewportElement = viewportElement;
+    if (!viewportElement) {
+      return;
+    }
+    this.stopObservingViewport = observeChatAttachmentViewport(viewportElement, () => {
+      this.waveformVisible = true;
+      void this.prepareWaveformAudio().catch(() => undefined);
+    });
   };
 
   private setWaveform = (element: Element | undefined) => {
@@ -230,6 +259,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     void pending?.then(() => {
       if (this.isConnected) {
         this.requestUpdate();
+        if (this.waveformVisible) {
+          void this.prepareWaveformAudio().catch(() => undefined);
+        }
       }
     });
   }
@@ -515,6 +547,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--audio"
+        ${ref(this.setViewportElement)}
         ?data-openable=${Boolean(this.onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
       >
