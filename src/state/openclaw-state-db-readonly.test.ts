@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 
 const snapshotMocks = vi.hoisted(() => ({
   isolated: vi.fn(),
@@ -41,7 +41,7 @@ afterEach(() => {
 
 describe("artifact-preserving shared-state reads", () => {
   it("prepares snapshots in-process when this process has no writable handle", async () => {
-    await withTempDir("openclaw-state-readonly-in-process-", async (stateDir) => {
+    await withTestDir("openclaw-state-readonly-in-process-", async (stateDir) => {
       const options = createOptions(stateDir);
       openOpenClawStateDatabase(options);
       closeOpenClawStateDatabaseForTest();
@@ -55,7 +55,7 @@ describe("artifact-preserving shared-state reads", () => {
   });
 
   it("keeps snapshot preparation isolated while a writable handle has a transaction", async () => {
-    await withTempDir("openclaw-state-readonly-isolated-", async (stateDir) => {
+    await withTestDir("openclaw-state-readonly-isolated-", async (stateDir) => {
       const options = createOptions(stateDir);
       const opened = openOpenClawStateDatabase(options);
       opened.db.exec("BEGIN");
@@ -72,7 +72,7 @@ describe("artifact-preserving shared-state reads", () => {
   });
 
   it("reuses an idle writable handle without preparing a snapshot", async () => {
-    await withTempDir("openclaw-state-readonly-reuse-", async (stateDir) => {
+    await withTestDir("openclaw-state-readonly-reuse-", async (stateDir) => {
       const options = createOptions(stateDir);
       openOpenClawStateDatabase(options);
 
