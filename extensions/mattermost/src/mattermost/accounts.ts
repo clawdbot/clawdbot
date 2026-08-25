@@ -91,7 +91,7 @@ function resolveMattermostAccountWithMode(params: {
     params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
   );
   const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
-  const rootConfig = params.cfg.channels?.mattermost as MattermostConfig | undefined;
+  const rootConfig: MattermostConfig | undefined = params.cfg.channels?.mattermost;
   const accountConfig = resolveAccountEntry(rootConfig?.accounts, accountId);
   const merged = mergeMattermostAccountConfig(params.cfg, accountId);
   const accountFinalDelivery = accountConfig?.streaming?.progress?.finalDelivery;

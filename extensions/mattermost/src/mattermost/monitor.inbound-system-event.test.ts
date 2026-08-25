@@ -1053,7 +1053,7 @@ describe("mattermost inbound user posts", () => {
         message: kind === "typed" ? "|\n\nWorking..." : "human question",
         senderId: kind === "typed" ? "peer-openclaw-bot" : "user-1",
         senderName: kind === "typed" ? "peer-openclaw" : "alice",
-        ...(kind === "typed" ? { postType: "custom_openclaw_progress" } : {}),
+        ...(kind === "typed" ? { type: "custom_openclaw_progress" } : {}),
       });
     }
     await emitMattermostChannelPost(socket, {
