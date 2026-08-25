@@ -520,6 +520,14 @@ describe("authorized beta focused evidence", () => {
     expect(result.stderr).not.toContain("historical execution plan child run id");
   });
 
+  it("allows ANSI-bearing Actions logs with legacy gh fallback", () => {
+    const source = readFileSync("scripts/validate-authorized-beta-focused-evidence.mts", "utf8");
+
+    expect(source).toContain('args.push("--allow-escape-sequences")');
+    expect(source).toContain('includes("unknown flag: --allow-escape-sequences")');
+    expect(source).toContain("log = gh(jobLogArgs(jobId, false))");
+  });
+
   it("binds the direct-child tree, exact diff, and unchanged published projection", () => {
     const { policy, root } = fixturePolicy();
     const changedPath = policy.changedPaths[0];
