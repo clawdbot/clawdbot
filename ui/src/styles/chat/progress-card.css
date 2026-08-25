@@ -479,7 +479,6 @@
   height: var(--session-progress-marker-size);
   align-items: center;
   justify-content: center;
-  align-self: start;
   flex: none;
   padding: 0;
   margin: 0;
