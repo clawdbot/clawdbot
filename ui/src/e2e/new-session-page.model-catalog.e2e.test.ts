@@ -202,15 +202,21 @@ suite.define(() => {
       const modelSelect = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
+      await expect.poll(() => modelSelect.getAttribute("aria-disabled")).toBe("false");
       await modelSelect.click();
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
 
-      // Opening the picker consumes the recovered ready snapshot without
-      // revalidating it.
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      // Explicit picker discovery refreshes the recovered metadata owner once.
+      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({
+          params: { view: "configured", agentId: "main", refresh: true },
+        }),
+      ]);
       expect(await gateway.getRequests("chat.metadata")).toEqual([
+        expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
         expect.objectContaining({ params: { agentId: "main" } }),
       ]);
