@@ -1457,36 +1457,40 @@ describe("session history HTTP endpoints", () => {
       });
 
       await withGatewayHarness(async (harness) => {
-        const hidden = await appendAssistantMessageToSessionTranscript({
-          sessionKey: "agent:main:main",
-          text: "NO_REPLY",
-          storePath,
-        });
-        expect(hidden.ok).toBe(true);
-
-        if (!hidden.ok) {
-          throw new Error(`append failed: ${hidden.reason}`);
-        }
-        const visibleMessageId = await appendTranscriptMessage({
-          sessionKey: "agent:main:main",
-          storePath,
-          message: makeTranscriptAssistantMessage({
-            text: "Done.",
-            content: [
-              {
-                type: blockType,
-                text: "internal reasoning",
-                textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        const visibleMessageId = "visible-phased-assistant";
+        await replaceTranscriptEvents(
+          { agentId: AGENT_ID, sessionId: "sess-main", sessionKey: "agent:main:main", storePath },
+          [
+            { type: "session", version: 1, id: "sess-main" },
+            { id: "hidden-control", message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }) },
+            {
+              id: visibleMessageId,
+              message: {
+                ...makeTranscriptAssistantMessage({ text: "Done." }),
+                content: [
+                  {
+                    type: blockType,
+                    text: "internal reasoning",
+                    textSignature: JSON.stringify({
+                      v: 1,
+                      id: "item_commentary",
+                      phase: "commentary",
+                    }),
+                  },
+                  {
+                    type: blockType,
+                    text: "Done.",
+                    textSignature: JSON.stringify({
+                      v: 1,
+                      id: "item_final",
+                      phase: "final_answer",
+                    }),
+                  },
+                ],
               },
-              {
-                type: blockType,
-                text: "Done.",
-                textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-              },
-            ],
-          }),
-          emitInlineMessage: false,
-        });
+            },
+          ],
+        );
 
         const historyRes = await fetchSessionHistory(harness.port, "agent:main:main");
         expect(historyRes.status).toBe(200);
