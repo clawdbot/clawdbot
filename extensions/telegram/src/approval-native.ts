@@ -41,8 +41,12 @@ type TelegramOriginResolverInput = Parameters<
   NonNullable<NonNullable<ChannelApprovalCapability["native"]>["resolveOriginTarget"]>
 >[0];
 
+function isTelegramExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
+  return "command" in request.request;
+}
+
 function clearTelegramTurnSource(request: ApprovalRequest): ApprovalRequest {
-  if ("command" in request.request) {
+  if (isTelegramExecApprovalRequest(request)) {
     return {
       ...request,
       request: {
