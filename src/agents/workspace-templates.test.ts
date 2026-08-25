@@ -7,7 +7,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { isHeartbeatContentEffectivelyEmpty } from "../auto-reply/heartbeat.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -24,7 +23,7 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
 
     const templatesDir = path.join(root, "src", "agents", "templates");
     await fs.mkdir(templatesDir, { recursive: true });
-    await fs.writeFile(path.join(templatesDir, "HEARTBEAT.md"), "# ok\n");
+    await fs.writeFile(path.join(templatesDir, "AGENTS.md"), "# ok\n");
 
     const distDir = path.join(root, "dist");
     await fs.mkdir(distDir, { recursive: true });
@@ -45,7 +44,7 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
     const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
 
     const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
-    expect(path.normalize(resolved)).toBe(path.resolve("src", "agents", "templates"));
+    expect(path.normalize(resolved)).toBe(path.join(root, "src", "agents", "templates"));
   });
 
   it("includes docs templates as secondary search roots", async () => {
@@ -66,22 +65,9 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
     expect(resolved.slice(0, 2)).toEqual([runtimeTemplatesDir, docsTemplatesDir]);
   });
 
-  it("keeps runtime templates free of docs frontmatter", async () => {
-    const runtimeTemplatesDir = path.resolve("src", "agents", "templates");
-    const entries = await fs.readdir(runtimeTemplatesDir);
-    const markdownFiles = entries.filter((entry) => entry.endsWith(".md"));
+  it("does not ship a retired runtime heartbeat template", async () => {
+    const heartbeatTemplate = path.resolve("src", "agents", "templates", "HEARTBEAT.md");
 
-    expect(markdownFiles).toContain("HEARTBEAT.md");
-    for (const fileName of markdownFiles) {
-      const content = await fs.readFile(path.join(runtimeTemplatesDir, fileName), "utf-8");
-      expect(content.startsWith("---")).toBe(false);
-    }
-  });
-
-  it("keeps the runtime HEARTBEAT.md template effectively empty", async () => {
-    const runtimeTemplatesDir = path.resolve("src", "agents", "templates");
-    const content = await fs.readFile(path.join(runtimeTemplatesDir, "HEARTBEAT.md"), "utf-8");
-
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+    await expect(fs.access(heartbeatTemplate)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

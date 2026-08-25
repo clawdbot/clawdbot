@@ -1058,7 +1058,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       },
     });
 
-    expect(result.calledCtx.Body).toContain("HEARTBEAT_OK");
+    expect(result.calledCtx.Body).toContain(SILENT_REPLY_TOKEN);
     expect(result.calledCtx.Body).not.toContain("heartbeat_respond");
     expect(result.calledOpts.sourceReplyDeliveryMode).toBeUndefined();
   });
@@ -1084,7 +1084,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     ]);
   });
 
-  it("keeps the legacy heartbeat ok prompt outside heartbeat response tool mode", async () => {
+  it("uses the canonical silent reply prompt outside heartbeat response tool mode", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath, visibleReplies: "automatic" });
       await seedTelegramSession(storePath, cfg);
@@ -1101,7 +1101,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
       const calledCtx = replyContext(replySpy);
       const calledOpts = replyOptions(replySpy);
-      expect(calledCtx.Body).toContain("HEARTBEAT_OK");
+      expect(calledCtx.Body).toContain(SILENT_REPLY_TOKEN);
       expect(calledCtx.Body).not.toContain("heartbeat_respond");
       expect(calledOpts.enableHeartbeatTool).toBeUndefined();
       expect(calledOpts.forceHeartbeatTool).toBeUndefined();
