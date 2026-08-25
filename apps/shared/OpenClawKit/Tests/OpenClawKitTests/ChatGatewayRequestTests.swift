@@ -99,12 +99,11 @@ struct ChatGatewayRequestTests {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "global",
             agentID: "reviewer",
-            expectedMarkedUnreadAt: .some(1_720_000_000_000),
             label: .some(nil),
             category: .some(nil),
             pinned: true,
             archived: nil,
-            unread: false)
+            unreadPatch: nil)
 
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
@@ -112,8 +111,6 @@ struct ChatGatewayRequestTests {
         #expect(request.params["label"]?.value is NSNull)
         #expect(request.params["category"]?.value is NSNull)
         #expect(request.params["pinned"]?.value as? Bool == true)
-        #expect(request.params["unread"]?.value as? Bool == false)
-        #expect(request.params["expectedMarkedUnreadAt"]?.value as? Double == 1_720_000_000_000)
         #expect(request.params["archived"] == nil)
     }
 
@@ -121,14 +118,43 @@ struct ChatGatewayRequestTests {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "main",
             agentID: nil,
-            expectedMarkedUnreadAt: .some(nil),
             label: nil,
             category: nil,
             pinned: nil,
             archived: nil,
-            unread: false)
+            unreadPatch: .automaticRead(expectedMarkedUnreadAt: nil))
 
         #expect(request.params["expectedMarkedUnreadAt"]?.value is NSNull)
+    }
+
+    @Test func `explicit session read identifies user intent`() {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "main",
+            agentID: nil,
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unreadPatch: .explicitRead)
+
+        #expect(request.params["unread"]?.value as? Bool == false)
+        #expect(request.params["readIntent"]?.value as? String == "explicit")
+        #expect(request.params["expectedMarkedUnreadAt"] == nil)
+    }
+
+    @Test func `session read routing separates explicit automatic and legacy requests`() {
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: nil,
+            supportsReadContract: true) == .explicitRead)
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: .some(nil),
+            supportsReadContract: true) == .automaticRead(expectedMarkedUnreadAt: nil))
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: .some(10),
+            supportsReadContract: false) == .legacyRead)
     }
 
     @Test func `settings patch request encodes default model as null`() {
@@ -278,7 +304,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: nil,
-            unread: nil)
+            unreadPatch: nil)
         let archive = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -287,7 +313,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: true,
-            unread: nil)
+            unreadPatch: nil)
         let restore = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -296,7 +322,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: false,
-            unread: nil)
+            unreadPatch: nil)
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:main:child",
             agentID: nil)

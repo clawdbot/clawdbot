@@ -554,6 +554,23 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun explicitMarkReadDeclaresIntentOnCurrentGateway() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == SESSION_UNREAD_ACK_CAPABILITY }
+        }
+
+      assertTrue(controller.patchSession(key = "main", unread = false))
+      advanceUntilIdle()
+
+      val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
+      assertTrue(patch.contains("\"unread\":false"))
+      assertTrue(patch.contains("\"readIntent\":\"explicit\""))
+      assertFalse(patch.contains("expectedMarkedUnreadAt"))
+    }
+
+  @Test
   fun archivingOrDeletingTheOpenSessionFallsBackToMain() =
     runTest {
       val (controller, requests) =
@@ -670,6 +687,7 @@ class ChatControllerCommandControlsTest {
       val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"unread\":false"))
       assertTrue(patch.contains("\"expectedMarkedUnreadAt\":100"))
+      assertFalse(patch.contains("readIntent"))
     }
 
   @Test

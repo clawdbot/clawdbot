@@ -110,6 +110,7 @@ suite.define(() => {
         key: activeKey,
         unread: false,
       });
+      expect(requireRecord(acknowledge.params)).not.toHaveProperty("readIntent");
       await captureUiProof(page, "manual-unread-reopened.png");
     } finally {
       await context.close();

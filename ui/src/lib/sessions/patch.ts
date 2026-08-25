@@ -26,12 +26,21 @@ export type SessionPatch = {
   unread?: boolean;
 };
 
+export function isExplicitSessionReadPatch(patch: SessionPatch): boolean {
+  return (
+    patch.unread === false &&
+    Object.entries(patch).every(([key, value]) => key === "unread" || value === undefined)
+  );
+}
+
 export type SessionPatchOptions = {
   agentId?: string;
   /** Durable identity observed with the row before an archive or restore action. */
   expectedSessionId?: string;
   /** Explicit unread marker observed by an automatic read acknowledgement. */
   expectedMarkedUnreadAt?: number | null;
+  /** Distinguishes a deliberate Mark as read action from legacy automatic acknowledgement. */
+  readIntent?: "explicit";
   /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
   deferModelOverride?: boolean;
   /** Keep optimistic model state bound to the UI owner that initiated the patch. */

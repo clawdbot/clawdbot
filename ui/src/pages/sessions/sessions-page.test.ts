@@ -300,6 +300,29 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
 
+  it("identifies Mark as read as an explicit user action", async () => {
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key: "agent:main:main",
+      entry: { sessionId: "session-main" },
+    }));
+    const sessions = createSessions({ patch });
+    const page = await createPage(
+      createContext(createGateway({} as GatewayBrowserClient).gateway, sessions),
+    );
+
+    await expect(page.patchSession("agent:main:main", { unread: false })).resolves.toBe(
+      "completed",
+    );
+
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:main",
+      { unread: false },
+      { agentId: "main", readIntent: "explicit" },
+    );
+  });
+
   it("shows a connection error in the checkpoints drawer while disconnected", async () => {
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(mutableGateway.gateway, createSessions()));

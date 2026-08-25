@@ -14,6 +14,27 @@ public struct OpenClawChatGatewayRequest: Sendable, Equatable {
     }
 }
 
+public enum OpenClawChatSessionUnreadPatch: Sendable, Equatable {
+    case markUnread
+    case legacyRead
+    case automaticRead(expectedMarkedUnreadAt: Double?)
+    case explicitRead
+
+    public static func routed(
+        unread: Bool?,
+        expectedMarkedUnreadAt: Double??,
+        supportsReadContract: Bool) -> Self?
+    {
+        guard let unread else { return nil }
+        guard !unread else { return .markUnread }
+        guard supportsReadContract else { return .legacyRead }
+        if let expectedMarkedUnreadAt {
+            return .automaticRead(expectedMarkedUnreadAt: expectedMarkedUnreadAt)
+        }
+        return .explicitRead
+    }
+}
+
 public enum OpenClawChatSessionTargetPolicy: Sendable {
     case preserveBareKeys
     case scopeBareKeysToSelectedAgent
@@ -338,21 +359,17 @@ public enum OpenClawChatGatewayRequests {
         sessionKey: String,
         agentID: String?,
         expectedSessionID: String? = nil,
-        expectedMarkedUnreadAt: Double?? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
         archived: Bool?,
-        unread: Bool?) -> OpenClawChatGatewayRequest
+        unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
         if let expectedSessionID = expectedSessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
            !expectedSessionID.isEmpty
         {
             params["expectedSessionId"] = AnyCodable(expectedSessionID)
-        }
-        if let expectedMarkedUnreadAt {
-            params["expectedMarkedUnreadAt"] = expectedMarkedUnreadAt.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
         if let label {
             params["label"] = label.map(AnyCodable.init) ?? AnyCodable(NSNull())
@@ -366,8 +383,19 @@ public enum OpenClawChatGatewayRequests {
         if let archived {
             params["archived"] = AnyCodable(archived)
         }
-        if let unread {
-            params["unread"] = AnyCodable(unread)
+        switch unreadPatch {
+        case .markUnread:
+            params["unread"] = AnyCodable(true)
+        case .legacyRead:
+            params["unread"] = AnyCodable(false)
+        case let .automaticRead(expectedMarkedUnreadAt):
+            params["unread"] = AnyCodable(false)
+            params["expectedMarkedUnreadAt"] = expectedMarkedUnreadAt.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        case .explicitRead:
+            params["unread"] = AnyCodable(false)
+            params["readIntent"] = AnyCodable("explicit")
+        case nil:
+            break
         }
         return OpenClawChatGatewayRequest(
             method: "sessions.patch",

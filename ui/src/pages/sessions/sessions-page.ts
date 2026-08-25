@@ -50,6 +50,7 @@ import {
   type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
+import { isExplicitSessionReadPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
@@ -1079,10 +1080,16 @@ class SessionsPage extends OpenClawLightDomElement {
       return "failed";
     }
     const agentId = this.sessionAgentId(key, scope.context);
+    const readIntent = isExplicitSessionReadPatch(patch) ? "explicit" : undefined;
     if (
       !this.requireMutationAccess(scope, {
         method: "sessions.patch",
-        params: { key, ...patch, ...(agentId ? { agentId } : {}) },
+        params: {
+          key,
+          ...patch,
+          ...(agentId ? { agentId } : {}),
+          ...(readIntent ? { readIntent } : {}),
+        },
       })
     ) {
       return "failed";
@@ -1090,6 +1097,7 @@ class SessionsPage extends OpenClawLightDomElement {
     try {
       const patched = await scope.sessions.patch(key, patch, {
         agentId,
+        ...(readIntent ? { readIntent } : {}),
         ...(typeof patch.archived === "boolean" ? { expectedSessionId } : {}),
       });
       if (!this.isRequestScopeCurrent(scope)) {

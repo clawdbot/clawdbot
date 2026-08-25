@@ -60,8 +60,13 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     },
     {
       name: "CAS envelope",
-      patch: { expectedSessionId: "session-1", expectedLifecycleRevision: "revision-1" },
+      patch: {
+        expectedSessionId: "session-1",
+        expectedLifecycleRevision: "revision-1",
+      },
     },
+    { name: "automatic read envelope", patch: { expectedMarkedUnreadAt: 10 } },
+    { name: "explicit read envelope", patch: { readIntent: "explicit" } },
   ])("keeps $name write-scoped", ({ patch }) => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patch", {

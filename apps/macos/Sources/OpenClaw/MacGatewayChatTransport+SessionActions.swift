@@ -74,26 +74,28 @@ extension MacGatewayChatTransport {
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         guard let serverLease = await self.connection.captureServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
-        let supportsConditionalUnreadAck = await self.connection.supportsServerCapability(
+        let unreadAckContract = await self.connection.supportsServerCapability(
             .sessionUnreadAckContract,
-            ifCurrentServerLease: serverLease) == true
+            ifCurrentServerLease: serverLease)
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
             patchSession: { key, expectedSessionID, expectedMarkedUnreadAt, label, category, pinned, archived, unread in
+                guard unread != false || unreadAckContract != nil else {
+                    throw OpenClawChatTransportSendError.notDispatched
+                }
                 let target = transport.sessionTarget(for: key)
-                let guardedUnreadExpectation: Double?? = supportsConditionalUnreadAck
-                    ? expectedMarkedUnreadAt
-                    : nil
                 let request = OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
                     expectedSessionID: expectedSessionID,
-                    expectedMarkedUnreadAt: guardedUnreadExpectation,
                     label: label,
                     category: category,
                     pinned: pinned,
                     archived: archived,
-                    unread: unread)
+                    unreadPatch: .routed(
+                        unread: unread,
+                        expectedMarkedUnreadAt: expectedMarkedUnreadAt,
+                        supportsReadContract: unreadAckContract == true))
                 _ = try await self.connection.request(
                     method: request.method,
                     params: request.params,

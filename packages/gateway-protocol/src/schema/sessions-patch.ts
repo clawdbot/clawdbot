@@ -15,6 +15,13 @@ const ExpectedMarkedUnreadAt = Type.Optional(
   }),
 );
 
+const ReadIntent = Type.Optional(
+  Type.Literal("explicit", {
+    description:
+      "Identifies a deliberate Mark as read action; omitted reads are legacy or automatic acknowledgements.",
+  }),
+);
+
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -77,6 +84,7 @@ export const SessionsPatchParamsSchema = closedObject({
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
   expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
+  readIntent: ReadIntent,
   ...SessionsPatchMutationProperties,
 });
 
@@ -90,7 +98,7 @@ export const SessionsPatchManyTargetSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
-  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
+  readIntent: ReadIntent,
 });
 
 export const SessionsPatchManyParamsSchema = closedObject({

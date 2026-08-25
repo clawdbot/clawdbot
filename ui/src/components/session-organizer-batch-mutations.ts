@@ -8,6 +8,7 @@ import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../src/shared/session-arc
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { isExplicitSessionReadPatch } from "../lib/sessions/patch.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type {
   SidebarRecentSession,
@@ -128,6 +129,7 @@ export async function patchSessionRows(
       targets: chunkRows.map((row) => ({
         key: row.key,
         agentId: sessionRowAgentId(row, scope),
+        ...(isExplicitSessionReadPatch(patch) ? { readIntent: "explicit" as const } : {}),
         ...(typeof patch.archived === "boolean" && row.sessionId
           ? { expectedSessionId: row.sessionId }
           : {}),

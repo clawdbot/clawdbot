@@ -28,6 +28,7 @@ import {
   deleteSession,
   deleteSessionGroup,
   deleteSessionsBatch,
+  patchSession,
   stopCloudWorker,
 } from "./session-organizer-operations.runtime.ts";
 
@@ -97,6 +98,7 @@ function createHarness(
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
+  const patch = vi.fn(async (key: string) => ({ ok: true, key }));
   const refreshReplacement = vi.fn(async () => undefined);
   const refreshTheme = vi.fn();
   const deleteMany = vi.fn(
@@ -113,6 +115,7 @@ function createHarness(
     context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
     gateway: { snapshot },
     sessions: {
+      patch,
       refreshReplacement,
       delete: deleteOne,
       deleteMany,
@@ -140,6 +143,7 @@ function createHarness(
     deleteOne,
     groupsDelete,
     host,
+    patch,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
     refreshReplacement,
@@ -162,6 +166,21 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
+  it("identifies a single Mark as read action explicitly", async () => {
+    const row = sessionRow(0);
+    const harness = createHarness();
+
+    await expect(patchSession(harness.host, row, { unread: false }, harness.scope)).resolves.toBe(
+      "completed",
+    );
+
+    expect(harness.patch).toHaveBeenCalledWith(
+      row.key,
+      { unread: false },
+      { agentId: "main", readIntent: "explicit" },
+    );
+  });
+
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {
     const harness = createHarness();
     const rows = Array.from({ length: 101 }, (_, index) => sessionRow(index));
@@ -220,6 +239,22 @@ describe("patchSessionRows", () => {
       rows[100]!.key,
     ]);
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+  });
+
+  it("identifies every batch Mark as read target explicitly", async () => {
+    const rows = [sessionRow(0), sessionRow(1)];
+    const harness = createHarness();
+
+    await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
+
+    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+      targets: rows.map((row) => ({
+        key: row.key,
+        agentId: "main",
+        readIntent: "explicit",
+      })),
+      patch: { unread: false },
+    });
   });
 
   it("sends no requests or refresh when the mutation scope is already stale", async () => {

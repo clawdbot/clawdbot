@@ -175,7 +175,7 @@ async function executeSessionPatchMutations(params: {
     length: params.targets.length,
   });
   for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
-    const unreadAckError = validateSessionUnreadAck(params.patch, input.expectedMarkedUnreadAt);
+    const unreadAckError = validateSessionUnreadAck(params.patch, input);
     if (unreadAckError) {
       outcomes[index] = {
         ok: false,
@@ -440,10 +440,7 @@ async function executeSessionPatchMutations(params: {
                             continue;
                           }
                         }
-                        const unreadAck = resolveSessionUnreadAck(
-                          existingEntry,
-                          target.fullPatch.expectedMarkedUnreadAt,
-                        );
+                        const unreadAck = resolveSessionUnreadAck(existingEntry, target.fullPatch);
                         if (unreadAck.kind === "missing") {
                           projectedOutcomes.push({
                             ok: false,
@@ -690,6 +687,7 @@ export async function executeSessionPatch(params: {
       ? { expectedLifecycleRevision: params.patch.expectedLifecycleRevision }
       : {}),
     expectedMarkedUnreadAt: params.patch.expectedMarkedUnreadAt,
+    readIntent: params.patch.readIntent,
   };
   const executed = await executeSessionPatchMutations({
     client: params.client,
