@@ -617,6 +617,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
+    mockProcessPlatform("linux");
     const managedDefinition = {
       programArguments: gatewayProgramArguments,
       environment: { OPENCLAW_WRAPPER: "/managed-wrapper", TAVILY_API_KEY: "managed" },
@@ -626,6 +627,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ...managedDefinition,
       environment: { OPENCLAW_WRAPPER: "/operator-wrapper", TAVILY_API_KEY: "old-inline-value" },
       managedDefinition,
+      managedOverrides: { environment: { keys: ["OPENCLAW_WRAPPER"] } },
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
@@ -1245,6 +1247,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("falls back to embedded service token when config and env tokens are missing", async () => {
+    mockProcessPlatform("linux");
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: undefined,
@@ -1253,11 +1256,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         setupGatewayTokenRepairScenario();
         mocks.readCommand.mockResolvedValue({
           programArguments: gatewayProgramArguments,
-          environment: { OPENCLAW_GATEWAY_TOKEN: "operator-drop-in-token" },
-          managedDefinition: {
-            programArguments: gatewayProgramArguments,
-            environment: { OPENCLAW_GATEWAY_TOKEN: "stale-token" },
-          },
+          environment: { OPENCLAW_GATEWAY_TOKEN: "stale-token" },
         });
 
         const cfg: OpenClawConfig = {
