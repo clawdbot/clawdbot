@@ -1,5 +1,8 @@
 // Memory host dreaming tests cover dreaming artifact persistence and lookup.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   formatMemoryDreamingDay,
@@ -9,6 +12,8 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "./dreaming.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("memory dreaming host helpers", () => {
   it("normalizes string settings from the dreaming config", () => {
@@ -251,6 +256,30 @@ describe("memory dreaming host helpers", () => {
         workspaceDir: "/workspace/beta",
         agentIds: ["beta"],
       },
+    ]);
+  });
+
+  it("dedupes configured workspace symlink aliases across agents", async () => {
+    const rootDir = tempDirs.make("openclaw-dreaming-workspace-");
+    const workspaceDir = path.join(rootDir, "workspace");
+    const workspaceAliasDir = path.join(rootDir, "workspace-alias");
+    await fs.mkdir(workspaceDir);
+    await fs.symlink(
+      workspaceDir,
+      workspaceAliasDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const cfg = {
+      agents: {
+        list: [
+          { id: "alpha", default: true, workspace: workspaceDir },
+          { id: "beta", workspace: workspaceAliasDir },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      { workspaceDir, agentIds: ["alpha", "beta"] },
     ]);
   });
 
