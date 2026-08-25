@@ -441,18 +441,8 @@ describe("resolveLlmIdleTimeoutMs", () => {
   ])(
     "keeps hosted watchdogs for custom Ollama model %s through %s",
     (id, baseUrl, localIdleTimeoutMs) => {
-      const cfg = {
-        models: {
-          providers: {
-            "local-ollama": {
-              api: "ollama",
-              apiKey: "ollama-local",
-              baseUrl,
-              models: [],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
+      const providerConfig = { api: "ollama", apiKey: "ollama-local", baseUrl, models: [] };
+      const cfg = { models: { providers: { "local-ollama": providerConfig } } } as OpenClawConfig;
       const model = { provider: "local-ollama", id, baseUrl };
 
       expect({
