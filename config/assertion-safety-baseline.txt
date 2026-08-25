@@ -3116,7 +3116,6 @@ src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-tunnel.ts	6
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/node-workspace-transfer-service.ts	1
-src/gateway/worker-environments/node-workspace-transfer-snapshot.ts	1
 src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/provider-lifecycle.ts	1
