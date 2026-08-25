@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -375,13 +376,33 @@ export async function updateGitCheckout(params: {
       }
     }
   } else {
-    const fetchFailure = await runRequiredStep(
+    // Branches fetched unforced so a rewritten upstream branch ref is rejected
+    // (not force-updated), matching the dev channel's `--no-tags` shape. A global
+    // `--force` here would overwrite a protected (no `+` prefix) configured refspec.
+    const branchFetchFailure = await runRequiredStep(
       "git fetch",
-      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
       "fetch-failed",
     );
-    if (fetchFailure) {
-      return fetchFailure;
+    if (branchFetchFailure) {
+      return branchFetchFailure;
+    }
+    // Tags force-fetched per configured remote (not just `origin`) so non-origin
+    // and multi-remote release checkouts still resolve a recreated upstream tag.
+    // The `+` refspec prefix scopes force to the tag-only refspec per remote,
+    // unlike a global `--all --force` that hits every configured refspec. Mirrors
+    // resolveExplicitTarget's per-remote `+refs/tags/*:refs/tags/*` fetch.
+    const remoteStep = await runStep(step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot));
+    const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
+    for (const remote of remotes) {
+      const tagFetchFailure = await runRequiredStep(
+        `git fetch tags ${remote}`,
+        ["git", "-C", gitRoot, "fetch", remote, "+refs/tags/*:refs/tags/*"],
+        "fetch-failed",
+      );
+      if (tagFetchFailure) {
+        return tagFetchFailure;
+      }
     }
     const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
     if (!tag) {
