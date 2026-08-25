@@ -25,6 +25,7 @@ type SessionOptions = {
 
 const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(),
   options: undefined as SessionOptions | undefined,
   sent: [] as unknown[],
   ready: false,
@@ -40,6 +41,10 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: vi.fn(async () => undefined),
 }));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return { ...actual, fetchWithSsrFGuard: mocks.fetchWithSsrFGuard };
+});
 vi.mock("openclaw/plugin-sdk/realtime-transcription", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -83,7 +88,7 @@ describe("NVIDIA realtime transcription provider", () => {
     mocks.options = undefined;
     mocks.sent.length = 0;
     mocks.ready = false;
-    mocks.catalog.mockResolvedValue({
+    mocks.catalog.mockReturnValue({
       cloud: {
         transport: "grpc",
         functionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -97,19 +102,16 @@ describe("NVIDIA realtime transcription provider", () => {
         },
       },
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              client_secret: { value: "ephemeral-test-token" },
-              input_audio_transcription: { model: "served-model-name" },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
+      response: new Response(
+        JSON.stringify({
+          client_secret: { value: "ephemeral-test-token" },
+          input_audio_transcription: { model: "served-model-name" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
       ),
-    );
+      release: vi.fn(),
+    }));
   });
 
   it("mints a hosted session and opens the NVIDIA realtime WebSocket", async () => {
@@ -118,11 +120,16 @@ describe("NVIDIA realtime transcription provider", () => {
 
     await session.connect();
 
-    expect(fetch).toHaveBeenCalledWith(
-      "https://aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.invocation.api.nvcf.nvidia.com/v1/realtime/transcription_sessions",
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ Authorization: "Bearer nvapi-test" }),
+        url: "https://aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.invocation.api.nvcf.nvidia.com/v1/realtime/transcription_sessions",
+        init: expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ Authorization: "Bearer nvapi-test" }),
+        }),
+        policy: {
+          allowedHostnames: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.invocation.api.nvcf.nvidia.com"],
+        },
       }),
     );
     await expect(mocks.options?.url()).resolves.toBe(

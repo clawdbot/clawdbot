@@ -11,16 +11,13 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const NVIDIA_SPEECH_CATALOG_URL =
+const NVIDIA_SPEECH_CATALOG_URL =
   "https://raw.githubusercontent.com/nvidia-riva/Nemotron-speech-skills/main/skills/nemotron-speech/references/speech-models.v1.json";
 
-export const NVIDIA_CATALOG_ASR_MODEL_ID = "nvidia/parakeet-ctc-1.1b-asr";
 export const NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID = "nvidia/nemotron-asr-streaming";
 export const NVIDIA_CATALOG_TTS_MODEL_ID = "nvidia/magpie-tts-multilingual";
 
 const CATALOG_FETCH_TIMEOUT_MS = 3_000;
-const CATALOG_CACHE_TTL_MS = 60 * 60 * 1_000;
-const CATALOG_FAILURE_BACKOFF_MS = 5 * 60 * 1_000;
 const CATALOG_MAX_BYTES = 256 * 1_024;
 const CATALOG_MAX_MODELS = 128;
 const NVCF_INVOCATION_SUFFIX = ".invocation.api.nvcf.nvidia.com";
@@ -86,31 +83,22 @@ type NvidiaSpeechCatalog = {
   models: NvidiaSpeechCatalogModel[];
 };
 
-type CachedCatalog = {
-  catalog: NvidiaSpeechCatalog;
-  expiresAt: number;
-};
+let activeCatalog: NvidiaSpeechCatalog | undefined;
+let catalogWarmup: Promise<void> | undefined;
 
-let cachedCatalog: CachedCatalog | undefined;
-let lastGoodCatalog: NvidiaSpeechCatalog | undefined;
-let catalogFetch: Promise<NvidiaSpeechCatalog | undefined> | undefined;
-let retryAfter = 0;
-
-export async function resolveNvidiaSpeechCatalogModel(params: {
+export function resolveNvidiaSpeechCatalogModel(params: {
   id: string;
   modality: NvidiaSpeechModality;
-}): Promise<NvidiaSpeechCatalogModel | undefined> {
-  const catalog = await loadNvidiaSpeechCatalog();
-  return findCatalogModel(catalog, params);
+}): NvidiaSpeechCatalogModel | undefined {
+  return findCatalogModel(activeCatalog, params);
 }
 
-export async function resolveNvidiaSpeechCatalogDefault(params: {
+export function resolveNvidiaSpeechCatalogDefault(params: {
   modality: NvidiaSpeechModality;
   key: string;
-}): Promise<NvidiaSpeechCatalogModel | undefined> {
-  const catalog = await loadNvidiaSpeechCatalog();
-  const id = catalog?.defaults[params.modality]?.[params.key];
-  return id ? findCatalogModel(catalog, { id, modality: params.modality }) : undefined;
+}): NvidiaSpeechCatalogModel | undefined {
+  const id = activeCatalog?.defaults[params.modality]?.[params.key];
+  return id ? findCatalogModel(activeCatalog, { id, modality: params.modality }) : undefined;
 }
 
 function findCatalogModel(
@@ -123,34 +111,19 @@ function findCatalogModel(
   );
 }
 
-async function loadNvidiaSpeechCatalog(): Promise<NvidiaSpeechCatalog | undefined> {
-  const now = Date.now();
-  if (cachedCatalog && cachedCatalog.expiresAt > now) {
-    return cachedCatalog.catalog;
+/** Loads catalog metadata during plugin setup; request dispatch only reads the process-stable result. */
+export function warmNvidiaSpeechCatalog(): Promise<void> {
+  if (catalogWarmup) {
+    return catalogWarmup;
   }
-  if (!lastGoodCatalog && retryAfter > now) {
-    return undefined;
-  }
-  if (catalogFetch) {
-    return await catalogFetch;
-  }
-  catalogFetch = fetchNvidiaSpeechCatalog()
+  catalogWarmup = fetchNvidiaSpeechCatalog()
     .then((catalog) => {
-      cachedCatalog = { catalog, expiresAt: Date.now() + CATALOG_CACHE_TTL_MS };
-      lastGoodCatalog = catalog;
-      retryAfter = 0;
-      return catalog;
+      activeCatalog = catalog;
     })
     .catch(() => {
-      if (!lastGoodCatalog) {
-        retryAfter = Date.now() + CATALOG_FAILURE_BACKOFF_MS;
-      }
-      return lastGoodCatalog;
-    })
-    .finally(() => {
-      catalogFetch = undefined;
+      // Compiled endpoint metadata remains available for the lifetime of this process.
     });
-  return await catalogFetch;
+  return catalogWarmup;
 }
 
 async function fetchNvidiaSpeechCatalog(): Promise<NvidiaSpeechCatalog> {
@@ -393,11 +366,4 @@ function isBoundedText(value: unknown, maxLength: number): value is string {
     }
   }
   return true;
-}
-
-export function resetNvidiaSpeechCatalogCacheForTests(): void {
-  cachedCatalog = undefined;
-  lastGoodCatalog = undefined;
-  catalogFetch = undefined;
-  retryAfter = 0;
 }

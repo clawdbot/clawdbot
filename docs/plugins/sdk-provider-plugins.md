@@ -910,6 +910,13 @@ catalog, API-key auth, and dynamic model resolution.
         explicitly opt in. Existing providers can keep reading `req.apiKey`;
         new providers should prefer `req.auth`.
 
+        The `resolveAuth` context includes `effectiveBaseUrl`, the final endpoint
+        after provider, model, and request overrides are applied. Use that value
+        for credential trust decisions. In particular, do not send ambient
+        provider credentials to an arbitrary custom endpoint; require explicit
+        request authentication or return `kind: "none"` when the endpoint is an
+        intentionally unauthenticated self-hosted service.
+
         ```typescript
         api.registerMediaUnderstandingProvider({
           id: "local-audio",

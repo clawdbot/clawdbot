@@ -9,16 +9,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   return { ...actual, fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard };
 });
 
-import {
-  NVIDIA_CATALOG_ASR_MODEL_ID,
-  NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
-  NVIDIA_CATALOG_TTS_MODEL_ID,
-  NVIDIA_SPEECH_CATALOG_URL,
-  resetNvidiaSpeechCatalogCacheForTests,
-  resolveNvidiaSpeechCatalogDefault,
-  resolveNvidiaSpeechCatalogModel,
-} from "./nvidia-speech-catalog.js";
-
+const NVIDIA_CATALOG_ASR_MODEL_ID = "nvidia/parakeet-ctc-1.1b-asr";
+const NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID = "nvidia/nemotron-asr-streaming";
+const NVIDIA_CATALOG_TTS_MODEL_ID = "nvidia/magpie-tts-multilingual";
+const NVIDIA_SPEECH_CATALOG_URL =
+  "https://raw.githubusercontent.com/nvidia-riva/Nemotron-speech-skills/main/skills/nemotron-speech/references/speech-models.v1.json";
 const ASR_FUNCTION_ID = "1598d209-5e27-4d3c-8079-4751568b1081";
 const TTS_FUNCTION_ID = "877104f7-e885-42b9-8de8-f6e4c6303969";
 const REALTIME_FUNCTION_ID = "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa";
@@ -119,23 +114,25 @@ function catalogResponse(payload: unknown) {
 
 describe("NVIDIA speech catalog", () => {
   beforeEach(() => {
-    resetNvidiaSpeechCatalogCacheForTests();
     ssrfMocks.fetchWithSsrFGuard.mockReset();
     vi.restoreAllMocks();
+    vi.resetModules();
   });
 
   it("loads validated models once and caches them in process", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValue(catalogResponse(catalogPayload()));
+    const catalog = await import("./nvidia-speech-catalog.js");
+    await catalog.warmNvidiaSpeechCatalog();
 
-    const asr = await resolveNvidiaSpeechCatalogModel({
+    const asr = catalog.resolveNvidiaSpeechCatalogModel({
       id: NVIDIA_CATALOG_ASR_MODEL_ID,
       modality: "asr",
     });
-    const tts = await resolveNvidiaSpeechCatalogModel({
+    const tts = catalog.resolveNvidiaSpeechCatalogModel({
       id: NVIDIA_CATALOG_TTS_MODEL_ID,
       modality: "tts",
     });
-    const defaultAsr = await resolveNvidiaSpeechCatalogDefault({
+    const defaultAsr = catalog.resolveNvidiaSpeechCatalogDefault({
       modality: "asr",
       key: "english",
     });
@@ -157,64 +154,77 @@ describe("NVIDIA speech catalog", () => {
     const payload = catalogPayload();
     payload.models[0]!.cloud.baseUrl = "https://speech.example";
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValue(catalogResponse(payload));
+    const catalog = await import("./nvidia-speech-catalog.js");
+    await catalog.warmNvidiaSpeechCatalog();
 
-    await expect(
-      resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_ASR_MODEL_ID, modality: "asr" }),
-    ).resolves.toBeUndefined();
+    expect(
+      catalog.resolveNvidiaSpeechCatalogModel({
+        id: NVIDIA_CATALOG_ASR_MODEL_ID,
+        modality: "asr",
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects untrusted gRPC routing data", async () => {
     const payload = catalogPayload();
     payload.models[3]!.cloud.server = "grpc.attacker.example:443";
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValue(catalogResponse(payload));
+    const catalog = await import("./nvidia-speech-catalog.js");
+    await catalog.warmNvidiaSpeechCatalog();
 
-    await expect(
-      resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_ASR_MODEL_ID, modality: "asr" }),
-    ).resolves.toBeUndefined();
+    expect(
+      catalog.resolveNvidiaSpeechCatalogModel({
+        id: NVIDIA_CATALOG_ASR_MODEL_ID,
+        modality: "asr",
+      }),
+    ).toBeUndefined();
   });
 
   it("accepts only the pinned NVIDIA realtime session and WebSocket URLs", async () => {
     const payload = catalogPayload();
     payload.models[2]!.cloud.realtime!.websocketUrl = "wss://attacker.example/realtime";
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValue(catalogResponse(payload));
+    const catalog = await import("./nvidia-speech-catalog.js");
+    await catalog.warmNvidiaSpeechCatalog();
 
-    await expect(
-      resolveNvidiaSpeechCatalogModel({
+    expect(
+      catalog.resolveNvidiaSpeechCatalogModel({
         id: NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
         modality: "asr",
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
   });
 
-  it("keeps the last valid catalog when a refresh fails", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce(catalogResponse(catalogPayload()));
-    const first = await resolveNvidiaSpeechCatalogModel({
+  it("never fetches the remote catalog during request dispatch", async () => {
+    const catalog = await import("./nvidia-speech-catalog.js");
+    const beforeWarmup = catalog.resolveNvidiaSpeechCatalogModel({
       id: NVIDIA_CATALOG_ASR_MODEL_ID,
       modality: "asr",
     });
+    expect(beforeWarmup).toBeUndefined();
+    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
 
-    vi.spyOn(Date, "now").mockReturnValue(60 * 60 * 1_000 + 2_000);
-    ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error("network unavailable"));
-    const refreshed = await resolveNvidiaSpeechCatalogModel({
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValue(catalogResponse(catalogPayload()));
+    await catalog.warmNvidiaSpeechCatalog();
+    const afterWarmup = catalog.resolveNvidiaSpeechCatalogModel({
       id: NVIDIA_CATALOG_ASR_MODEL_ID,
       modality: "asr",
     });
-
-    expect(refreshed).toEqual(first);
-    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    expect(afterWarmup?.id).toBe(NVIDIA_CATALOG_ASR_MODEL_ID);
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
   });
 
-  it("backs off after an initial fetch failure", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
+  it("keeps compiled routing available when setup warmup fails", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValue(new Error("network unavailable"));
+    const catalog = await import("./nvidia-speech-catalog.js");
+    await catalog.warmNvidiaSpeechCatalog();
 
-    await expect(
-      resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_ASR_MODEL_ID, modality: "asr" }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_ASR_MODEL_ID, modality: "asr" }),
-    ).resolves.toBeUndefined();
+    expect(
+      catalog.resolveNvidiaSpeechCatalogModel({
+        id: NVIDIA_CATALOG_ASR_MODEL_ID,
+        modality: "asr",
+      }),
+    ).toBeUndefined();
 
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
   });

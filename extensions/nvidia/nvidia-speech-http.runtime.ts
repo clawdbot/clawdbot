@@ -186,7 +186,7 @@ type AsrEndpoint = {
   baseUrl: string;
   model: string;
   hosted: boolean;
-  defaultLanguage: string;
+  defaultLanguage?: string;
   routeStyle: "fixed-model" | "model-path";
   modelPath?: string;
 };
@@ -209,7 +209,7 @@ function resolveSpeechUrl(
   return `${root}/audio/${encodedModelPath}/${operation}`;
 }
 
-async function resolveAsrEndpoint(req: AudioTranscriptionRequest): Promise<AsrEndpoint> {
+function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
   const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
   const customBaseUrl =
     requestBaseUrl && !isNvidiaHostedAsrBaseUrl(requestBaseUrl) ? requestBaseUrl : undefined;
@@ -221,14 +221,13 @@ async function resolveAsrEndpoint(req: AudioTranscriptionRequest): Promise<AsrEn
       baseUrl: customBaseUrl,
       model,
       hosted: false,
-      defaultLanguage: "en-US",
       routeStyle: normalizeNvidiaSpeechRouteStyle(req.query?.routeStyle),
       modelPath: normalizeNvidiaSpeechModelPath(req.query?.modelPath),
     };
   }
   const catalogModel = useCatalogDefault
-    ? await resolveNvidiaSpeechCatalogDefault({ modality: "asr", key: "english" })
-    : await resolveNvidiaSpeechCatalogModel({ id: requestedModel, modality: "asr" });
+    ? resolveNvidiaSpeechCatalogDefault({ modality: "asr", key: "english" })
+    : resolveNvidiaSpeechCatalogModel({ id: requestedModel, modality: "asr" });
   if (!catalogModel && !useCatalogDefault && requestedModel !== NVIDIA_DEFAULT_ASR_MODEL) {
     throw new Error(`NVIDIA ASR model ${requestedModel} requires an explicit HTTP base URL`);
   }
@@ -270,7 +269,6 @@ async function transcribeAtEndpoint(
     mime: req.mime,
     fields: {
       language: req.language?.trim() || endpoint.defaultLanguage,
-      ...(endpoint.hosted || endpoint.routeStyle === "model-path" ? {} : { model: endpoint.model }),
       response_format: "json",
     },
   });
@@ -304,7 +302,7 @@ async function transcribeAtEndpoint(
 export async function transcribeNvidiaAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
-  const endpoint = await resolveAsrEndpoint(req);
+  const endpoint = resolveAsrEndpoint(req);
   const apiKey = req.auth?.kind === "none" ? undefined : req.apiKey?.trim();
   if (endpoint.hosted && !apiKey) {
     throw new Error("NVIDIA speech API key missing for hosted ASR");
@@ -360,7 +358,7 @@ export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<
 
   const configuredBaseUrl = normalizeNvidiaBaseUrl(params.baseUrl);
   const catalogModel = isNvidiaHostedTtsBaseUrl(configuredBaseUrl)
-    ? await resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_TTS_MODEL_ID, modality: "tts" })
+    ? resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_TTS_MODEL_ID, modality: "tts" })
     : undefined;
   const catalogCloud = catalogModel?.cloud.transport === "http" ? catalogModel.cloud : undefined;
   const baseUrl = catalogCloud?.baseUrl ?? configuredBaseUrl;
@@ -442,7 +440,7 @@ export async function magpieSynthesizeStream(params: MagpieSynthesizeParams): Pr
 
   const configuredBaseUrl = normalizeNvidiaBaseUrl(params.baseUrl);
   const catalogModel = isNvidiaHostedTtsBaseUrl(configuredBaseUrl)
-    ? await resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_TTS_MODEL_ID, modality: "tts" })
+    ? resolveNvidiaSpeechCatalogModel({ id: NVIDIA_CATALOG_TTS_MODEL_ID, modality: "tts" })
     : undefined;
   const catalogCloud = catalogModel?.cloud.transport === "http" ? catalogModel.cloud : undefined;
   const baseUrl = catalogCloud?.baseUrl ?? configuredBaseUrl;

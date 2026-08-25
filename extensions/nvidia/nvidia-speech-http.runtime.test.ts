@@ -24,7 +24,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
 });
 
 vi.mock("./nvidia-speech-catalog.js", () => ({
-  NVIDIA_CATALOG_ASR_MODEL_ID: "nvidia/parakeet-ctc-1.1b-asr",
   NVIDIA_CATALOG_TTS_MODEL_ID: "nvidia/magpie-tts-multilingual",
   resolveNvidiaSpeechCatalogDefault: mocks.resolveNvidiaSpeechCatalogDefault,
   resolveNvidiaSpeechCatalogModel: mocks.resolveNvidiaSpeechCatalogModel,
@@ -99,8 +98,8 @@ function okJson(text: string) {
 describe("NVIDIA speech HTTP runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveNvidiaSpeechCatalogDefault.mockResolvedValue(undefined);
-    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue(undefined);
+    mocks.resolveNvidiaSpeechCatalogDefault.mockReturnValue(undefined);
+    mocks.resolveNvidiaSpeechCatalogModel.mockReturnValue(undefined);
   });
 
   it("uses hosted Parakeet CTC by default and forwards ASR customizations", async () => {
@@ -140,7 +139,7 @@ describe("NVIDIA speech HTTP runtime", () => {
   });
 
   it("uses the catalog-selected English model, endpoint, and language for hosted ASR", async () => {
-    mocks.resolveNvidiaSpeechCatalogDefault.mockResolvedValue({
+    mocks.resolveNvidiaSpeechCatalogDefault.mockReturnValue({
       id: "nvidia/parakeet-new-english-asr",
       modality: "asr",
       status: "active",
@@ -168,7 +167,7 @@ describe("NVIDIA speech HTTP runtime", () => {
   });
 
   it("preserves an explicit hosted ASR model pin", async () => {
-    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue({
+    mocks.resolveNvidiaSpeechCatalogModel.mockReturnValue({
       id: "nvidia/pinned-asr",
       modality: "asr",
       status: "active",
@@ -213,7 +212,8 @@ describe("NVIDIA speech HTTP runtime", () => {
       allowedOrigins: ["http://10.0.0.5:9000"],
     });
     const form = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.body as FormData;
-    expect(form.get("model")).toBe("nvidia/parakeet-tdt-0.6b-v2");
+    expect(form.get("model")).toBeNull();
+    expect(form.get("language")).toBeNull();
     const headers = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
     expect(headers.has("authorization")).toBe(false);
   });
@@ -378,7 +378,7 @@ describe("NVIDIA speech HTTP runtime", () => {
   });
 
   it("uses the validated catalog endpoint for hosted Magpie", async () => {
-    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue({
+    mocks.resolveNvidiaSpeechCatalogModel.mockReturnValue({
       id: "nvidia/magpie-tts-multilingual",
       modality: "tts",
       status: "active",

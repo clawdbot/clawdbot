@@ -4,6 +4,10 @@
 import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
   type RealtimeTranscriptionProviderPlugin,
@@ -13,6 +17,10 @@ import {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   isRecord,
@@ -119,34 +127,31 @@ function parseRealtimeEvent(payload: Buffer): NvidiaEvent {
 }
 
 async function mintSession(apiKey: string, sessionUrl: string): Promise<SessionResponse> {
-  const response = await fetch(sessionUrl, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: sessionUrl,
+    init: {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
     },
-    body: "{}",
-    signal: AbortSignal.timeout(SESSION_TIMEOUT_MS),
+    timeoutMs: SESSION_TIMEOUT_MS,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(sessionUrl),
+    auditContext: "NVIDIA realtime ASR session",
   });
-  if (!response.ok) {
-    throw new Error(`NVIDIA realtime ASR session request failed (HTTP ${response.status})`);
-  }
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > SESSION_RESPONSE_MAX_BYTES) {
-    throw new Error("NVIDIA realtime ASR session response exceeded 64 KiB");
-  }
-  const text = await response.text();
-  if (Buffer.byteLength(text) > SESSION_RESPONSE_MAX_BYTES) {
-    throw new Error("NVIDIA realtime ASR session response exceeded 64 KiB");
-  }
   try {
-    return parseSession(JSON.parse(text));
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error("NVIDIA realtime ASR session returned malformed JSON", { cause: error });
-    }
-    throw error;
+    await assertOkOrThrowProviderError(response, "NVIDIA realtime ASR session request failed");
+    const payload = await readProviderJsonResponse<unknown>(
+      response,
+      "NVIDIA realtime ASR session",
+      { maxBytes: SESSION_RESPONSE_MAX_BYTES },
+    );
+    return parseSession(payload);
+  } finally {
+    await release();
   }
 }
 
@@ -249,7 +254,7 @@ function createSession(
     callbacks: req,
     url: async () => {
       apiKey = await resolveApiKey(config, req.cfg);
-      const catalogModel = await resolveNvidiaSpeechCatalogModel({
+      const catalogModel = resolveNvidiaSpeechCatalogModel({
         id: NVIDIA_CATALOG_REALTIME_ASR_MODEL_ID,
         modality: "asr",
       });
