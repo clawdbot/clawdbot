@@ -28,6 +28,71 @@ async function confirmDelete(page: import("playwright").Page, proofName?: string
 }
 
 suite.define(() => {
+  it("refreshes the archived sidebar after restoring a session during a stale roster load", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
+    const main = sessionRow("agent:main:main", "Main", updatedAt);
+    const archived = sessionRow("agent:main:restore-pending", "Restore pending", updatedAt - 1, {
+      archived: true,
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([main, archived]),
+        "sessions.patch": {},
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: main.key,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page
+        .locator(".sidebar-session-sort-menu")
+        .getByRole("menuitemradio", { name: "Archived" })
+        .click();
+
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const archivedRow = sidebar.locator(`[data-session-key="${archived.key}"]`);
+      await archivedRow.waitFor({ state: "visible" });
+      await captureUiProof(page, "filtered-roster-forced-refresh-before.png");
+
+      const archivedRequests = async () =>
+        (await gateway.getRequests("sessions.list")).filter(
+          (request) => requireRecord(request.params).archived === true,
+        );
+      const initialRequests = (await archivedRequests()).length;
+      await gateway.deferNext("sessions.list", { archived: true });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...archived,
+        reason: "update",
+        sessionKey: archived.key,
+      });
+      await expect.poll(archivedRequests).toHaveLength(initialRequests + 1);
+
+      await archivedRow.hover();
+      await archivedRow.getByRole("button", { name: "Open session menu" }).click();
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Restore session" }));
+      await waitForPatch(
+        gateway,
+        (params) => params.key === archived.key && params.archived === false,
+      );
+
+      await gateway.resolveDeferred("sessions.list", sessionsListResponse([archived]));
+
+      await expect.poll(archivedRequests).toHaveLength(initialRequests + 2);
+      await archivedRow.waitFor({ state: "detached" });
+      await captureUiProof(page, "filtered-roster-forced-refresh-after.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("deletes every archived thread exactly once when the paged roster reorders", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
