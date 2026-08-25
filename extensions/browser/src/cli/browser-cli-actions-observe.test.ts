@@ -32,6 +32,7 @@ const { registerBrowserActionObserveCommands } = await import("./browser-cli-act
 
 function createActionObserveProgram(): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
+  browser.option("--timeout <ms>", "Timeout in ms", "30000");
   registerBrowserActionObserveCommands(browser, parentOpts);
   return program;
 }
@@ -40,6 +41,23 @@ describe("browser action observe commands", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it.each([
+    { command: "console", path: "/console", timeout: "30000" },
+    { command: "console", path: "/console", timeout: "60000" },
+    { command: "pdf", path: "/pdf", timeout: "30000" },
+    { command: "pdf", path: "/pdf", timeout: "60000" },
+  ])("inherits parent $timeout ms timeout for $command", async ({ command, path, timeout }) => {
+    const program = createActionObserveProgram();
+    const parentArgs = timeout === "30000" ? ["--json"] : ["--json", "--timeout", timeout];
+
+    await program.parseAsync(["browser", ...parentArgs, command], { from: "user" });
+
+    expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeout }),
+      expect.objectContaining({ path }),
+    );
   });
 
   it("rejects non-decimal responsebody numeric flags before dispatch", async () => {
