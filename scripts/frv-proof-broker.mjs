@@ -251,19 +251,23 @@ async function waitForRerun(api, context, fixtureRunId, sleep) {
   throw new Error("timed out waiting for the failed-job rerun");
 }
 
-async function validateReadOnlyPrerequisites(api, context) {
+async function validateMutationAuthority(api, context) {
   validateActorPermission(
     await api.request("GET", `/collaborators/${encodeURIComponent(context.actor)}/permission`),
     context.actor,
   );
   validatePullRequest(await api.request("GET", `/pulls/${context.prNumber}`), context);
+}
+
+async function validateTrustedPrerequisites(api, context) {
   validateFixtureWorkflow(await api.request("GET", `/actions/workflows/${FIXTURE_WORKFLOW_ID}`));
   validateMainRef(await api.request("GET", "/git/ref/heads/main"), context.workflowSha);
 }
 
 export async function runProofBroker({ api, env, event, sleep = setTimeoutPromise }) {
   const context = validateBrokerRequest(event, env);
-  await validateReadOnlyPrerequisites(api, context);
+  await validateTrustedPrerequisites(api, context);
+  await validateMutationAuthority(api, context);
 
   await api.request("POST", `/actions/workflows/${FIXTURE_WORKFLOW_ID}/dispatches`, {
     inputs: {
@@ -274,6 +278,7 @@ export async function runProofBroker({ api, env, event, sleep = setTimeoutPromis
   });
   const initialRun = await waitForInitialRun(api, context, sleep);
   const fixtureRunId = requiredPositiveInteger(initialRun.id, "fixture run id");
+  await validateMutationAuthority(api, context);
   await api.request("POST", `/actions/runs/${fixtureRunId}/rerun-failed-jobs`);
   await waitForRerun(api, context, fixtureRunId, sleep);
   return {

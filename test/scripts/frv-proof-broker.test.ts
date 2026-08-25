@@ -87,12 +87,15 @@ function pullRequest(overrides: Record<string, unknown> = {}) {
 function successfulApi(
   options: {
     initialRun?: Record<string, unknown>;
-    pull?: Record<string, unknown>;
+    permissions?: string[];
+    pulls?: Array<Record<string, unknown>>;
     rerun?: Record<string, unknown>;
     rerunError?: Error;
   } = {},
 ) {
   const calls: Array<{ body?: unknown; method: string; path: string }> = [];
+  let permissionRead = 0;
+  let pullRead = 0;
   const initialRun = options.initialRun ?? fixtureRun();
   const rerun =
     options.rerun ??
@@ -104,10 +107,14 @@ function successfulApi(
     request: vi.fn(async (method: string, path: string, body?: unknown) => {
       calls.push({ body, method, path });
       if (method === "GET" && path === "/collaborators/maintainer/permission") {
-        return { permission: "maintain" };
+        const permission = options.permissions?.[permissionRead] ?? "maintain";
+        permissionRead += 1;
+        return { permission };
       }
       if (method === "GET" && path === "/pulls/128141") {
-        return options.pull ?? pullRequest();
+        const pull = options.pulls?.[pullRead] ?? pullRequest();
+        pullRead += 1;
+        return pull;
       }
       if (method === "GET" && path === "/actions/workflows/frv-proof-fixture.yml") {
         return {
@@ -209,10 +216,10 @@ describe("FRV proof broker mutation boundary", () => {
     });
     const firstMutation = calls.findIndex((call) => call.method !== "GET");
     expect(calls.slice(0, firstMutation).map((call) => call.path)).toEqual([
-      "/collaborators/maintainer/permission",
-      "/pulls/128141",
       "/actions/workflows/frv-proof-fixture.yml",
       "/git/ref/heads/main",
+      "/collaborators/maintainer/permission",
+      "/pulls/128141",
     ]);
   });
 
@@ -249,9 +256,11 @@ describe("FRV proof broker mutation boundary", () => {
 
   it("rejects a mismatched PR head before any mutation", async () => {
     const { api, calls } = successfulApi({
-      pull: pullRequest({
-        head: { sha: "c".repeat(40), repo: { full_name: repository } },
-      }),
+      pulls: [
+        pullRequest({
+          head: { sha: "c".repeat(40), repo: { full_name: repository } },
+        }),
+      ],
     });
     await expect(
       runProofBroker({
@@ -262,6 +271,48 @@ describe("FRV proof broker mutation boundary", () => {
       }),
     ).rejects.toThrow(/head SHA/u);
     expect(calls.some((call) => call.method !== "GET")).toBe(false);
+  });
+
+  it("rejects revoked actor authority before rerunning", async () => {
+    const { api, calls } = successfulApi({ permissions: ["maintain", "read"] });
+    await expect(
+      runProofBroker({
+        api,
+        env: brokerEnv(),
+        event: brokerEvent(),
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/lacks repository write permission/u);
+    expect(calls.filter((call) => call.method !== "GET")).toEqual([
+      {
+        body: {
+          inputs: { correlation: "frv-proof-12345", operation: "noop" },
+          ref: "main",
+        },
+        method: "POST",
+        path: "/actions/workflows/frv-proof-fixture.yml/dispatches",
+      },
+    ]);
+  });
+
+  it("rejects a replaced PR head before rerunning", async () => {
+    const { api, calls } = successfulApi({
+      pulls: [
+        pullRequest(),
+        pullRequest({
+          head: { sha: "c".repeat(40), repo: { full_name: repository } },
+        }),
+      ],
+    });
+    await expect(
+      runProofBroker({
+        api,
+        env: brokerEnv(),
+        event: brokerEvent(),
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/head SHA/u);
+    expect(calls.some((call) => call.path.endsWith("/rerun-failed-jobs"))).toBe(false);
   });
 
   it("does not mutate refs after a rerun failure", async () => {
