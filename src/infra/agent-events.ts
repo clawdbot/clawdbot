@@ -85,6 +85,11 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
 type AgentEventState = {
   seqByRun: Map<string, number>;
   listeners: Set<(evt: AgentEventRuntimePayload) => void>;
+  // Run-indexed buckets beside the process-global Set. Subscribers that only
+  // want one run register here so a delta walks its own run's closures instead
+  // of every concurrent run's. Empty buckets are dropped on unsubscribe, so the
+  // map size tracks live subscribed runs, not runs ever seen.
+  runListeners: Map<string, Set<(evt: AgentEventRuntimePayload) => void>>;
   auditListeners: Set<(evt: AgentEventPayload) => void>;
   lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
@@ -101,6 +106,7 @@ function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
     seqByRun: new Map<string, number>(),
     listeners: new Set<(evt: AgentEventRuntimePayload) => void>(),
+    runListeners: new Map<string, Set<(evt: AgentEventRuntimePayload) => void>>(),
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
   }));
 }
@@ -329,13 +335,27 @@ function enrichAgentEvent(
   return enriched;
 }
 
+function notifyAgentEventListeners(
+  state: AgentEventState,
+  enriched: AgentEventRuntimePayload,
+): void {
+  // Global listeners keep their stock insertion ordering and run first, so
+  // moving a subscriber into a run bucket can never reorder it ahead of a
+  // global listener whose state it reads.
+  notifyListeners(state.listeners, enriched);
+  const runListeners = state.runListeners.get(enriched.runId);
+  if (runListeners) {
+    notifyListeners(runListeners, enriched);
+  }
+}
+
 /** Emits an event only when its run ownership is still current. */
 export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "ts">): boolean {
   const enriched = enrichAgentEvent(event);
   if (!enriched) {
     return false;
   }
-  notifyListeners(getAgentEventState().listeners, enriched);
+  notifyAgentEventListeners(getAgentEventState(), enriched);
   return true;
 }
 
@@ -350,7 +370,7 @@ export function emitAgentEventForOwner(
 ) {
   const enriched = enrichAgentEvent(event, claimId);
   if (enriched) {
-    notifyListeners(getAgentEventState().listeners, enriched);
+    notifyAgentEventListeners(getAgentEventState(), enriched);
   }
 }
 
@@ -380,6 +400,29 @@ export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) =>
   return registerListener(getAgentEventState().listeners, listener);
 }
 
+/**
+ * Subscribes to one run's sequenced agent events; returns an unsubscribe callback.
+ * Prefer this over `onAgentEvent` for a listener that discards other runs: those
+ * listeners otherwise run on every concurrent run's events.
+ */
+export function onAgentEventForRun(runId: string, listener: (evt: AgentEventPayload) => void) {
+  const state = getAgentEventState();
+  const existing = state.runListeners.get(runId);
+  const bucket = existing ?? new Set<(evt: AgentEventRuntimePayload) => void>();
+  if (!existing) {
+    state.runListeners.set(runId, bucket);
+  }
+  const unsubscribe = registerListener(bucket, listener);
+  return () => {
+    unsubscribe();
+    // Only reclaim the bucket this handle registered into; a later subscriber
+    // for the same run may already have installed a replacement.
+    if (bucket.size === 0 && state.runListeners.get(runId) === bucket) {
+      state.runListeners.delete(runId);
+    }
+  };
+}
+
 /** Subscribes to private audit-only agent events; returns an unsubscribe callback. */
 export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
   return registerListener(getAgentEventState().auditListeners, listener);
@@ -392,6 +435,7 @@ export function resetAgentEventsForTest(options?: { preserveListeners?: boolean 
   resetAgentRunRegistryForTest();
   if (!options?.preserveListeners) {
     state.listeners.clear();
+    state.runListeners.clear();
     state.auditListeners.clear();
   }
 }
