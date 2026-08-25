@@ -45,6 +45,7 @@ import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-ru
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -71,6 +72,35 @@ type ModelsListResult = {
 
 let loggedSlowModelsListCatalog = false;
 
+function resolvePreparedCliRuntimeProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: ModelCatalogEntry;
+  metadataSnapshot: PluginMetadataSnapshot;
+}): string | undefined {
+  const runtime = resolveModelChoiceAgentRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entry: params.entry,
+  })?.id;
+  if (!runtime || runtime === "openclaw") {
+    return undefined;
+  }
+  const provider = normalizeProviderId(params.entry.provider);
+  const runtimeOwners = params.metadataSnapshot.owners.cliBackends.get(runtime) ?? [];
+  const providerOwners = new Set(params.metadataSnapshot.owners.providers.get(provider) ?? []);
+  const ownerId = runtimeOwners.find((pluginId) => providerOwners.has(pluginId));
+  const owner = ownerId ? params.metadataSnapshot.byPluginId.get(ownerId) : undefined;
+  return owner &&
+    isManifestPluginAvailableForControlPlane({
+      snapshot: params.metadataSnapshot,
+      plugin: owner,
+      config: params.cfg,
+    })
+    ? runtime
+    : undefined;
+}
+
 function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
   const view = params.view;
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
@@ -88,19 +118,26 @@ function resolveLegacyEntryAvailability(params: {
     return true;
   }
   let available = params.primaryAvailability;
-  const runtimeProvider = resolveCliRuntimeExecutionProvider({
-    provider: params.entry.provider,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelId: params.entry.id,
-    metadataSnapshot: params.metadataSnapshot,
-  });
+  const runtimeProvider =
+    resolveCliRuntimeExecutionProvider({
+      provider: params.entry.provider,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      modelId: params.entry.id,
+      metadataSnapshot: params.metadataSnapshot,
+    }) ??
+    resolvePreparedCliRuntimeProvider({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry: params.entry,
+      metadataSnapshot: params.metadataSnapshot,
+    });
   if (
     runtimeProvider &&
     normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
   ) {
     const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
-    if (runtimeAvailable === true) {
+    if (runtimeAvailable === true || params.authResolver.hasSyntheticAuth(runtimeProvider)) {
       return true;
     }
     if (available === false && runtimeAvailable === undefined) {
