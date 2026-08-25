@@ -68,6 +68,9 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const listReadOnlyChannelPluginsForConfigMock = vi.fn(
+  (_config: unknown, _options?: unknown): unknown[] => [],
+);
 const isGatewayCredentialsRequiredErrorMock = vi.fn((_value: unknown) => false);
 const isGatewaySecretRefUnavailableErrorMock = vi.fn((_value: unknown) => false);
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -113,7 +116,8 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => [],
+  listReadOnlyChannelPluginsForConfig: (config: unknown, options?: unknown) =>
+    listReadOnlyChannelPluginsForConfigMock(config, options),
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -221,6 +225,46 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway probe duration: 5ms");
+  });
+
+  it("surfaces unhealthy secondary accounts without an explicit account binding", async () => {
+    const primary = {
+      accountId: "main",
+      enabled: true,
+      configured: true,
+      linked: true,
+      healthState: "healthy",
+      probe: { ok: true, elapsedMs: 12 },
+    };
+    const snapshot = createHealthSummary({
+      channels: {
+        matrix: {
+          ...primary,
+          accounts: {
+            main: primary,
+            alerts: {
+              accountId: "alerts",
+              enabled: true,
+              configured: true,
+              linked: true,
+              healthState: "blocked",
+            },
+          },
+        },
+      },
+      channelOrder: ["matrix"],
+      channelLabels: { matrix: "Matrix" },
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
+      { id: "matrix", config: { listAccountIds: () => ["main", "alerts"] } },
+    ]);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Matrix: blocked");
+    expect(output).not.toContain("Matrix: ok");
   });
 
   it("shows every agent when an explicit fleet has no default owner", async () => {
