@@ -1,0 +1,196 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+
+const manager = "org.freedesktop.systemd1";
+const rootObjectPath = "/org/freedesktop/systemd1";
+const args = process.argv.slice(2);
+
+function fail() {
+  process.stderr.write("doctor-switch busctl shim: unexpected invocation or unavailable unit\n");
+  process.exit(1);
+}
+
+function splitWords(value) {
+  const words = [];
+  let word = "";
+  let quote = "";
+  let escaped = false;
+  for (const character of value) {
+    if (escaped) {
+      word += character;
+      escaped = false;
+    } else if (character === "\\" && quote !== "'") {
+      escaped = true;
+    } else if (quote) {
+      if (character === quote) {
+        quote = "";
+      } else {
+        word += character;
+      }
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (/\s/u.test(character)) {
+      if (word) {
+        words.push(word);
+        word = "";
+      }
+    } else {
+      word += character;
+    }
+  }
+  if (quote || escaped) {
+    fail();
+  }
+  if (word) {
+    words.push(word);
+  }
+  return words;
+}
+
+function encodeUnitName(name) {
+  return Array.from(Buffer.from(name), (byte) =>
+    (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+      ? String.fromCharCode(byte)
+      : `_${byte.toString(16).padStart(2, "0")}`,
+  ).join("");
+}
+
+function writeProperties(properties) {
+  process.stdout.write(properties.map((property) => JSON.stringify(property)).join("\n") + "\n");
+}
+
+if (args[0] !== "--user" || args[1] !== "--json=short") {
+  fail();
+}
+
+const invocation = args.slice(2);
+if (invocation[0] === "call") {
+  const [command, destination, objectPath, interfaceName, method, signature, unitName] = invocation;
+  if (
+    invocation.length !== 7 ||
+    command !== "call" ||
+    destination !== manager ||
+    objectPath !== rootObjectPath ||
+    interfaceName !== `${manager}.Manager` ||
+    method !== "LoadUnit" ||
+    signature !== "s" ||
+    !unitName.endsWith(".service") ||
+    path.basename(unitName) !== unitName ||
+    !fs.existsSync(path.join(process.env.HOME, ".config/systemd/user", unitName))
+  ) {
+    fail();
+  }
+  writeProperties([{ type: "o", data: [`${rootObjectPath}/unit/${encodeUnitName(unitName)}`] }]);
+  process.exit(0);
+}
+
+if (invocation[0] !== "get-property" || invocation[1] !== manager) {
+  fail();
+}
+
+const unitName = `${process.env.OPENCLAW_SYSTEMD_UNIT || "openclaw-gateway"}`.replace(
+  /(?:\.service)?$/u,
+  ".service",
+);
+const unitPath = path.join(process.env.HOME, ".config/systemd/user", unitName);
+if (invocation[2] !== `${rootObjectPath}/unit/${encodeUnitName(unitName)}`) {
+  fail();
+}
+
+if (invocation[3] === `${manager}.Unit`) {
+  if (
+    invocation.length !== 7 ||
+    invocation.slice(4).join(" ") !== "FragmentPath DropInPaths NeedDaemonReload"
+  ) {
+    fail();
+  }
+  writeProperties([
+    { type: "s", data: unitPath },
+    { type: "as", data: [] },
+    { type: "b", data: false },
+  ]);
+  process.exit(0);
+}
+
+if (
+  invocation[3] !== `${manager}.Service` ||
+  invocation.length !== 9 ||
+  invocation.slice(4).join(" ") !==
+    "ExecStart WorkingDirectory Environment EnvironmentFiles UnsetEnvironment"
+) {
+  fail();
+}
+
+let programArguments = [];
+let workingDirectory = "";
+const environment = new Map();
+const environmentFiles = [];
+const unsetEnvironment = [];
+const expandHome = (value) =>
+  value.replace(/%%|%h/gu, (match) => (match === "%h" ? process.env.HOME : "%"));
+
+let content;
+try {
+  content = fs.readFileSync(unitPath, "utf8");
+} catch {
+  fail();
+}
+
+for (const rawLine of content.split(/\r?\n/u)) {
+  const line = rawLine.trim();
+  const separator = line.indexOf("=");
+  if (separator < 0 || line.startsWith("#") || line.startsWith(";")) {
+    continue;
+  }
+  const directive = line.slice(0, separator);
+  const value = line.slice(separator + 1).trim();
+  if (directive === "ExecStart") {
+    programArguments = splitWords(value).map(expandHome);
+  } else if (directive === "WorkingDirectory") {
+    workingDirectory = expandHome(splitWords(value)[0] || "").replace(/^-/, "");
+  } else if (directive === "Environment") {
+    if (!value) {
+      environment.clear();
+    }
+    for (const assignment of splitWords(value)) {
+      const assignmentSeparator = assignment.indexOf("=");
+      if (assignmentSeparator <= 0) {
+        fail();
+      }
+      environment.set(
+        assignment.slice(0, assignmentSeparator),
+        expandHome(assignment.slice(assignmentSeparator + 1)),
+      );
+    }
+  } else if (directive === "EnvironmentFile") {
+    if (!value) {
+      environmentFiles.length = 0;
+    }
+    for (const filename of splitWords(value)) {
+      const optional = filename.startsWith("-");
+      environmentFiles.push([expandHome(optional ? filename.slice(1) : filename), optional]);
+    }
+  } else if (directive === "UnsetEnvironment") {
+    if (!value) {
+      unsetEnvironment.length = 0;
+    } else {
+      unsetEnvironment.push(...splitWords(value));
+    }
+  }
+}
+
+if (!programArguments.length) {
+  fail();
+}
+
+writeProperties([
+  {
+    type: "a(sasbttttuii)",
+    data: [[programArguments[0], programArguments, false, 0, 0, 0, 0, 0, 0, 0]],
+  },
+  { type: "s", data: workingDirectory },
+  { type: "as", data: Array.from(environment, ([key, value]) => `${key}=${value}`) },
+  { type: "a(sb)", data: environmentFiles },
+  { type: "as", data: unsetEnvironment },
+]);

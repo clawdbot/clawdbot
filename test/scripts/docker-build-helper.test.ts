@@ -83,6 +83,7 @@ const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-matrix-docker.sh";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
+const DOCTOR_SWITCH_BUSCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/busctl";
 const DOCTOR_SWITCH_LOGINCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/loginctl";
 const DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/systemctl";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
@@ -4881,6 +4882,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expectTextToIncludeAll(doctorScenario, [
       "cp scripts/e2e/lib/doctor-install-switch/shims/systemctl",
       "cp scripts/e2e/lib/doctor-install-switch/shims/loginctl",
+      "cp scripts/e2e/lib/doctor-install-switch/shims/busctl",
       "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1",
       "scripts/e2e/lib/package-compat.mjs",
     ]);
@@ -4927,6 +4929,109 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(loadState.stdout.trim()).toBe("not-found");
     expect(unitPath.status).toBe(0);
     expect(unitPath.stdout).toContain("/etc/systemd/system");
+  });
+
+  it("reports the installed doctor switch unit through the systemd manager", () => {
+    const home = tempDirs.make("openclaw-doctor-busctl-shim-");
+    const serviceName = "openclaw-gateway.service";
+    const unitPath = join(home, ".config", "systemd", "user", serviceName);
+    mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+    writeFileSync(
+      unitPath,
+      [
+        "[Service]",
+        'ExecStart=/usr/bin/node "/opt/openclaw git/dist/index.js" gateway --port 18789',
+        'WorkingDirectory="/opt/openclaw git"',
+        'Environment="GREETING=hello world" OPENCLAW_PROFILE=fixture',
+        "EnvironmentFile=-%h/.openclaw/gateway.systemd.env",
+        "UnsetEnvironment=STALE_FLAG",
+      ].join("\n"),
+    );
+
+    const manager = "org.freedesktop.systemd1";
+    const objectPath = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
+    const programArguments = [
+      "/usr/bin/node",
+      "/opt/openclaw git/dist/index.js",
+      "gateway",
+      "--port",
+      "18789",
+    ];
+    const runBusctl = (args: string[]) => {
+      const result = spawnSync(
+        DOCTOR_SWITCH_BUSCTL_SHIM_PATH,
+        ["--user", "--json=short", ...args],
+        {
+          encoding: "utf8",
+          env: { ...process.env, HOME: home },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+    };
+
+    expect(
+      runBusctl([
+        "call",
+        manager,
+        "/org/freedesktop/systemd1",
+        `${manager}.Manager`,
+        "LoadUnit",
+        "s",
+        serviceName,
+      ]),
+    ).toEqual([{ type: "o", data: [objectPath] }]);
+    expect(
+      runBusctl([
+        "get-property",
+        manager,
+        objectPath,
+        `${manager}.Service`,
+        "ExecStart",
+        "WorkingDirectory",
+        "Environment",
+        "EnvironmentFiles",
+        "UnsetEnvironment",
+      ]),
+    ).toEqual([
+      {
+        type: "a(sasbttttuii)",
+        data: [[programArguments[0], programArguments, false, ...Array(7).fill(0)]],
+      },
+      { type: "s", data: "/opt/openclaw git" },
+      { type: "as", data: ["GREETING=hello world", "OPENCLAW_PROFILE=fixture"] },
+      { type: "a(sb)", data: [[join(home, ".openclaw", "gateway.systemd.env"), true]] },
+      { type: "as", data: ["STALE_FLAG"] },
+    ]);
+    expect(
+      runBusctl([
+        "get-property",
+        manager,
+        objectPath,
+        `${manager}.Unit`,
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+      ]),
+    ).toEqual([
+      { type: "s", data: unitPath },
+      { type: "as", data: [] },
+      { type: "b", data: false },
+    ]);
+
+    const unexpected = spawnSync(
+      DOCTOR_SWITCH_BUSCTL_SHIM_PATH,
+      ["--user", "--json=short", "list"],
+      {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+      },
+    );
+    expect(unexpected.status).toBe(1);
+    expect(unexpected.stderr).toContain("unexpected invocation");
   });
 
   it("routes doctor install switch commands through the E2E timeout helper", () => {

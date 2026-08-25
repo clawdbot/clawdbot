@@ -1938,7 +1938,30 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("silently skips the host-service contribution in an externally managed container", async () => {
+  it("repairs an installed Gateway service during an authorized update inside Docker", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+    mocks.resolveGatewayService.mockReturnValue({
+      hasInstalledDefinition: vi.fn(async () => true),
+      isLoaded: mocks.gatewayServiceIsLoaded,
+    });
+
+    await withProcessPlatform("linux", async () => {
+      const ctx = createDoctorContext({
+        cfg: { gateway: { mode: "local" } },
+        shouldRepair: true,
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "1",
+        },
+      });
+
+      await requireDoctorContribution("doctor:gateway-services").run(ctx);
+
+      expect(mocks.maybeRepairGatewayServiceConfig).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("silently skips the host-service contribution in a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
     const contribution = requireDoctorContribution("doctor:gateway-services");
     const ctx = createDoctorContext({
@@ -2486,7 +2509,7 @@ describe("doctor health contributions", () => {
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
-  it("never probes systemd linger when selected inside an externally managed container", async () => {
+  it("never probes systemd linger inside a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
     const checks = await resolveDoctorContributionHealthChecks();
     const lingerCheck = checks.find((check) => check.id === "core/doctor/systemd-linger");
