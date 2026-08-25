@@ -16,8 +16,10 @@ import {
   createWhatsAppPersonalPhoneHarness,
   createWhatsAppRootAllowFromConfig,
   expectNoWhatsAppLoginFollowup,
+  expectNoWhatsAppNextStepsNote,
   expectWhatsAppAllowlistModeSetup,
   expectWhatsAppLoginFollowup,
+  expectWhatsAppNextStepsNote,
   expectWhatsAppOpenPolicySetup,
   expectWhatsAppOwnerAllowlistSetup,
   expectWhatsAppPersonalPhoneSetup,
@@ -441,6 +443,7 @@ describe("whatsapp setup wizard", () => {
     expect(hoisted.loginWeb).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID, {
       beforeCredentialPersistence: undefined,
     });
+    expectWhatsAppNextStepsNote(harness);
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
@@ -455,6 +458,7 @@ describe("whatsapp setup wizard", () => {
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
     expectNoWhatsAppLoginFollowup(harness);
+    expectWhatsAppNextStepsNote(harness);
   });
 
   it("shows follow-up login command note when not linked and linking is skipped", async () => {
@@ -468,6 +472,20 @@ describe("whatsapp setup wizard", () => {
     });
 
     expectWhatsAppLoginFollowup(harness);
+    expectNoWhatsAppNextStepsNote(harness);
+  });
+
+  it("does not show next steps note when WhatsApp login fails", async () => {
+    hoisted.hasWebCredsSync.mockReturnValue(false);
+    hoisted.loginWeb.mockRejectedValueOnce(new Error("login failed"));
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+
+    await runConfigureWithHarness({
+      harness,
+    });
+
+    expect(hoisted.loginWeb).toHaveBeenCalled();
+    expectNoWhatsAppNextStepsNote(harness);
   });
 
   it("heartbeat readiness uses configured defaultAccount for active listener checks", async () => {
