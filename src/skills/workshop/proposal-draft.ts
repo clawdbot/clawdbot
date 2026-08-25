@@ -7,7 +7,7 @@ import {
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
 } from "../lifecycle/workspace-skill-write.js";
-import { renderProposalMarkdown } from "./frontmatter.js";
+import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { assertProposalContainsNoLiteralSecrets, scanProposalBundle } from "./proposal-scan.js";
 import {
   hashSkillProposalContent,
@@ -54,7 +54,6 @@ export function prepareSkillProposalDraft(input: {
 }): Result<PreparedSkillProposalDraft, SkillProposalDraftValidationError> {
   try {
     assertProposalDescriptionWithinLimit(input.description);
-    assertProposalContentWithinLimit(input.content, input.maxSkillBytes);
     const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
     const content = renderProposalMarkdown({
       name: input.name,
@@ -64,6 +63,10 @@ export function prepareSkillProposalDraft(input: {
       version: input.version,
       date: input.date,
     });
+    assertProposalContentWithinLimit(
+      stripProposalFrontmatterForSkill(content),
+      input.maxSkillBytes,
+    );
     const goal = normalizeOptionalString(input.goal);
     const evidence = normalizeOptionalString(input.evidence);
     const scan = scanProposalBundle(content, supportFiles, [

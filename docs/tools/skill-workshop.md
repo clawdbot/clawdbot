@@ -378,7 +378,7 @@ the proposal threshold, and troubleshooting.
 | `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                             |
 | `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.             |
 | `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                   |
-| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                                 |
+| `maxSkillBytes`            | `40000`  | Caps persisted `SKILL.md` size in bytes, including retained frontmatter (1024-200000).                                                                                          |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
 completed trajectory clears the evidence-gated proposal bar. The foreground model is not prompted
@@ -474,7 +474,7 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | Limit                           | Value                                                                        |
 | ------------------------------- | ---------------------------------------------------------------------------- |
 | Description                     | 160 bytes                                                                    |
-| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
+| Persisted `SKILL.md`            | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
 | Support files                   | 64 per proposal                                                              |
 | Support file size               | 256 KiB each, 2 MiB total                                                    |
 | Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
@@ -484,7 +484,7 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | Problem                                        | Resolution                                                                                                                                                                                                  |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                                                                                                                                 |
-| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
+| `Skill proposal content is too large`          | Shorten the resulting skill or raise `skills.workshop.maxSkillBytes`.                                                                                                                                       |
 | `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
 | `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
 | `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |

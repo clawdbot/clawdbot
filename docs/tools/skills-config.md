@@ -389,9 +389,9 @@ proposal-only permissions, and troubleshooting.
 </ParamField>
 
 <ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
-  Maximum proposal body size in bytes (allowed range: 1024-200000). Proposal
-  descriptions are hard-capped at 160 bytes separately, because they appear
-  in discovery and listing output.
+  Maximum persisted `SKILL.md` size in bytes, including retained frontmatter
+  (allowed range: 1024-200000). Proposal descriptions are hard-capped at 160
+  bytes separately, because they appear in discovery and listing output.
 </ParamField>
 
 See [Skill Workshop](/tools/skill-workshop) for the proposal lifecycle, CLI

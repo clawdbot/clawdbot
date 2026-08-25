@@ -69,7 +69,7 @@ export type SkillsWorkshopConfig = {
   approvalPolicy?: "pending" | "auto";
   /** Maximum pending/quarantined proposals retained per workspace. */
   maxPending?: number;
-  /** Maximum generated skill proposal size in bytes. */
+  /** Maximum persisted SKILL.md size in bytes, including retained frontmatter. */
   maxSkillBytes?: number;
 };
 

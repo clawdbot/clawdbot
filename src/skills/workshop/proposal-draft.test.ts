@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   nextProposalVersion,
   prepareSkillProposalDraft,
@@ -52,7 +53,9 @@ describe("Skill Workshop proposal draft preparation", () => {
     expect(oversized).toMatchObject({
       ok: false,
       error: {
-        message: "Skill proposal content is too large (5 bytes, max 4).",
+        message: expect.stringMatching(
+          /^Skill proposal content is too large \(\d+ bytes, max 4\)\.$/,
+        ),
       },
     });
 
@@ -75,6 +78,39 @@ describe("Skill Workshop proposal draft preparation", () => {
         message: expect.stringContaining("recognized literal credential in skill-name"),
       },
     });
+  });
+
+  it("measures the canonical persisted skill instead of the submitted body", () => {
+    const maxSkillBytes = 1024;
+    const input = {
+      name: "boundary-skill",
+      description: "Boundary skill",
+      content: "x".repeat(maxSkillBytes),
+      date: "2026-08-14T00:00:00.000Z",
+    };
+    const prepared = prepareSkillProposalDraft({
+      ...input,
+      maxSkillBytes,
+    });
+
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: {
+        message: expect.stringMatching(
+          /^Skill proposal content is too large \(1\d{3} bytes, max 1024\)\.$/,
+        ),
+      },
+    });
+
+    const roomy = prepareSkillProposalDraft({ ...input, maxSkillBytes: 2048 });
+    if (!roomy.ok) {
+      throw roomy.error.cause;
+    }
+    const persistedBytes = Buffer.byteLength(
+      stripProposalFrontmatterForSkill(roomy.value.content),
+      "utf8",
+    );
+    expect(prepareSkillProposalDraft({ ...input, maxSkillBytes: persistedBytes }).ok).toBe(true);
   });
 
   it("preserves version and UTF-8 description behavior", () => {

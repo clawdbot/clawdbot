@@ -277,7 +277,7 @@ result pending regardless of autonomous mode.
 | `skills.workshop.autonomous.mode`          | `"auto"` | Chooses capture behavior; `auto` also enables daily collection review.                                                   |
 | `skills.workshop.approvalPolicy`           | `"auto"` | Controls prompts for normal agent-initiated lifecycle calls. It never expands the isolated reviewer tool surface.        |
 | `skills.workshop.maxPending`               | `50`     | Caps pending and quarantined proposals per workspace.                                                                    |
-| `skills.workshop.maxSkillBytes`            | `40000`  | Caps proposal body size in bytes.                                                                                        |
+| `skills.workshop.maxSkillBytes`            | `40000`  | Caps persisted `SKILL.md` size in bytes, including retained frontmatter.                                                 |
 | `skills.workshop.allowSymlinkTargetWrites` | `false`  | Allows apply through explicitly trusted workspace skill symlinks. Capture itself does not widen the trusted target list. |
 
 See [Skills config](/tools/skills-config#workshop-skills-workshop) for ranges and
