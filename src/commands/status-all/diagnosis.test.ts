@@ -118,6 +118,14 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Tailscale: off");
   });
 
+  it("does not warn about an unavailable Tailscale daemon when exposure is disabled", async () => {
+    const params = createBaseParams([]);
+
+    await appendStatusAllDiagnosis(params);
+
+    expect(params.lines.join("\n")).toContain("✓ Tailscale exposure: off · daemon unknown");
+  });
+
   it("treats same-process dual-stack loopback listeners as healthy", async () => {
     const params = createBaseParams([
       { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
