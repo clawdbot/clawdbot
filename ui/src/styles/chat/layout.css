@@ -2040,6 +2040,17 @@ button.chat-reply-preview--message:disabled {
   margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
 }
 
+/* Fade transcript content before the highest composer-stack surface covers it.
+   The chat-surface endpoint stays invisible when there is no content behind. */
+.agent-chat__composer-shell::before {
+  position: absolute;
+  inset: -20px 0 auto;
+  height: 20px;
+  background: linear-gradient(to bottom, transparent, var(--chat-surface));
+  content: "";
+  pointer-events: none;
+}
+
 /* The conversation's top-right gutter, owned by one column so its members
    stack instead of overlapping (the positioned ancestor is
    .chat-main__conversation); content scrolls underneath it. The column is as
@@ -2062,7 +2073,6 @@ button.chat-reply-preview--message:disabled {
 .chat-gutter-stack > * {
   pointer-events: auto;
 }
-
 .task-suggestions {
   --task-suggestion-card-bg: color-mix(in srgb, var(--panel-strong) 72%, var(--panel-hover) 28%);
   --task-suggestion-path-bg: color-mix(in srgb, var(--panel-hover) 84%, var(--text) 16%);
