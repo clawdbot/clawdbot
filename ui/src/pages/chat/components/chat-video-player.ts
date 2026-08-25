@@ -88,6 +88,15 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     });
   }
 
+  private adoptPendingSource(): boolean {
+    if (!this.media || !this.sourceController.applyPendingSource(this.media)) {
+      return false;
+    }
+    this.metadataLoaded = false;
+    this.requestUpdate();
+    return true;
+  }
+
   override render() {
     const downloadHref = safeAttachmentHref(this.src);
     const preparing = this.sourceController.readiness === "preparing";
@@ -138,8 +147,13 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
                 this.metadataLoaded = false;
               }
             }}
+            @play=${() => this.adoptPendingSource()}
             @seeking=${() => {
-              if (this.media?.error && this.sourceController.handleError(this.media)) {
+              if (
+                !this.adoptPendingSource() &&
+                this.media?.error &&
+                this.sourceController.handleError(this.media)
+              ) {
                 this.metadataLoaded = false;
                 this.requestUpdate();
               }

@@ -35,6 +35,30 @@ describe("ChatVideoPlayer", () => {
     expect(player.querySelector("video")?.style.aspectRatio).toBe("9 / 16");
   });
 
+  it("applies a renewed ticket when playback resumes", async () => {
+    const player = document.createElement("openclaw-chat-video-player");
+    player.src = "/media/clip.mp4?mediaTicket=A";
+    player.sourceIdentity = "media:renewing-clip";
+    player.label = "clip.mp4";
+    document.body.append(player);
+    await player.updateComplete;
+    const video = player.querySelector("video")!;
+    let paused = true;
+    Object.defineProperties(video, {
+      currentTime: { configurable: true, get: () => 12 },
+      paused: { configurable: true, get: () => paused },
+    });
+
+    player.src = "/media/clip.mp4?mediaTicket=B";
+    await player.updateComplete;
+    expect(video.getAttribute("src")).toContain("mediaTicket=A");
+
+    paused = false;
+    video.dispatchEvent(new Event("play"));
+
+    expect(video.getAttribute("src")).toContain("mediaTicket=B");
+  });
+
   it("keeps one video element mounted across 202 preparation", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
