@@ -9,7 +9,6 @@ import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
-import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import {
   createChatAttachmentDropHandlers,
@@ -24,10 +23,7 @@ import {
   paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
-import {
-  renderChatComposerPlusMenu,
-  type ChatComposerPlusMenuView,
-} from "../chat/components/chat-composer-plus-menu.ts";
+import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.ts";
 import {
   createSkillMenuState,
   getActiveSkillMenuOptionId,
@@ -53,6 +49,11 @@ import {
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import { insertComposerDictation } from "../chat/composer-dictation.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import {
+  renderNewSessionDraftVisibility,
+  renderNewSessionPlusMenu,
+  renderNewSessionSelectionStatus,
+} from "./composer-capability-controls.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
@@ -345,35 +346,6 @@ export class NewSessionComposerTextareaController {
   }
 }
 
-/** Draft visibility pill: selecting it clears incognito, re-click returns to normal. */
-function renderVisibilityPill(params: {
-  mode: Exclude<NewSessionVisibility, "normal">;
-  icon: unknown;
-  label: string;
-  description: string;
-  options: NewSessionComposerOptions;
-}) {
-  const active = params.options.visibility === params.mode;
-  const disabled = params.options.submitting || params.options.messageLocked;
-  return html`
-    <button
-      type="button"
-      class="new-session-page__visibility new-session-page__visibility--${params.mode} ${active
-        ? "new-session-page__visibility--active"
-        : ""}"
-      role="switch"
-      aria-label=${params.label}
-      aria-checked=${String(active)}
-      ?disabled=${disabled}
-      title=${params.description}
-      @click=${() => params.options.onVisibilityChange?.(active ? "normal" : params.mode)}
-    >
-      <span class="new-session-page__visibility-icon" aria-hidden="true">${params.icon}</span>
-      <span class="new-session-page__visibility-label">${params.label}</span>
-    </button>
-  `;
-}
-
 export function renderDraftError(message: string, action?: { label: string; onClick: () => void }) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
@@ -432,67 +404,6 @@ function handleComposerKeydown(
     event.preventDefault();
     submitNewSession(options);
   }
-}
-
-function renderNewSessionPlusMenu(
-  options: NewSessionComposerOptions,
-  attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"],
-) {
-  const capabilityMenu = options.capabilityMenu;
-  const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  const disabled = options.submitting || options.messageLocked === true;
-  const controller = options.textareaController;
-  return renderChatComposerPlusMenu({
-    attachments,
-    capabilityMenu,
-    disabled,
-    open: controller.capabilityMenuOpen,
-    view: controller.capabilityMenuView,
-    toolOverrides: options.toolOverrides,
-    selectedLabel:
-      overrideCount > 0
-        ? t("newSession.composerOptionsSelected", { count: String(overrideCount) })
-        : undefined,
-    onOpenChange: (open) => {
-      controller.capabilityMenuOpen = open;
-      if (!open) {
-        controller.capabilityMenuView = "root";
-      }
-      options.requestUpdate();
-    },
-    onViewChange: (view) => {
-      controller.capabilityMenuView = view;
-      options.requestUpdate();
-    },
-  });
-}
-
-function renderNewSessionOverrideStatus(options: NewSessionComposerOptions) {
-  const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  if (overrideCount === 0) {
-    return nothing;
-  }
-  const disabled = options.submitting || options.messageLocked === true;
-  const openMenu = () => {
-    options.textareaController.capabilityMenuView = "root";
-    options.textareaController.capabilityMenuOpen = true;
-    options.requestUpdate();
-  };
-  return html`
-    <button
-      type="button"
-      class="new-session-page__selection-status"
-      ?disabled=${disabled}
-      @click=${openMenu}
-    >
-      ${t(
-        overrideCount === 1
-          ? "chat.composer.overrides.countOne"
-          : "chat.composer.overrides.count",
-        { count: String(overrideCount) },
-      )}
-    </button>
-  `;
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
@@ -642,16 +553,8 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           <div class="agent-chat__composer-lead">
             ${renderNewSessionPlusMenu(options, attachmentProps)}
             ${options.permissionControl ?? nothing}
-            ${options.draftAvailable
-              ? renderVisibilityPill({
-                  mode: "draft",
-                  icon: icons.pencil,
-                  label: t("newSession.draft"),
-                  description: t("newSession.draftDescription"),
-                  options,
-                })
-              : nothing}
-            ${renderNewSessionOverrideStatus(options)}
+            ${options.draftAvailable ? renderNewSessionDraftVisibility(options) : nothing}
+            ${renderNewSessionSelectionStatus(options)}
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
