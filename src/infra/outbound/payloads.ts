@@ -230,12 +230,7 @@ function createOutboundPayloadPlanEntry(
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  if (
-    (strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText)) &&
-    mergedMedia.length === 0
-  ) {
-    return null;
-  }
+  const suppressedText = strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText);
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
@@ -243,7 +238,7 @@ function createOutboundPayloadPlanEntry(
     text:
       formatBtwTextForExternalDelivery({
         ...payload,
-        text: parsedText,
+        text: suppressedText ? "" : parsedText,
       }) ?? "",
     mediaUrls: mergedMedia.length ? mergedMedia : undefined,
     mediaUrl: resolvedMediaUrl,
@@ -252,7 +247,10 @@ function createOutboundPayloadPlanEntry(
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
   };
-  if (!isRenderablePayload(normalizedPayload)) {
+  const hasRenderableContent = suppressedText
+    ? hasReplyPayloadContent(normalizedPayload)
+    : isRenderablePayload(normalizedPayload);
+  if (!hasRenderableContent) {
     return null;
   }
   const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);

@@ -253,6 +253,49 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it.each(
+    typedCases<{ name: string; content: ReplyPayload }>([
+      { name: "media", content: { mediaUrl: "https://x.test/one.png" } },
+      {
+        name: "voice media",
+        content: { mediaUrl: "https://x.test/voice.ogg", audioAsVoice: true },
+      },
+      {
+        name: "presentation",
+        content: { presentation: { blocks: [{ type: "text", text: "Visible card" }] } },
+      },
+      {
+        name: "interactive blocks",
+        content: { interactive: { blocks: [{ type: "text", text: "Visible controls" }] } },
+      },
+      { name: "channel data", content: { channelData: { mode: "flex" } } },
+      { name: "location", content: { location: { latitude: 1, longitude: 2 } } },
+    ]),
+  )("preserves $name without exposing suppressed reply text", ({ content }) => {
+    for (const text of [
+      "NO_REPLY",
+      '{"action":"NO_REPLY"}',
+      "No channel reply.",
+      "Replied in-thread.",
+    ]) {
+      const [normalized] = normalizeReplyPayloadsForDelivery([{ ...content, text }]);
+      expect(normalized, text).toMatchObject({ ...content, text: "" });
+    }
+  });
+
+  it.each(["NO_REPLY", '{"action":"NO_REPLY"}', "No channel reply.", "Replied in-thread."])(
+    "suppresses %s when an audio-as-voice marker has no media",
+    (text) => {
+      expect(normalizeReplyPayloadsForDelivery([{ text, audioAsVoice: true }])).toStrictEqual([]);
+    },
+  );
+
+  it("preserves empty audio-as-voice markers used for delivery tracking", () => {
+    expect(normalizeReplyPayloadsForDelivery([{ audioAsVoice: true }])).toMatchObject([
+      { text: "", audioAsVoice: true },
+    ]);
+  });
+
   it("drops bare silent replies for direct conversations", () => {
     expect(
       projectOutboundPayloadPlanForDelivery(

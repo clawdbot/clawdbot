@@ -5889,7 +5889,12 @@ describe("deliverOutboundPayloads", () => {
     expect(pinOptions?.messageId).toBe("mx-1");
   });
 
-  it("preserves channelData-only payloads with empty text for sendPayload channels", async () => {
+  it.each([
+    { name: "empty text", text: " \n\t " },
+    { name: "a silent token", text: "NO_REPLY" },
+    { name: "a silent JSON action", text: '{"action":"NO_REPLY"}' },
+    { name: "a relay status placeholder", text: "No channel reply." },
+  ])("delivers channelData-only payloads with $name", async ({ text }) => {
     const sendPayload = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-1" });
     const sendText = vi.fn();
     const sendMedia = vi.fn();
@@ -5899,7 +5904,7 @@ describe("deliverOutboundPayloads", () => {
       cfg: {},
       channel: "line",
       to: "U123",
-      payloads: [{ text: " \n\t ", channelData: { mode: "flex" } }],
+      payloads: [{ text, channelData: { mode: "flex" } }],
     });
 
     expect(sendPayload).toHaveBeenCalledTimes(1);
