@@ -733,7 +733,7 @@ function filterSessionStoreByAgent(params: {
   const scopedAgentId = normalizeAgentId(params.agentId);
   const scopedStore: Record<string, SessionEntry> = {};
   for (const [key, entry] of Object.entries(params.store)) {
-    if (params.config.session?.scope === "global" && key.trim().toLowerCase() === "global") {
+    if (key.trim().toLowerCase() === "global") {
       scopedStore[key] = entry;
       continue;
     }
