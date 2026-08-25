@@ -148,8 +148,11 @@ describe("createReplyRestartRecoveryClaimController", () => {
       abortedLastRun: false,
       lifecycleRunId: "recovery-run",
       restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "recovery-run",
       restartRecoveryDeliverySourceRunId: "source-turn",
+      restartRecoveryDeliveryToolCallId: "message-call",
       sessionId,
       startedAt: 1,
       status: "running",
@@ -172,8 +175,11 @@ describe("createReplyRestartRecoveryClaimController", () => {
     await expect(controller.admitUserTurn()).resolves.toBe("admitted");
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "recovery-run",
       restartRecoveryDeliverySourceRunId: "source-turn",
+      restartRecoveryDeliveryToolCallId: "message-call",
       status: "running",
     });
   });

@@ -44,6 +44,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   let executionStartTimedOut = false;
   let preStartAbortAttempted = false;
   let preStartAbortConfirmed = false;
+  let preStartAbort: Promise<void> | undefined;
   const observe = (): RestartRecoveryDispatchObservation => ({
     dispatchAccepted,
     executionStarted,
@@ -55,6 +56,29 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     resolveExecutionStarted = resolve;
   });
   const executionStartAbort = new AbortController();
+  const abortBeforeStart = () => {
+    if (!dispatchAccepted || executionStarted) {
+      return Promise.resolve();
+    }
+    return (preStartAbort ??= (async () => {
+      preStartAbortAttempted = true;
+      const aborted = await params.gatewayRuntime.abortAgent(
+        {
+          agentId: params.agentId,
+          runId: params.recoveryRunId,
+          sessionKey: params.sessionKey,
+        },
+        RESTART_RECOVERY_ABORT_TIMEOUT_MS,
+      );
+      preStartAbortConfirmed = aborted.aborted === true;
+    })());
+  };
+  let resolveExecutionStartTimeout!: (outcome: RestartRecoveryDispatchStartOutcome) => void;
+  const executionStartTimeoutPromise = new Promise<RestartRecoveryDispatchStartOutcome>(
+    (resolve) => {
+      resolveExecutionStartTimeout = resolve;
+    },
+  );
   let executionStartTimer: ReturnType<typeof setTimeout> | undefined;
   const clearExecutionStartTimer = () => {
     if (executionStartTimer) {
@@ -65,7 +89,13 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   executionStartTimer = setTimeout(() => {
     if (!executionStarted) {
       executionStartTimedOut = true;
-      executionStartAbort.abort(new Error("restart recovery execution start timeout"));
+      const error = new Error("restart recovery execution start timeout");
+      void abortBeforeStart()
+        .catch(() => undefined)
+        .then(() => {
+          executionStartAbort.abort(error);
+          resolveExecutionStartTimeout({ kind: "failed", error, observation: observe() });
+        });
     }
   }, RESTART_RECOVERY_EXECUTION_START_TIMEOUT_MS);
   executionStartTimer.unref?.();
@@ -87,21 +117,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
           clearExecutionStartTimer();
           resolveExecutionStarted();
         },
-        onSignalAbort: async () => {
-          if (!dispatchAccepted || executionStarted) {
-            return;
-          }
-          preStartAbortAttempted = true;
-          const aborted = await params.gatewayRuntime.abortAgent(
-            {
-              agentId: params.agentId,
-              runId: params.recoveryRunId,
-              sessionKey: params.sessionKey,
-            },
-            RESTART_RECOVERY_ABORT_TIMEOUT_MS,
-          );
-          preStartAbortConfirmed = aborted.aborted === true;
-        },
+        onSignalAbort: abortBeforeStart,
         signal: executionStartAbort.signal,
       },
     );
@@ -114,6 +130,12 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     RestartRecoveryDispatchStartOutcome
   >(
     (result) => {
+      if (result.status === "in_flight") {
+        // Cached acceptance is still queued work. Keep its exact claim under the
+        // same start deadline as a newly accepted run.
+        dispatchAccepted = true;
+        return executionStartTimeoutPromise;
+      }
       clearExecutionStartTimer();
       return { kind: "terminal", observation: observe(), result };
     },
@@ -124,6 +146,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   );
   return await Promise.race([
     terminalDispatchOutcome,
+    executionStartTimeoutPromise,
     executionStartedPromise.then(
       (): RestartRecoveryDispatchStartOutcome => ({
         kind: "started",

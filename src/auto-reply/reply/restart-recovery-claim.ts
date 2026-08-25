@@ -242,13 +242,19 @@ export function createReplyRestartRecoveryClaimController(params: {
         throw new Error("restart recovery claim changed before agent adoption");
       }
       // Clear the retry verifier as the exact admitted claim crosses into execution.
+      const preservesTerminalReceipt =
+        entry.restartRecoveryDeliveryReceiptState === "terminal-pending";
       const adopted = await persistAdmissionPatch({
         entry,
         patch: {
           restartRecoveryBeforeAgentReplyState: undefined,
-          restartRecoveryDeliveryReceiptState: undefined,
-          restartRecoveryDeliveryToolCallId: undefined,
-          restartRecoveryDeliveryRequestFingerprint: undefined,
+          ...(preservesTerminalReceipt
+            ? {}
+            : {
+                restartRecoveryDeliveryReceiptState: undefined,
+                restartRecoveryDeliveryToolCallId: undefined,
+                restartRecoveryDeliveryRequestFingerprint: undefined,
+              }),
           restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
           updatedAt: Date.now(),
         },

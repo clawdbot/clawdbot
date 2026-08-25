@@ -4216,6 +4216,7 @@ describe("main-session-restart-recovery", () => {
     {
       label: "restores the interrupted claim after confirmed cancellation",
       aborted: true,
+      cached: false,
       expectedAbortedLastRun: true,
       expectedRunId: undefined,
       expectedScheduleCount: 1,
@@ -4223,13 +4224,22 @@ describe("main-session-restart-recovery", () => {
     {
       label: "keeps the claim fenced when cancellation is not confirmed",
       aborted: false,
+      cached: false,
       expectedAbortedLastRun: false,
       expectedRunId: "recovery-main",
       expectedScheduleCount: 0,
     },
+    {
+      label: "restores a cached in-flight claim after confirmed cancellation",
+      aborted: true,
+      cached: true,
+      expectedAbortedLastRun: true,
+      expectedRunId: undefined,
+      expectedScheduleCount: 1,
+    },
   ])(
     "$label when accepted recovery never starts",
-    async ({ aborted, expectedAbortedLastRun, expectedRunId, expectedScheduleCount }) => {
+    async ({ aborted, cached, expectedAbortedLastRun, expectedRunId, expectedScheduleCount }) => {
       vi.useFakeTimers();
       const { sessionsDir, storePath } = await makeMainSessionFixture({
         restartRecoveryDeliveryRunId: "recovery-main",
@@ -4243,8 +4253,12 @@ describe("main-session-restart-recovery", () => {
         .mockImplementation(() => {});
       const accepted = createDeferred();
       const abortAgent = vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({ aborted }));
-      const dispatchAgent = vi.fn<GatewayRecoveryRuntime["dispatchAgent"]>(
-        async (request, _timeoutMs, options) => {
+      const dispatchAgent = vi.fn(
+        async (
+          request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
+          _timeoutMs: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[1],
+          options: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
+        ) => {
           const runId = request.idempotencyKey!;
           await commitMainSessionRecovery({
             command: {
@@ -4257,6 +4271,10 @@ describe("main-session-restart-recovery", () => {
             requireWriteSuccess: true,
             target: { sessionKey: "agent:main:main", storePath },
           });
+          if (cached) {
+            accepted.resolve();
+            return { runId, status: "in_flight" };
+          }
           options?.onAccepted?.({ runId, status: "accepted" });
           accepted.resolve();
           return await new Promise<never>((_resolve, reject) => {
