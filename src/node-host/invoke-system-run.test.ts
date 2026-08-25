@@ -430,7 +430,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   function createPolicyMutationCommit(
     mutate: (current: ReturnType<typeof loadExecApprovals>) => void,
-  ): Mock<HandleSystemRunInvokeOptions["commitExecAuthorization"]> {
+  ): Mock<NonNullable<HandleSystemRunInvokeOptions["commitExecAuthorization"]>> {
     return vi.fn(async (params) => {
       const current = loadExecApprovals();
       mutate(current);
