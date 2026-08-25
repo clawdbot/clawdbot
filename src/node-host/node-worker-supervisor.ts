@@ -217,7 +217,9 @@ class NodeWorkerSupervisor {
         if (inspection === "reused") {
           throw new Error(`node worker launch ${launchId} lost its container ownership`);
         }
-        if (inspection === "live") {
+        // A created container's start client is still in flight; only its own
+        // death may end the launch — reaping here would kill a healthy start.
+        if (inspection === "live" || inspection === "created") {
           const clientState = inspectNodeWorkerProcessIdentity(active.worker);
           if (clientState !== "dead" && clientState !== "reused") {
             return this.store.get(launchId);

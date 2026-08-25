@@ -63,7 +63,7 @@ export class NodeWorkerContainerLifecycle {
   async inspect(
     container: NodeWorkerContainerIdentity,
     owner: NodeWorkerContainerOwner,
-  ): Promise<"live" | "dead" | "reused" | "unknown"> {
+  ): Promise<"live" | "created" | "dead" | "reused" | "unknown"> {
     return await inspectNodeWorkerContainer(
       this.requireMatchingEngine(container),
       container.containerId,

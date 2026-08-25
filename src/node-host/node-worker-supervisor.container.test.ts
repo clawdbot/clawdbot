@@ -67,9 +67,13 @@ const save = (container) => {
 };
 const launchIdFor = (container) =>
   Buffer.from(container.labels["openclaw.node-worker.launch"], "base64url").toString("utf8");
+// null = a successful read proved the row is absent; undefined = the read
+// itself glitched (the live WAL writer's checkpoints can briefly lock out
+// this raw cross-process reader) and proves nothing about the journal.
 const journalState = (launchId) => {
   try {
     const database = new DatabaseSync(path.join(stateRoot, "state", "openclaw.sqlite"), { readOnly: true });
+    database.exec("PRAGMA busy_timeout = 5000;");
     const row = database.prepare("SELECT state FROM node_worker_launches WHERE launch_id = ?").get(launchId);
     const hasContainerTable = database.prepare(
       "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'node_worker_launch_containers'",
@@ -80,7 +84,7 @@ const journalState = (launchId) => {
       ).get(launchId)
       : undefined;
     database.close();
-    return row && { state: row.state, container_json: container?.container_json ?? null };
+    return row ? { state: row.state, container_json: container?.container_json ?? null } : null;
   } catch {
     return undefined;
   }
@@ -147,7 +151,7 @@ if (command === "version") {
   }
   const entry = args.at(-1);
   const image = args.at(-2);
-  const container = { id, labels, env, mounts, image, entry, running: false, pid: null };
+  const container = { id, labels, env, mounts, image, entry, status: "created", pid: null };
   save(container);
   record({ argv: args, container, journal: journalState(launchIdFor(container)) });
   releaseAfterMarker("hold-create", () => process.stdout.write(id + "\n"));
@@ -167,12 +171,18 @@ if (command === "version") {
       process.stderr.write("container worker executed before its exact identity was journaled\n");
       process.exit(67);
     }
+    // Holds the container in "created" so tests can race supervisor calls
+    // against a start client that has not yet transitioned it to running.
+    const startMarker = path.join(engineRoot, "hold-start-running");
+    while (fs.existsSync(startMarker)) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     const child = spawn(process.execPath, [container.entry], {
       detached: process.platform !== "win32",
       env: container.env,
       stdio: ["pipe", "inherit", "inherit"],
     });
-    container.running = true;
+    container.status = "running";
     container.pid = child.pid;
     save(container);
     child.stdin.end(descriptor);
@@ -183,7 +193,7 @@ if (command === "version") {
     child.once("exit", (code, signal) => {
       if (fs.existsSync(statePath(container.id))) {
         const current = load(container.id);
-        current.running = false;
+        current.status = "exited";
         current.pid = null;
         save(current);
       }
@@ -198,7 +208,7 @@ if (command === "version") {
   record({ argv: args });
   const container = readContainer(id);
   const format = args[args.indexOf("--format") + 1];
-  const columns = [String(container.running)];
+  const columns = [container.status];
   if (format.includes("openclaw.node-worker.host")) {
     columns.push(
       container.labels["openclaw.node-worker.host"] ?? "",
@@ -210,11 +220,11 @@ if (command === "version") {
 } else if (command === "kill") {
   const container = readContainer(args.at(-1));
   record({ argv: args, journal: journalState(launchIdFor(container)) });
-  if (!container.running) {
+  if (container.status !== "running") {
     process.stderr.write("container is not running\n");
     process.exit(1);
   }
-  container.running = false;
+  container.status = "exited";
   save(container);
   if (container.pid) {
     try {
@@ -263,7 +273,7 @@ type FakeContainer = {
   mounts: string[];
   image: string;
   entry: string;
-  running: boolean;
+  status: "created" | "running" | "exited";
   pid: number | null;
 };
 
@@ -351,7 +361,7 @@ function containerFixture(
         mounts: [],
         image: "node:22-slim",
         entry: bundleEntry,
-        running: params.running ?? true,
+        status: (params.running ?? true) ? "running" : "exited",
         pid: null,
       };
       fs.writeFileSync(
@@ -435,7 +445,11 @@ describe("node worker supervisor container isolation", () => {
         },
       });
       const completed = await waitForTerminal(fixture.supervisor, input.launchId);
-      expect(completed?.state).toBe("completed");
+      // Compare state together with errorText so a failed launch prints why.
+      expect({ state: completed?.state, errorText: completed?.errorText }).toEqual({
+        state: "completed",
+        errorText: null,
+      });
       expect(JSON.parse(completed?.resultJson ?? "null")).toEqual({
         status: "completed",
         argv: [],
@@ -494,6 +508,41 @@ describe("node worker supervisor container isolation", () => {
         "node:22-slim",
       );
     } finally {
+      await fixture.supervisor.close();
+    }
+  });
+
+  it("keeps a created container alive when status races the start client", async () => {
+    const fixture = containerFixture();
+    const input = testWorkerLaunchInput(fixture.workspaceDir, "container-created-status-race");
+    const startMarker = path.join(fixture.engineRoot, "hold-start-running");
+    fs.writeFileSync(startMarker, "hold");
+
+    try {
+      const launch = fixture.supervisor.launch(input, endpoint);
+      // The engine records "start" after journaling but before the container
+      // leaves "created" — exactly the window a status() poll used to reap.
+      await vi.waitFor(
+        () => expect(fixture.events().some((event) => event.argv[0] === "start")).toBe(true),
+        { timeout: 5_000 },
+      );
+
+      const observed = await fixture.supervisor.status(input.launchId);
+      expect(observed?.state).toBe("running");
+      expect(fixture.events().some((event) => event.argv[0] === "kill")).toBe(false);
+      expect(fixture.events().some((event) => event.argv[0] === "rm")).toBe(false);
+
+      fs.unlinkSync(startMarker);
+      await expect(launch).resolves.toMatchObject({ state: "running" });
+      const completed = await waitForTerminal(fixture.supervisor, input.launchId);
+      expect({ state: completed?.state, errorText: completed?.errorText }).toEqual({
+        state: "completed",
+        errorText: null,
+      });
+    } finally {
+      if (fs.existsSync(startMarker)) {
+        fs.unlinkSync(startMarker);
+      }
       await fixture.supervisor.close();
     }
   });

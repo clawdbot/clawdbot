@@ -340,11 +340,11 @@ export async function inspectNodeWorkerContainer(
   engine: NodeWorkerContainerEngine,
   containerId: string,
   expected?: NodeWorkerContainerExpectedOwner,
-): Promise<"live" | "dead" | "reused" | "unknown"> {
+): Promise<"live" | "created" | "dead" | "reused" | "unknown"> {
   try {
     const format = expected
-      ? `{{.State.Running}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
-      : "{{.State.Running}}";
+      ? `{{.State.Status}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
+      : "{{.State.Status}}";
     const state = await runContainerCommand(engine, [
       "inspect",
       "--type",
@@ -353,7 +353,7 @@ export async function inspectNodeWorkerContainer(
       format,
       containerId,
     ]);
-    const [running, owner, gateway, launch, extra] = state.split("\t");
+    const [status, owner, gateway, launch, extra] = state.split("\t");
     if (expected) {
       if (
         extra !== undefined ||
@@ -366,7 +366,28 @@ export async function inspectNodeWorkerContainer(
     } else if (owner !== undefined) {
       return "unknown";
     }
-    return running === "true" ? "live" : running === "false" ? "dead" : "unknown";
+    // "created" is a launch in flight (create finished, start client not yet
+    // through), never a dead workload: reaping it destroys a healthy launch.
+    // Docker states: created/running/paused/restarting/removing/exited/dead;
+    // Podman adds configured/initialized/stopped/stopping.
+    switch (status) {
+      case "running":
+      case "paused":
+      case "restarting":
+      case "stopping":
+        return "live";
+      case "configured":
+      case "initialized":
+      case "created":
+        return "created";
+      case "exited":
+      case "stopped":
+      case "removing":
+      case "dead":
+        return "dead";
+      default:
+        return "unknown";
+    }
   } catch (error) {
     return missingContainer(error) ? "dead" : "unknown";
   }
