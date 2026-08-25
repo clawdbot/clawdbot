@@ -30,7 +30,7 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
 import {
-  isUpdateAttentionDismissed,
+  isSidebarAttentionDismissed,
   isUpdateAttentionForced,
   loadDismissals,
   resolveUpdateAttentionDismissal,
@@ -143,7 +143,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     !overlaySnapshot?.updateReconciliationPending &&
     overlaySnapshot?.updateSchedule?.campaign?.state !== "applying" &&
     !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
-    isUpdateAttentionDismissed(
+    isSidebarAttentionDismissed(
       loadDismissals(context.gateway.connection.gatewayUrl),
       updateAttentionDismissal,
     ),

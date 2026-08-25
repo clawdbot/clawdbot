@@ -3635,7 +3635,10 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("keeps partial preview-first finalization on the existing draft when text is unchanged", async () => {
+  it.each([
+    { name: "plain text", payload: { text: "Single block" } },
+    { name: "blank-only media", payload: { text: "Single block", mediaUrls: ["   "] } },
+  ])("finalizes unchanged partial drafts for $name", async ({ payload }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({
       blockStreamingEnabled: true,
       streaming: "partial",
@@ -3654,7 +3657,7 @@ describe("matrix monitor handler draft streaming", () => {
     expect(draftOptions.msgtype).not.toBe("m.notice");
     expect(draftOptions.includeMentions).toBe(false);
 
-    await deliver({ text: "Single block" }, { kind: "final" });
+    await deliver(payload, { kind: "final" });
 
     // MSC4357: even when text is unchanged, a finalize edit is sent to clear
     // the live marker so supporting clients stop the streaming animation.
@@ -4706,7 +4709,10 @@ describe("matrix monitor handler draft streaming", () => {
     expect(redactEventMock).not.toHaveBeenCalled();
   });
 
-  it("keeps shutdown cleanup for empty final payloads that send nothing", async () => {
+  it.each([
+    { name: "no media", payload: {} },
+    { name: "blank-only media", payload: { mediaUrls: ["   "] } },
+  ])("cleans up empty final drafts with $name", async ({ payload }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -4720,7 +4726,7 @@ describe("matrix monitor handler draft streaming", () => {
       visibleReplySent: false,
       suppression: { reason: "no_visible_result" },
     });
-    await deliver({}, { kind: "final" });
+    await deliver(payload, { kind: "final" });
 
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(redactEventMock).not.toHaveBeenCalled();
@@ -4749,25 +4755,57 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("redacts stale draft when payload reply target mismatches", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });
+  it.each([
+    {
+      name: "an implicit reply with reply mode first",
+      replyToMode: "first" as const,
+      payload: { text: "Final text", replyToId: "$different_msg" },
+    },
+    {
+      name: "an explicit reply tag with reply mode off",
+      replyToMode: "off" as const,
+      payload: { text: "Final text", replyToId: "$different_msg", replyToTag: true },
+    },
+  ])(
+    "redacts stale draft when $name targets a different event",
+    async ({ replyToMode, payload }) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode });
+      const { deliver, opts, finish } = await dispatch();
+
+      // Simulate streaming: partial reply creates draft message.
+      opts.onPartialReply?.({ text: "Partial reply" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+
+      // Final delivery carries a different replyToId than the draft's.
+      deliverMatrixRepliesMock.mockClear();
+      await deliver(payload, { kind: "final" });
+
+      expect(editMessageMatrixMock).not.toHaveBeenCalled();
+      // Draft should be redacted since it can't change reply relation.
+      expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+      // Final answer delivered via normal path.
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+      await finish();
+    },
+  );
+
+  it("finalizes the existing draft when an implicit reply is suppressed by off mode", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "off" });
     const { deliver, opts, finish } = await dispatch();
 
-    // Simulate streaming: partial reply creates draft message.
     opts.onPartialReply?.({ text: "Partial reply" });
     await waitForMatrixState(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
 
-    // Final delivery carries a different replyToId than the draft's.
     deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Final text", replyToId: "$different_msg" }, { kind: "final" });
+    await deliver({ text: "Final text", replyToId: "$suppressed_implicit" }, { kind: "final" });
 
-    expect(editMessageMatrixMock).not.toHaveBeenCalled();
-    // Draft should be redacted since it can't change reply relation.
-    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
-    // Final answer delivered via normal path.
-    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(editMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     await finish();
   });
 
@@ -4857,7 +4895,10 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("finalizes partial drafts before reusing unchanged media captions", async () => {
+  it.each([
+    { name: "a singular attachment", mediaUrls: undefined },
+    { name: "a singular fallback after blank plural entries", mediaUrls: ["   "] },
+  ])("reuses partial-draft captions for $name", async ({ mediaUrls }) => {
     const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
     const { deliver, opts, finish } = await dispatch();
 
@@ -4871,6 +4912,7 @@ describe("matrix monitor handler draft streaming", () => {
       {
         text: "screenshot ready",
         mediaUrl: "https://example.com/image.png",
+        mediaUrls,
       },
       { kind: "final" },
     );

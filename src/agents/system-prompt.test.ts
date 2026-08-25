@@ -1313,6 +1313,50 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Bravo");
   });
 
+  it("removes shipped heartbeat prompt quotes from workspace context without dropping user guidance", () => {
+    const heartbeatPrompts = [
+      "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      "Follow the heartbeat monitor scratch context when provided. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      "Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+    ];
+
+    for (const heartbeatPrompt of heartbeatPrompts) {
+      for (const lineEnding of ["\n", "\r\n"]) {
+        const prompt = buildAgentSystemPrompt({
+          workspaceDir: "/tmp/openclaw",
+          heartbeatPrompt: "heartbeat probe",
+          contextFiles: [
+            {
+              path: "AGENTS.md",
+              content: `Keep this user guidance.${lineEnding}${lineEnding}Default heartbeat prompt:${lineEnding}\`${heartbeatPrompt}\`${lineEnding}${lineEnding}Keep this too.`,
+            },
+          ],
+        });
+
+        expect(prompt).toContain("Keep this user guidance.");
+        expect(prompt).toContain("Keep this too.");
+        expect(prompt).toContain("## Heartbeats");
+        expect(prompt).toContain("NO_REPLY");
+        expect(prompt).not.toContain("HEARTBEAT_OK");
+        expect(prompt).not.toContain("HEARTBEAT.md");
+        expect(prompt).not.toContain(heartbeatPrompt);
+        expect(prompt).not.toContain("Default heartbeat prompt:");
+      }
+    }
+  });
+
+  it("preserves custom quoted workspace instructions that are not default heartbeat prompts", () => {
+    const customPrompt =
+      "Default heartbeat prompt:\n`Review only the incident queue. If nothing needs attention, reply HEARTBEAT_OK.`";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: customPrompt }],
+    });
+
+    expect(prompt).toContain(customPrompt);
+  });
+
   it("ignores context files with missing or blank paths", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

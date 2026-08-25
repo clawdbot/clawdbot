@@ -245,7 +245,7 @@ export async function createTargetViaCdp(opts: {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
         appendCdpPath(discoveryUrl, "/json/version"),
         opts.timeouts?.httpTimeoutMs,
-        undefined,
+        { signal: opts.signal },
         cdpControlPolicy,
       );
     } catch (err) {

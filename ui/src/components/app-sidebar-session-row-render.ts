@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
@@ -579,8 +580,10 @@ export function renderSessionTree(params: {
                 role=${ifDefined(listItem ? "list" : undefined)}
                 aria-label=${ifDefined(listItem ? t("sessionsView.childSessions") : undefined)}
               >
-                ${visibleChildren.map((child) =>
-                  renderSessionTree({ host, session: child, listItem }),
+                ${repeat(
+                  visibleChildren,
+                  (child) => child.key,
+                  (child) => renderSessionTree({ host, session: child, listItem }),
                 )}
               </div>`
             : nothing}
