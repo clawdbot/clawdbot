@@ -433,6 +433,9 @@ export async function add(
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
+    if (opts?.createdActor) {
+      job.createdActor = structuredClone(opts.createdActor);
+    }
     const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
       job,

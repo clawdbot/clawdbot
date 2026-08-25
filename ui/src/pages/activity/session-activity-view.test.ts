@@ -236,6 +236,40 @@ describe("session activity automation grouping", () => {
       expect(container.querySelectorAll("[data-activity-session]")).toHaveLength(2);
     }
   });
+
+  it("labels only cron-origin sessions from their recorded creation provenance", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({
+          rows: [
+            row("Scheduled report", { id: "owner", label: "Owner" }, Date.now(), {
+              createdVia: "cron",
+            }),
+            row("Automation-bound chat", { id: "owner", label: "Owner" }, Date.now() - 1, {
+              hasAutomation: true,
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container
+        .querySelector(
+          '[data-activity-session="Scheduled report"] [data-activity-created-via="cron"]',
+        )
+        ?.textContent?.trim(),
+    ).toContain("Automation");
+    expect(
+      container.querySelector(
+        '[data-activity-session="Automation-bound chat"] [data-activity-created-via]',
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("session activity live status", () => {

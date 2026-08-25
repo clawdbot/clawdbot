@@ -34,7 +34,7 @@ import {
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
 import { normalizeCronJobCreate } from "./normalize.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
 
@@ -274,6 +274,40 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
       expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
       expect(res.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+    });
+  });
+
+  it("attributes stable and exact run sessions to the stored automation creator", async () => {
+    await useRealCronSessionState();
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      mockEmbeddedTranscriptWrite(storePath, "creator-attributed transcript");
+      const job: CronStoredJob = {
+        ...makeJob({ kind: "agentTurn", message: "persist this turn" }),
+        createdActor: { type: "human", id: "profile-ada" },
+        delivery: { mode: "none" },
+      };
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps: makeDeps(),
+        job,
+        message: "persist this turn",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
+      await expect(readCronSessionEntry(storePath, "agent:main:cron:job-1")).resolves.toMatchObject(
+        {
+          createdVia: "cron",
+          createdActor: { type: "human", id: "profile-ada" },
+        },
+      );
+      await expect(readCronSessionEntry(storePath, res.sessionKey!)).resolves.toMatchObject({
+        createdVia: "cron",
+        createdActor: { type: "human", id: "profile-ada" },
+      });
     });
   });
 

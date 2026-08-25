@@ -2,6 +2,7 @@ import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runne
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
@@ -523,6 +524,8 @@ export type CronToolsAllowProvenance = {
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Immutable creator provenance stamped by the trusted cron creation seam. */
+  createdActor?: SessionCreatedActor;
   toolsAllowProvenance?: CronToolsAllowProvenance;
   /** Runtime-private authority omitted from public Gateway and wire contracts. */
   runtimeAuthority?: CronRuntimeAuthority;
