@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
-import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   prepareModelRunCapabilities,
   resolvePreparedModelThinkingCompat,
@@ -204,19 +202,11 @@ describe("embedded model resolution consistency", () => {
     };
 
     expect(
-      withPluginMetadataSnapshotScope(
-        createPluginMetadataSnapshot({
-          config,
-          manifestRegistry: { plugins: [], diagnostics: [] },
-        }),
-        () =>
-          resolveInitialEmbeddedRunModel({
-            config,
-            agentId: "worker",
-            model: "worker-haiku",
-          }),
-        { config },
-      ),
+      resolveInitialEmbeddedRunModel({
+        config,
+        agentId: "worker",
+        model: "worker-haiku",
+      }),
     ).toEqual({ provider: "anthropic", modelId: "claude-haiku-4-5" });
   });
 
