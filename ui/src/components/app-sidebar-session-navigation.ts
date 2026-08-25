@@ -21,6 +21,7 @@ import {
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
+import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   adoptedCatalogSessionKeys,
   visibleSessionCatalogProjection,
@@ -599,10 +600,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       showSystem: this.sessionsShowSystem,
       archivedFilter: this.sessionsStatusFilter,
     } as const;
-    const rows =
-      selected === loadedAgentId
-        ? (this.sessionData.sessionsResult?.sessions ?? [])
-        : (this.sessionData.sessionResultsByAgent[selected]?.sessions ?? []);
+    const { childSessionRowsByParent, isSessionHidden, rows } = projectSidebarArchiveVisibility({
+      sessionData: this.sessionData,
+      selectedAgentId: selected,
+      statusFilter: this.sessionsStatusFilter,
+      archiveVisibility: (key) => this.context?.sessions.archiveVisibility(key),
+    });
     const rowsByKey = new Map(rows.map((row) => [row.key, row]));
     const rootRows =
       selected === routeAgentId && selected === loadedAgentId
@@ -625,6 +628,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       (session) =>
         (selected === routeAgentId || lineageAgentId === selected) &&
         session.key === navigationState.activeRowKey &&
+        !isSessionHidden(session.key) &&
         !adopted.has(session.key) &&
         !areUiSessionKeysEquivalent(session.key, mainSessionKey),
     );
@@ -639,12 +643,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const lineageRouteAgentId = normalizeAgentId(
       parseAgentSessionKey(navigationState.routeSessionKey)?.agentId ?? "",
     );
-    const lineageSelected = Boolean(
-      lineageRoot && areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey),
-    );
     if (
       lineageRoot &&
-      (lineageSelected || sessionMatchesArchivedFilter(lineageRoot, this.sessionsStatusFilter)) &&
+      !isSessionHidden(lineageRoot.key) &&
+      (areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey) ||
+        sessionMatchesArchivedFilter(lineageRoot, this.sessionsStatusFilter)) &&
       (lineageAgentId === selected || lineageRouteAgentId === selected) &&
       !adopted.has(lineageRoot.key) &&
       !areUiSessionKeysEquivalent(lineageRoot.key, mainSessionKey) &&
@@ -654,7 +657,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
     const sessionCandidateRows = collectSidebarSessionCandidateRows({
       rows,
-      childRowsByParent: this.sessionData.childSessionRowsByParent,
+      childRowsByParent: childSessionRowsByParent,
     });
     const categorizedChildRows = collectCategorizedChildRootRows({
       rows: sessionCandidateRows,
@@ -686,7 +689,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const projected = projectSessionTree({
       roots: orderedRootRows.filter((row) => !adopted.has(row.key)),
       agentRows: rows,
-      childRowsByParent: this.sessionData.childSessionRowsByParent,
+      childRowsByParent: childSessionRowsByParent,
       loadingChildKeys: this.sessionData.loadingChildSessionKeys,
       knownSessionAttention: this.attention.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,
