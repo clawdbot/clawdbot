@@ -68,6 +68,20 @@ type EffectiveModelAlias = ModelAliasCandidate & {
   ref: ModelRef;
 };
 
+function isStaticDefaultProviderAliasCandidate(
+  candidate: ModelAliasCandidate,
+  cfg: OpenClawConfig,
+): boolean {
+  const raw = candidate.keyRaw.trim();
+  const slash = raw.indexOf("/");
+  return (
+    slash > 0 &&
+    slash < raw.length - 1 &&
+    normalizeProviderId(raw.slice(0, slash)) === normalizeProviderId(DEFAULT_PROVIDER) &&
+    !findExactConfiguredProviderRefParts({ cfg, raw })
+  );
+}
+
 type ExactConfiguredProviderRefParts = {
   configuredProvider: string;
   modelRaw: string;
@@ -164,30 +178,27 @@ function buildEffectiveModelAliases(
   if (candidates.length === 0) {
     return { aliases: [], disabledKeys: new Set() };
   }
+  // One alias index must use one manifest generation. Skip discovery only when
+  // every candidate is a default-provider identity transform.
+  const useStaticDefaultProviderAliases =
+    params.allowManifestNormalization !== false &&
+    candidates.every((candidate) => isStaticDefaultProviderAliasCandidate(candidate, params.cfg)) &&
+    params.manifestPluginContext.peek() === undefined &&
+    !getActivePluginRegistryWorkspaceDirFromState() &&
+    !getCurrentPluginMetadataSnapshot({ config: params.cfg, env: process.env });
+  const manifestPlugins = useStaticDefaultProviderAliases
+    ? undefined
+    : params.manifestPluginContext.get();
   for (const candidate of candidates) {
-    const isColdDefaultProviderAlias =
-      params.allowManifestNormalization !== false &&
-      hasSlashFormModelRef(candidate.keyRaw) &&
-      normalizeProviderId(candidate.keyRaw.slice(0, candidate.keyRaw.indexOf("/"))) ===
-        normalizeProviderId(DEFAULT_PROVIDER) &&
-      !findExactConfiguredProviderRefParts({ cfg: params.cfg, raw: candidate.keyRaw }) &&
-      params.manifestPluginContext.peek() === undefined &&
-      !getActivePluginRegistryWorkspaceDirFromState() &&
-      !getCurrentPluginMetadataSnapshot({ config: params.cfg, env: process.env });
-    // The default-provider owner declares no manifest or runtime model normalizer;
-    // cold alias indexing must not discover every plugin for an identity transform.
-    const manifestPlugins = isColdDefaultProviderAlias
-      ? undefined
-      : params.manifestPluginContext.get();
     const ref = parseModelRefWithCompatAlias({
       cfg: params.cfg,
       agentId: params.agentId,
       raw: candidate.keyRaw,
       defaultProvider: params.defaultProvider,
-      allowManifestNormalization: isColdDefaultProviderAlias
+      allowManifestNormalization: useStaticDefaultProviderAliases
         ? false
         : params.allowManifestNormalization,
-      allowPluginNormalization: isColdDefaultProviderAlias
+      allowPluginNormalization: useStaticDefaultProviderAliases
         ? false
         : params.allowPluginNormalization,
       manifestPlugins,
