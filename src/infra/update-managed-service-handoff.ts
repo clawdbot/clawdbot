@@ -695,7 +695,7 @@ function runServiceCommand(command, args, onSpawn, deadline, timeoutCap) {
 
 async function inspectSystemdService(unit, deadline) {
   const result = await runServiceCommand("systemctl", ["--user", "show", unit,
-    "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic"], undefined, deadline);
+    "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID"], undefined, deadline);
   if (result.code !== 0) return null;
   return Object.fromEntries(result.stdout.trim().split(/\r?\n/).map((line) => {
     const index = line.indexOf("=");
@@ -708,6 +708,7 @@ function isLaunchdNotLoaded(result) {
 }
 
 let parkedServiceGeneration = null;
+let parkedServiceInvocation = null;
 let restorationArmed = false;
 let pendingServiceStop;
 
@@ -722,11 +723,12 @@ async function parkGatewayService() {
     if (!current || current.Id !== recovery.unit || current.LoadState !== "loaded" ||
       current.ActiveState !== "active" || current.MainPID !== String(params.parentPid) ||
       !/^[1-9]\d*$/.test(current.ExecMainStartTimestampMonotonic || "") ||
-      !ownsManagedUpdateLease() ||
+      !/^[a-f0-9]{32}$/i.test(current.InvocationID || "") || !ownsManagedUpdateLease() ||
       readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
       throw new Error("systemd service does not match the exact active gateway parent");
     }
     parkedServiceGeneration = current.ExecMainStartTimestampMonotonic;
+    parkedServiceInvocation = current.InvocationID;
     // Keep the exact stop job open across parent exit; its completion is the
     // authoritative systemd fact, even after inactive-unit metadata is collected.
     await new Promise((resolve, reject) => {
@@ -957,10 +959,30 @@ async function restoreGatewayService(reason) {
         throw new Error("systemd stop failed or exceeded the parent-exit deadline");
       }
       const unit = params.serviceRecovery.unit;
-      const current = await inspectSystemdService(unit, params.parentExitDeadlineAt);
-      if (!current || current.Id !== unit || current.LoadState !== "loaded" ||
-        current.ActiveState !== "inactive" || current.MainPID !== "0") {
-        throw new Error("systemd service remained active or changed execution generation");
+      for (;;) {
+        const current = await inspectSystemdService(unit, params.parentExitDeadlineAt);
+        if (!current || current.Id !== unit || current.LoadState !== "loaded" ||
+          Date.now() >= params.parentExitDeadlineAt) {
+          throw new Error("systemd service remained active or changed execution generation");
+        }
+        if (current.ActiveState === "inactive" && current.MainPID === "0") {
+          const retainedIdentity =
+            current.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
+            current.InvocationID === parkedServiceInvocation;
+          const clearedIdentity =
+            current.ExecMainStartTimestampMonotonic === "0" && !current.InvocationID;
+          if (!retainedIdentity && !clearedIdentity) {
+            throw new Error("systemd service remained active or changed execution generation");
+          }
+          break;
+        }
+        if (current.ActiveState !== "deactivating" || current.MainPID !== "0" ||
+          current.ExecMainStartTimestampMonotonic !== parkedServiceGeneration ||
+          current.InvocationID !== parkedServiceInvocation) {
+          throw new Error("systemd service remained active or changed execution generation");
+        }
+        // The exact stop job has completed; systemd may publish inactive a moment later.
+        await sleep(Math.min(25, Math.max(0, params.parentExitDeadlineAt - Date.now())));
       }
     }
     if (params.serviceRecovery?.kind === "launchd") {

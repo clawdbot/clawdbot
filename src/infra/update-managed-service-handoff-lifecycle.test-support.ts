@@ -1,6 +1,8 @@
 type ManagedSystemdPostExitState = {
   activeState: string;
+  generation?: "cleared" | "parked" | "replacement";
   id?: string;
+  invocation?: "cleared" | "parked" | "replacement";
   loadState?: string;
   mainPid?: "parent" | "replacement" | "none";
 };
@@ -75,19 +77,45 @@ export function registerManagedSystemdHandoffConvergenceTests(
 ): void {
   itUnix("waits for the exact systemd stop job to finish after parent exit", async () => {
     const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      systemdPostExitStates: [
+        { activeState: "deactivating", mainPid: "none" },
+        { activeState: "inactive", mainPid: "none" },
+      ],
       systemdStopDelayMs: 100,
       updaterExitCode: 0,
     });
 
-    expect(commands.map((command) => command.split(" ")[1])).toEqual(["show", "stop", "show"]);
-    expect(state).toMatchObject({ parked: true, stopCompleted: true });
+    expect(commands.map((command) => command.split(" ")[1])).toEqual([
+      "show",
+      "stop",
+      "show",
+      "show",
+    ]);
+    expect(state).toMatchObject({ parked: true, postExitShows: 2, stopCompleted: true });
     expect(state.reset).toBeUndefined();
     expect(state.restored).toBeUndefined();
     expect(sentinel).toBeNull();
   });
 
   itUnix.each([
-    ["a replacement main PID", { activeState: "inactive", mainPid: "replacement" }],
+    [
+      "an inactive replacement generation",
+      {
+        activeState: "inactive",
+        generation: "replacement",
+        invocation: "replacement",
+        mainPid: "none",
+      },
+    ],
+    [
+      "a cleared generation with the parked invocation",
+      { activeState: "inactive", generation: "cleared", invocation: "parked", mainPid: "none" },
+    ],
+    [
+      "the parked generation with a cleared invocation",
+      { activeState: "inactive", generation: "parked", invocation: "cleared", mainPid: "none" },
+    ],
+    ["a replacement main PID", { activeState: "deactivating", mainPid: "replacement" }],
     ["an active service", { activeState: "active", mainPid: "replacement" }],
     ["a restarting service", { activeState: "activating", mainPid: "none" }],
     ["a failed service", { activeState: "failed", mainPid: "none" }],
@@ -180,13 +208,24 @@ if (${JSON.stringify(kind)} === "systemd") {
       : observation?.mainPid === "replacement" ? ${process.pid}
       : observation?.mainPid === "none" ? 0
       : state.restored ? restoredPid : active ? ${parentPid} : 0;
-    const observedGeneration = state.restored ? "222" : active ? "111" : "0";
+    const observedGeneration = state.restored || observation?.generation === "replacement" ? "222"
+      : observation?.generation === "parked" ? "111"
+        : observation?.generation === "cleared" ? "0"
+          : active || observation?.activeState === "deactivating" ? "111" : "0";
+    const observedInvocation = state.restored || observation?.invocation === "replacement"
+      ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      : observation?.invocation === "parked" ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        : observation?.invocation === "cleared" ? ""
+          : active || observation?.activeState === "deactivating"
+            ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            : "";
     process.stdout.write([
       "Id=" + (observation?.id || "openclaw-gateway.service"),
       "LoadState=" + (observation?.loadState || "loaded"),
       "ActiveState=" + (observation?.activeState || (active ? "active" : "inactive")),
       "MainPID=" + observedPid,
       "ExecMainStartTimestampMonotonic=" + observedGeneration,
+      "InvocationID=" + observedInvocation,
     ].join("\\n") + "\\n");
   }
   } else {

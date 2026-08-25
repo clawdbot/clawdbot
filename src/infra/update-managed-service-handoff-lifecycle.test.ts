@@ -641,7 +641,7 @@ describe("managed service update handoff", () => {
     expect(verbs).toEqual(["show", "stop", "show", "reset-failed", "start", "show"]);
     expect(commands.every((command) => command.startsWith("--user "))).toBe(true);
     expect(commands[0]).toContain(
-      "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic",
+      "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID",
     );
     expect(commands[1]).toContain("stop openclaw-gateway.service");
     expect(state).toMatchObject({ parked: true, reset: true, restored: true });
