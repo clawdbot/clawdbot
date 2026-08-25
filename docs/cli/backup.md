@@ -45,7 +45,7 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 - The archive embeds a `manifest.json` with the resolved source paths and archive layout.
 - Default output is a timestamped `.tar.gz` archive in the current working directory. Timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
-- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, absolute or archive-escaping symbolic links, and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
+- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, unsafe symbolic links, and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
 
 ## Restore a full archive
@@ -247,23 +247,31 @@ OpenClaw canonicalizes paths before building the archive: if config, the credent
 
 During archive creation, OpenClaw excludes known live-mutation paths before `tar` reads them. This avoids races between a file's recorded size and concurrent writes. The filter applies these state-relative rules under each backed-up state directory:
 
-| State-relative scope                         | Skipped file suffixes         |
-| -------------------------------------------- | ----------------------------- |
-| `sessions/**`                                | `.jsonl`, `.log`              |
-| `agents/<agentId>/sessions/**`               | `.jsonl`, `.log`              |
-| `cron/runs/**`                               | `.jsonl`, `.log`              |
-| `logs/**`                                    | `.jsonl`, `.log`              |
-| `delivery-queue/**`                          | `.json`, `.delivered`, `.tmp` |
-| `session-delivery-queue/**`                  | `.json`, `.delivered`, `.tmp` |
-| Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`       |
+| State-relative scope                         | Skipped entries                                       |
+| -------------------------------------------- | ----------------------------------------------------- |
+| `sessions/**`                                | `.jsonl`, `.log`                                      |
+| `agents/<agentId>/sessions/**`               | `.jsonl`, `.log`                                      |
+| `cron/runs/**`                               | `.jsonl`, `.log`                                      |
+| `logs/**`                                    | `.jsonl`, `.log`                                      |
+| `delivery-queue/**`                          | `.json`, `.delivered`, `.tmp`                         |
+| `session-delivery-queue/**`                  | `.json`, `.delivered`, `.tmp`                         |
+| `browser/<profile>/user-data/`               | `SingletonCookie`, `SingletonLock`, `SingletonSocket` |
+| `sandbox/skills-workspaces/**`               | All entries                                           |
+| Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`                               |
 
-These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted.
+These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports intentionally omitted volatile entries; regenerable agent temporary roots are listed separately in `skipped` and are not included in that count.
+
+Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
 
 SQLite databases under the state directory are captured with SQLite's online backup API and compacted offline with `VACUUM` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a direct file copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 
-The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symlink index, not authoritative state. Backup creation reports and omits that root because its absolute targets are specific to the source installation. After activating restored state, run `openclaw skills list` or start an agent session to rebuild the links from current plugin metadata. Other relative symbolic links are retained when their targets stay inside the archive root; verification rejects absolute or archive-escaping targets.
+The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symlink index, not authoritative state. Backup creation reports and omits that root because its absolute targets are specific to the source installation. After activating restored state, run `openclaw skills list` or start an agent session to rebuild the links from current plugin metadata.
+
+Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
+
+Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. Absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
 
 Installer-managed and rebuildable runtime roots under the state directory are also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and `tools/`. These contain managed checkouts, package trees, compiler caches, temporary files, and downloaded runtimes rather than authoritative user state; reinstall or update the corresponding runtime or plugin after restore. An explicitly configured config file, credentials directory, or workspace inside one of these roots remains included.
 

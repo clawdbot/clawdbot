@@ -13,7 +13,6 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertCanMutateClaimedCard,
-  capText,
   cardBoardId,
   cardChildIds,
   cardParentIds,
@@ -48,6 +47,7 @@ import type {
 } from "./store-inputs.js";
 import {
   appendCompletionProof,
+  capText,
   clearDiagnostics,
   deriveChildIdempotencyKey,
   normalizeArtifact,

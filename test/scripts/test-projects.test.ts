@@ -288,13 +288,6 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes Z.AI fallback repro script changes through its regression test", () => {
-    expectChangedTargets(
-      ["scripts/zai-fallback-repro.ts"],
-      ["test/scripts/zai-fallback-repro.test.ts"],
-    );
-  });
-
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expectChangedTargets(
       ["src/config/types.messages.ts", "src/config/zod-schema.core.ts"],
@@ -1007,6 +1000,14 @@ describe("scripts/test-projects changed-target routing", () => {
     ["src/agents/agent-scope.test.ts", "test/vitest/vitest.agents-core.config.ts"],
     [
       "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
     ],
     [

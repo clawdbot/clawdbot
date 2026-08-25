@@ -16,10 +16,11 @@ class PluginLoadReentryError extends Error {
 export class PluginLoaderCacheState<T> {
   readonly #registryCache: PluginLruCache<T>;
   readonly #inFlightLoads = new Set<string>();
-  readonly #openAllowlistWarningCache = new Set<string>();
+  readonly #openAllowlistWarningCache: PluginLruCache<true>;
 
   constructor(defaultMaxEntries: number) {
     this.#registryCache = new PluginLruCache<T>(defaultMaxEntries);
+    this.#openAllowlistWarningCache = new PluginLruCache<true>(defaultMaxEntries);
   }
 
   clear(): void {
@@ -57,10 +58,10 @@ export class PluginLoaderCacheState<T> {
   }
 
   hasOpenAllowlistWarning(cacheKey: string): boolean {
-    return this.#openAllowlistWarningCache.has(cacheKey);
+    return this.#openAllowlistWarningCache.get(cacheKey) === true;
   }
 
   recordOpenAllowlistWarning(cacheKey: string): void {
-    this.#openAllowlistWarningCache.add(cacheKey);
+    this.#openAllowlistWarningCache.set(cacheKey, true);
   }
 }

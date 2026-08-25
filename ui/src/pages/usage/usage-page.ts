@@ -9,11 +9,7 @@ import type {
   SessionsUsageResult,
   SessionUsageTimeSeries,
 } from "../../api/types.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -25,7 +21,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
+import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import {
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
@@ -37,6 +33,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import {
   currentLocalDate,
@@ -46,37 +43,23 @@ import {
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
-import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
+import {
+  providerUsageFromSnapshotResult,
+  type ProviderUsageSnapshot,
+  requestUsageSnapshot,
+} from "./request-usage-snapshot.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
   type SessionLogRole,
+  type UsageDetailTaskValue,
   type UsageProps,
+  type UsageRouteData,
+  type UsageTaskValue,
 } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
-export type UsageRouteData = {
-  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-  query: {
-    startDate: string;
-    endDate: string;
-    scope: "instance" | "family";
-    timeZone: "local" | "utc";
-    agentId: string | null;
-  };
-  result: SessionsUsageResult | null;
-  costSummary: CostUsageSummary | null;
-  providerUsage: ProviderUsageRequestResult | null;
-  loadedAtMs: number | null;
-  error: string | null;
-};
-
-type UsageDetailTaskValue<T> = {
-  sessionKey: string;
-  data: T;
-};
+export type { UsageRouteData } from "./types.ts";
 
 class UsagePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -86,7 +69,9 @@ class UsagePage extends OpenClawLightDomElement {
 
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
-  @state() private providerUsage: ProviderUsageRequestResult | null = null;
+  @state() private providerUsageSummary: ProviderUsageSummary | null = null;
+  @state() private providerUsageUnavailable = false;
+  @state() private providerUsageStalled = false;
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -129,11 +114,17 @@ class UsagePage extends OpenClawLightDomElement {
   // Invalidation runs the Task with a null client to supersede stale completions.
   // Track real gateway work separately so that no-op runs cannot block reconnect retries.
   private usageTaskActiveClient: GatewayBrowserClient | null = null;
+  // The client survives transport reconnects, so retry budgets need a separate epoch.
+  private connectionEpoch: object = {};
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.usageLoading,
-    reload: () => this.performUsageReload(),
+    reload: () => {
+      this.clearDateDebounce();
+      return this.loadUsage();
+    },
+    onIncompleteUsageExhausted: () => (this.providerUsageStalled = true),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -155,6 +146,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (this.routeDataInitialized && this.usageAgentId !== scopeId) {
       this.usageAgentId = scopeId;
       this.clearSelectionsAndDetails();
+      this.resetProviderUsage();
       this.refreshPolicy.reload();
     }
     this.requestUpdate();
@@ -182,30 +174,38 @@ class UsagePage extends OpenClawLightDomElement {
         return initialState;
       }
       this.refreshPolicy.beginLoad();
+      const epoch = this.connectionEpoch;
       const agentId = normalizedAgentId || undefined;
-      return requestUsageSnapshot(client, { startDate, endDate, agentId, scope, timeZone }, signal);
+      return {
+        epoch,
+        snapshot: await requestUsageSnapshot(
+          client,
+          { startDate, endDate, agentId, scope, timeZone },
+          signal,
+        ),
+      } satisfies UsageTaskValue;
     },
     onComplete: (value) => {
       this.usageTaskActiveClient = null;
-      this.usageResult = value.result;
-      this.usageCostSummary = value.costSummary;
-      this.providerUsage = value.providerUsage;
-      this.usageError = null;
-      this.refreshPolicy.setLastLoadedAtMs(value.providerUsage.ok ? Date.now() : null);
+      const snapshot = value.snapshot;
+      if (snapshot.ok) {
+        this.usageResult = snapshot.value.result;
+        this.usageCostSummary = snapshot.value.costSummary;
+        this.usageError = null;
+      } else {
+        this.applyUsageError(snapshot.error.cause);
+      }
+      this.applyProviderUsage(
+        providerUsageFromSnapshotResult(snapshot),
+        value.epoch,
+        snapshot.ok ? undefined : null,
+      );
       this.refreshPolicy.flushPending();
     },
     onError: (error) => {
       this.usageTaskActiveClient = null;
-      if (this.providerUsage?.ok === false) {
-        this.providerUsage = null;
-      }
-      if (isMissingOperatorReadScopeError(error)) {
-        this.usageResult = null;
-        this.usageCostSummary = null;
-        this.usageError = formatMissingOperatorReadScopeMessage("usage");
-      } else {
-        this.usageError = toUsageErrorMessage(error);
-      }
+      this.refreshPolicy.markLoadFailed(this.connectionEpoch);
+      this.applyUsageError(error);
       this.refreshPolicy.flushPending();
     },
   });
@@ -277,6 +277,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
+    this.refreshPolicy.dispose();
     this.usageTaskActiveClient = null;
     void this.usageTask.run(this.usageTaskArgs(null));
     void this.usageTimeSeriesTask.run([null, ""]);
@@ -301,6 +302,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (data.query.agentId !== currentAgentId) {
       this.usageAgentId = currentAgentId;
       this.clearSelectionsAndDetails();
+      this.resetProviderUsage();
       this.refreshPolicy.reload();
       return;
     }
@@ -314,8 +316,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageAgentId = data.query.agentId;
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
-    this.providerUsage = data.providerUsage;
-    this.refreshPolicy.setLastLoadedAtMs(data.providerUsage?.ok ? data.loadedAtMs : null);
+    this.applyProviderUsage(data.providerUsage, this.connectionEpoch, data.loadedAtMs);
     this.usageError = data.error;
   }
 
@@ -341,11 +342,49 @@ class UsagePage extends OpenClawLightDomElement {
     }
     this.usageResult = null;
     this.usageCostSummary = null;
-    this.providerUsage = null;
-    this.refreshPolicy.resetPayload();
+    this.resetProviderUsage();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
+  }
+
+  private resetProviderUsage() {
+    this.providerUsageSummary = null;
+    this.providerUsageUnavailable = false;
+    this.providerUsageStalled = false;
+    this.refreshPolicy.resetPayload();
+  }
+
+  private applyProviderUsage(
+    snapshot: ProviderUsageSnapshot,
+    connection: unknown,
+    loadedAtMs?: number | null,
+  ): void {
+    if (snapshot.state === "pending") {
+      this.refreshPolicy.markLoadFailed(connection);
+      return;
+    }
+    const result = snapshot.result;
+    this.providerUsageUnavailable = !result.ok;
+    const incomplete = !result.ok || isUsageIncomplete(result.value);
+    if (result.ok && !incomplete) {
+      this.providerUsageSummary = result.value;
+    }
+    const retryState =
+      loadedAtMs === undefined
+        ? this.refreshPolicy.markLoaded({ incomplete, connection })
+        : this.refreshPolicy.setLastLoadedAtMs(loadedAtMs, { incomplete, connection });
+    this.providerUsageStalled = retryState === "exhausted";
+  }
+
+  private applyUsageError(error: unknown) {
+    const missingScope = isMissingOperatorReadScopeError(error);
+    this.usageError = missingScope
+      ? formatMissingOperatorReadScopeMessage("usage")
+      : toUsageErrorMessage(error);
+    if (missingScope) {
+      this.usageResult = this.usageCostSummary = null;
+    }
   }
 
   private get usageLoading(): boolean {
@@ -440,18 +479,16 @@ class UsagePage extends OpenClawLightDomElement {
     }, 400);
   }
 
-  private performUsageReload() {
-    this.clearDateDebounce();
-    void this.loadUsage();
-  }
-
   private handleGatewaySnapshot(change: GatewayPageChange) {
     if (!this.gateway.connected || !this.gateway.client) {
       return;
     }
     void this.context.agents.ensureList();
-    if (this.routeDataInitialized && (change.identityChanged || change.becameConnected)) {
-      this.refreshPolicy.request("reconnect");
+    if (change.identityChanged || change.becameConnected) {
+      this.connectionEpoch = {};
+      if (this.routeDataInitialized) {
+        this.refreshPolicy.request("reconnect");
+      }
     }
   }
 
@@ -503,8 +540,9 @@ class UsagePage extends OpenClawLightDomElement {
           this.usageResult?.cacheStatus,
           this.usageCostSummary?.cacheStatus,
         ),
-        providerUsage: this.providerUsage?.ok ? this.providerUsage.value.providers : [],
-        providerUsageUnavailable: this.providerUsage?.ok === false,
+        providerUsage: this.providerUsageSummary?.providers ?? [],
+        providerUsageStalled: this.providerUsageStalled,
+        providerUsageUnavailable: this.providerUsageUnavailable,
       },
       filters: {
         startDate: this.usageStartDate,
@@ -574,9 +612,7 @@ class UsagePage extends OpenClawLightDomElement {
             this.clearSelectionsAndDetails();
             this.refreshPolicy.reload();
           },
-          onToggleHeaderPinned: () => {
-            this.usageHeaderPinned = !this.usageHeaderPinned;
-          },
+          onToggleHeaderPinned: () => (this.usageHeaderPinned = !this.usageHeaderPinned),
           onSelectHour: (hour, shiftKey) => {
             this.usageSelectedHours = toggleUsageRangeSelection(
               this.usageSelectedHours,
@@ -612,12 +648,8 @@ class UsagePage extends OpenClawLightDomElement {
               false,
             );
           },
-          onClearDays: () => {
-            this.usageSelectedDays = [];
-          },
-          onClearHours: () => {
-            this.usageSelectedHours = [];
-          },
+          onClearDays: () => (this.usageSelectedDays = []),
+          onClearHours: () => (this.usageSelectedHours = []),
           onClearSessions: () => {
             this.usageSelectedSessions = [];
             this.clearDetails();
@@ -625,21 +657,11 @@ class UsagePage extends OpenClawLightDomElement {
           onClearFilters: () => this.clearSelectionsAndDetails(),
         },
         display: {
-          onChartModeChange: (mode) => {
-            this.usageChartMode = mode;
-          },
-          onDailyChartModeChange: (mode) => {
-            this.usageDailyChartMode = mode;
-          },
-          onSessionSortChange: (sort) => {
-            this.usageSessionSort = sort;
-          },
-          onSessionSortDirChange: (direction) => {
-            this.usageSessionSortDir = direction;
-          },
-          onSessionsTabChange: (tab) => {
-            this.usageSessionsTab = tab;
-          },
+          onChartModeChange: (mode) => (this.usageChartMode = mode),
+          onDailyChartModeChange: (mode) => (this.usageDailyChartMode = mode),
+          onSessionSortChange: (sort) => (this.usageSessionSort = sort),
+          onSessionSortDirChange: (direction) => (this.usageSessionSortDir = direction),
+          onSessionsTabChange: (tab) => (this.usageSessionsTab = tab),
           onToggleColumn: (column) => {
             this.usageVisibleColumns = this.usageVisibleColumns.includes(column)
               ? this.usageVisibleColumns.filter((entry) => entry !== column)
@@ -647,12 +669,9 @@ class UsagePage extends OpenClawLightDomElement {
           },
         },
         details: {
-          onToggleContextExpanded: () => {
-            this.usageContextExpanded = !this.usageContextExpanded;
-          },
-          onToggleSessionLogsExpanded: () => {
-            this.usageSessionLogsExpanded = !this.usageSessionLogsExpanded;
-          },
+          onToggleContextExpanded: () => (this.usageContextExpanded = !this.usageContextExpanded),
+          onToggleSessionLogsExpanded: () =>
+            (this.usageSessionLogsExpanded = !this.usageSessionLogsExpanded),
           onLogFilterRolesChange: (roles) => {
             this.usageLogFilterRoles = roles;
           },

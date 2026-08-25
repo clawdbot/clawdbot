@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -285,6 +286,20 @@ describe("Code Mode swarm guest", () => {
     }
   });
 
+  it("keeps a guest error after agents.run restricted", async () => {
+    const details = await runSwarmCode(
+      createSwarmHarness(),
+      `await agents.run("Research"); return missingAfterCollector();`,
+    );
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(consumeRepairableCodeModeFailure(details)).toBe(false);
+  });
+
   it.each([
     { name: "blank result", schemaError: undefined },
     { name: "schema error", schemaError: "structured output was invalid" },
@@ -381,6 +396,21 @@ describe("Code Mode swarm host bridge", () => {
       kind: "phase",
       text: "Plan",
     });
+  });
+
+  it("refuses swarm globals when the run executes only an allowlist", async () => {
+    const harness = createSwarmHarness();
+    Object.assign(harness.ctx, { toolExecutionAllow: ["skill_workshop"] });
+
+    // Guest phase/log are fire-and-forget, so the refusal shows as no foreground event.
+    const noted = await runSwarmCode(harness, 'phase("Plan"); return "ok";');
+    const spawned = await runSwarmCode(harness, 'return await agents.run("Research");');
+
+    expect(noted).toMatchObject({ status: "completed", value: "ok" });
+    expect(spawned).toMatchObject({ status: "failed" });
+    expect(String(spawned.error)).toContain("Unavailable during skill review");
+    expect(swarmMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+    expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
   it("re-settles a persisted collector after restart without double-spawn", async () => {

@@ -3,6 +3,7 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -144,10 +145,9 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
-  await Promise.resolve();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");

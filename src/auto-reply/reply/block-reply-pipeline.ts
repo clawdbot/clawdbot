@@ -63,6 +63,7 @@ function createBlockReplyContentIdentity(payload: ReplyPayload) {
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
     location: payload.location ?? null,
+    videoAsNote: payload.videoAsNote === true,
   };
 }
 

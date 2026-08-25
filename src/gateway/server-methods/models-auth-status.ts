@@ -47,7 +47,6 @@ import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
-import { suppressSyntheticAliasRowsCoveredByExternalCli } from "./models-auth-status-projection.js";
 import {
   clearModelAuthStatusUsageCache,
   type ProviderUsageStatus,
@@ -376,11 +375,9 @@ function resolveConfiguredProviders(
 ): {
   providers: string[];
   expectsOAuth: Set<string>;
-  directModelAuthProviders: Set<string>;
 } {
   const out = new Set<string>();
   const expectsOAuth = new Set<string>();
-  const directModelAuthProviders = new Set<string>();
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     const normalized = normalizeProviderId(id);
     if (!normalized) {
@@ -395,7 +392,6 @@ function resolveConfiguredProviders(
     if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
       continue;
     }
-    directModelAuthProviders.add(normalized);
     if (apiKeys.has(normalized)) {
       continue;
     }
@@ -427,7 +423,7 @@ function resolveConfiguredProviders(
       expectsOAuth.add(normalized);
     }
   }
-  return { providers: Array.from(out), expectsOAuth, directModelAuthProviders };
+  return { providers: Array.from(out), expectsOAuth };
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
@@ -645,20 +641,16 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
-      const providers = suppressSyntheticAliasRowsCoveredByExternalCli(
-        authHealth.providers.map((prov) =>
-          mapProvider(
-            prov,
-            usageByProvider,
-            configured.expectsOAuth,
-            apiKeys,
-            logoutProfileIds,
-            configBoundProfileIds,
-            externalCliProfileIds,
-          ),
+      const providers = authHealth.providers.map((prov) =>
+        mapProvider(
+          prov,
+          usageByProvider,
+          configured.expectsOAuth,
+          apiKeys,
+          logoutProfileIds,
+          configBoundProfileIds,
+          externalCliProfileIds,
         ),
-        externalCliProfileIds,
-        new Map(),
       );
       const providerCapabilities = buildProviderCapabilities({
         config: cfg,

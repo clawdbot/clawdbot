@@ -35,6 +35,28 @@ use tauri_plugin_global_shortcut::{Code, Modifiers};
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
 
+fn is_active_onboarding_url(url: &Url) -> bool {
+    let path = url.path().trim_end_matches('/');
+    let query_key = if path.ends_with("/settings/model-setup") {
+        "firstRun"
+    } else if path.ends_with("/custodian") {
+        "onboarding"
+    } else {
+        return false;
+    };
+    url.query_pairs()
+        .find(|(key, _)| key == query_key)
+        .is_some_and(|(_, value)| {
+            if query_key == "firstRun" {
+                return value == "1";
+            }
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BuildInfo {
@@ -538,11 +560,19 @@ impl DesktopState {
                 continue;
             }
 
+            // Onboarding keeps verification and guided-session state in its live page. Latch it
+            // for this outage so neither recovery screen nor dashboard reload erases that state.
+            let preserve_dashboard = main_window(&app)
+                .ok()
+                .and_then(|window| window.url().ok())
+                .is_some_and(|url| is_active_onboarding_url(&url));
             let mut displayed_phase = snapshot.phase;
-            if matches!(
-                state.show_local(&app, local_mode(&snapshot), false, Some(generation)),
-                Ok(false)
-            ) {
+            if !preserve_dashboard
+                && matches!(
+                    state.show_local(&app, local_mode(&snapshot), false, Some(generation)),
+                    Ok(false)
+                )
+            {
                 return;
             }
             state.update_tray(&snapshot);
@@ -561,6 +591,10 @@ impl DesktopState {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
                             app.state::<gateway_ws::GatewayClient>()
                                 .configure(&app, ready.gateway_ws.clone());
+                            if preserve_dashboard {
+                                state.update_tray(&ready.snapshot);
+                                break;
+                            }
                             match state.navigate_local(
                                 &app,
                                 &ready.dashboard_url,
@@ -577,7 +611,7 @@ impl DesktopState {
                                 Err(_) => {}
                             }
                         }
-                    } else if snapshot.phase != displayed_phase {
+                    } else if !preserve_dashboard && snapshot.phase != displayed_phase {
                         displayed_phase = snapshot.phase;
                         if matches!(
                             state.show_local(&app, local_mode(&snapshot), false, Some(generation),),
@@ -603,7 +637,43 @@ fn local_mode(snapshot: &GatewaySnapshot) -> &'static str {
 
 #[cfg(test)]
 mod navigation_tests {
-    use super::{is_release_version, NavigationState};
+    use super::{is_active_onboarding_url, is_release_version, NavigationState, Url};
+
+    #[test]
+    fn only_active_onboarding_preserves_the_dashboard_during_reconnect() {
+        for (url, preserve) in [
+            ("http://127.0.0.1/settings/model-setup?firstRun=1", true),
+            (
+                "http://127.0.0.1/openclaw/settings/model-setup/?tab=ai&firstRun=1#token=redacted",
+                true,
+            ),
+            ("http://127.0.0.1/settings/model-setup", false),
+            ("http://127.0.0.1/settings/model-setup?firstRun=0", false),
+            (
+                "http://127.0.0.1/settings/model-setup?firstRun=0&firstRun=1",
+                false,
+            ),
+            ("http://127.0.0.1/settings/providers?firstRun=1", false),
+            ("http://127.0.0.1/custodian?onboarding=1", true),
+            (
+                "http://127.0.0.1/openclaw/custodian/?tab=chat&onboarding=YES",
+                true,
+            ),
+            ("http://127.0.0.1/custodian", false),
+            ("http://127.0.0.1/custodian?onboarding=0", false),
+            (
+                "http://127.0.0.1/custodian?onboarding=0&onboarding=1",
+                false,
+            ),
+            ("http://127.0.0.1/chat?onboarding=1", false),
+        ] {
+            assert_eq!(
+                is_active_onboarding_url(&Url::parse(url).expect("dashboard URL")),
+                preserve,
+                "unexpected reconnect policy for {url}"
+            );
+        }
+    }
 
     #[test]
     fn committed_package_version_is_a_development_build() {
@@ -679,8 +749,10 @@ mod navigation_tests {
 
         assert_eq!(first.path(), "/settings/model-setup");
         assert_eq!(first.query(), Some("firstRun=1"));
+        assert!(is_active_onboarding_url(&first));
         assert_eq!(second.path(), "/");
         assert_eq!(second.query(), None);
+        assert!(!is_active_onboarding_url(&second));
     }
 
     #[test]

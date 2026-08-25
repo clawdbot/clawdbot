@@ -206,6 +206,18 @@ describe("createBlockReplyPipeline dedup with threading", () => {
         { location: { latitude: 3, longitude: 4 } },
       ],
     },
+    {
+      name: "normal and round videos sharing the same media",
+      payloads: [
+        { mediaUrl: "file:///reply.mp4" },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: false },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: true },
+      ],
+      expected: [
+        { mediaUrl: "file:///reply.mp4" },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: true },
+      ],
+    },
   ])("preserves streamed delivery order for $name", async ({ payloads, expected }) => {
     const sent: ReplyPayload[] = [];
     const pipeline = createBlockReplyPipeline({
@@ -233,12 +245,16 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toHaveLength(expected.length);
     expect(sent).toMatchObject(expected);
     expect(pipeline.getSentMediaUrls()).toEqual(
-      expected.flatMap((payload) =>
-        "mediaUrls" in payload
-          ? payload.mediaUrls
-          : "mediaUrl" in payload
-            ? [payload.mediaUrl]
-            : [],
+      Array.from(
+        new Set(
+          expected.flatMap((payload) =>
+            "mediaUrls" in payload
+              ? payload.mediaUrls
+              : "mediaUrl" in payload
+                ? [payload.mediaUrl]
+                : [],
+          ),
+        ),
       ),
     );
   });
@@ -316,6 +332,61 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
     expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
   });
+
+  it.each([
+    { name: "reply-to-current text", routing: { replyToCurrent: true }, media: false },
+    { name: "explicit-tag text", routing: { replyToTag: true }, media: false },
+    { name: "reply-to-current media", routing: { replyToCurrent: true }, media: true },
+    { name: "explicit-tag media", routing: { replyToTag: true }, media: true },
+  ] as const)(
+    "preserves explicit reply routing and metadata for $name",
+    async ({ routing, media }) => {
+      const sent: ReplyPayload[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (payload) => {
+          sent.push(payload);
+        },
+        timeoutMs: 5000,
+        coalescing: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
+      });
+
+      pipeline.enqueue(
+        setReplyPayloadMetadata(
+          { text: "Explicit answer", replyToId: "100", ...routing },
+          { assistantMessageIndex: 7, replyToIdExplicit: true },
+        ),
+      );
+      if (media) {
+        pipeline.enqueue(
+          setReplyPayloadMetadata(
+            {
+              mediaUrls: ["file:///photo.png"],
+              replyToId: "100",
+              replyToCurrent: undefined,
+              replyToTag: undefined,
+            },
+            { assistantMessageIndex: 7, assistantTranscriptMediaUrls: ["file:///photo.png"] },
+          ),
+        );
+      }
+      await pipeline.flush({ force: true });
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        text: "Explicit answer",
+        replyToId: "100",
+        ...routing,
+        ...(media ? { mediaUrls: ["file:///photo.png"] } : {}),
+      });
+      expect(sent.map(getReplyPayloadMetadata)).toEqual([
+        expect.objectContaining({
+          assistantMessageIndex: 7,
+          replyToIdExplicit: true,
+          ...(media ? { assistantTranscriptMediaUrls: ["file:///photo.png"] } : {}),
+        }),
+      ]);
+    },
+  );
 
   it("keeps media separate across assistant message boundaries", async () => {
     const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];

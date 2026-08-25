@@ -47,6 +47,7 @@ let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partia
 let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
 let mockedPinnedMainDmOwner: string | undefined;
 let capturedReplyOptions: GetReplyOptions | undefined;
+let capturedDispatchReplyFromConfig: unknown;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
 const statusReactionControllerMock = {
   setQueued: vi.fn(async () => {}),
@@ -349,6 +350,7 @@ function createPreparedSlackMessage(params?: {
   ackReactionPromise?: Promise<boolean> | null;
   relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
   turnAdoptionLifecycle?: object;
+  dispatchReplyFromConfig?: unknown;
   eventScope?: {
     teamId: string;
     client: Record<string, unknown>;
@@ -380,6 +382,7 @@ function createPreparedSlackMessage(params?: {
       historyLimit: 0,
       channelHistories: new Map(),
       allowFrom: [],
+      dispatchReplyFromConfig: params?.dispatchReplyFromConfig,
       setSlackThreadStatus: params?.setSlackThreadStatus ?? (async () => undefined),
     },
     account: {
@@ -995,6 +998,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     readAgentRunTerminalOutcome: () => mockedAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (params: DispatchParams) => {
       capturedReplyOptions = params.replyOptions as typeof capturedReplyOptions;
+      capturedDispatchReplyFromConfig = params.dispatchReplyFromConfig;
       if (mockedReplyOptionEvents.length > 0) {
         for (const entry of mockedReplyOptionEvents) {
           if (entry.kind === "item") {
@@ -1149,6 +1153,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedSlackDraftMode = "append";
     mockedPinnedMainDmOwner = undefined;
     capturedReplyOptions = undefined;
+    capturedDispatchReplyFromConfig = undefined;
     capturedStatusReactionOptions = undefined;
     capturedTyping = undefined;
     mockedReplyThreadTs = THREAD_TS;
@@ -1189,6 +1194,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({ turnAdoptionLifecycle }));
 
     expect(capturedReplyOptions?.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
+  });
+
+  it("forwards the instance-bound reply dispatcher", async () => {
+    const dispatchReplyFromConfig = vi.fn();
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ dispatchReplyFromConfig }));
+
+    expect(capturedDispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
   });
 
   it("preserves provider previews for observer-only hooks", async () => {

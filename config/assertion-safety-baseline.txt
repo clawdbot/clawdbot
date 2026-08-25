@@ -2163,7 +2163,6 @@ src/agents/utils/frontmatter.ts	2
 src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	3
 src/agents/workspace-state-store.ts	1
-src/agents/workspace-templates.ts	1
 src/agents/workspace.ts	9
 src/agents/worktrees/git.ts	2
 src/agents/worktrees/provisioned-files.ts	3
@@ -2988,7 +2987,6 @@ src/gateway/server-methods/logs.ts	1
 src/gateway/server-methods/mcp-app.ts	1
 src/gateway/server-methods/memory-search.ts	3
 src/gateway/server-methods/migrations.ts	1
-src/gateway/server-methods/models-auth-status-usage-cache.ts	1
 src/gateway/server-methods/models-auth-status.ts	1
 src/gateway/server-methods/models-probe.ts	1
 src/gateway/server-methods/nodes.event.ts	1
@@ -3788,7 +3786,7 @@ src/skills/runtime/refresh.ts	3
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
 src/skills/security/clawhub-verdicts.ts	2
-src/skills/workshop/experience-review.ts	2
+src/skills/workshop/experience-review.ts	1
 src/skills/workshop/history-scan.ts	2
 src/skills/workshop/policy.ts	1
 src/skills/workshop/store-record.ts	3
@@ -4262,6 +4260,6 @@ ui/src/pages/workboard/view-card-actions.ts	2
 ui/src/pages/workboard/view-card-details.ts	1
 ui/src/pages/workboard/view-card-modal.ts	1
 ui/src/pages/workboard/view-card.ts	1
-ui/src/pages/workboard/view.ts	2
+ui/src/pages/workboard/view.ts	1
 ui/src/pages/workboard/workboard-select.ts	1
 ui/src/pages/worktrees/worktrees-page.ts	3
