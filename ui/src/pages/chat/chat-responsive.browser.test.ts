@@ -1793,6 +1793,72 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
+  it("clips the transcript at the stack fade and floats scroll-to-latest above it", async () => {
+    const page = await openBrowserPage(1200, 800);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head>
+        <body style="margin:0;height:100vh;overflow:hidden">
+          <section class="card chat">
+            <div class="chat-main">
+              <div class="chat-main__conversation-column">
+                <div class="chat-main__conversation" style="--chat-composer-stack-height:300px">
+                  <div class="chat-thread" role="log">
+                    <div class="chat-thread-inner" style="height:1200px">Long transcript</div>
+                  </div>
+                  <div class="chat-scroll-to-bottom-wrap">
+                    <button class="chat-scroll-to-bottom">${iconSvg()}</button>
+                  </div>
+                  <div class="chat-main__composer-stack" style="height:300px">
+                    <div class="agent-chat__composer-shell">
+                      <div class="session-progress-card session-progress-card--composer">Task progress</div>
+                      <div class="chat-queue"><div class="chat-queue__item">Queued turn</div></div>
+                      <div class="agent-chat__goal-float"><div class="agent-chat__goal">Goal</div></div>
+                      <div class="agent-chat__input">Composer</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </body></html>`);
+      await waitForLayoutSettled(
+        page,
+        ".chat-thread, .chat-main__composer-stack, .chat-scroll-to-bottom",
+      );
+
+      const geometry = await page.evaluate(() => {
+        const rect = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        const thread = rect(".chat-thread");
+        const stack = rect(".chat-main__composer-stack");
+        const button = rect(".chat-scroll-to-bottom");
+        const threadStyle = getComputedStyle(document.querySelector<HTMLElement>(".chat-thread")!);
+        const fadeStyle = getComputedStyle(
+          document.querySelector<HTMLElement>(".chat-main__composer-stack")!,
+          "::before",
+        );
+        return {
+          buttonGap: stack.top - button.bottom,
+          fadeHeight: Number.parseFloat(fadeStyle.height),
+          fadeTop: Number.parseFloat(fadeStyle.top),
+          paddingBottom: Number.parseFloat(threadStyle.paddingBottom),
+          stackBottom: stack.bottom,
+          threadBottom: thread.bottom,
+          underlap: thread.bottom - stack.top,
+        };
+      });
+
+      expect(geometry.underlap).toBeCloseTo(35, 1);
+      expect(geometry.paddingBottom).toBeCloseTo(41, 1);
+      expect(geometry.fadeTop).toBeCloseTo(-35, 1);
+      expect(geometry.fadeHeight).toBeCloseTo(70, 1);
+      expect(geometry.buttonGap).toBeCloseTo(12, 1);
+      expect(geometry.threadBottom).toBeLessThan(geometry.stackBottom);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("optically matches the effort lightning to the microphone without shrinking fast mode", async () => {
     const page = await openBrowserPage(800, 300);
     try {
