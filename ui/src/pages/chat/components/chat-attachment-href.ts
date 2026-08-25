@@ -15,3 +15,17 @@ export function safeAttachmentHref(value: string): string | undefined {
     return undefined;
   }
 }
+
+/** Keeps document previews from turning persisted external URLs into browser network requests. */
+export function isSameOriginAttachmentHref(value: string, baseHref: string): boolean {
+  const href = safeAttachmentHref(value);
+  if (!href) {
+    return false;
+  }
+  try {
+    const base = new URL(baseHref);
+    return new URL(href, base).origin === base.origin;
+  } catch {
+    return false;
+  }
+}

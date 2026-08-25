@@ -30,7 +30,7 @@ import {
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
-import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachment-href.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -89,7 +89,7 @@ function renderSidebarAttachment(
     mimeType === "application/json" ||
     mimeType === "application/pdf" ||
     ["csv", "htm", "html", "js", "json", "md", "pdf", "txt"].includes(extension);
-  if (canFrame) {
+  if (canFrame && isSameOriginAttachmentHref(src, window.location.href)) {
     return html`<iframe
       class="sidebar-attachment-preview__frame"
       src=${src}

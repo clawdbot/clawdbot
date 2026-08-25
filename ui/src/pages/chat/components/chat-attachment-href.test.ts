@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachment-href.ts";
 
 describe("safeAttachmentHref", () => {
   it.each([
@@ -24,5 +24,20 @@ describe("safeAttachmentHref", () => {
     "",
   ])("rejects an unsafe attachment href: %s", (href) => {
     expect(safeAttachmentHref(href)).toBeUndefined();
+  });
+
+  it.each([
+    "/downloads/report.pdf",
+    "https://control.example/downloads/report.pdf",
+    "blob:https://control.example/15ed4f80-4fb5-4ca6-a6e6-3c9a8943a003",
+  ])("allows a controlled preview source: %s", (href) => {
+    expect(isSameOriginAttachmentHref(href, "https://control.example/chat")).toBe(true);
+  });
+
+  it.each([
+    "https://files.example/report.pdf",
+    "blob:https://files.example/15ed4f80-4fb5-4ca6-a6e6-3c9a8943a003",
+  ])("rejects an external preview source: %s", (href) => {
+    expect(isSameOriginAttachmentHref(href, "https://control.example/chat")).toBe(false);
   });
 });

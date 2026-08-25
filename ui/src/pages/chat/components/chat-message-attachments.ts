@@ -4,7 +4,7 @@ import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
-import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachment-href.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -557,7 +557,9 @@ export function renderAssistantAttachments(
       });
     }
     const downloadHref = safeAttachmentHref(attachmentUrl);
-    const previewKind = resolveDocumentPreviewKind(attachment);
+    const previewKind = isSameOriginAttachmentHref(attachmentUrl, window.location.href)
+      ? resolveDocumentPreviewKind(attachment)
+      : null;
     const previewText =
       previewKind === "table"
         ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)

@@ -399,6 +399,28 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
+  it("keeps external documents download-only", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "external.html",
+      src: "https://files.example/external.html",
+      mimeType: "text/html",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector("iframe")).toBeNull();
+    expect(
+      panel.querySelector<HTMLAnchorElement>(".sidebar-attachment-preview__unavailable a")?.href,
+    ).toBe("https://files.example/external.html");
+    panel.remove();
+  });
+
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

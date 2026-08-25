@@ -72,7 +72,12 @@ describe("parseDelimitedPreview", () => {
   ])("does not load %s until the preview is requested", (label, mimeType, sandbox) => {
     const container = document.createElement("div");
     render(
-      renderAssistantAttachments([documentAttachment(label, mimeType)], {}, undefined, vi.fn()),
+      renderAssistantAttachments(
+        [documentAttachment(label, mimeType, `/__fixtures/${label}`)],
+        {},
+        undefined,
+        vi.fn(),
+      ),
       container,
     );
 
@@ -103,14 +108,14 @@ describe("parseDelimitedPreview", () => {
         container,
       );
 
-    renderSource("https://example.com/ticket-A/preview.html");
+    renderSource("/__fixtures/ticket-A/preview.html");
     container
       .querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__preview-load")
       ?.click();
     const activatedFrame = container.querySelector<HTMLIFrameElement>("iframe");
     expect(activatedFrame?.getAttribute("src")).toContain("ticket-A");
 
-    renderSource("https://example.com/ticket-B/preview.html");
+    renderSource("/__fixtures/ticket-B/preview.html");
 
     const renewedFrame = container.querySelector<HTMLIFrameElement>("iframe");
     const renewedTrigger = container.querySelector<HTMLButtonElement>(
@@ -119,5 +124,30 @@ describe("parseDelimitedPreview", () => {
     expect(renewedFrame).not.toBe(activatedFrame);
     expect(renewedFrame?.hasAttribute("src")).toBe(false);
     expect(renewedTrigger?.hidden).toBe(false);
+  });
+
+  it.each([
+    ["external.html", "text/html"],
+    ["external.pdf", "application/pdf"],
+    ["external.csv", "text/csv"],
+  ])("keeps external document %s download-only", (label, mimeType) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    render(
+      renderAssistantAttachments(
+        [documentAttachment(label, mimeType, `https://files.example/${label}`)],
+        {},
+        undefined,
+        vi.fn(),
+      ),
+      container,
+    );
+
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
