@@ -1,3 +1,4 @@
+import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import { getActivePluginSessionExtensionRegistry } from "./runtime.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 
@@ -16,13 +17,16 @@ export type ActiveSessionCatalog = {
  */
 export function listActiveSessionCatalogs(): ActiveSessionCatalog[] {
   const registrations = getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? [];
+  const allowProcessHomeFallback = allowsProcessHomeSessionScan();
   return registrations
     .map(({ pluginId, provider }) => ({
       pluginId,
       id: provider.id,
       label: provider.label,
-      list: provider.list.bind(provider),
-      read: provider.read.bind(provider),
+      list: (params: Parameters<SessionCatalogProvider["list"]>[0]) =>
+        provider.list({ ...params, allowProcessHomeFallback }),
+      read: (params: Parameters<SessionCatalogProvider["read"]>[0]) =>
+        provider.read({ ...params, allowProcessHomeFallback }),
     }))
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
