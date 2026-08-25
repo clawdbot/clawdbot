@@ -600,17 +600,8 @@ openclaw-chat-page {
      scroll container's padding, which floats the thumb away from the pane
      edge (visible next to the sidebar divider). The side inset lives on
      .chat-thread-inner instead so the scrollbar hugs the edge. */
-  /* Preserve the last message's resting position while clipping the viewport
-     above the footer. Only the shared 35px fade may pass under the stack. */
-  padding: clamp(20px, 3vh, 28px) 0
-    calc(
-      min(var(--chat-composer-stack-height, 0px), var(--chat-transcript-stack-underlap, 35px)) + 6px
-    );
-  margin: 0 0
-    max(
-      0px,
-      calc(var(--chat-composer-stack-height, 0px) - var(--chat-transcript-stack-underlap, 35px))
-    );
+  padding: clamp(20px, 3vh, 28px) 0 calc(var(--chat-composer-stack-height, 0px) + 6px);
+  margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-md);
@@ -745,7 +736,7 @@ openclaw-chat-page {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: calc(var(--chat-composer-stack-height, 0px) + 12px);
+  bottom: 12px;
   left: 50%;
   display: inline-flex;
   align-items: center;

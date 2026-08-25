@@ -66,10 +66,6 @@
 }
 
 .chat-main__conversation {
-  /* The measured footer stack may overlap only this shallow transcript fade.
-     The rest of its height remains outside the scroll viewport. */
-  --chat-transcript-stack-underlap: 35px;
-
   position: relative;
   display: flex;
   min-width: 0;
@@ -93,8 +89,8 @@
 .chat-main__composer-stack::before {
   position: absolute;
   z-index: -1;
-  inset: calc(0px - var(--chat-transcript-stack-underlap)) 0 auto;
-  height: calc(2 * var(--chat-transcript-stack-underlap));
+  inset: -40px 0 auto;
+  height: 46px;
   background: linear-gradient(to bottom, transparent, var(--chat-surface));
   content: "";
   pointer-events: none;
