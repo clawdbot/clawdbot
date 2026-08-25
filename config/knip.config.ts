@@ -476,6 +476,10 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
+    // Focused walker tests exercise both separator branches of toPortableMatchPath
+    // (POSIX default + injected Windows separator, unreachable on POSIX CI);
+    // production folds the match separator in-module.
+    "src/agents/workspace-extra-bootstrap-walker.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
