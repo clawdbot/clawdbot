@@ -1,6 +1,6 @@
 /**
  * Regression coverage for workspace template directory discovery.
- * Verifies dev, package, fallback, and docs-template search paths.
+ * Verifies packaged and fallback documentation template search paths.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,7 +21,7 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
     const root = tempDirs.make("openclaw-templates-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
-    const templatesDir = path.join(root, "src", "agents", "templates");
+    const templatesDir = path.join(root, "docs", "reference", "templates");
     await fs.mkdir(templatesDir, { recursive: true });
     await fs.writeFile(path.join(templatesDir, "AGENTS.md"), "# ok\n");
 
@@ -34,7 +34,7 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
     expect(resolved).toBe(templatesDir);
   });
 
-  it("falls back to package-root runtime path when templates directory is missing", async () => {
+  it("falls back to checkout docs when package-root templates are missing", async () => {
     const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = tempDirs.make("openclaw-templates-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
@@ -44,17 +44,15 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
     const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
 
     const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
-    expect(path.normalize(resolved)).toBe(path.join(root, "src", "agents", "templates"));
+    expect(path.normalize(resolved)).toBe(path.resolve("docs", "reference", "templates"));
   });
 
-  it("includes docs templates as secondary search roots", async () => {
+  it("returns only existing documentation template directories", async () => {
     const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = tempDirs.make("openclaw-templates-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
-    const runtimeTemplatesDir = path.join(root, "src", "agents", "templates");
     const docsTemplatesDir = path.join(root, "docs", "reference", "templates");
-    await fs.mkdir(runtimeTemplatesDir, { recursive: true });
     await fs.mkdir(docsTemplatesDir, { recursive: true });
 
     const distDir = path.join(root, "dist");
@@ -62,7 +60,11 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
     const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
 
     const resolved = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
-    expect(resolved.slice(0, 2)).toEqual([runtimeTemplatesDir, docsTemplatesDir]);
+    expect(resolved[0]).toBe(docsTemplatesDir);
+    expect(resolved).not.toContain(path.join(root, "src", "agents", "templates"));
+    for (const templateDir of resolved) {
+      expect((await fs.stat(templateDir)).isDirectory()).toBe(true);
+    }
   });
 
   it("does not ship a retired runtime heartbeat template", async () => {
