@@ -69,6 +69,9 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  IOS_SCREENSHOT_FASTLANE_VERSION: "2.236.1"
+  IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
+  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"
   NODE_VERSION: "24.x"
 
 jobs:
@@ -3833,28 +3836,9 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 150
     env:
-      BUNDLE_DEPLOYMENT: "true"
-      BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *platform_checkout_step
-
-      - name: Setup Ruby
-        if: env.HISTORICAL_TARGET != 'true'
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
-        with:
-          ruby-version: "3.4.10"
-          bundler: "2.6.9"
-          bundler-cache: false
-          working-directory: apps/ios
-
-      - name: Install locked Fastlane bundle
-        if: env.HISTORICAL_TARGET != 'true'
-        working-directory: apps/ios
-        run: |
-          bundle _2.6.9_ install --jobs 4 --retry 3
-          bundle _2.6.9_ check
-          bundle _2.6.9_ exec fastlane --version
 
       - name: Select Xcode 26
         run: |
@@ -4008,20 +3992,214 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Capture iOS release screenshots
-        # Full manual/release validation always captures. PRs and their exact-head
-        # release-gate substitutes use the same conservative screenshot-risk scope.
-        if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && env.HISTORICAL_TARGET != 'true' }}
+  ios-screenshot-shard:
+    permissions:
+      contents: read
+    name: "ios-screenshots-${{ matrix.device_family }}"
+    needs: [preflight, ios-build]
+    # Full manual/release validation always captures. PRs and their exact-head
+    # release-gate substitutes use the same conservative screenshot-risk scope.
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    timeout-minutes: 90
+    env:
+      BUNDLE_DEPLOYMENT: "true"
+      BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        device_family: [iphone, ipad-13]
+    steps:
+      - *platform_checkout_step
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4.10"
+          bundler: "2.6.9"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/ios
+        run: |
+          bundle _2.6.9_ install --jobs 4 --retry 3
+          bundle _2.6.9_ check
+          bundle _2.6.9_ exec fastlane --version
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
+            exit 1
+          fi
+          swift --version
+
+      - name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+
+      - name: Install iOS screenshot tooling
+        run: |
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/xcodegen" --version
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
+
+      - name: Capture iOS device screenshot shard
+        id: device_screenshots
+        env:
+          OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
+          OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"
         run: pnpm ios:screenshots
 
+      - name: Capture Apple Watch screenshot
+        id: watch_screenshot
+        if: matrix.device_family == 'iphone'
+        run: |
+          source scripts/lib/ios-fastlane.sh
+          (
+            cd apps/ios
+            run_ios_fastlane ios watch_screenshot
+          )
+
+      - name: Package iOS screenshot shard evidence
+        id: package_screenshot_evidence
+        env:
+          DEVICE_FAMILY: ${{ matrix.device_family }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          fastlane_version="$(
+            source scripts/lib/ios-fastlane.sh
+            run_ios_fastlane --version 2>&1 | awk 'match($0, /^fastlane [0-9]+\.[0-9]+\.[0-9]+$/) { print substr($0, RSTART + 9, RLENGTH - 9); exit }'
+          )"
+          xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
+          test "$xcode_version" = "$IOS_SCREENSHOT_XCODE_VERSION"
+          collect_args=(
+            collect
+            --family "$DEVICE_FAMILY"
+            --screenshots apps/ios/fastlane/screenshots/en-US
+            --xcresults apps/ios/build/SnapshotTestResults
+            --output apps/ios/build/ScreenshotEvidenceShard
+            --target-sha "$TARGET_SHA"
+            --workflow-sha "$WORKFLOW_SHA"
+            --run-id "$RUN_ID"
+            --run-attempt "$RUN_ATTEMPT"
+            --xcode-version "$xcode_version"
+            --fastlane-version "$fastlane_version"
+            --node-version "$(node --version)"
+          )
+          node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+          if [[ "$DEVICE_FAMILY" == "iphone" ]]; then
+            collect_args[2]="watch"
+            node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+          fi
+
+      - name: Upload iOS screenshot shard evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-shard-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/ScreenshotEvidenceShard/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failed iOS screenshot attempt evidence
+        if: ${{ always() && (steps.device_screenshots.outcome == 'failure' || steps.watch_screenshot.outcome == 'failure' || steps.package_screenshot_evidence.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-failure-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
+          path: |
+            apps/ios/fastlane/screenshots/en-US/*.png
+            apps/ios/build/SnapshotTestResults/capture-attempts.json
+            apps/ios/build/SnapshotTestResults/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+  ios-screenshot-evidence:
+    permissions:
+      contents: read
+    name: "ios-screenshot-evidence"
+    needs: [preflight, ios-screenshot-shard]
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+
+      - name: Setup screenshot evidence Node
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          install-deps: "false"
+          node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+
+      - name: Download iOS screenshot shard evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: ios-release-screenshot-shard-*-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/ScreenshotEvidenceInputs
+          merge-multiple: false
+
+      - name: Reduce iOS screenshot evidence
+        id: reduce_screenshot_evidence
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          node scripts/ios-screenshot-evidence.mjs reduce \
+            --input apps/ios/build/ScreenshotEvidenceInputs \
+            --output . \
+            --target-sha "$TARGET_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --xcode-version "$IOS_SCREENSHOT_XCODE_VERSION" \
+            --fastlane-version "$IOS_SCREENSHOT_FASTLANE_VERSION" \
+            --node-version "$(node --version)"
+
+      - name: Upload failed iOS screenshot reducer evidence
+        if: ${{ always() && steps.reduce_screenshot_evidence.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-reducer-failure-${{ needs.preflight.outputs.checkout_revision }}
+          path: |
+            apps/ios/build/ScreenshotEvidenceInputs/**/screenshots/*.png
+            apps/ios/build/ScreenshotEvidenceInputs/**/xcresults/*.xcresult
+            apps/ios/build/ScreenshotEvidenceInputs/**/manifest.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload iOS release screenshot evidence
-        if: ${{ always() && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/*.xcresult
+            apps/ios/build/ScreenshotEvidence/manifest.json
           if-no-files-found: error
           retention-days: 14
 
@@ -4296,6 +4474,8 @@ jobs:
       - macos-node
       - macos-swift
       - ios-build
+      - ios-screenshot-shard
+      - ios-screenshot-evidence
       - android
       - docker-seed-e2e
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
@@ -4333,6 +4513,8 @@ jobs:
             macos-node=${{ needs.macos-node.result }}
             macos-swift=${{ needs.macos-swift.result }}
             ios-build=${{ needs.ios-build.result }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}
             android=${{ needs.android.result }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}
         run: |

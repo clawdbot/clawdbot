@@ -138,7 +138,7 @@ suite.define(() => {
     );
   });
 
-  it("dismisses a completed card across rerender and reload", async () => {
+  it("centers the completed marker and dismisses the card across disclosure and reload", async () => {
     const sessionKey = "agent:main:progress-complete";
     const plan = [
       { step: "Inspected owner", status: "completed" },
@@ -188,7 +188,23 @@ suite.define(() => {
           await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
           const card = page.locator('[data-progress-card-placement="composer"]');
           await expect.poll(() => card.isVisible()).toBe(true);
+          const expectMarkerCentered = async () => {
+            const summaryBounds = await card.locator("summary").boundingBox();
+            const markerBounds = await card
+              .locator('.session-progress-card__current-marker[data-status="completed"]')
+              .boundingBox();
+            expect(summaryBounds).not.toBeNull();
+            expect(markerBounds).not.toBeNull();
+            if (!summaryBounds || !markerBounds) {
+              return;
+            }
+            const summaryCenterY = summaryBounds.y + summaryBounds.height / 2;
+            const markerCenterY = markerBounds.y + markerBounds.height / 2;
+            expect(Math.abs(summaryCenterY - markerCenterY)).toBeLessThanOrEqual(0.5);
+          };
+          await expectMarkerCentered();
           await card.locator("summary").click();
+          await expectMarkerCentered();
           await captureProof(page, `completed-${colorScheme}-before.png`);
 
           await card.getByRole("button", { name: "Dismiss progress card" }).click();
