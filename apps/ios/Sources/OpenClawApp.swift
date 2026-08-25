@@ -230,12 +230,12 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 completionHandler(.noData)
                 return
             }
-            let handled = await appModel.handleSilentPushWake(userInfo)
-            self.logger.info("APNs wake handled=\(handled, privacy: .public)")
-            if !handled {
+            let result = await appModel.handleSilentPushWake(userInfo)
+            self.logger.info("APNs wake handled=\(result.handled, privacy: .public)")
+            if !result.handled {
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_not_applied")
             }
-            completionHandler(handled ? .newData : .noData)
+            completionHandler(result == .newData ? .newData : .noData)
         }
     }
 
