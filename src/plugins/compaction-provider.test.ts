@@ -1,10 +1,14 @@
 /** Covers canonical plugin compaction provider registration and runtime lookup. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { getCompactionProvider, type CompactionProvider } from "./compaction-provider.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 function createTestRegistry() {
   return createPluginRegistry({

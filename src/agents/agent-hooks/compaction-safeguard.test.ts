@@ -9,7 +9,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
-import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  requireActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+} from "../../plugins/runtime.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -134,6 +137,7 @@ beforeEach(() => {
 
 afterEach(() => {
   testing.setSummarizeInStagesForTest();
+  resetPluginRuntimeStateForTest();
 });
 
 function installCompactionProviderForTest(provider: CompactionProvider): void {
