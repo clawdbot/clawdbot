@@ -217,12 +217,16 @@ export function resolveDocumentFramePreviewState(
   ).value;
 }
 
-function startDocumentFramePreview(
+export function loadDocumentFramePreview(
   source: string,
   sourceIdentity: string,
   onRequestUpdate: (() => void) | undefined,
-  blockNetwork: boolean,
-) {
+  blockNetwork = false,
+  sizeBytes?: number,
+): DocumentFramePreviewState {
+  if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
+    return "failed";
+  }
   const cacheKey = documentFramePreviewCacheKey(source, blockNetwork);
   const resource = observeChatMediaResource<DocumentFramePreviewState>(
     "document-frame",
@@ -231,7 +235,7 @@ function startDocumentFramePreview(
     sourceIdentity,
   );
   if (resource.pending || resource.value !== undefined) {
-    return resource;
+    return resource.value;
   }
   resource.value = "loading";
   const controller = new AbortController();
@@ -273,20 +277,7 @@ function startDocumentFramePreview(
       notifyChatMediaResourceSubscribers(resource);
     });
   resource.pending = pending;
-  return resource;
-}
-
-export function loadDocumentFramePreview(
-  source: string,
-  sourceIdentity: string,
-  onRequestUpdate: (() => void) | undefined,
-  blockNetwork = false,
-  sizeBytes?: number,
-): DocumentFramePreviewState {
-  if (sizeBytes !== undefined && sizeBytes > DOCUMENT_PREVIEW_MAX_BYTES) {
-    return "failed";
-  }
-  return startDocumentFramePreview(source, sourceIdentity, onRequestUpdate, blockNetwork).value;
+  return resource.value;
 }
 
 function renderAttachmentTablePreview(
@@ -361,7 +352,6 @@ function renderAttachmentTablePreview(
 export function renderAttachmentDocumentPreview(
   previewKind: Exclude<AttachmentDocumentPreviewKind, null>,
   attachment: AttachmentItem["attachment"],
-  attachmentUrl: string,
   previewText: string | null | undefined,
   framePreviewState: DocumentFramePreviewState,
   display: "compact" | "full" = "compact",
@@ -377,35 +367,26 @@ export function renderAttachmentDocumentPreview(
             loading="lazy"
             scrolling="no"
           ></iframe>`
-        : framePreviewState === "loading"
-          ? html`<div class="chat-assistant-attachment-card__preview-unavailable">
-              ${t("chat.mediaPlayer.preparing")}
-            </div>`
-          : html`<div class="chat-assistant-attachment-card__preview-unavailable">
-              ${t("chat.mediaPlayer.preparing")}
-            </div>`}
+        : html`<div class="chat-assistant-attachment-card__preview-unavailable">
+            ${t("chat.mediaPlayer.preparing")}
+          </div>`}
       <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
     </div>`;
   }
   if (previewKind === "table") {
     return renderAttachmentTablePreview(attachment, previewText, display);
   }
-  const previewUrl = `${frameSource ?? attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">
     ${frameSource
       ? html`<iframe
-          src=${previewUrl}
+          src=${`${frameSource}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
           title=${attachment.label}
           sandbox="allow-scripts"
           loading="lazy"
         ></iframe>`
-      : framePreviewState === "loading"
-        ? html`<div class="chat-assistant-attachment-card__preview-unavailable">
-            ${t("chat.mediaPlayer.preparing")}
-          </div>`
-        : html`<div class="chat-assistant-attachment-card__preview-unavailable">
-            ${t("chat.mediaPlayer.preparing")}
-          </div>`}
+      : html`<div class="chat-assistant-attachment-card__preview-unavailable">
+          ${t("chat.mediaPlayer.preparing")}
+        </div>`}
   </div>`;
 }
 

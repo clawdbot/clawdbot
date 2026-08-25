@@ -47,11 +47,6 @@ import type { SidebarContent } from "./chat-sidebar.ts";
 
 let attachmentStyles: Promise<unknown> | undefined;
 
-function loadAttachmentStyles(): Promise<unknown> {
-  // Keep preview/icon rules off the core chat route until a transcript actually has attachments.
-  return (attachmentStyles ??= import("../../../styles/chat/attachments.css"));
-}
-
 function retainManagedAttachmentUntilExpiry(
   resource: ChatMediaResource<ManagedAttachmentAvailability>,
   availability: Extract<ManagedAttachmentAvailability, { status: "available" }> | null,
@@ -360,7 +355,9 @@ export function renderAssistantAttachments(
   if (attachments.length === 0) {
     return nothing;
   }
-  void loadAttachmentStyles();
+  // Keep preview/icon rules off the core chat route until a transcript actually has attachments.
+  attachmentStyles ??= import("../../../styles/chat/attachments.css");
+  void attachmentStyles;
   const {
     connectionEpoch,
     localMediaPreviewRoots = [],
@@ -372,6 +369,7 @@ export function renderAssistantAttachments(
     resolveArtifactDownload,
   } = options;
   const renderAttachment = ({ attachment }: AttachmentItem) => {
+    const localSource = isLocalAssistantAttachmentSource(attachment.url);
     const assistantAvailability = resolveAssistantAttachmentAvailability(
       attachment.url,
       localMediaPreviewRoots,
@@ -398,7 +396,7 @@ export function renderAssistantAttachments(
             : assistantAvailability;
     const attachmentUrl =
       assistantAvailability.status === "available" && managedAvailability?.status === "available"
-        ? isLocalAssistantAttachmentSource(attachment.url)
+        ? localSource
           ? buildAssistantAttachmentUrl(
               attachment.url,
               resourceBasePath,
@@ -426,12 +424,10 @@ export function renderAssistantAttachments(
       assistantAvailability.status === "available"
         ? (assistantAvailability.height ?? attachment.height)
         : attachment.height;
-    const playbackAuthToken = isLocalAssistantAttachmentSource(attachment.url)
-      ? (authToken ?? null)
-      : null;
+    const playbackAuthToken = localSource ? (authToken ?? null) : null;
     const safeAttachmentUrl = safeAttachmentHref(attachmentUrl ?? "");
     const hasLiveSidebarSource =
-      isLocalAssistantAttachmentSource(attachment.url) ||
+      localSource ||
       (isManagedOutgoingMediaSource(attachment.url) &&
         Boolean(attachment.artifactId && resolveArtifactDownload));
     const retryUnavailableAttachment =
@@ -487,7 +483,7 @@ export function renderAssistantAttachments(
                         return null;
                       }
                       return {
-                        src: isLocalAssistantAttachmentSource(attachment.url)
+                        src: localSource
                           ? buildAssistantAttachmentUrl(
                               attachment.url,
                               runtime.resourceBasePath,
@@ -496,9 +492,7 @@ export function renderAssistantAttachments(
                           : nextManagedAvailability.url,
                         playback:
                           nextAssistantAvailability.playback ?? attachment.playback ?? "native",
-                        authToken: isLocalAssistantAttachmentSource(attachment.url)
-                          ? (runtime.authToken ?? null)
-                          : null,
+                        authToken: localSource ? (runtime.authToken ?? null) : null,
                         sizeBytes: nextAssistantAvailability.sizeBytes ?? attachment.sizeBytes,
                         durationMs: nextAssistantAvailability.durationMs ?? attachment.durationMs,
                         width: nextAssistantAvailability.width ?? attachment.width,
@@ -665,7 +659,6 @@ export function renderAssistantAttachments(
             mimeType: attachment.mimeType,
             sizeBytes,
             downloadHref,
-            showExpandAction: true,
             onExpand: openAttachmentSidebar,
             visualMode: showPreview ? "preview-with-favicon" : "large-placeholder",
           })}

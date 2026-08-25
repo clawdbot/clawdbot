@@ -89,7 +89,6 @@ describe("parseDelimitedPreview", () => {
       renderAttachmentDocumentPreview(
         "table",
         documentAttachment("wide.csv", "text/csv").attachment,
-        "https://example.com/wide.csv",
         wideCsv,
         undefined,
       ),
@@ -112,7 +111,6 @@ describe("parseDelimitedPreview", () => {
       renderAttachmentDocumentPreview(
         "table",
         documentAttachment("oversized.csv", "text/csv").attachment,
-        "https://example.com/oversized.csv",
         oversizedCsv,
         undefined,
         "full",

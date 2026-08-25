@@ -153,9 +153,7 @@ const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
     ),
     contentType: "image/png",
   },
-  "sample-video.mp4": {
-    ...buildVideoAsset(),
-  },
+  "sample-video.mp4": buildVideoAsset(),
   "sample-audio.wav": buildWavAsset(),
   "sample-audio-secondary.wav": buildWavAsset(),
   "brief.pdf": {

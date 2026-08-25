@@ -1569,8 +1569,7 @@ openclaw-chat-video-player {
   line-height: 1.2;
 }
 
-.chat-assistant-attachment-card__title,
-.chat-assistant-attachment-card__link {
+.chat-assistant-attachment-card__title {
   min-width: 0;
   flex: 1;
   overflow: hidden;

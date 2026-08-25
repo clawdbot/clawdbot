@@ -26,7 +26,6 @@ export function renderAssistantAttachmentStatusCard(params: {
       <div class="chat-assistant-attachment-card__header">
         <div class="chat-assistant-attachment-card__identity">
           ${renderAttachmentCardIcon({
-            kind: params.kind,
             label: params.label,
             mimeType: params.mimeType,
             visualMode: "large-placeholder",

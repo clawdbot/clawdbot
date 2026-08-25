@@ -19,10 +19,7 @@ export type AttachmentCardHeaderOptions = {
   label: string;
   mimeType?: string;
   sizeBytes?: number;
-  titleHref?: string;
   downloadHref?: string;
-  onDownload?: () => void;
-  showExpandAction?: boolean;
   onExpand?: () => void;
   visualMode?: AttachmentFileVisualMode;
   voiceNote?: boolean;
@@ -49,10 +46,6 @@ export function openAttachmentCardFromClick(
   onOpen();
 }
 
-function attachmentFormatLabel(label: string, mimeType: string | undefined): string {
-  return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
-}
-
 function attachmentTypeLabel(
   kind: AttachmentCardKind,
   label: string,
@@ -67,11 +60,10 @@ function attachmentTypeLabel(
   if (kind === "image") {
     return t("chat.attachments.attachedFile");
   }
-  return attachmentFormatLabel(label, mimeType);
+  return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
 }
 
 export function renderAttachmentCardIcon(options: {
-  kind: AttachmentCardKind;
   label: string;
   mimeType?: string;
   visualMode?: AttachmentFileVisualMode;
@@ -87,29 +79,12 @@ export function renderAttachmentCardIcon(options: {
 
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
   const compactPreview = options.visualMode === "preview-with-favicon";
-  const compactSize =
-    compactPreview && options.sizeBytes !== undefined ? formatBytes(options.sizeBytes) : undefined;
+  const formattedSize =
+    options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
   const typeLabel = attachmentTypeLabel(options.kind, options.label, options.mimeType);
-  const metadata = [
-    typeLabel,
-    options.sizeBytes !== undefined ? formatBytes(options.sizeBytes) : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const title = options.titleHref
-    ? html`<a
-        class="chat-assistant-attachment-card__title chat-assistant-attachment-card__link"
-        href=${options.titleHref}
-        target="_blank"
-        rel="noreferrer"
-        title=${options.label}
-        >${options.label}</a
-      >`
-    : html`<span class="chat-assistant-attachment-card__title" title=${options.label}
-        >${options.label}</span
-      >`;
+  const metadata = [typeLabel, formattedSize].filter(Boolean).join(" · ");
   const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
-  const hasOpenAction = options.showExpandAction === true && options.onExpand !== undefined;
+  const hasOpenAction = options.onExpand !== undefined;
   const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
     hasOpenAction ? "chat-assistant-attachment-card__download--secondary" : ""
   }`;
@@ -121,7 +96,6 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
     >
       <div class="chat-assistant-attachment-card__identity">
         ${renderAttachmentCardIcon({
-          kind: options.kind,
           label: options.label,
           mimeType: options.mimeType,
           visualMode: options.visualMode,
@@ -131,12 +105,14 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             ? "chat-assistant-attachment-card__details--preview"
             : ""}"
         >
-          ${title}
+          <span class="chat-assistant-attachment-card__title" title=${options.label}
+            >${options.label}</span
+          >
           ${compactPreview
-            ? compactSize
+            ? formattedSize
               ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
                     >·</span
-                  ><span class="chat-assistant-attachment-card__meta">${compactSize}</span>`
+                  ><span class="chat-assistant-attachment-card__meta">${formattedSize}</span>`
               : null
             : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`}
         </span>
@@ -158,17 +134,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
               title=${downloadTitle}
               >${icons.download}</a
             >`
-          : options.onDownload
-            ? html`<button
-                type="button"
-                class=${downloadClass}
-                aria-label=${downloadTitle}
-                title=${downloadTitle}
-                @click=${options.onDownload}
-              >
-                ${icons.download}
-              </button>`
-            : null}
+          : null}
         ${hasOpenAction
           ? html`<button
               type="button"

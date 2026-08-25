@@ -281,7 +281,6 @@ export function renderAttachmentFileIcon(options: {
       : ""}"
     data-family=${resolved.family}
     data-mode=${options.mode}
-    data-accent=${resolved.accent}
     aria-hidden="true"
     style=${styleMap({
       "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,

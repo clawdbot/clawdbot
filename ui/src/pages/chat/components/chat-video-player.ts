@@ -1,5 +1,5 @@
 import { html, type PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
+import { property } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../../../i18n/index.ts";
@@ -22,8 +22,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property({ type: Number }) mediaHeight: number | undefined;
   @property({ attribute: false }) onExpand: (() => void) | undefined;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
-
-  @state() private metadataLoaded = false;
 
   private media: HTMLVideoElement | null = null;
   private previewVisible = false;
@@ -54,15 +52,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       changedProperties.has("playback") ||
       changedProperties.has("authToken")
     ) {
-      const authenticationChanged = changedProperties.has("authToken");
-      if (
-        authenticationChanged ||
-        (changedProperties.has("sourceIdentity") &&
-          this.sourceController.currentIdentity &&
-          this.sourceController.currentIdentity !== this.sourceIdentity.trim())
-      ) {
-        this.metadataLoaded = false;
-      }
       this.syncSource();
     }
   }
@@ -101,9 +90,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       this.playback,
       this.authToken,
     );
-    if (this.sourceController.readiness === "preparing") {
-      this.metadataLoaded = false;
-    }
     this.requestUpdate();
     void pending?.then(() => {
       if (this.isConnected) {
@@ -116,7 +102,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     if (!this.media || !this.sourceController.applyPendingSource(this.media)) {
       return false;
     }
-    this.metadataLoaded = false;
     this.requestUpdate();
     return true;
   }
@@ -133,7 +118,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
         ${ref(this.setViewportElement)}
-        ?data-metadata-loaded=${this.metadataLoaded}
         ?data-unplayable=${this.sourceController.readiness === "unavailable"}
         ?data-openable=${Boolean(this.onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
@@ -144,7 +128,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
-          showExpandAction: true,
           onExpand: this.onExpand,
           visualMode: unavailable ? "large-placeholder" : "preview-with-favicon",
         })}
@@ -164,12 +147,11 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
                 return;
               }
               this.sourceController.handleLoadedMetadata(this.media);
-              this.metadataLoaded = true;
               this.onMediaLoaded?.();
             }}
             @ended=${() => {
               if (this.media && this.sourceController.handleEnded(this.media)) {
-                this.metadataLoaded = false;
+                this.requestUpdate();
               }
             }}
             @play=${() => this.adoptPendingSource()}
@@ -179,7 +161,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
                 this.media?.error &&
                 this.sourceController.handleError(this.media)
               ) {
-                this.metadataLoaded = false;
                 this.requestUpdate();
               }
             }}

@@ -166,7 +166,6 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref: this.downloadHref,
-          showExpandAction: true,
           onExpand: this.onExpand,
           visualMode: "large-placeholder",
         })}

@@ -159,7 +159,7 @@ export function sidebarPanelDefinitions(
   const attachmentContent =
     state?.sidebarContent?.kind === "attachment" ? state.sidebarContent : null;
   const detailContent =
-    (state?.sidebarContent?.kind === "attachment" ? null : state?.sidebarContent) ??
+    (attachmentContent ? null : state?.sidebarContent) ??
     (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
   const workspaceContent =
     attachmentContent && params

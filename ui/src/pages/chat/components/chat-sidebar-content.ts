@@ -117,7 +117,6 @@ function renderSidebarAttachment(
           mimeType: content.mimeType ?? undefined,
           url: sourceIdentity,
         },
-        src,
         previewText,
         undefined,
         "full",

@@ -1879,7 +1879,6 @@ openclaw-session-discussion {
 }
 
 .sidebar-attachment-preview__frame,
-.sidebar-attachment-preview__media,
 .sidebar-attachment-preview__image {
   display: block;
   width: 100%;
@@ -1891,10 +1890,6 @@ openclaw-session-discussion {
 
 .sidebar-attachment-preview__frame {
   min-height: min(70vh, 720px);
-}
-
-.sidebar-attachment-preview__media {
-  max-height: min(70vh, 720px);
 }
 
 .sidebar-attachment-preview__image {
