@@ -6,7 +6,11 @@ import {
   handleSkillTokenKeydown,
   type SkillMenuHost,
 } from "./chat-composer-skill-menu.ts";
-import { handleSlashMenuKeydown, type SlashMenuHost } from "./chat-composer-slash-menu.ts";
+import {
+  handleInlineSlashArgKeydown,
+  handleSlashMenuKeydown,
+  type SlashMenuHost,
+} from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
@@ -52,6 +56,13 @@ export function createComposerKeyDownHandler({
     }
 
     if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
+      return;
+    }
+
+    if (
+      props.connected &&
+      handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut)
+    ) {
       return;
     }
 

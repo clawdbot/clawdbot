@@ -77,6 +77,7 @@ function resolveChatSlashCommandArgOptions(
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
+  state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -183,8 +184,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     paneId: props.paneId,
     getDraft: skillMenuHost.getDraft,
     commitDraft: skillMenuHost.commitDraft,
+    getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: () => props.onSend(),
+    canRunInlineCommand: () => state.slashCommandDispatchConnected && Boolean(props.onSlashCommand),
+    runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
   };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
@@ -350,6 +354,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
+    updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
     updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
