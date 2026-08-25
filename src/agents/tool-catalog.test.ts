@@ -40,6 +40,15 @@ describe("tool-catalog", () => {
     expect(ids({ githubPublicationAvailable: true })).toContain("github_publish");
   });
 
+  it("distinguishes native dashboards from standalone web-app previews", () => {
+    const tools = listCoreToolSections().flatMap((section) => section.tools);
+    const description = (id: string) => tools.find((tool) => tool.id === id)?.description ?? "";
+
+    expect(description("dashboard")).toMatch(/present.*native session dashboard/i);
+    expect(description("show_widget")).toMatch(/pin.*native session dashboard/i);
+    expect(description("portal")).toMatch(/standalone local web app/i);
+  });
+
   it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
