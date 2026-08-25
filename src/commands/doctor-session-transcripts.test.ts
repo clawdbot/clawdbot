@@ -509,6 +509,32 @@ describe("doctor session transcript repair", () => {
     );
   });
 
+  it("does not report successful metadata-only repairs as errors", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "metadata-only" },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          content: [{ type: "text", text: "legacy" }],
+        },
+      },
+    ]);
+
+    await noteSessionTranscriptHealth({
+      sessionDirs: [path.dirname(filePath)],
+      shouldRepair: true,
+    });
+
+    const [message, title] = requireFirstMockCall(note, "doctor note") as [string, string];
+    expect(title).toBe("Session transcripts");
+    expect(message).toContain("repaired");
+    expect(message).toContain("openai-codex=1");
+    expect(message).not.toContain("error=no active branch");
+  });
+
   it("reports affected transcripts without rewriting outside repair mode", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
