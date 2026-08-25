@@ -12,6 +12,7 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { extractToolResultMediaArtifact } from "../agents/embedded-agent-tool-media.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
@@ -1376,6 +1377,45 @@ describe("createManagedOutgoingImageBlocks", () => {
       });
     },
   );
+
+  it("prepares generated audio when provider attachment metadata contains malformed values", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "theme.mp3");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    const extracted = extractToolResultMediaArtifact({
+      details: {
+        media: {
+          mediaUrls: [sourcePath],
+          attachments: [
+            {
+              type: "audio",
+              path: sourcePath,
+              name: 1,
+              mimeType: false,
+              durationMs: -1,
+              width: Infinity,
+            },
+          ],
+        },
+      },
+    });
+    const onPrepareError = vi.fn();
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: extracted?.mediaUrls,
+      attachments: extracted?.attachments,
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+
+    expect(onPrepareError).not.toHaveBeenCalled();
+    expect(blocks).toHaveLength(1);
+    expect(requireBlock(blocks)).toMatchObject({ type: "audio", fileName: "theme.mp3" });
+  });
 
   it("marks exotic managed media metadata for playback transcoding", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.caf");

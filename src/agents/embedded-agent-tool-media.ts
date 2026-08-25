@@ -1,4 +1,8 @@
 /** Extracts and trust-filters media from embedded-agent tool results. */
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { extractToolResultText } from "./embedded-agent-tool-results.js";
@@ -278,9 +282,23 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
       return;
     }
     const record = value as Record<string, unknown>;
-    // Result attachments are provider-controlled; trust remains owned by the run/tool policy.
+    // Provider metadata can break Gateway delivery; media trust remains policy-owned.
     const attachment: ReplyMediaAttachment = Object.fromEntries(
-      Object.entries(record).filter(([key]) => REPLY_ATTACHMENT_METADATA_KEYS.has(key)),
+      Object.entries(record).filter(([key, entry]) => {
+        if (!REPLY_ATTACHMENT_METADATA_KEYS.has(key)) {
+          return false;
+        }
+        if (key === "type") {
+          return entry === "image" || entry === "audio" || entry === "video" || entry === "file";
+        }
+        if (key === "width" || key === "height") {
+          return asPositiveFiniteNumber(entry) !== undefined;
+        }
+        if (key === "sizeBytes" || key === "durationMs") {
+          return asNonNegativeFiniteNumber(entry) !== undefined;
+        }
+        return typeof entry === "string";
+      }),
     );
     for (const key of ["media", "path", "url", "mediaUrl", "filePath", "fileUrl"]) {
       pushString(record[key], attachment);

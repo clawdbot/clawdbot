@@ -145,6 +145,47 @@ describe("extractToolResultMediaArtifact", () => {
     });
   });
 
+  it("drops malformed provider attachment metadata while preserving valid media references", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            attachments: [
+              {
+                type: "document",
+                path: "/tmp/generated.mp3",
+                url: false,
+                mediaUrl: {},
+                filePath: 12,
+                mimeType: 7,
+                name: 1,
+                sizeBytes: Infinity,
+                durationMs: -1,
+                width: "1920",
+                height: NaN,
+                trustedLocalMedia: true,
+              },
+              {
+                type: "audio",
+                path: "/tmp/empty.mp3",
+                sizeBytes: 0,
+                durationMs: 0,
+                width: 0,
+                height: 0,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/generated.mp3", "/tmp/empty.mp3"],
+      attachments: [
+        { path: "/tmp/generated.mp3" },
+        { type: "audio", path: "/tmp/empty.mp3", sizeBytes: 0, durationMs: 0 },
+      ],
+    });
+  });
+
   it("returns undefined when content has no text or image blocks", () => {
     expect(extractToolResultMediaArtifact({ content: [{ type: "other" }] })).toBeUndefined();
   });

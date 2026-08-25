@@ -323,6 +323,44 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("delivers generated media after dropping malformed provider attachment metadata", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedHarness({
+      runId: "generated-malformed-metadata",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["music_generate"]),
+    });
+    const path = "/tmp/generated-song.mp3";
+
+    emitToolRun({
+      emit,
+      toolName: "music_generate",
+      toolCallId: "music-tool",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated media." }],
+        details: {
+          media: {
+            mediaUrls: [path],
+            attachments: [{ type: "audio", path, name: 1, mimeType: null, durationMs: -1 }],
+          },
+        },
+      },
+    });
+    await subscription.waitForPendingEvents();
+    emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated song." });
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "Here is your generated song.",
+      mediaUrls: [path],
+      attachments: [{ type: "audio", path }],
+    });
+  });
+
   it("does not double-count usage when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = {
