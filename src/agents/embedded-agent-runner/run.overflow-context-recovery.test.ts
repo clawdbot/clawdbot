@@ -191,7 +191,8 @@ describe("recoverEmbeddedRunOverflow", () => {
   it("uses the canonical assistant classifier when the text heuristic misses", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",
-      errorMessage: "400 Your input exceeds the context window of this model",
+      errorMessage:
+        "413 Chat history exceeds the 800-message limit; compact the conversation and retry.",
     });
     const result = await recoverEmbeddedRunOverflow(
       makeInput({ promptError: null, assistantOverflowCandidate }),
@@ -200,6 +201,18 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(result).toEqual({ action: "retry" });
     expect(mocks.compact).toHaveBeenCalledOnce();
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
+  it("recovers message-count admission overflow reported as a prompt error", async () => {
+    const promptError = new Error(
+      "413 Chat history exceeds the 800-message limit; compact the conversation and retry.",
+    );
+
+    const result = await recoverEmbeddedRunOverflow(makeInput({ promptError }));
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=promptError"));
   });
 
   it("does not compact after an ambiguous bodyless 400", async () => {

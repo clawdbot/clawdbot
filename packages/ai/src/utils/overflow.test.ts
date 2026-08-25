@@ -65,6 +65,7 @@ describe("provider overflow messages", () => {
     'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"input length and `max_tokens` exceed context limit: 176312 + 32000 > 200000"}}',
     "code 1210: tokens in request more than max tokens allowed",
     "code 1261: Prompt exceeds max length",
+    "413 Chat history exceeds the 800-message limit; compact the conversation and retry.",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
@@ -75,6 +76,15 @@ describe("scoped overflow messages", () => {
     expect(
       matchesContextOverflowMessage(
         "input length 14295 tokens exceeds the model limit",
+        "failover-explicit",
+      ),
+    ).toBe(true);
+  });
+
+  it("recognizes message-count admission overflow in the strict failover scope", () => {
+    expect(
+      matchesContextOverflowMessage(
+        "Chat history exceeds the 1,200 message limit; compact the conversation and retry.",
         "failover-explicit",
       ),
     ).toBe(true);
