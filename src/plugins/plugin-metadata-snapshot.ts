@@ -5,6 +5,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import {
+  adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
 } from "./current-plugin-metadata-snapshot.js";
@@ -377,7 +378,19 @@ export function resolvePluginMetadataSnapshot(
         : {}),
     });
     if (!current) {
-      return loadPluginMetadataSnapshot(params);
+      const snapshot = loadPluginMetadataSnapshot(params);
+      // Scoped or caller-owned discovery must never become process-wide metadata.
+      if (
+        params.index === undefined &&
+        params.workspaceDir === undefined &&
+        params.pluginIds === undefined &&
+        params.pluginIdScope === undefined &&
+        snapshot.workspaceDir === undefined &&
+        snapshot.pluginIds === undefined
+      ) {
+        adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, params);
+      }
+      return snapshot;
     }
     if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;

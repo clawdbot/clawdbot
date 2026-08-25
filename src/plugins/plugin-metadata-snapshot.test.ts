@@ -487,6 +487,64 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
+  it("adopts a cold unscoped snapshot across equivalent selected-agent model configs", () => {
+    const config = {
+      agents: {
+        entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
+      },
+    };
+    const index = makeIndex();
+    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: index,
+      diagnostics: [],
+    });
+
+    const snapshot = resolvePluginMetadataSnapshot({ config, env: {} });
+
+    expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
+      snapshot,
+    );
+    expect(
+      resolvePluginMetadataSnapshot({
+        config: {
+          agents: {
+            entries: { support: { models: { "openai/support": { alias: "Support" } } } },
+          },
+        },
+        env: {},
+      }),
+    ).toBe(snapshot);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { scope: "workspace", options: { workspaceDir: "/workspace" } },
+    { scope: "plugin", options: { pluginIds: ["demo"] } },
+    { scope: "empty plugin", options: { pluginIds: [] } },
+    { scope: "caller-owned index", options: { index: makeIndex() } },
+    { scope: "current bypass", options: { allowCurrent: false } },
+    { scope: "persisted bypass", options: { preferPersisted: false } },
+    { scope: "state override", options: { stateDir: "/state" } },
+  ])("does not publish a cold $scope snapshot as process metadata", ({ options }) => {
+    const config = {};
+    const index = makeIndex();
+    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: index,
+      diagnostics: [],
+    });
+
+    const first = resolvePluginMetadataSnapshot({ config, env: {}, ...options });
+    const second = resolvePluginMetadataSnapshot({ config, env: {}, ...options });
+
+    expect(second).not.toBe(first);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("propagates the current-snapshot bypass to the registry reader", () => {
     const config = {};
     const index = makeIndex();

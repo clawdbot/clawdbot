@@ -14,7 +14,7 @@ import {
 } from "../plugins/plugin-config-trust.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 
@@ -175,7 +175,7 @@ export function resolveProviderAuthAliasMap(
       });
       return currentSnapshot;
     })() ??
-    loadPluginMetadataSnapshot({
+    resolvePluginMetadataSnapshot({
       config: config ?? {},
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       env,
