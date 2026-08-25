@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
 import { readCodexMcpToolConnectorId, readCodexMcpToolUiVisibility } from "./mcp-tool-metadata.js";
-import type { ResourceReadResult } from "./protocol-mcp.js";
 import type { CodexMcpServerStatus, CodexThreadItem, JsonObject, JsonValue } from "./protocol.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 
@@ -149,17 +148,20 @@ function createNativeMcpRuntime(params: {
     readResource: async (serverName, uri) => {
       // Codex scopes and echoes originCallId only for its shared codex_apps server.
       // Ordinary MCP servers intentionally return no origin correlation.
-      const isCodexAppsServer = serverName === "codex_apps";
-      const response = params.client.request("mcpServer/resource/read", {
+      const isCodexAppsServer = serverName === CODEX_APPS_MCP_SERVER;
+      const response = await params.client.request("mcpServer/resource/read", {
         threadId: params.threadId,
         ...(isCodexAppsServer ? { originCallId: params.originCallId } : {}),
         server: serverName,
         uri,
         ...(params.connectorId ? { connectorId: params.connectorId } : {}),
       });
-      return isCodexAppsServer
-        ? await readCorrelatedMcpResource(params.originCallId, response)
-        : await response;
+      if (isCodexAppsServer && response.originCallId !== params.originCallId) {
+        throw new Error(
+          `Codex MCP resource response originCallId mismatch: expected ${params.originCallId}, received ${response.originCallId}`,
+        );
+      }
+      return response;
     },
     listResources: async (serverName) => {
       const status = (await loadStatuses()).find((entry) => entry.name === serverName);
@@ -172,19 +174,6 @@ function createNativeMcpRuntime(params: {
     dispose: async () => {},
   };
   return runtime;
-}
-
-async function readCorrelatedMcpResource(
-  originCallId: string,
-  responsePromise: Promise<ResourceReadResult>,
-): Promise<ResourceReadResult> {
-  const response = await responsePromise;
-  if (response.originCallId !== originCallId) {
-    throw new Error(
-      `Codex MCP resource response originCallId mismatch: expected ${originCallId}, received ${response.originCallId}`,
-    );
-  }
-  return response;
 }
 
 export function createCodexNativeMcpAppResultDetailsPreparer(params: {
@@ -212,28 +201,20 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
       originCallId: item.id,
       ...(connectorId ? { connectorId } : {}),
     });
-    const catalog = await runtime.getCatalog();
-    const connectorIdsByToolName =
-      serverName === CODEX_APPS_MCP_SERVER
-        ? new Map(
-            (await runtime.listTools?.(serverName))?.tools.map((tool) => [
-              tool.name,
-              readCodexMcpToolConnectorId(tool),
-            ]),
-          )
-        : undefined;
+    const tools = (await runtime.listTools?.(serverName))?.tools ?? [];
     const allowedAppToolNames = new Set(
-      catalog.tools
-        .filter(
-          (tool) =>
-            tool.serverName === serverName &&
-            (tool.uiVisibility === undefined || tool.uiVisibility.includes("app")) &&
-            (connectorIdsByToolName === undefined ||
-              connectorIdsByToolName.get(tool.toolName) === connectorId),
-        )
-        .map((tool) => tool.toolName),
+      tools
+        .filter((tool) => {
+          const uiVisibility = readCodexMcpToolUiVisibility(tool);
+          return (
+            (uiVisibility === undefined || uiVisibility.includes("app")) &&
+            (serverName !== CODEX_APPS_MCP_SERVER ||
+              readCodexMcpToolConnectorId(tool) === connectorId)
+          );
+        })
+        .map((tool) => tool.name),
     );
-    if (allowedAppToolNames.size === 0) {
+    if (!allowedAppToolNames.has(toolName)) {
       return undefined;
     }
     return await prepareHarnessNativeMcpAppPreview({

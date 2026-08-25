@@ -119,6 +119,29 @@ describe("Codex app-server client runtime", () => {
     });
   });
 
+  it("bounds token refresh at the Codex external-auth request boundary", async () => {
+    vi.useFakeTimers();
+    mocks.refreshAuth.mockImplementationOnce(() => new Promise(() => {}));
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+
+    harness.send({
+      id: "refresh-timed-out",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "expired" },
+    });
+
+    await vi.advanceTimersByTimeAsync(8_999);
+    expect(harness.writes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
+      id: "refresh-timed-out",
+      error: { message: expect.stringContaining("token refresh timed out") },
+    });
+  });
+
   it("rejects a refreshed token from a different ChatGPT workspace", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

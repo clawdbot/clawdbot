@@ -15,8 +15,6 @@ const OAUTH_TOKEN_SSRF_POLICY = {
   hostnameAllowlist: ["auth.openai.com"],
 } satisfies SsrFPolicy;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
-// Codex cancels external-auth refresh requests after 10s; leave time to return the result.
-const TOKEN_REFRESH_REQUEST_TIMEOUT_MS = 9_000;
 const OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
@@ -181,7 +179,7 @@ export async function refreshOpenAIAccessToken(
   refreshToken: string,
   options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
-  const timeoutMs = options.timeoutMs ?? TOKEN_REFRESH_REQUEST_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
   try {
     const response = await postTokenForm(
       new URLSearchParams({

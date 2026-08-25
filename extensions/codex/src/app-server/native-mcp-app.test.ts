@@ -235,18 +235,17 @@ describe("Codex native MCP Apps", () => {
       attempt: createAttempt(),
     });
 
-    await expect(
-      prepare?.({
-        id: "call-calendar",
-        type: "mcpToolCall",
-        server: "codex_apps",
-        tool: "calendar_read",
-        status: "completed",
-        appContext: { connectorId: "calendar", resourceUri: "ui://calendar/widget.html" },
-        arguments: {},
-        result: { content: [{ type: "text", text: "Calendar ready." }] },
-      } as never),
-    ).resolves.toBeDefined();
+    const hostedItem = {
+      id: "call-calendar",
+      type: "mcpToolCall",
+      server: "codex_apps",
+      tool: "calendar_read",
+      status: "completed",
+      appContext: { connectorId: "calendar", resourceUri: "ui://calendar/widget.html" },
+      arguments: {},
+      result: { content: [{ type: "text", text: "Calendar ready." }] },
+    };
+    await expect(prepare?.(hostedItem as never)).resolves.toBeDefined();
 
     const previewParams = vi.mocked(prepareHarnessNativeMcpAppPreview).mock.lastCall?.[0];
     expect(previewParams?.allowedAppToolNames).toEqual(
@@ -266,6 +265,18 @@ describe("Codex native MCP Apps", () => {
         }),
       ]),
     });
+
+    const previousResourceReadCount = request.mock.calls.filter(
+      ([method]) => method === "mcpServer/resource/read",
+    ).length;
+    for (const tool of ["calendar_model_only", "drive_delete", "unattributed"]) {
+      await expect(
+        prepare?.({ ...hostedItem, id: `call-denied-${tool}`, tool } as never),
+      ).resolves.toBeUndefined();
+    }
+    expect(
+      request.mock.calls.filter(([method]) => method === "mcpServer/resource/read"),
+    ).toHaveLength(previousResourceReadCount);
   });
 
   it("does not grant a hosted widget authority without an originating connector", async () => {

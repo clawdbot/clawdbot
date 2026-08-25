@@ -422,7 +422,7 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
-  it("finishes token refresh before the Codex external-auth deadline", async () => {
+  it("preserves the shared 30-second token-refresh deadline", async () => {
     mockTokenResponse({
       access_token: "renewed-access-token",
       refresh_token: "rotated-refresh-token",
@@ -432,9 +432,8 @@ describe("OpenAI Codex OAuth flow", () => {
     await refreshOpenAIAccessToken("existing-refresh-token");
 
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      expect.objectContaining({ timeoutMs: 30_000 }),
     );
-    expect(ssrfMocks.fetchWithSsrFGuard.mock.calls[0]?.[0].timeoutMs).toBeLessThan(10_000);
   });
 });
 

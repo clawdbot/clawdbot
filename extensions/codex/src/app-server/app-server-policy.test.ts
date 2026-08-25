@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
@@ -58,29 +57,37 @@ describe("Codex app-server policy", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("shares only an in-flight effective Guardian config read", async () => {
-    const firstRead = createDeferred<{
-      config: { model_provider: string };
-      origins: Record<string, never>;
-    }>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(firstRead.promise)
-      .mockResolvedValue({ config: { model_provider: "openai" }, origins: {} });
+  it("keeps concurrent reviewer attestations independent when one run aborts", async () => {
+    const aborted = new AbortController();
+    const healthy = new AbortController();
+    const abortError = new Error("first run canceled");
+    const request = vi.fn((_method: string, _params: unknown, options: { signal?: AbortSignal }) =>
+      options.signal === aborted.signal
+        ? new Promise((_resolve, reject) => {
+            options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+              once: true,
+            });
+          })
+        : Promise.resolve({ config: { model_provider: "openai" }, origins: {} }),
+    );
     const params = {
       client: { request } as never,
       approvalsReviewer: "auto_review",
       cwd: "/workspace",
     } as const;
 
-    const first = assertCodexModelBackedReviewerEffectiveConfig(params);
-    const concurrent = assertCodexModelBackedReviewerEffectiveConfig(params);
-    expect(request).toHaveBeenCalledOnce();
-    firstRead.resolve({ config: { model_provider: "openai" }, origins: {} });
-    await Promise.all([first, concurrent]);
-
-    await assertCodexModelBackedReviewerEffectiveConfig(params);
+    const first = assertCodexModelBackedReviewerEffectiveConfig({
+      ...params,
+      signal: aborted.signal,
+    });
+    const second = assertCodexModelBackedReviewerEffectiveConfig({
+      ...params,
+      signal: healthy.signal,
+    });
     expect(request).toHaveBeenCalledTimes(2);
+    const canceled = expect(first).rejects.toBe(abortError);
+    aborted.abort(abortError);
+    await Promise.all([canceled, expect(second).resolves.toBeUndefined()]);
   });
 
   it("revalidates Guardian trust across calls and workspaces on one Codex process", async () => {

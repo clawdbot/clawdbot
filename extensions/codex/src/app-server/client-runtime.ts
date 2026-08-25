@@ -5,6 +5,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServiceTier } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import type { CodexAppServerAuthProfileLookup } from "./session-binding.js";
+import { withTimeout } from "./timeout.js";
 
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
   agentDir: string;
@@ -44,6 +45,8 @@ export type CodexAppServerLiveThreadOwnership = {
 const CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS = 30 * 60_000;
 /** Native-child parents are active ownership, so only otherwise-idle threads count against this cap. */
 const CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE = 64;
+/** Return a deterministic error before Codex cancels its ten-second external-auth request. */
+const CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS = 9_000;
 
 const configuredClients = new WeakMap<CodexAppServerClient, ClientRuntime>();
 const physicalThreadReleases = new WeakMap<
@@ -108,15 +111,19 @@ export function ensureCodexAppServerClientRuntime(
       isJsonObject(request.params) && typeof request.params.previousAccountId === "string"
         ? request.params.previousAccountId.trim() || undefined
         : undefined;
-    const tokens = await refreshCodexAppServerAuthTokens({
-      agentDir: runtime.context.agentDir,
-      authProfileId: runtime.context.authProfileId,
-      ...(previousAccountId ? { previousAccountId } : {}),
-      ...(runtime.context.authProfileStore
-        ? { authProfileStore: runtime.context.authProfileStore }
-        : {}),
-      config: runtime.context.config,
-    });
+    const tokens = await withTimeout(
+      refreshCodexAppServerAuthTokens({
+        agentDir: runtime.context.agentDir,
+        authProfileId: runtime.context.authProfileId,
+        ...(previousAccountId ? { previousAccountId } : {}),
+        ...(runtime.context.authProfileStore
+          ? { authProfileStore: runtime.context.authProfileStore }
+          : {}),
+        config: runtime.context.config,
+      }),
+      CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
+      "Codex app-server ChatGPT token refresh timed out before its external-auth deadline",
+    );
     if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
       throw new Error("ChatGPT workspace changed during Codex token refresh.");
     }

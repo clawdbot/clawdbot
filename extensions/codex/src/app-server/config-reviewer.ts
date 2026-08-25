@@ -20,7 +20,6 @@ import type { CodexConfigReadParams, CodexConfigReadResponse } from "./protocol-
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
-const effectiveReviewerConfigInFlightByClient = new WeakMap<object, Map<string, Promise<void>>>();
 
 /** Cloud/system config can redirect reviews after local home/profile checks have passed. */
 export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
@@ -41,61 +40,32 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
   ) {
     return;
   }
-  const effectiveCwd = path.resolve(params.cwd);
-  const cachedClientAttestations = effectiveReviewerConfigInFlightByClient.get(params.client);
-  const clientAttestations = cachedClientAttestations ?? new Map<string, Promise<void>>();
-  if (!cachedClientAttestations) {
-    effectiveReviewerConfigInFlightByClient.set(params.client, clientAttestations);
+  const response = await params.client.request(
+    "config/read",
+    { cwd: path.resolve(params.cwd), includeLayers: false },
+    { signal: params.signal },
+  );
+  const effectiveConfig = readRecord(readRecord(response)?.config);
+  if (!effectiveConfig) {
+    throw new Error("Codex config/read returned an invalid model-backed reviewer config");
   }
-  let attestation = clientAttestations.get(effectiveCwd);
-  if (!attestation) {
-    attestation = params.client
-      .request(
-        "config/read",
-        { cwd: effectiveCwd, includeLayers: false },
-        { signal: params.signal },
-      )
-      .then((response) => {
-        const config = readRecord(response)?.config;
-        const effectiveConfig = readRecord(config);
-        if (!effectiveConfig) {
-          throw new Error("Codex config/read returned an invalid model-backed reviewer config");
-        }
-        const modelProvider = effectiveConfig.model_provider;
-        const providers = effectiveConfig.model_providers;
-        const providerRecords = providers == null ? undefined : readRecord(providers);
-        const provider = providerRecords?.openai;
-        const openAIProvider = provider == null ? undefined : readRecord(provider);
-        if (
-          (modelProvider != null && modelProvider !== "openai") ||
-          (providers != null && !providerRecords) ||
-          (provider != null && !openAIProvider) ||
-          !isTrustedOptionalReviewerEndpoint(
-            effectiveConfig.openai_base_url,
-            isNativeOpenAIBaseUrl,
-          ) ||
-          !isTrustedOptionalReviewerEndpoint(
-            effectiveConfig.chatgpt_base_url,
-            isNativeChatGPTBaseUrl,
-          ) ||
-          !isTrustedOptionalReviewerEndpoint(openAIProvider?.base_url, isNativeOpenAIBaseUrl)
-        ) {
-          throw new Error(
-            "Codex model-backed approval reviewer requires the running server to use a trusted OpenAI endpoint",
-          );
-        }
-      });
-    attestation = attestation.finally(() => {
-      if (clientAttestations.get(effectiveCwd) === attestation) {
-        clientAttestations.delete(effectiveCwd);
-        if (clientAttestations.size === 0) {
-          effectiveReviewerConfigInFlightByClient.delete(params.client);
-        }
-      }
-    });
-    clientAttestations.set(effectiveCwd, attestation);
+  const modelProvider = effectiveConfig.model_provider;
+  const providers = effectiveConfig.model_providers;
+  const providerRecords = providers == null ? undefined : readRecord(providers);
+  const provider = providerRecords?.openai;
+  const openAIProvider = provider == null ? undefined : readRecord(provider);
+  if (
+    (modelProvider != null && modelProvider !== "openai") ||
+    (providers != null && !providerRecords) ||
+    (provider != null && !openAIProvider) ||
+    !isTrustedOptionalReviewerEndpoint(effectiveConfig.openai_base_url, isNativeOpenAIBaseUrl) ||
+    !isTrustedOptionalReviewerEndpoint(effectiveConfig.chatgpt_base_url, isNativeChatGPTBaseUrl) ||
+    !isTrustedOptionalReviewerEndpoint(openAIProvider?.base_url, isNativeOpenAIBaseUrl)
+  ) {
+    throw new Error(
+      "Codex model-backed approval reviewer requires the running server to use a trusted OpenAI endpoint",
+    );
   }
-  await attestation;
 }
 
 function isTrustedOptionalReviewerEndpoint(
