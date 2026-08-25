@@ -24,7 +24,9 @@ type ParsedWorkflow = {
   jobs?: Record<
     string,
     {
+      needs?: string | string[];
       outputs?: Record<string, string>;
+      permissions?: Record<string, string>;
       steps?: Array<{
         env?: Record<string, string>;
         if?: string;
@@ -134,6 +136,7 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
 function resolveFocusedProducer(
   options: {
     annotatedTag?: boolean;
+    boundary?: "docker" | "resolve";
     consumer?: "ancestor" | "current" | "diverged";
     missingTag?: boolean;
     producer?: "policy-drift" | "unanchored" | "workflow-drift";
@@ -168,8 +171,14 @@ function resolveFocusedProducer(
   }
   const producerRef = `release-publish/${producerSha.slice(0, 12)}-123`;
   const outputPath = join(root, "github-output");
+  const isDockerBoundary = options.boundary === "docker";
   const workflow = parse(
-    readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
+    readFileSync(
+      isDockerBoundary
+        ? ".github/workflows/docker-release.yml"
+        : ".github/workflows/openclaw-release-publish.yml",
+      "utf8",
+    ),
   ) as ParsedWorkflow;
   const run = {
     id: 123,
@@ -206,7 +215,13 @@ function resolveFocusedProducer(
         "    return 1",
         "  fi",
         "}",
-        namedStep(workflow, "resolve_release_target", "Resolve focused release evidence run").run,
+        namedStep(
+          workflow,
+          isDockerBoundary ? "resolve_build_provenance" : "resolve_release_target",
+          isDockerBoundary
+            ? "Revalidate focused evidence producer after Docker approval"
+            : "Resolve focused release evidence run",
+        ).run,
       ].join("\n"),
     ],
     {
@@ -221,6 +236,8 @@ function resolveFocusedProducer(
         MOCK_RUN_JSON: JSON.stringify(run),
         MOCK_TAG_JSON: JSON.stringify(tag),
         MOCK_TAG_MISSING: String(options.missingTag ?? false),
+        PRODUCER_WORKFLOW_FULL_REF: `refs/tags/${producerRef}`,
+        PRODUCER_WORKFLOW_SHA: producerSha,
         WORKFLOW_SHA: consumerSha,
       },
     },
@@ -271,6 +288,58 @@ describe("authorized beta focused evidence", () => {
     { name: "wrong producer attempt", options: { run: { run_attempt: 3 } } },
   ])("rejects $name before focused artifact download", ({ options }) => {
     expect(resolveFocusedProducer(options).result.status).not.toBe(0);
+  });
+
+  it("accepts the exact focused producer again after Docker approval", () => {
+    const { result } = resolveFocusedProducer({ boundary: "docker", consumer: "diverged" });
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it.each([
+    {
+      name: "moved producer tag",
+      options: { tag: { object: { sha: "f".repeat(40), type: "commit" } } },
+    },
+    { name: "missing producer tag", options: { missingTag: true } },
+    { name: "rerun producer", options: { run: { run_attempt: 3 } } },
+    { name: "substituted producer", options: { run: { head_sha: "f".repeat(40) } } },
+    { name: "failed producer", options: { run: { conclusion: "failure" } } },
+  ])("rejects $name after Docker approval before registry access", ({ options }) => {
+    expect(resolveFocusedProducer({ ...options, boundary: "docker" }).result.status).not.toBe(0);
+  });
+
+  it("gates every Docker build on post-approval focused evidence revalidation", () => {
+    const docker = parse(
+      readFileSync(".github/workflows/docker-release.yml", "utf8"),
+    ) as ParsedWorkflow;
+    const gate = docker.jobs?.resolve_build_provenance;
+    if (!gate) {
+      throw new Error("Docker build provenance gate is missing");
+    }
+
+    expect(gate.needs).toContain("approve_docker_publish");
+    expect(gate.permissions).toMatchObject({
+      actions: "read",
+      attestations: "read",
+      contents: "read",
+    });
+    const names = (gate.steps ?? []).map((step) => step.name);
+    const revalidation = names.indexOf(
+      "Revalidate focused evidence producer after Docker approval",
+    );
+    const download = names.indexOf("Download focused release evidence after Docker approval");
+    const verification = names.indexOf("Verify focused release evidence after Docker approval");
+    const provenance = names.indexOf("Resolve shared build provenance");
+    expect(revalidation).toBeGreaterThan(-1);
+    expect(revalidation).toBeLessThan(download);
+    expect(download).toBeLessThan(verification);
+    expect(verification).toBeLessThan(provenance);
+
+    for (const jobName of ["build-amd64", "build-arm64"]) {
+      expect(docker.jobs?.[jobName]?.needs).toContain("resolve_build_provenance");
+    }
   });
 
   it("pins the exact beta.3 candidate, inventories, trust split, and repaired leaves", () => {

@@ -16,6 +16,26 @@ on:
         required: false
         default: ""
         type: string
+      focused_release_evidence_run_id:
+        description: Optional immutable authorized beta focused evidence producer run
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_run_attempt:
+        description: Exact previously verified focused evidence producer attempt
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_workflow_full_ref:
+        description: Exact previously verified focused evidence producer tag
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_workflow_sha:
+        description: Exact previously verified focused evidence producer SHA
+        required: false
+        default: ""
+        type: string
     outputs:
       version:
         description: Resolved Docker release version without the v prefix
@@ -178,6 +198,8 @@ jobs:
     if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
+      attestations: read
       contents: read
     outputs:
       built_at: ${{ steps.build_provenance.outputs.built_at }}
@@ -188,6 +210,95 @@ jobs:
         with:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout trusted focused evidence verifier
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-harness
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Revalidate focused evidence producer after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ inputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.focused_release_evidence_workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" =~ ^[1-9][0-9]*$ ||
+                ! "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ||
+                ! "${PRODUCER_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ||
+                ! "${PRODUCER_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ||
+                "${PRODUCER_WORKFLOW_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
+            echo "Focused evidence producer identity is missing or invalid after Docker approval." >&2
+            exit 1
+          fi
+          producer_ref="${PRODUCER_WORKFLOW_FULL_REF#refs/tags/}"
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOCUSED_RELEASE_EVIDENCE_RUN_ID}")"
+          if ! jq -e \
+            --arg run_id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --arg attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            --arg producer_ref "${producer_ref}" \
+            --arg producer_sha "${PRODUCER_WORKFLOW_SHA}" \
+            '.id == ($run_id | tonumber) and .run_attempt == ($attempt | tonumber) and
+             .name == "Authorized Beta Focused Validation" and
+             .path == ".github/workflows/authorized-beta-focused-validation.yml" and
+             .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and
+             .head_branch == $producer_ref and .head_sha == $producer_sha' \
+            <<<"${run_json}" >/dev/null; then
+            echo "Focused evidence producer changed after Docker approval." >&2
+            exit 1
+          fi
+          remote_producer_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${producer_ref}" \
+              --jq '.object | select(.type == "commit") | .sha'
+          )"
+          if [[ "${remote_producer_sha}" != "${PRODUCER_WORKFLOW_SHA}" ]]; then
+            echo "Focused evidence producer tag is missing, moved, or annotated after Docker approval." >&2
+            exit 1
+          fi
+
+      - name: Download focused release evidence after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ inputs.focused_release_evidence_run_attempt }}
+          path: ${{ runner.temp }}/authorized-beta-focused-evidence
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.focused_release_evidence_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify focused release evidence after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ inputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.focused_release_evidence_workflow_sha }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/authorized-beta-focused-evidence/evidence.json"
+          gh attestation verify "${evidence}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
+            --signer-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --deny-self-hosted-runners
+          node .release-harness/scripts/validate-authorized-beta-focused-evidence.mts verify \
+            --candidate-root . \
+            --artifact "${evidence}" \
+            --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
       - name: Resolve shared build provenance
         id: build_provenance
