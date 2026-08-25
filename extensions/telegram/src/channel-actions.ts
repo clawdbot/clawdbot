@@ -208,7 +208,9 @@ function describeTelegramMessageTool({
   if (discovery.isEnabled("reactions")) {
     schema.push({
       properties: createTelegramReactionEmojiSchema(),
-      actions: ["react"],
+      // The shared emoji parameter keeps react valid across channels; this
+      // contribution only adds Telegram-specific guidance for that parameter.
+      actions: [],
     });
   }
   if (discovery.isEnabled("sendMessage")) {

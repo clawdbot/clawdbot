@@ -514,12 +514,12 @@ describe("telegramMessageActions", () => {
       : discovery?.schema
         ? [discovery.schema]
         : [];
-    const reactionSchema = contributions.find((entry) => entry.actions?.includes("react"));
+    const reactionSchema = contributions.find((entry) => "emoji" in entry.properties);
     const emojiDescription = (
       reactionSchema?.properties.emoji as { description?: string } | undefined
     )?.description;
 
-    expect(reactionSchema?.actions).toEqual(["react"]);
+    expect(reactionSchema?.actions).toEqual([]);
     expect(reactionSchema?.properties.emoji).toMatchObject({
       type: "string",
       description: expect.stringContaining("custom_emoji_id"),
