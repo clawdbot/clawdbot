@@ -192,6 +192,58 @@ describe("tui session actions", () => {
     );
   });
 
+  it("retires the previous global agent before replacement history resolves", async () => {
+    const state = createBaseState({
+      currentAgentId: "research",
+      currentSessionKey: "global",
+      currentSessionId: "research-session",
+      activeChatRunId: "research-run",
+      pendingSubmit: acceptedSubmit("research-pending", "private draft"),
+      historyLoaded: true,
+      sessionInfo: { displayName: "Research secret", updatedAt: 100, verboseLevel: "full" },
+    });
+    sendPendingUser(state, "research-pending", "private draft");
+    const chatLog = new ChatLog();
+    chatLog.addUser("PRIVATE RESEARCH HISTORY");
+    const history = createDeferred<{
+      messages: unknown[];
+      sessionInfo: { sessionId: string };
+    }>();
+    const loadHistory = vi.fn(() => history.promise);
+    const invalidateRunOwnership = vi.fn();
+    const clearLocalRunIds = vi.fn();
+    const { setSession } = createTestSessionActions({
+      client: makeTuiBackend({ loadHistory }),
+      chatLog,
+      state,
+      invalidateRunOwnership,
+      clearLocalRunIds,
+      resolveSessionSelection: vi.fn((_raw?: string, agentId = state.currentAgentId) => ({
+        key: "global",
+        agentId,
+      })),
+    });
+
+    const switching = setSession("", "ops");
+
+    expect(state.currentAgentId).toBe("ops");
+    expect(state.currentSessionKey).toBe("global");
+    expect(state.currentSessionId).toBeNull();
+    expect(state.sessionInfo.displayName).toBeUndefined();
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingSubmit).toBeNull();
+    expect(state.historyLoaded).toBe(false);
+    expect(state.sessionProjection?.entries).toEqual([]);
+    expect(chatLog.render(120).join("\n")).not.toContain("PRIVATE RESEARCH HISTORY");
+    expect(invalidateRunOwnership).toHaveBeenCalledOnce();
+    expect(clearLocalRunIds).toHaveBeenCalledOnce();
+    expect(loadHistory).toHaveBeenCalledWith({ sessionKey: "global", agentId: "ops", limit: 200 });
+
+    history.resolve({ messages: [], sessionInfo: { sessionId: "ops-session" } });
+    await switching;
+    expect(state.currentSessionId).toBe("ops-session");
+  });
+
   it("returns success after applying a normalized fresh agent roster", async () => {
     const state = createBaseState({
       agents: [{ id: "cached", name: "Cached Agent" }],

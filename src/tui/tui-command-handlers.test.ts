@@ -35,7 +35,7 @@ type SelectableOverlay = {
   onSelect?: (item: { value: string; label?: string; description?: string }) => void;
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
-type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
+type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string, agentId?: string) => Promise<void>);
 type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
 type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
 type RefreshAgentsMock = ReturnType<typeof vi.fn> & (() => Promise<Result<void, string>>);
@@ -149,7 +149,13 @@ function createHarness(params?: {
     params?.runUsageCostCommand === null
       ? undefined
       : (params?.runUsageCostCommand ?? vi.fn().mockResolvedValue({ text: "💸 Usage cost" }));
-  const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
+  const setSession =
+    params?.setSession ??
+    (vi.fn(async (_key: string, agentId?: string) => {
+      if (agentId) {
+        state.currentAgentId = agentId;
+      }
+    }) as SetSessionMock);
   const addUser = vi.fn();
   const addPendingUser = vi.fn();
   const dropPendingUser = vi.fn();
@@ -484,7 +490,10 @@ describe("tui command handlers", () => {
       selector.onSelect?.({ value });
       await flushAsyncSelect();
 
-      expect(harness.setSession).toHaveBeenCalledExactlyOnceWith(session);
+      expect(harness.setSession).toHaveBeenCalledExactlyOnceWith(
+        session,
+        ...(command === "/agents" ? [value] : []),
+      );
       expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
     },
   );
@@ -1003,8 +1012,30 @@ describe("tui command handlers", () => {
     await handleCommand("/agent Work");
 
     expect(state.currentAgentId).toBe("work");
-    expect(setSession).toHaveBeenCalledWith("");
+    expect(setSession).toHaveBeenCalledWith("", "work");
     expect(addSystem).toHaveBeenCalledWith("agent set to work; use /openclaw to return");
+  });
+
+  it("lets the session owner observe the previous agent before switching a global session", async () => {
+    let ownerBeforeSelection: string | undefined;
+    const setSession = vi.fn(async (_key: string, agentId?: string) => {
+      ownerBeforeSelection = harness.state.currentAgentId;
+      if (agentId) {
+        harness.state.currentAgentId = agentId;
+      }
+    }) as SetSessionMock;
+    const harness = createHarness({
+      currentAgentId: "research",
+      currentSessionKey: "global",
+      setSession,
+    });
+
+    await harness.handleCommand("/agent OPS");
+
+    expect(ownerBeforeSelection).toBe("research");
+    expect(setSession).toHaveBeenCalledExactlyOnceWith("", "ops");
+    expect(harness.state.currentAgentId).toBe("ops");
+    expect(harness.addSystem).toHaveBeenCalledWith("agent set to ops; use /openclaw to return");
   });
 
   it("marks the generated runId as local before gateway events arrive", async () => {
