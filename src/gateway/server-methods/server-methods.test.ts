@@ -1460,7 +1460,7 @@ describe("projectChatDisplayMessages", () => {
   );
 
   it("projects raw validation-loop assistant errors as a generic safe failure", () => {
-    const result = projectRecentChatDisplayMessages([
+    const result = projectChatDisplayMessages([
       {
         role: "assistant",
         content: [

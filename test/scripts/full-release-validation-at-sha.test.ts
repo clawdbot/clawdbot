@@ -880,9 +880,9 @@ describe("full-release-validation-at-sha", () => {
       expect(artifactDownloads[1]?.index).toBeGreaterThan(parentPolls[1]?.index ?? Infinity);
       expect(artifactDownloads[1]?.index).toBeLessThan(parentPolls[2]?.index ?? -Infinity);
       expect(result.stdout).toContain("Parent run status: queued/pending");
-      expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
-        "refs/heads/main\nrefs/heads/release/2026.8.1",
-      );
+      expect(
+        runBareGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"]),
+      ).toBe("refs/heads/main\nrefs/heads/release/2026.8.1");
     } finally {
       fixture.cleanup();
     }
