@@ -9,6 +9,14 @@ import { extractLlamaServerArchive } from "./llama-server-extract.js";
 
 const tempRoots: string[] = [];
 
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -149,7 +157,7 @@ describe("extractLlamaServerArchive", () => {
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
       await fs.writeFile(path.join(buildDir, "llama-server"), "binary");
     });
-    const enteredStat = Promise.withResolvers<void>();
+    const enteredStat = createDeferred();
     let rejection: unknown;
     vi.useFakeTimers({ now: 1_000 });
     vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
@@ -158,9 +166,11 @@ describe("extractLlamaServerArchive", () => {
     });
     vi.spyOn(fs, "rm").mockResolvedValueOnce();
 
-    void extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }).catch((error) => {
-      rejection = error;
-    });
+    void extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }).catch(
+      (error: unknown) => {
+        rejection = error;
+      },
+    );
     await enteredStat.promise;
     await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
 
@@ -198,7 +208,7 @@ describe("extractLlamaServerArchive", () => {
       await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
       await fs.symlink("libllama.so.1", path.join(buildDir, "libllama.so"));
     });
-    const enteredCopy = Promise.withResolvers<void>();
+    const enteredCopy = createDeferred();
     const realCopyFile = fs.copyFile.bind(fs);
     vi.spyOn(archiveSdk, "extractArchive").mockImplementationOnce(async (params) => {
       const buildDir = path.join(params.destDir, "llama-build");

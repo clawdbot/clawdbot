@@ -82,7 +82,7 @@ async function readTarAliases(archivePath: string, deadlineMs: number): Promise<
       onReadEntry: (entry) => {
         try {
           entryCount += 1;
-          const entrySize = Number(entry.size);
+          const entrySize = entry.size;
           extractedBytes += entrySize;
           if (
             entryCount > MAX_TAR_PREFLIGHT_ENTRIES ||
@@ -92,7 +92,7 @@ async function readTarAliases(archivePath: string, deadlineMs: number): Promise<
             abort(new Error("llama-server archive exceeds the preflight entry limits"));
             return;
           }
-          const entryPath = String(entry.path);
+          const entryPath = entry.path;
           if (entry.type === "Link") {
             abort(new Error(`unsupported hard link in llama-server archive: ${entryPath}`));
             return;

@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "jszip": "3.10.1",
     "tar": "7.5.22"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "jszip": "3.10.1"
   },
   "openclaw": {
     "extensions": [
