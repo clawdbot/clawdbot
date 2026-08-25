@@ -762,8 +762,22 @@ jobs:
             echo "Focused evidence producer tag is missing, moved, or annotated." >&2
             exit 1
           fi
-          if ! git merge-base --is-ancestor "${producer_sha}" "${WORKFLOW_SHA}"; then
-            echo "Focused evidence producer tooling is not on the trusted publish workflow lineage." >&2
+          producer_workflow_path=".github/workflows/authorized-beta-focused-validation.yml"
+          producer_policy_path="scripts/authorized-beta-focused-policy.json"
+          for trusted_path in "${producer_workflow_path}" "${producer_policy_path}"; do
+            producer_blob="$(git rev-parse "${producer_sha}:${trusted_path}")"
+            consumer_blob="$(git rev-parse "${WORKFLOW_SHA}:${trusted_path}")"
+            if [[ "${producer_blob}" != "${consumer_blob}" ]]; then
+              echo "Focused evidence producer does not match the trusted ${trusted_path}." >&2
+              exit 1
+            fi
+          done
+          historical_tooling_sha="$(
+            git show "${WORKFLOW_SHA}:${producer_policy_path}" |
+              jq -er '.historicalToolingSha | select(type == "string" and test("^[a-f0-9]{40}$"))'
+          )"
+          if ! git merge-base --is-ancestor "${historical_tooling_sha}" "${producer_sha}"; then
+            echo "Focused evidence producer is not descended from the fixed authorized tooling." >&2
             exit 1
           fi
           {

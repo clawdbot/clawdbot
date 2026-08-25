@@ -85,6 +85,17 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
   writeFileSync(join(root, "published.txt"), "published\n");
+  const historicalToolingSha = commit(root, "historical tooling");
+  mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+  mkdirSync(join(root, "scripts"));
+  writeFileSync(
+    join(root, ".github", "workflows", "authorized-beta-focused-validation.yml"),
+    "name: Authorized Beta Focused Validation\n",
+  );
+  writeFileSync(
+    join(root, "scripts", "authorized-beta-focused-policy.json"),
+    JSON.stringify({ historicalToolingSha }),
+  );
   mkdirSync(join(root, "tests"));
   writeFileSync(join(root, "tests", "proof.test.ts"), "one\n");
   const baseCandidateSha = commit(root, "base");
@@ -103,6 +114,7 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
       ...readAuthorizedBetaFocusedPolicy(),
       baseCandidateSha,
       candidateSha,
+      historicalToolingSha,
       reviewedHeadSha: candidateSha,
       candidateTreeSha,
       baseTreeSha,
@@ -122,19 +134,38 @@ function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } 
 function resolveFocusedProducer(
   options: {
     annotatedTag?: boolean;
-    consumer?: "ancestor" | "current" | "non-ancestor";
+    consumer?: "ancestor" | "current" | "diverged";
     missingTag?: boolean;
+    producer?: "policy-drift" | "unanchored" | "workflow-drift";
     run?: Record<string, unknown>;
     tag?: Record<string, unknown>;
   } = {},
 ) {
   const { policy, root } = fixturePolicy();
-  const producerSha =
-    options.consumer === "current" || options.consumer === "non-ancestor"
-      ? policy.candidateSha
-      : policy.baseCandidateSha;
-  const consumerSha =
-    options.consumer === "non-ancestor" ? policy.baseCandidateSha : policy.candidateSha;
+  let producerSha = options.consumer === "current" ? policy.candidateSha : policy.baseCandidateSha;
+  const consumerSha = policy.candidateSha;
+  if (options.consumer === "diverged" || options.producer) {
+    if (options.producer === "unanchored") {
+      git(root, ["checkout", "--quiet", "--orphan", "unanchored-producer"]);
+    } else {
+      git(root, ["checkout", "--quiet", "--detach", policy.baseCandidateSha]);
+    }
+    if (options.producer === "policy-drift") {
+      writeFileSync(
+        join(root, "scripts", "authorized-beta-focused-policy.json"),
+        JSON.stringify({ historicalToolingSha: "f".repeat(40) }),
+      );
+    } else if (options.producer === "workflow-drift") {
+      writeFileSync(
+        join(root, ".github", "workflows", "authorized-beta-focused-validation.yml"),
+        "name: Untrusted Validation\n",
+      );
+    } else {
+      writeFileSync(join(root, "published.txt"), "protected producer branch\n");
+    }
+    producerSha = commit(root, "protected producer");
+    git(root, ["checkout", "--quiet", "--detach", consumerSha]);
+  }
   const producerRef = `release-publish/${producerSha.slice(0, 12)}-123`;
   const outputPath = join(root, "github-output");
   const workflow = parse(
@@ -198,7 +229,7 @@ function resolveFocusedProducer(
 }
 
 describe("authorized beta focused evidence", () => {
-  it.each(["ancestor", "current"] as const)(
+  it.each(["ancestor", "current", "diverged"] as const)(
     "accepts an exact protected focused producer from %s trusted tooling",
     (consumer) => {
       const { outputPath, producerRef, producerSha, result } = resolveFocusedProducer({ consumer });
@@ -212,7 +243,9 @@ describe("authorized beta focused evidence", () => {
   );
 
   it.each([
-    { name: "non-ancestor tooling", options: { consumer: "non-ancestor" as const } },
+    { name: "unanchored producer", options: { producer: "unanchored" as const } },
+    { name: "producer policy drift", options: { producer: "policy-drift" as const } },
+    { name: "producer workflow drift", options: { producer: "workflow-drift" as const } },
     {
       name: "moved producer tag",
       options: { tag: { object: { sha: "f".repeat(40), type: "commit" } } },
