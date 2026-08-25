@@ -311,6 +311,6 @@ flow:
             message: replay-safe QA checkpoint tool was removed before Code Mode catalog construction
         - call: assertNoGatewayLogSentinels
           args:
-            - sinceIndex:
+            - since:
                 ref: gatewayLogCursor
       detailsExpr: "`inboundMessageId=${inbound.id} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} deliveryRunIds=${checkpointDeliveryRunIds.join(',')} auditAnchorRunId=${auditAnchorIdentity.runId} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"
