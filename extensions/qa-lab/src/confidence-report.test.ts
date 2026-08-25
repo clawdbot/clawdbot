@@ -72,7 +72,6 @@ describe("qa confidence report", () => {
   it("passes strict zero-unknowns when every lane passes or has an allowed blocked verdict", async () => {
     await writeJson("tool-defaults/qa-suite-summary.json", {
       counts: { total: 20, passed: 18, skipped: 2, failed: 0 },
-      scenarios: [],
     });
     await writeJson("token/qa-runtime-token-efficiency-summary.json", {
       status: "estimated",
@@ -174,7 +173,6 @@ describe("qa confidence report", () => {
   it("does not let optional lanes block strict gates", async () => {
     await writeJson("required/qa-suite-summary.json", {
       counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
-      scenarios: [],
     });
 
     const report = await buildQaConfidenceReport({
@@ -310,7 +308,6 @@ describe("qa confidence report", () => {
   it("fails strict global pass for skipped suite rows until a backfill lane passes", async () => {
     const report = await buildStrictSuiteReport({
       counts: { total: 3, passed: 2, skipped: 1, failed: 0 },
-      scenarios: [],
     });
 
     expect(report.zeroUnknowns).toBe(true);
@@ -396,9 +393,24 @@ describe("qa confidence report", () => {
     expect(report.lanes[0]).toMatchObject({ status: "pass" });
   });
 
+  it.each([
+    [{ total: 1, passed: 1, failed: 0, skipped: 0 }, "count/scenario mismatch"],
+    [{ total: 3, passed: 2, failed: 0 }, "no executed scenarios"],
+  ] as const)(
+    "rejects positive counts with explicitly empty scenario rows",
+    async (counts, expectedDetail) => {
+      const report = await buildStrictSuiteReport({ counts, scenarios: [] });
+
+      expect(report.pass).toBe(false);
+      expect(report.globalPass).toBe(false);
+      expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+      expect(report.lanes[0]?.details).toContain(expectedDetail);
+    },
+  );
+
   it("infers skipped suite rows from totals and scenario status", async () => {
     for (const [artifact, expectedDetail] of [
-      [{ counts: { total: 3, passed: 2, failed: 0 }, scenarios: [] }, "counts.skipped=1"],
+      [{ counts: { total: 3, passed: 2, failed: 0 } }, "counts.skipped=1"],
       [
         {
           counts: { total: 2, passed: 2, failed: 0 },
@@ -533,7 +545,7 @@ describe("qa confidence report", () => {
 
   it("passes strict global pass when skipped suite rows are backfilled by a passing lane", async () => {
     const report = await buildStrictSuiteReport(
-      { counts: { total: 3, passed: 2, skipped: 1, failed: 0 }, scenarios: [] },
+      { counts: { total: 3, passed: 2, skipped: 1, failed: 0 } },
       true,
     );
 
@@ -561,7 +573,6 @@ describe("qa confidence report", () => {
           text: "OpenAI quota exceeded",
         },
       ],
-      scenarios: [],
     });
 
     const report = await buildQaConfidenceReport({
