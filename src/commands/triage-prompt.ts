@@ -67,7 +67,7 @@ export function renderTriagePrompt(params: {
     "",
     `- OpenClaw: ${VERSION}`,
     `- Platform: ${process.platform}`,
-    `- Node.js: ${process.versions.node}`,
+    `- Node.js: ${process.versions.node} (the runtime executing OpenClaw, which may differ from the shell default)`,
     "",
     "## Doctor findings",
     "",
