@@ -302,12 +302,18 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
+async function hasUserScopedSystemdGatewayService(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
+  return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
     process.platform !== "linux" ||
     resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env))
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
   ) {
     return;
   }
@@ -337,7 +343,8 @@ async function detectSystemdLingerFindings(
   if (
     process.platform !== "linux" ||
     resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env))
+    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
+    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
   ) {
     return [];
   }
