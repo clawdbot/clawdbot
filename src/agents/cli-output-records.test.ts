@@ -543,6 +543,19 @@ describe("parseCliOutput", () => {
 });
 
 describe("parseCliJsonl record usage", () => {
+  it("drops a record whose reset time cannot form a Date", () => {
+    expect(
+      parseClaudeCliRateLimit({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        parsed: {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "allowed", rateLimitType: "five_hour", resetsAt: 9e15 },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("synthesizes a window from the SDK-typed top-level shape", () => {
     expect(
       parseClaudeCliRateLimit({

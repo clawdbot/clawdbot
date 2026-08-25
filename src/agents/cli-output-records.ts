@@ -510,13 +510,15 @@ export function parseClaudeCliJsonlResult(params: {
 }
 
 const rateLimitStatusSchema = z.enum(["allowed", "allowed_warning", "rejected"]);
+// Largest unix-second value `Date` can represent; a larger reset would throw in the digest formatter.
+const rateLimitResetSchema = z.number().min(0).max(8_640_000_000_000);
 const claudeCliRateLimitRecordSchema = z.object({
   type: z.literal("rate_limit_event"),
   rate_limit_info: z.object({
     status: rateLimitStatusSchema,
     rateLimitType: z.string().optional(),
     utilization: z.number().min(0).max(1).optional(),
-    resetsAt: z.number().nonnegative().optional(),
+    resetsAt: rateLimitResetSchema.optional(),
     overageStatus: rateLimitStatusSchema.optional(),
     overageDisabledReason: z.string().optional(),
     isUsingOverage: z.boolean().optional(),
@@ -524,7 +526,7 @@ const claudeCliRateLimitRecordSchema = z.object({
     unifiedWindows: z
       .record(
         z.string(),
-        z.object({ utilization: z.number().min(0).max(1), resetsAt: z.number().nonnegative() }),
+        z.object({ utilization: z.number().min(0).max(1), resetsAt: rateLimitResetSchema }),
       )
       .optional(),
   }),
