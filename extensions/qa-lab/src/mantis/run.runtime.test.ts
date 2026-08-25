@@ -7,82 +7,12 @@ import { QA_EVIDENCE_FILENAME, buildQaSuiteEvidenceSummary } from "../evidence-s
 import { runMantisBeforeAfter } from "./run.runtime.js";
 import {
   failedCommandResult,
-  findSingleMantisGenerationErrorPath,
   requireArgAfter,
   successfulCommandResult,
   timedOutCommandResult,
   writeLegacyLaneSummary,
   worktreeListOutput,
 } from "./run.test-support.js";
-
-async function writePublishedGenerationSentinels(outputDir: string) {
-  const generationDir = path.join(outputDir, ".mantis-generations", "generation-old");
-  const generationPaths = {
-    baseline: path.join(generationDir, "baseline", "last-good.txt"),
-    candidate: path.join(generationDir, "candidate", "last-good.txt"),
-    comparison: path.join(generationDir, "comparison.json"),
-    manifest: path.join(generationDir, "mantis-evidence.json"),
-    report: path.join(generationDir, "mantis-report.md"),
-  };
-  const compatibilityPaths = {
-    baseline: path.join(outputDir, "baseline", "last-good.txt"),
-    candidate: path.join(outputDir, "candidate", "last-good.txt"),
-    comparison: path.join(outputDir, "comparison.json"),
-    manifest: path.join(outputDir, "mantis-evidence.json"),
-    report: path.join(outputDir, "mantis-report.md"),
-  };
-  await fs.mkdir(path.dirname(generationPaths.baseline), { recursive: true });
-  await fs.mkdir(path.dirname(generationPaths.candidate), { recursive: true });
-  await fs.mkdir(path.dirname(compatibilityPaths.baseline), { recursive: true });
-  await fs.mkdir(path.dirname(compatibilityPaths.candidate), { recursive: true });
-  await Promise.all(
-    [generationPaths, compatibilityPaths].flatMap((paths) =>
-      Object.entries(paths).map(async ([component, filePath]) => {
-        await fs.writeFile(filePath, `old ${component}`, "utf8");
-      }),
-    ),
-  );
-  await fs.writeFile(
-    path.join(outputDir, "mantis-current.json"),
-    `${JSON.stringify({ generation: ".mantis-generations/generation-old", schemaVersion: 1 })}\n`,
-    "utf8",
-  );
-  return { compatibilityPaths, generationPaths };
-}
-
-async function expectPublishedGenerationSentinels(
-  paths: Awaited<ReturnType<typeof writePublishedGenerationSentinels>>,
-) {
-  for (const view of [paths.generationPaths, paths.compatibilityPaths]) {
-    for (const [component, filePath] of Object.entries(view)) {
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(`old ${component}`);
-    }
-  }
-}
-
-async function expectImmutableGenerationSentinels(
-  paths: Awaited<ReturnType<typeof writePublishedGenerationSentinels>>,
-) {
-  for (const [component, filePath] of Object.entries(paths.generationPaths)) {
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(`old ${component}`);
-  }
-}
-
-async function expectNoMantisTransientEvidence(outputDir: string) {
-  const outputEntries = await fs.readdir(outputDir);
-  const siblingEntries = await fs.readdir(path.dirname(outputDir));
-  expect([
-    ...outputEntries.filter(
-      (entry) =>
-        entry.startsWith(".mantis-staged-") ||
-        entry.startsWith(".mantis-previous-") ||
-        entry.startsWith(".mantis-compat-"),
-    ),
-    ...siblingEntries.filter(
-      (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
-    ),
-  ]).toEqual([]);
-}
 
 describe("mantis before/after runtime", () => {
   let repoRoot: string;
@@ -557,9 +487,8 @@ describe("mantis before/after runtime", () => {
     }
   });
 
-  it("keeps one published comparison generation when the candidate lane fails", async () => {
+  it("writes top-level failure diagnostics when the candidate lane fails", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "candidate-failure");
-    const sentinels = await writePublishedGenerationSentinels(outputDir);
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
         if (path.basename(String(args[4])).startsWith("candidate-")) {
@@ -593,13 +522,14 @@ describe("mantis before/after runtime", () => {
       }),
     ).rejects.toThrow("candidate worktree-add");
 
-    await expectPublishedGenerationSentinels(sentinels);
-    await expectNoMantisTransientEvidence(outputDir);
+    await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toContain(
+      "candidate worktree-add",
+    );
+    await expect(fs.stat(path.join(outputDir, "baseline"))).resolves.toBeDefined();
   });
 
-  it("keeps the previous pointer when worktree cleanup fails", async () => {
+  it("retains the owned worktree and writes diagnostics when cleanup fails", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-failure");
-    const sentinels = await writePublishedGenerationSentinels(outputDir);
     let baselineWorktreeDir = "";
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
@@ -632,67 +562,10 @@ describe("mantis before/after runtime", () => {
       }),
     ).rejects.toThrow("baseline worktree cleanup left registered path");
 
-    await expectPublishedGenerationSentinels(sentinels);
-    await expectNoMantisTransientEvidence(outputDir);
+    await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toContain(
+      "baseline worktree cleanup left registered path",
+    );
     await expect(fs.stat(baselineWorktreeDir)).resolves.toBeDefined();
-  });
-
-  it("publishes without renaming a generation over the caller output directory", async () => {
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-failure");
-    const sentinels = await writePublishedGenerationSentinels(outputDir);
-    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
-      if (command === "git" && execution.stage === "worktree-add") {
-        await fs.mkdir(String(args[4]), { recursive: true });
-        return successfulCommandResult();
-      }
-      if (command === "pnpm" && execution.stage === "qa") {
-        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
-        return successfulCommandResult();
-      }
-      if (command === "git" && execution.stage === "worktree-cleanup") {
-        if (args[1] === "remove") {
-          await fs.rm(execution.cwd, { force: true, recursive: true });
-        }
-        return successfulCommandResult();
-      }
-      throw new Error(`unexpected ${execution.stage} command`);
-    });
-    const originalRename = fs.rename.bind(fs);
-    let directoryPromotionAttempted = false;
-    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
-      if (
-        String(source).includes(`${path.sep}.mantis-generations${path.sep}`) &&
-        path.resolve(String(target)) === outputDir
-      ) {
-        directoryPromotionAttempted = true;
-        throw new Error("generation directory promotion is forbidden");
-      }
-      await originalRename(source, target);
-    });
-
-    let result: Awaited<ReturnType<typeof runMantisBeforeAfter>>;
-    try {
-      result = await runMantisBeforeAfter({
-        baseline: "baseline-ref",
-        candidate: "candidate-ref",
-        commandRunner: runner,
-        outputDir: ".artifacts/qa-e2e/mantis/publish-failure",
-        repoRoot,
-        skipBuild: true,
-        skipInstall: true,
-      });
-    } finally {
-      rename.mockRestore();
-    }
-
-    expect(directoryPromotionAttempted).toBe(false);
-    expect(result).toBeDefined();
-    if (!result) {
-      throw new Error("Mantis publication did not return a result");
-    }
-    await expect(fs.stat(result.outputDir)).resolves.toBeDefined();
-    await expectImmutableGenerationSentinels(sentinels);
-    await expectNoMantisTransientEvidence(outputDir);
   });
 
   it("accepts an already-absent unregistered worktree after Git cleanup fails", async () => {
@@ -770,9 +643,7 @@ describe("mantis before/after runtime", () => {
     if (result.status === "rejected") {
       expect(result.error).toBeInstanceOf(AggregateError);
       const aggregate = result.error as AggregateError;
-      const errorPath = await findSingleMantisGenerationErrorPath(
-        path.join(repoRoot, ".artifacts/qa-e2e/mantis/aggregate-failure"),
-      );
+      const errorPath = path.join(repoRoot, ".artifacts/qa-e2e/mantis/aggregate-failure/error.txt");
       expect(aggregate.message).toContain("Mantis lane failed and worktree cleanup failed");
       expect(aggregate.message).toContain(errorPath);
       expect(aggregate.cause).toBeInstanceOf(Error);

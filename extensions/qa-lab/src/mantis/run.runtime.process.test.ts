@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner } from "./run-command.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
-import { findSingleMantisGenerationErrorPath } from "./run.test-support.js";
 
 const commandTimeouts = {
   build: 5_000,
@@ -575,7 +574,7 @@ process.exit(result.status ?? 1);
         );
         expect(worktreeEntries).toHaveLength(1);
         await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
-        const errorPath = await findSingleMantisGenerationErrorPath(outputDir);
+        const errorPath = path.join(outputDir, "error.txt");
         await expect(fs.readFile(errorPath, "utf8")).resolves.toContain(
           `baseline qa timed out after ${qaTimeoutMs}ms`,
         );

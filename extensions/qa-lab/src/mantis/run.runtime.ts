@@ -8,7 +8,6 @@ import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-p
 import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyMantisLaneArtifact,
-  publishMantisRunOutput,
   readMantisLaneResult,
   type LaneResult,
 } from "./run-artifacts.runtime.js";
@@ -142,16 +141,12 @@ function createMantisFailureArtifactWriteError(params: {
 
 async function throwMantisRunFailure(params: {
   error: unknown;
-  generationDir: string;
-  generationRelative: string;
+  outputDir: string;
   outputRoot: Pick<Awaited<ReturnType<typeof root>>, "write">;
 }): Promise<never> {
-  const errorPath = path.join(params.generationDir, "error.txt");
+  const errorPath = path.join(params.outputDir, "error.txt");
   try {
-    await params.outputRoot.write(
-      path.posix.join(params.generationRelative, "error.txt"),
-      `${formatMantisFailure(params.error)}\n`,
-    );
+    await params.outputRoot.write("error.txt", `${formatMantisFailure(params.error)}\n`);
   } catch (artifactError) {
     throw createMantisFailureArtifactWriteError({
       artifactError,
@@ -162,9 +157,15 @@ async function throwMantisRunFailure(params: {
   throw attachMantisFailureArtifact(params.error, errorPath);
 }
 
+async function copyMantisLaneOutput(sourceDir: string, targetDir: string): Promise<void> {
+  await fs.rm(targetDir, { force: true, recursive: true });
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.cp(sourceDir, targetDir, { recursive: true });
+}
+
 async function runLane(params: {
-  generationDir: string;
   lane: "baseline" | "candidate";
+  outputDir: string;
   ref: string;
   repoRoot: string;
   runId: string;
@@ -187,7 +188,7 @@ async function runLane(params: {
 }) {
   const worktreeDir = path.join(params.worktreeRoot, `${params.lane}-${params.runId}`);
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
-  const generationLaneDir = path.join(params.generationDir, params.lane);
+  const publishedLaneDir = path.join(params.outputDir, params.lane);
   const worktreeAddArgs = ["worktree", "add", "--detach", "--", worktreeDir, params.ref];
   const worktreeAddExecution = {
     cwd: params.repoRoot,
@@ -296,13 +297,8 @@ async function runLane(params: {
       lane: params.lane,
       runner: params.runner,
     });
-    // Copy into the fresh immutable generation before Git removes its worktree.
-    // A raced source can fail or copy inconsistently, but is never relocated or deleted here.
-    await fs.cp(path.join(worktreeDir, worktreeOutputDir), generationLaneDir, {
-      errorOnExist: true,
-      force: false,
-      recursive: true,
-    });
+    // Git owns worktree removal, so preserve the lane artifacts before cleanup.
+    await copyMantisLaneOutput(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
   } catch (error) {
     workloadFailed = true;
     workloadError = error;
@@ -344,7 +340,7 @@ async function runLane(params: {
   }
   const result = await readMantisLaneResult({
     laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
-    publishedLaneDir: generationLaneDir,
+    publishedLaneDir,
     scenario: params.scenario,
   });
   const copiedScreenshot = await copyMantisLaneArtifact({
@@ -397,18 +393,15 @@ export async function runMantisBeforeAfter(
   const runner = opts.commandRunner ?? defaultMantisCommandRunner;
   const outputRoot = await root(outputDir);
   const runId = `${process.pid}-${randomUUID()}`;
-  const generationRelative = path.posix.join(".mantis-generations", `generation-${runId}`);
-  await outputRoot.mkdir(generationRelative);
-  const generationDir = path.join(outputDir, ...generationRelative.split(path.posix.sep));
   const worktreeRoot = await ensureRepoBoundDirectory(
     repoRoot,
     `${outputDir}.worktrees`,
     "Mantis before/after worktree directory",
     { mode: 0o755 },
   );
-  const generationComparisonPath = path.join(generationDir, "comparison.json");
-  const generationManifestPath = path.join(generationDir, "mantis-evidence.json");
-  const generationReportPath = path.join(generationDir, "mantis-report.md");
+  const comparisonPath = path.join(outputDir, "comparison.json");
+  const manifestPath = path.join(outputDir, "mantis-evidence.json");
+  const reportPath = path.join(outputDir, "mantis-report.md");
 
   try {
     await removeLegacyMantisWorktrees({
@@ -426,8 +419,8 @@ export async function runMantisBeforeAfter(
       skipInstall: opts.skipInstall ?? false,
     };
     const baselineResult = await runLane({
-      generationDir,
       lane: "baseline",
+      outputDir,
       ref: baseline,
       repoRoot,
       runId,
@@ -439,8 +432,8 @@ export async function runMantisBeforeAfter(
       opts: commonOpts,
     });
     const candidateResult = await runLane({
-      generationDir,
       lane: "candidate",
+      outputDir,
       ref: candidate,
       repoRoot,
       runId,
@@ -472,13 +465,12 @@ export async function runMantisBeforeAfter(
       scenario,
       transport,
     } satisfies MantisComparison;
-    await fs.writeFile(
-      generationComparisonPath,
-      `${JSON.stringify(comparison, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.writeFile(
-      generationReportPath,
+    if (opts.signal?.aborted) {
+      throw new Error("Mantis artifact processing aborted", { cause: opts.signal.reason });
+    }
+    await outputRoot.write("comparison.json", `${JSON.stringify(comparison, null, 2)}\n`);
+    await outputRoot.write(
+      "mantis-report.md",
       renderReport({
         baseline: baselineResult,
         candidate: candidateResult,
@@ -486,44 +478,32 @@ export async function runMantisBeforeAfter(
         outputDir,
         scenarioConfig,
       }),
-      "utf8",
     );
-    await fs.writeFile(
-      generationManifestPath,
+    await outputRoot.write(
+      "mantis-evidence.json",
       `${JSON.stringify(
         buildEvidenceManifest({
           baseline: baselineResult,
           candidate: candidateResult,
           comparison,
-          outputDir: generationDir,
+          outputDir,
           scenarioConfig,
         }),
         null,
         2,
       )}\n`,
-      "utf8",
     );
-    if (opts.signal?.aborted) {
-      throw new Error("Mantis artifact publication aborted", { cause: opts.signal.reason });
-    }
-    await publishMantisRunOutput({
-      generationDir,
-      outputDir,
-      outputRoot,
-      signal: opts.signal,
-    });
     return {
-      comparisonPath: path.join(outputDir, "comparison.json"),
-      manifestPath: path.join(outputDir, "mantis-evidence.json"),
+      comparisonPath,
+      manifestPath,
       outputDir,
-      reportPath: path.join(outputDir, "mantis-report.md"),
+      reportPath,
       status: comparison.pass ? "pass" : "fail",
     };
   } catch (error) {
     return throwMantisRunFailure({
       error,
-      generationDir,
-      generationRelative,
+      outputDir,
       outputRoot,
     });
   }

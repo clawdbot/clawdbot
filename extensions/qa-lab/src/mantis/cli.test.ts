@@ -93,7 +93,7 @@ it.each([
       cleanupComplete = true;
       throw attachMantisFailureArtifact(
         new Error("Mantis artifact processing aborted", { cause: runtimeSignal.reason }),
-        "/tmp/mantis/.mantis-generations/generation-interrupted/error.txt",
+        "/tmp/mantis/error.txt",
       );
     });
 
@@ -126,7 +126,7 @@ it.each([
       expect(runtimeSignal.aborted).toBe(true);
       expect(cleanupComplete).toBe(true);
       const stderr = stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
-      expect(stderr).toContain("/tmp/mantis/.mantis-generations/generation-interrupted/error.txt");
+      expect(stderr).toContain("/tmp/mantis/error.txt");
       expect(process.exitCode).toBe(exitCode);
       for (const name of INTERRUPT_SIGNALS) {
         expect(new Set(process.listeners(name))).toEqual(listenersBefore.get(name));

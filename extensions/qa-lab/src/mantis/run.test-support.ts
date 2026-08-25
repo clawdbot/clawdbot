@@ -44,38 +44,6 @@ export function timedOutCommandResult(): StubCommandResult {
   };
 }
 
-export async function findSingleMantisGenerationErrorPath(outputDir: string): Promise<string> {
-  const generationsDir = path.join(outputDir, ".mantis-generations");
-  const generationEntries = await fs.readdir(generationsDir, { withFileTypes: true });
-  const errorPaths = (
-    await Promise.all(
-      generationEntries
-        .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-        .map(async (entry) => {
-          const errorPath = path.join(generationsDir, entry.name, "error.txt");
-          try {
-            const stat = await fs.lstat(errorPath);
-            return stat.isFile() ? errorPath : undefined;
-          } catch (error) {
-            if (
-              typeof error === "object" &&
-              error !== null &&
-              "code" in error &&
-              error.code === "ENOENT"
-            ) {
-              return undefined;
-            }
-            throw error;
-          }
-        }),
-    )
-  ).filter((errorPath): errorPath is string => errorPath !== undefined);
-  if (errorPaths.length !== 1) {
-    throw new Error(`expected exactly one Mantis generation error, found ${errorPaths.length}`);
-  }
-  return expectDefined(errorPaths[0], "Mantis generation error path");
-}
-
 export async function writeLegacyLaneSummary(params: {
   args: readonly string[];
   scenario: string;

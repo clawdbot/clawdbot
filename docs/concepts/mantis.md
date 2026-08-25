@@ -101,21 +101,16 @@ each checkout (unless skipped), then runs
 `pnpm openclaw qa discord --scenario <id> --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --allow-failures`
 against each worktree. Each lane writes `discord-qa-reaction-timelines.json`
 plus a `<scenario-id>-timeline.html`/`.png` pair. Before asking Git to remove
-the checkout, the runner copies the lane evidence into a fresh immutable
-generation under `<output-dir>/.mantis-generations/`.
+the checkout, the runner copies the lane evidence into the stable top-level
+`<output-dir>/baseline/` or `<output-dir>/candidate/` directory.
 
 After both lanes finish, the runner writes `comparison.json`,
-`mantis-report.md`, and `mantis-evidence.json` in that generation. Publication
-is serialized per output container. The runner first refreshes the documented
-top-level `baseline/`, `candidate/`, report, manifest, and comparison paths as
-a compatibility snapshot, then atomically replaces
-`<output-dir>/mantis-current.json`. Existing automation can continue reading
-the top-level paths. Readers that need a crash-consistent view across several
-artifacts should resolve the `generation` field in `mantis-current.json`
-instead; the top-level compatibility snapshot spans several filesystem
-entries. Existing unrelated files in the output container and older
-generations are preserved. The command exits nonzero if the comparison did not
-pass (baseline `fail` and candidate `pass`).
+`mantis-report.md`, and `mantis-evidence.json` directly in `<output-dir>`.
+Existing automation continues reading those stable paths. Use a distinct
+output directory for each concurrently running command; publication to one
+shared output directory is not serialized. Existing unrelated top-level files
+are preserved. The command exits nonzero if the comparison did not pass
+(baseline `fail` and candidate `pass`).
 
 The second Discord scenario (`discord-thread-reply-filepath-attachment`) posts
 a parent message with the driver bot, creates a real thread, calls the SUT's
@@ -342,25 +337,16 @@ Artifact kinds: `timeline` (deterministic before/after screenshot),
 GIF from the recording), `motionClip` (motion-trimmed MP4), `fullVideo` (full
 recording), `metadata` (JSON/log sidecar), `report` (Markdown report).
 
-For `qa mantis run`, the stable output container and its current immutable
-generation have this layout:
+For `qa mantis run`, the stable output container has this layout:
 
 ```text
 .artifacts/qa-e2e/mantis/<run-id>/
-  mantis-current.json
+  error.txt # failures only
   mantis-report.md
   mantis-evidence.json
   baseline/
   candidate/
   comparison.json
-  .mantis-generations/
-    generation-<pid>-<uuid>/
-      error.txt # failures only
-      mantis-report.md
-      mantis-evidence.json
-      baseline/
-      candidate/
-      comparison.json
 .artifacts/qa-e2e/mantis/<run-id>.worktrees/
   baseline-<pid>-<uuid>/
   candidate-<pid>-<uuid>/
@@ -372,20 +358,14 @@ If `git worktree add` fails before registration, Mantis can leave its empty,
 uniquely named prepared directory instead of deleting through a pathname that
 could have been replaced.
 
-Each failed attempt writes `error.txt` inside its own immutable generation. The
-thrown error, or the concise stderr diagnostic for an expected CLI interrupt,
-reports that exact path. Successful publication only atomically replaces
-`mantis-current.json`; it does not erase earlier failure diagnostics. A normal
-publication failure rolls the top-level compatibility snapshot back and leaves
-the pointer on the previous complete generation. A process crash can interrupt
-the multi-entry compatibility refresh, so pointer-based readers remain the
-authoritative crash-consistent path. Mantis does not recursively delete a
-worktree after Git no longer owns its registration: if cleanup fails, inspect
-the retained unique directory under `<output-dir>.worktrees/` together with the
-reported generation `error.txt`, then remove it through Git after resolving the
-failure. If an owned path disappears while its Git registration remains,
-cleanup fails closed instead of recreating the path. At startup, Mantis also
-checks the exact historical
+Each failed attempt writes `<output-dir>/error.txt`. The thrown error, or the
+concise stderr diagnostic for an expected CLI interrupt, reports that exact
+path. Mantis does not recursively delete a worktree after Git no longer owns
+its registration: if cleanup fails, inspect the retained unique directory
+under `<output-dir>.worktrees/` together with the reported `error.txt`, then
+remove it through Git after resolving the failure. If an owned path disappears
+while its Git registration remains, cleanup fails closed instead of recreating
+the path. At startup, Mantis also checks the exact historical
 `<output-dir>/worktrees/baseline` and `<output-dir>/worktrees/candidate` paths
 and removes them through Git when they are still registered and present. Other
 registered or unregistered entries in that legacy directory are left

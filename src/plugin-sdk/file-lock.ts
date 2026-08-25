@@ -32,8 +32,6 @@ export type FileLockOptions = {
    * Reuse one key only within that call chain; omit it for ordinary contention.
    */
   reentrantOwner?: string;
-  /** Cancels lock contention waits without leaving a late-acquired lock held. */
-  signal?: AbortSignal;
 };
 
 /** Live file-lock handle returned after successful acquisition. */
@@ -141,30 +139,6 @@ function normalizeLockError(err: unknown): never {
   throw err;
 }
 
-function createAbortedFileLockReleaseError(
-  abortReason: unknown,
-  releaseError: unknown,
-): AggregateError {
-  return new AggregateError(
-    [abortReason, releaseError],
-    "File lock acquisition was aborted and the acquired lock could not be released",
-    { cause: abortReason },
-  );
-}
-
-async function releaseFileLockAfterAbort(
-  lock: Awaited<ReturnType<typeof acquireFsSafeFileLock>>,
-  signal: AbortSignal,
-): Promise<never> {
-  try {
-    await lock.release();
-  } catch (releaseError) {
-    throw createAbortedFileLockReleaseError(signal.reason, releaseError);
-  }
-  signal.throwIfAborted();
-  throw new Error("File lock acquisition aborted without an abort reason");
-}
-
 /** Reset process-local file-lock state for tests that isolate lock managers. */
 export function resetFileLockStateForTest(): void {
   resetFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
@@ -181,22 +155,14 @@ export async function acquireFileLock(
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
   const staleRecovery = options.staleRecovery ?? "remove-if-unchanged";
-  const signal = options.signal;
   try {
-    signal?.throwIfAborted();
     const lock = await acquireFsSafeFileLock(filePath, {
       managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
       retry: options.retries,
       staleRecovery,
       reentrantOwner: options.reentrantOwner,
-      // fs-safe owns retry timing and platform-specific contention policy. Its
-      // payload callback runs before every ordinary acquire attempt, so it is
-      // also the cancellation checkpoint without replacing that retry loop.
-      payload: () => {
-        signal?.throwIfAborted();
-        return createCurrentProcessLockPayload();
-      },
+      payload: createCurrentProcessLockPayload,
       shouldReclaim: (params) =>
         staleRecovery === "fail-closed"
           ? isLockOwnerDefinitelyStale({ payload: asLockPayload(params.payload) })
@@ -215,12 +181,8 @@ export async function acquireFileLock(
           }
         : {}),
     });
-    if (signal?.aborted) {
-      return await releaseFileLockAfterAbort(lock, signal);
-    }
     return { lockPath: lock.lockPath, release: lock.release };
   } catch (err) {
-    signal?.throwIfAborted();
     return normalizeLockError(err);
   }
 }

@@ -4,7 +4,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireFileLock,
@@ -24,7 +23,6 @@ describe("acquireFileLock", () => {
   });
 
   afterEach(async () => {
-    __setFsSafeTestHooksForTest();
     await drainFileLockStateForTest();
     vi.restoreAllMocks();
     if (tempDir) {
@@ -62,85 +60,6 @@ describe("acquireFileLock", () => {
       "oauth-refresh.lock",
     );
   }, 5_000);
-
-  it("aborts a contended retry wait without acquiring the lock later", async () => {
-    const filePath = path.join(tempDir, "abortable-contention");
-    const first = await acquireFileLock(filePath, {
-      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-      stale: 60_000,
-    });
-    const controller = new AbortController();
-    const abortReason = new Error("stop waiting for the file lock");
-    const waiting = acquireFileLock(filePath, {
-      retries: { retries: 300, factor: 1, minTimeout: 1_000, maxTimeout: 1_000 },
-      signal: controller.signal,
-      stale: 60_000,
-    });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    controller.abort(abortReason);
-
-    await expect(waiting).rejects.toBe(abortReason);
-    await first.release();
-    const next = await acquireFileLock(filePath, {
-      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-      stale: 60_000,
-    });
-    await next.release();
-  });
-
-  it("retains fs-safe's Windows transient-denial retries for signal-aware waits", async () => {
-    const filePath = path.join(tempDir, "windows-transient-denial");
-    const held = await acquireFileLock(filePath, {
-      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-      stale: 60_000,
-    });
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    let snapshotOpenAttempts = 0;
-    __setFsSafeTestHooksForTest({
-      beforeSidecarLockSnapshotOpen: (lockPath) => {
-        snapshotOpenAttempts += 1;
-        if (snapshotOpenAttempts === 1) {
-          throw Object.assign(new Error("transient Windows lock teardown"), {
-            code: "EPERM",
-            path: lockPath,
-          });
-        }
-      },
-    });
-
-    try {
-      await expect(
-        acquireFileLock(filePath, {
-          retries: { retries: 1, factor: 1, minTimeout: 1, maxTimeout: 1 },
-          signal: new AbortController().signal,
-          stale: 60_000,
-        }),
-      ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
-      expect(snapshotOpenAttempts).toBe(2);
-    } finally {
-      __setFsSafeTestHooksForTest();
-      platform.mockRestore();
-      await held.release();
-    }
-  });
-
-  it("does not create a lock when acquisition is already aborted", async () => {
-    const filePath = path.join(tempDir, "already-aborted");
-    const controller = new AbortController();
-    const abortReason = new Error("already cancelled");
-    controller.abort(abortReason);
-
-    await expect(
-      acquireFileLock(filePath, {
-        retries: { retries: 3, factor: 1, minTimeout: 1, maxTimeout: 1 },
-        signal: controller.signal,
-        stale: 60_000,
-      }),
-    ).rejects.toBe(abortReason);
-    await expect(fs.access(`${filePath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
-  });
 
   it("reclaims a stale lock when its owner pid is dead", async () => {
     const filePath = path.join(tempDir, "auth-profiles.json");
