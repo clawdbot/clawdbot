@@ -140,11 +140,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
-  withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
-}));
-
 vi.mock("../provider-secret-egress.js", () => ({
   protectPreparedProviderRuntimeAuth: (value: unknown) => value,
   unwrapSecretSentinelsForProviderEgress: (value: unknown) => value,
