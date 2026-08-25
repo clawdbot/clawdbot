@@ -6,6 +6,7 @@ import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapsh
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -24,6 +25,8 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -43,7 +46,9 @@ import type {
   PluginHealthSummary,
 } from "./types.js";
 
-const DEFAULT_HEALTH_TIMEOUT_MS = 10_000;
+// `status --all` gives live health 8s, so the Gateway must finish first.
+const HEALTH_COLLECTION_TIMEOUT_MS = 7_000;
+const HEALTH_PROBE_CONCURRENCY = 5;
 const HEALTH_RECENT_SESSION_LIMIT = 5;
 const healthLog = createSubsystemLogger("health");
 
@@ -219,6 +224,168 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   return { loaded, errors, unavailable };
 }
 
+type HealthChannelPlan = {
+  plugin: ChannelPlugin;
+  defaultAccountId: string;
+  preferredAccountId: string;
+  accountIds: string[];
+  accountSummaries: Record<string, ChannelAccountHealthSummary>;
+};
+
+function buildHealthTimeoutRecord(
+  accountId: string,
+  timeoutMs: number,
+): ChannelAccountHealthSummary {
+  const error = `health collection timed out after ${timeoutMs}ms`;
+  return {
+    accountId,
+    lastError: error,
+    probe: { ok: false, timedOut: true, error },
+  };
+}
+
+function resolveHealthProbeTimeoutMs(deadlineAtMs: number): number {
+  return Math.max(1, deadlineAtMs - Date.now());
+}
+
+async function buildHealthAccountRecord(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+  defaultAccountId: string;
+  includeSensitive: boolean;
+  probe: boolean;
+  deadlineAtMs: number;
+  timeoutMs: number;
+  runtimeSnapshot?: ChannelRuntimeSnapshot;
+}): Promise<ChannelAccountHealthSummary> {
+  const timedOut = () => buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+  const { probeAccount, snapshotAccount, enabled, configured, diagnostics } =
+    await resolveHealthAccountContext({
+      plugin: params.plugin,
+      cfg: params.cfg,
+      accountId: params.accountId,
+    });
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+  if (diagnostics.length > 0) {
+    debugHealth(params.cfg, "account.diagnostics", {
+      channel: params.plugin.id,
+      accountId: params.accountId,
+      diagnostics,
+    });
+  }
+
+  let probe: unknown;
+  let lastProbeAt: number | null = null;
+  if (enabled && configured && params.probe && params.plugin.status?.probeAccount) {
+    try {
+      probe = await params.plugin.status.probeAccount({
+        account: probeAccount,
+        timeoutMs: resolveHealthProbeTimeoutMs(params.deadlineAtMs),
+        cfg: params.cfg,
+      });
+      lastProbeAt = Date.now();
+    } catch (error) {
+      probe = { ok: false, error: formatErrorMessage(error) };
+      lastProbeAt = Date.now();
+    }
+  }
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+
+  const probeRecord =
+    probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
+  const bot =
+    probeRecord && typeof probeRecord.bot === "object"
+      ? (probeRecord.bot as { username?: string | null })
+      : null;
+  if (bot?.username) {
+    debugHealth(params.cfg, "probe.bot", {
+      channel: params.plugin.id,
+      accountId: params.accountId,
+      username: bot.username,
+    });
+  }
+
+  const runtimeSnapshot =
+    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId] ??
+    (params.accountId === params.defaultAccountId
+      ? params.runtimeSnapshot?.channels[params.plugin.id]
+      : undefined);
+  const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
+  const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
+  const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
+    plugin: params.plugin,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    account: snapshotAccount,
+    runtime: runtimeSnapshot,
+    probe: snapshotProbe,
+    enabledFallback: enabled,
+    configuredFallback: configured,
+  });
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+  if (lastProbeAt) {
+    snapshot.lastProbeAt = lastProbeAt;
+  }
+  const healthState = resolveChannelHealthState(snapshot, {
+    channelId: params.plugin.id,
+    now: Date.now(),
+    staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+    channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  });
+  if (healthState !== undefined) {
+    snapshot.healthState = healthState;
+  }
+
+  const summary = params.plugin.status?.buildChannelSummary
+    ? await params.plugin.status.buildChannelSummary({
+        account: probeAccount,
+        cfg: params.cfg,
+        defaultAccountId: params.accountId,
+        snapshot,
+      })
+    : undefined;
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+  // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
+  const record = redactChannelStatusSummaryBaseUrl(
+    summary && typeof summary === "object"
+      ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
+      : ({
+          ...snapshot,
+          accountId: params.accountId,
+          configured,
+        } satisfies ChannelAccountHealthSummary),
+  );
+  if (record.configured === undefined) {
+    record.configured = configured;
+  }
+  if (params.includeSensitive && record.probe === undefined && probe !== undefined) {
+    record.probe = probe;
+  }
+  if (!params.includeSensitive) {
+    const summaryProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, record.probe);
+    const safeProbeFailure = summaryProbeFailure ?? nonSensitiveProbeFailure;
+    if (safeProbeFailure) {
+      record.probe = safeProbeFailure;
+    } else {
+      delete record.probe;
+    }
+  }
+  if (record.lastProbeAt === undefined && lastProbeAt) {
+    record.lastProbeAt = lastProbeAt;
+  }
+  record.accountId = params.accountId;
+  return record;
+}
+
 /** Collects the gateway-owned health snapshot for an explicit trust audience. */
 export async function collectGatewayHealthSnapshot(params: {
   audience: HealthSnapshotAudience;
@@ -228,6 +395,12 @@ export async function collectGatewayHealthSnapshot(params: {
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
+  const start = Date.now();
+  const timeoutMs = Math.min(
+    resolveTimerTimeoutMs(params.timeoutMs, HEALTH_COLLECTION_TIMEOUT_MS, 50),
+    HEALTH_COLLECTION_TIMEOUT_MS,
+  );
+  const deadlineAtMs = start + timeoutMs;
   const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveHealthAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
@@ -271,8 +444,6 @@ export async function collectGatewayHealthSnapshot(params: {
       summaryAgent?.agentId,
     ));
 
-  const start = Date.now();
-  const cappedTimeout = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_HEALTH_TIMEOUT_MS, 50);
   const includeSensitive = params.audience === "admin";
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
@@ -280,8 +451,7 @@ export async function collectGatewayHealthSnapshot(params: {
   });
   const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
-
-  for (const plugin of plugins) {
+  const channelPlans: HealthChannelPlan[] = plugins.map((plugin) => {
     channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
@@ -317,122 +487,69 @@ export async function collectGatewayHealthSnapshot(params: {
       preferredAccountId,
       accountIdsToProbe,
     });
-    const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
-
-    for (const accountId of accountIdsToProbe) {
-      const { probeAccount, snapshotAccount, enabled, configured, diagnostics } =
-        await resolveHealthAccountContext({
-          plugin,
-          cfg,
-          accountId,
-        });
-      if (diagnostics.length > 0) {
-        debugHealth(cfg, "account.diagnostics", { channel: plugin.id, accountId, diagnostics });
-      }
-
-      let probe: unknown;
-      let lastProbeAt: number | null = null;
-      if (enabled && configured && params.probe && plugin.status?.probeAccount) {
-        try {
-          probe = await plugin.status.probeAccount({
-            account: probeAccount,
-            timeoutMs: cappedTimeout,
+    return {
+      plugin,
+      defaultAccountId,
+      preferredAccountId,
+      accountIds: accountIdsToProbe,
+      accountSummaries: {},
+    };
+  });
+  const accountTasks = channelPlans.flatMap((plan) =>
+    plan.accountIds.map((accountId) => ({ plan, accountId })),
+  );
+  const { results: accountResults } = await runTasksWithConcurrency({
+    tasks: accountTasks.map(({ plan, accountId }) => async () => {
+      const result = await awaitWithinDeadline(
+        () =>
+          buildHealthAccountRecord({
+            plugin: plan.plugin,
             cfg,
-          });
-          lastProbeAt = Date.now();
-        } catch (error) {
-          probe = { ok: false, error: formatErrorMessage(error) };
-          lastProbeAt = Date.now();
-        }
-      }
-
-      const probeRecord =
-        probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
-      const bot =
-        probeRecord && typeof probeRecord.bot === "object"
-          ? (probeRecord.bot as { username?: string | null })
-          : null;
-      if (bot?.username) {
-        debugHealth(cfg, "probe.bot", { channel: plugin.id, accountId, username: bot.username });
-      }
-
-      const runtimeSnapshot =
-        params.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
-        (accountId === defaultAccountId ? params.runtimeSnapshot?.channels[plugin.id] : undefined);
-      const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(plugin.id, probe);
-      const snapshotProbe = includeSensitive ? probe : nonSensitiveProbeFailure;
-      const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
-        plugin,
-        cfg,
-        accountId,
-        account: snapshotAccount,
-        runtime: runtimeSnapshot,
-        probe: snapshotProbe,
-        enabledFallback: enabled,
-        configuredFallback: configured,
-      });
-      if (lastProbeAt) {
-        snapshot.lastProbeAt = lastProbeAt;
-      }
-      const healthState = resolveChannelHealthState(snapshot, {
-        channelId: plugin.id,
-        now: Date.now(),
-        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-      });
-      if (healthState !== undefined) {
-        snapshot.healthState = healthState;
-      }
-
-      const summary = plugin.status?.buildChannelSummary
-        ? await plugin.status.buildChannelSummary({
-            account: probeAccount,
-            cfg,
-            defaultAccountId: accountId,
-            snapshot,
-          })
-        : undefined;
-      // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
-      const record = redactChannelStatusSummaryBaseUrl(
-        summary && typeof summary === "object"
-          ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
-          : ({ ...snapshot, accountId, configured } satisfies ChannelAccountHealthSummary),
+            accountId,
+            defaultAccountId: plan.defaultAccountId,
+            includeSensitive,
+            probe: params.probe,
+            deadlineAtMs,
+            timeoutMs,
+            runtimeSnapshot: params.runtimeSnapshot,
+          }),
+        deadlineAtMs,
       );
-      if (record.configured === undefined) {
-        record.configured = configured;
-      }
-      if (includeSensitive && record.probe === undefined && probe !== undefined) {
-        record.probe = probe;
-      }
-      if (!includeSensitive) {
-        const summaryProbeFailure = buildNonSensitiveProbeFailure(plugin.id, record.probe);
-        const safeProbeFailure = summaryProbeFailure ?? nonSensitiveProbeFailure;
-        if (safeProbeFailure) {
-          record.probe = safeProbeFailure;
-        } else {
-          delete record.probe;
-        }
-      }
-      if (record.lastProbeAt === undefined && lastProbeAt) {
-        record.lastProbeAt = lastProbeAt;
-      }
-      record.accountId = accountId;
-      accountSummaries[accountId] = record;
+      return {
+        plan,
+        accountId,
+        record:
+          result === ABSOLUTE_DEADLINE_EXPIRED
+            ? buildHealthTimeoutRecord(accountId, timeoutMs)
+            : result,
+      };
+    }),
+    limit: params.probe ? HEALTH_PROBE_CONCURRENCY : 1,
+    throwOnError: true,
+  });
+  for (const result of accountResults) {
+    if (result) {
+      result.plan.accountSummaries[result.accountId] = result.record;
     }
+  }
 
+  for (const plan of channelPlans) {
     const defaultSummary =
-      accountSummaries[preferredAccountId] ??
-      accountSummaries[defaultAccountId] ??
-      accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
+      plan.accountSummaries[plan.preferredAccountId] ??
+      plan.accountSummaries[plan.defaultAccountId] ??
+      plan.accountSummaries[plan.accountIds[0] ?? plan.preferredAccountId];
     const fallbackSummary =
       defaultSummary ??
-      accountSummaries[
-        expectDefined(Object.keys(accountSummaries)[0], "object.keys(account summaries) entry at 0")
+      plan.accountSummaries[
+        expectDefined(
+          Object.keys(plan.accountSummaries)[0],
+          "object.keys(account summaries) entry at 0",
+        )
       ];
     if (fallbackSummary) {
-      channels[plugin.id] = {
+      channels[plan.plugin.id] = {
         ...fallbackSummary,
-        accounts: accountSummaries,
+        accounts: plan.accountSummaries,
       } satisfies ChannelHealthSummary;
     }
   }
