@@ -119,10 +119,11 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
               ${t("chat.mediaPlayer.preparing")}
             </div>`
           : null}
-        <div class="chat-assistant-video-frame" style=${styleMap(dimensions)} ?hidden=${preparing}>
+        <div class="chat-assistant-video-frame" ?hidden=${preparing}>
           <video
             controls
             preload="metadata"
+            style=${styleMap(dimensions)}
             ${ref(this.setMedia)}
             @loadedmetadata=${() => {
               if (!this.media) {

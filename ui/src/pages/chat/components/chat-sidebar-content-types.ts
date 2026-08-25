@@ -50,6 +50,8 @@ export type AttachmentSidebarSource = {
   authToken?: string | null;
   sizeBytes?: number;
   durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 export type AttachmentSidebarRuntime = {
@@ -71,6 +73,8 @@ type AttachmentSidebarContent = {
   authToken?: string | null;
   sizeBytes?: number;
   durationMs?: number;
+  width?: number;
+  height?: number;
   voiceNote?: boolean;
   resolveSource?: (
     onRequestUpdate: () => void,

@@ -1874,7 +1874,6 @@ openclaw-chat-video-player {
   max-width: 100%;
   max-height: none;
   margin: 0;
-  aspect-ratio: 16 / 9;
   object-fit: contain;
   opacity: 1;
   background: var(--bg);

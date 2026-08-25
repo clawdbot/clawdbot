@@ -22,6 +22,19 @@ describe("ChatVideoPlayer", () => {
     expect(player.querySelector("video")?.preload).toBe("metadata");
   });
 
+  it("preserves a portrait attachment aspect ratio", async () => {
+    const player = document.createElement("openclaw-chat-video-player");
+    player.src = "https://example.com/portrait.mp4";
+    player.sourceIdentity = "media:portrait";
+    player.label = "portrait.mp4";
+    player.mediaWidth = 9;
+    player.mediaHeight = 16;
+    document.body.append(player);
+    await player.updateComplete;
+
+    expect(player.querySelector("video")?.style.aspectRatio).toBe("9 / 16");
+  });
+
   it("keeps one video element mounted across 202 preparation", async () => {
     vi.useFakeTimers();
     const fetchMock = vi

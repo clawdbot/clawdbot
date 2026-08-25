@@ -390,6 +390,8 @@ describe("markdown sidebar", () => {
       mimeType: "video/quicktime",
       playback: "transcode",
       authToken: "session-token",
+      width: 9,
+      height: 16,
     };
     document.body.append(panel);
     await panel.updateComplete;
@@ -398,7 +400,9 @@ describe("markdown sidebar", () => {
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toContain("playback=1");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
-    expect(panel.querySelector("openclaw-chat-video-player")).not.toBeNull();
+    const player = panel.querySelector("openclaw-chat-video-player");
+    expect(player?.mediaWidth).toBe(9);
+    expect(player?.mediaHeight).toBe(16);
     expect(panel.querySelector(":scope > video")).toBeNull();
     panel.remove();
   });
@@ -437,11 +441,12 @@ describe("markdown sidebar", () => {
         static override revokeObjectURL = vi.fn();
       },
     );
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      new Response("<h1>Preview</h1>", {
-        status: 200,
-        headers: { "Content-Type": "text/html", "X-Frame-Options": "DENY" },
-      }),
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response("<h1>Preview</h1>", {
+          status: 200,
+          headers: { "Content-Type": "text/html", "X-Frame-Options": "DENY" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {

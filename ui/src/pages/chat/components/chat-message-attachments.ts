@@ -399,6 +399,14 @@ export function renderAssistantAttachments(
       assistantAvailability.status === "available"
         ? (assistantAvailability.durationMs ?? attachment.durationMs)
         : attachment.durationMs;
+    const mediaWidth =
+      assistantAvailability.status === "available"
+        ? (assistantAvailability.width ?? attachment.width)
+        : attachment.width;
+    const mediaHeight =
+      assistantAvailability.status === "available"
+        ? (assistantAvailability.height ?? attachment.height)
+        : attachment.height;
     const playbackAuthToken = isLocalAssistantAttachmentSource(attachment.url)
       ? (authToken ?? null)
       : null;
@@ -432,6 +440,8 @@ export function renderAssistantAttachments(
             authToken: playbackAuthToken,
             sizeBytes,
             durationMs: serverDurationMs,
+            width: mediaWidth,
+            height: mediaHeight,
             voiceNote: attachment.isVoiceNote === true,
             ...(hasLiveSidebarSource
               ? {
@@ -469,6 +479,8 @@ export function renderAssistantAttachments(
                         : null,
                       sizeBytes: nextAssistantAvailability.sizeBytes ?? attachment.sizeBytes,
                       durationMs: nextAssistantAvailability.durationMs ?? attachment.durationMs,
+                      width: nextAssistantAvailability.width ?? attachment.width,
+                      height: nextAssistantAvailability.height ?? attachment.height,
                     };
                   },
                 }
@@ -555,12 +567,8 @@ export function renderAssistantAttachments(
           .playback=${playback}
           .authToken=${playbackAuthToken}
           .sizeBytes=${sizeBytes}
-          .mediaWidth=${assistantAvailability.status === "available"
-            ? (assistantAvailability.width ?? attachment.width)
-            : attachment.width}
-          .mediaHeight=${assistantAvailability.status === "available"
-            ? (assistantAvailability.height ?? attachment.height)
-            : attachment.height}
+          .mediaWidth=${mediaWidth}
+          .mediaHeight=${mediaHeight}
           .onExpand=${openAttachmentSidebar}
           .onMediaLoaded=${onAssistantAttachmentLoaded}
         ></openclaw-chat-video-player>

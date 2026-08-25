@@ -68,6 +68,8 @@ function renderSidebarAttachment(
       .playback=${source?.playback ?? content.playback ?? "native"}
       .authToken=${authToken}
       .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .mediaWidth=${source?.width ?? content.width}
+      .mediaHeight=${source?.height ?? content.height}
     ></openclaw-chat-video-player>`;
   }
   if (content.attachmentKind === "audio" || mimeType.startsWith("audio/")) {
