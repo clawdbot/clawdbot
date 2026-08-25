@@ -38,7 +38,10 @@ import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
-import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
+import {
+  normalizeSpawnedRunMetadata,
+  resolvePreparedAgentCommandWorkspaceDir,
+} from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
@@ -272,11 +275,22 @@ export async function prepareAgentCommandExecution(
     agentId: sessionAgentId,
     sessionKey,
   });
-  const workspaceDirRaw =
-    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
-  const workspaceDir = resolveUserPath(workspaceDirRaw);
   const cwd =
     normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
+  // Managed worktree sessions persist spawnedCwd; remount that checkout as
+  // workspaceDir so system prompt + bootstrap match the file-tool sandbox root.
+  // Without this, prepare inherits cwd from the session while leaving workspace
+  // on the canonical agent home and models write outside the worktree.
+  const workspaceDirRaw = resolvePreparedAgentCommandWorkspaceDir({
+    configuredWorkspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+    explicitWorkspaceDir: normalizedSpawned.workspaceDir,
+    session: {
+      spawnedBy: sessionEntryRaw?.spawnedBy ?? normalizedSpawned.spawnedBy,
+      spawnedWorkspaceDir: sessionEntryRaw?.spawnedWorkspaceDir,
+      spawnedCwd: sessionEntryRaw?.spawnedCwd,
+    },
+  });
+  const workspaceDir = resolveUserPath(workspaceDirRaw);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;

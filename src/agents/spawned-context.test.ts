@@ -5,6 +5,7 @@ import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSessionRun,
+  resolvePreparedAgentCommandWorkspaceDir,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 
@@ -110,5 +111,51 @@ describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
       }),
     ).toBe("/tmp/worktree");
     expect(resolveIngressWorkspaceOverrideForSessionRun()).toBeUndefined();
+  });
+});
+
+describe("resolvePreparedAgentCommandWorkspaceDir", () => {
+  it("remounts managed worktree cwd over explicit and configured agent homes", () => {
+    // agentCommand prepare must remount even when a caller still passes the
+    // canonical .openclaw/workspace; otherwise the system prompt shows that
+    // home while file tools sandbox to the worktree.
+    expect(
+      resolvePreparedAgentCommandWorkspaceDir({
+        configuredWorkspaceDir: "/home/user/.openclaw/workspace",
+        explicitWorkspaceDir: "/home/user/.openclaw/workspace",
+        session: {
+          spawnedCwd: "/home/user/.openclaw/worktrees/abc/wt-1",
+        },
+      }),
+    ).toBe("/home/user/.openclaw/worktrees/abc/wt-1");
+  });
+
+  it("keeps spawned-run workspace inheritance instead of remounting task cwd", () => {
+    expect(
+      resolvePreparedAgentCommandWorkspaceDir({
+        configuredWorkspaceDir: "/home/user/.openclaw/workspace",
+        explicitWorkspaceDir: "/home/user/.openclaw/workspace-coder",
+        session: {
+          spawnedBy: "agent:main:subagent:parent",
+          spawnedWorkspaceDir: "/home/user/.openclaw/workspace-coder",
+          spawnedCwd: "/tmp/task-repo",
+        },
+      }),
+    ).toBe("/home/user/.openclaw/workspace-coder");
+  });
+
+  it("falls back to explicit then configured workspace when no session remount applies", () => {
+    expect(
+      resolvePreparedAgentCommandWorkspaceDir({
+        configuredWorkspaceDir: "/home/user/.openclaw/workspace",
+        explicitWorkspaceDir: "/tmp/explicit",
+        session: {},
+      }),
+    ).toBe("/tmp/explicit");
+    expect(
+      resolvePreparedAgentCommandWorkspaceDir({
+        configuredWorkspaceDir: "/home/user/.openclaw/workspace",
+      }),
+    ).toBe("/home/user/.openclaw/workspace");
   });
 });

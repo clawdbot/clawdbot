@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { resolvePreparedAgentCommandWorkspaceDir } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
@@ -319,19 +319,21 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           rawBodyTrimmed.length > 0)));
   const startupAction =
     softResetTriggered || /^\/reset(?:\s|$)/i.test(normalizedCommandBody) ? "reset" : "new";
-  const sessionWorkspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({
-    spawnedBy: sessionEntry?.spawnedBy,
-    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-    cwd: sessionEntry?.spawnedCwd,
+  const workspaceDir = resolvePreparedAgentCommandWorkspaceDir({
+    configuredWorkspaceDir,
+    session: {
+      spawnedBy: sessionEntry?.spawnedBy,
+      spawnedWorkspaceDir: sessionEntry?.spawnedWorkspaceDir,
+      spawnedCwd: sessionEntry?.spawnedCwd,
+    },
   });
-  const workspaceDir = sessionWorkspaceOverride ?? configuredWorkspaceDir;
   const bareResetPromptState =
     isBareSessionReset && workspaceDir
       ? await resolveBareSessionResetPromptState({
           cfg,
           workspaceDir,
           isPrimaryRun: !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey),
-          isCanonicalWorkspace: !sessionWorkspaceOverride,
+          isCanonicalWorkspace: workspaceDir === configuredWorkspaceDir,
           hasBootstrapFileAccess: () =>
             resolveBareResetBootstrapFileAccess({
               cfg,
