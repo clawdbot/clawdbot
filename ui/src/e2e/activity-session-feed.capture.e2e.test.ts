@@ -345,21 +345,39 @@ suite.define(() => {
         await activityPage.locator(".activity-feed__people-clear").click();
         await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
         await page.setViewportSize({ height: 844, width: 390 });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
 
-        const peopleControl = activityPage.locator(".activity-feed__people-control");
-        const timeButtonTops = await timeFilter
-          .locator(".settings-segmented__btn")
-          .evaluateAll((buttons) =>
-            buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
-          );
-        const [timeFilterBox, peopleControlBox] = await Promise.all([
-          timeFilter.boundingBox(),
-          peopleControl.boundingBox(),
-        ]);
-        expect(new Set(timeButtonTops)).toHaveLength(1);
-        expect(timeFilterBox).not.toBeNull();
-        expect(peopleControlBox).not.toBeNull();
-        expect(Math.abs(timeFilterBox!.y - peopleControlBox!.y)).toBeLessThan(2);
+        // Sample related controls in one browser frame so viewport scroll anchoring
+        // cannot shift one box between independent Playwright requests.
+        const toolbarGeometry = await activityPage
+          .locator(".activity-feed__toolbar")
+          .evaluate((toolbar) => {
+            const timeControl = toolbar.querySelector<HTMLElement>(".activity-feed__time-filter");
+            const peopleControl = toolbar.querySelector<HTMLElement>(
+              ".activity-feed__people-control",
+            );
+            if (!timeControl || !peopleControl) {
+              throw new Error("Expected activity toolbar controls");
+            }
+            return {
+              peopleTop: peopleControl.getBoundingClientRect().top,
+              timeButtonTops: Array.from(
+                timeControl.querySelectorAll<HTMLElement>(".settings-segmented__btn"),
+                (button) => Math.round(button.getBoundingClientRect().top),
+              ),
+              timeTop: timeControl.getBoundingClientRect().top,
+            };
+          });
+        expect(new Set(toolbarGeometry.timeButtonTops)).toHaveLength(1);
+        expect(
+          Math.abs(toolbarGeometry.timeTop - toolbarGeometry.peopleTop),
+          JSON.stringify(toolbarGeometry),
+        ).toBeLessThan(2);
         const automationGroupChildTops = await automationGroup
           .locator(":scope > *")
           .evaluateAll((children) =>

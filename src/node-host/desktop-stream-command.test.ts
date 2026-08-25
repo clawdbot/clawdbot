@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   invokeNodeDesktopStream,
   invokeNodeWorkerDesktopStream,
@@ -196,17 +197,21 @@ describe("node desktop stream command", () => {
     const wss = new WebSocketServer({ server: httpServer });
     const streams: Array<{
       accessHeaders: [string | undefined, string | undefined];
+      attached: Promise<void>;
       closed: boolean;
     }> = [];
     wss.on("connection", (ws, request) => {
+      const attached = createDeferred();
       const stream = {
         accessHeaders: [
           request.headers["cf-access-client-id"],
           request.headers["cf-access-client-secret"],
         ] as [string | undefined, string | undefined],
+        attached: attached.promise,
         closed: false,
       };
       streams.push(stream);
+      ws.once("message", () => attached.resolve());
       ws.once("close", () => {
         stream.closed = true;
       });
@@ -227,7 +232,12 @@ describe("node desktop stream command", () => {
 
     for (const kind of ["public", "worker"] as const) {
       const controller = new AbortController();
-      const emitStatus = vi.fn(async () => undefined);
+      const publicAttached = createDeferred();
+      const emitStatus = vi.fn(async (message: string) => {
+        if (message === "desktop stream attached\n") {
+          publicAttached.resolve();
+        }
+      });
       const connection = {
         paramsJSON: JSON.stringify({
           ticket: TICKET,
@@ -256,7 +266,10 @@ describe("node desktop stream command", () => {
       }
       expect(stream.accessHeaders).toEqual(["desktop-client-id", "desktop-client-secret"]);
       if (kind === "public") {
+        await publicAttached.promise;
         expect(emitStatus).toHaveBeenCalledWith("desktop stream attached\n");
+      } else {
+        await stream.attached;
       }
 
       controller.abort();
