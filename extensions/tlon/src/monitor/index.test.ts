@@ -1,6 +1,7 @@
 // Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setImmediate } from "node:timers/promises";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -230,12 +231,12 @@ it("awaits cumulative Tlon discovery persistence and retries failed writes", asy
     });
     expect.soft(firstResult).toBeInstanceOf(Promise);
     await firstResult;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
 
     sseClientMock.poke.mockRejectedValueOnce(new Error("settings write failed"));
     const retryEvent = { join: { channels: ["chat/~zod/retry"] } };
     await Promise.resolve(groupSubscription.event(retryEvent)).catch(() => undefined);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     await groupSubscription.event(retryEvent);
 
     expect(sseClientMock.poke).toHaveBeenCalledTimes(3);
