@@ -3,11 +3,8 @@ import { keyed } from "lit/directives/keyed.js";
 import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
+import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import {
-  openAttachmentCardFromClick,
-  renderAttachmentCardHeader,
-} from "./chat-attachment-card.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -350,11 +347,7 @@ export function renderAssistantAttachments(
     );
     const managedAvailability =
       assistantAvailability.status === "available"
-        ? resolveManagedAttachmentAvailability(
-            attachment,
-            resolveArtifactDownload,
-            onRequestUpdate,
-          )
+        ? resolveManagedAttachmentAvailability(attachment, resolveArtifactDownload, onRequestUpdate)
         : null;
     const availability =
       assistantAvailability.status !== "available"
@@ -365,8 +358,7 @@ export function renderAssistantAttachments(
             ? managedAvailability
             : assistantAvailability;
     const attachmentUrl =
-      assistantAvailability.status === "available" &&
-      managedAvailability?.status === "available"
+      assistantAvailability.status === "available" && managedAvailability?.status === "available"
         ? isLocalAssistantAttachmentSource(attachment.url)
           ? buildAssistantAttachmentUrl(
               attachment.url,
@@ -482,13 +474,7 @@ export function renderAssistantAttachments(
           class="chat-message-image-button"
           aria-label=${t("chat.imageLightbox.open", { title })}
           @click=${() =>
-            openResolvedImage(
-              onOpenImage,
-              attachmentUrl,
-              title,
-              undefined,
-              onRequestOpenImage?.(),
-            )}
+            openResolvedImage(onOpenImage, attachmentUrl, title, undefined, onRequestOpenImage?.())}
         >
           <img src=${attachmentUrl} alt=${title} class="chat-message-image" />
         </button>
@@ -574,8 +560,7 @@ export function renderAssistantAttachments(
     const downloadHref = safeAttachmentHref(attachmentUrl);
     const previewKind = resolveDocumentPreviewKind(attachment);
     const previewText =
-      (previewKind === "table" || previewKind === "text") &&
-      isTextyDocumentAttachment(attachment)
+      (previewKind === "table" || previewKind === "text") && isTextyDocumentAttachment(attachment)
         ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)
         : null;
     const textPreviewFailed = previewKind === "text" && previewText === null;
@@ -587,37 +572,30 @@ export function renderAssistantAttachments(
     return keyed(
       attachmentUrl,
       html`
-      <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--document ${
-          showPreview
+        <div
+          class="chat-assistant-attachment-card chat-assistant-attachment-card--document ${showPreview
             ? "chat-assistant-attachment-card--preview"
-            : "chat-assistant-attachment-card--compact"
-        }"
-        ?data-openable=${Boolean(openAttachmentSidebar)}
-        @click=${(event: MouseEvent) =>
-          openAttachmentCardFromClick(event, openAttachmentSidebar)}
-      >
-        ${renderAttachmentCardHeader({
-          kind: "document",
-          label: attachment.label,
-          mimeType: attachment.mimeType,
-          sizeBytes,
-          downloadHref,
-          showExpandAction: true,
-          onExpand: openAttachmentSidebar,
-          visualMode: showPreview ? "preview-with-favicon" : "large-placeholder",
-        })}
-        ${showPreview && previewKind
-          ? renderAttachmentDocumentPreview(previewKind, attachment, attachmentUrl, previewText)
-          : null}
-      </div>
-    `,
+            : "chat-assistant-attachment-card--compact"}"
+          ?data-openable=${Boolean(openAttachmentSidebar)}
+          @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, openAttachmentSidebar)}
+        >
+          ${renderAttachmentCardHeader({
+            kind: "document",
+            label: attachment.label,
+            mimeType: attachment.mimeType,
+            sizeBytes,
+            downloadHref,
+            showExpandAction: true,
+            onExpand: openAttachmentSidebar,
+            visualMode: showPreview ? "preview-with-favicon" : "large-placeholder",
+          })}
+          ${showPreview && previewKind
+            ? renderAttachmentDocumentPreview(previewKind, attachment, attachmentUrl, previewText)
+            : null}
+        </div>
+      `,
     );
   };
 
-  return html`
-    <div class="chat-assistant-attachments">
-      ${attachments.map(renderAttachment)}
-    </div>
-  `;
+  return html` <div class="chat-assistant-attachments">${attachments.map(renderAttachment)}</div> `;
 }

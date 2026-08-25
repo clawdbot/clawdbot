@@ -110,11 +110,7 @@ export function parseDelimitedPreview(text: string): DelimitedPreview {
     row = [];
   };
   let index = 0;
-  for (
-    ;
-    index < text.length && rows.length < DOCUMENT_PREVIEW_MAX_ROWS;
-    index += 1
-  ) {
+  for (; index < text.length && rows.length < DOCUMENT_PREVIEW_MAX_ROWS; index += 1) {
     if (cellCount >= DOCUMENT_PREVIEW_MAX_CELLS) {
       break;
     }
@@ -188,15 +184,19 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
       <table class="chat-assistant-attachment-card__table">
         <thead>
           <tr>
-            ${Array.from({ length: columnCount }, (_, index) =>
-              html`<th>${rows[0]?.[index] ?? ""}</th>`,
+            ${Array.from(
+              { length: columnCount },
+              (_, index) => html`<th>${rows[0]?.[index] ?? ""}</th>`,
             )}
           </tr>
         </thead>
         <tbody>
           ${rows.slice(1).map(
             (row) => html`<tr>
-              ${Array.from({ length: columnCount }, (_, index) => html`<td>${row[index] ?? ""}</td>`)}
+              ${Array.from(
+                { length: columnCount },
+                (_, index) => html`<td>${row[index] ?? ""}</td>`,
+              )}
             </tr>`,
           )}
         </tbody>
@@ -247,8 +247,9 @@ export function renderAttachmentDocumentPreview(
         type="button"
         class="chat-assistant-attachment-card__preview-load"
         @click=${(event: Event) => activateDocumentPreview(event, attachmentUrl)}
-        >${t("chat.attachments.loadPreview")}</button
       >
+        ${t("chat.attachments.loadPreview")}
+      </button>
       <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
     </div>`;
   }
@@ -277,8 +278,9 @@ export function renderAttachmentDocumentPreview(
       type="button"
       class="chat-assistant-attachment-card__preview-load"
       @click=${(event: Event) => activateDocumentPreview(event, previewUrl)}
-      >${t("chat.attachments.loadPreview")}</button
     >
+      ${t("chat.attachments.loadPreview")}
+    </button>
   </div>`;
 }
 

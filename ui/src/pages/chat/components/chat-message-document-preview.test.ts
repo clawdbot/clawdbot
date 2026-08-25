@@ -31,9 +31,7 @@ describe("parseDelimitedPreview", () => {
   });
 
   it("retains the bounded inline preview for text documents", () => {
-    expect(resolveDocumentPreviewKind({ label: "notes.txt", mimeType: "text/plain" })).toBe(
-      "text",
-    );
+    expect(resolveDocumentPreviewKind({ label: "notes.txt", mimeType: "text/plain" })).toBe("text");
   });
 
   it.each([
