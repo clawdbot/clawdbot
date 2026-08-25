@@ -3,6 +3,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
 import "./chat-document-preview.ts";
+import "./chat-svg-attachment.ts";
 import "./chat-video-player.ts";
 import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachment-href.ts";
@@ -33,6 +34,7 @@ import {
 import {
   isChatMediaResourceCurrent,
   isImageMediaPath,
+  isSvgImageMediaPath,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
@@ -507,6 +509,19 @@ export function renderAssistantAttachments(
         });
       }
       const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
+      if (isSvgImageMediaPath(attachment.label, attachment.mimeType)) {
+        return html`<openclaw-chat-svg-attachment
+          .src=${attachmentUrl}
+          .sourceIdentity=${attachment.url}
+          .label=${title}
+          .mimeType=${attachment.mimeType ?? "image/svg+xml"}
+          .sizeBytes=${sizeBytes}
+          .downloadHref=${safeAttachmentHref(attachmentUrl)}
+          .onOpen=${(src: string) =>
+            openResolvedImage(onOpenImage, src, title, undefined, onRequestOpenImage?.())}
+          .onExpand=${openAttachmentSidebar}
+        ></openclaw-chat-svg-attachment>`;
+      }
       return html`
         <button
           type="button"

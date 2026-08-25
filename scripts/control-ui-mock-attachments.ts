@@ -223,6 +223,7 @@ const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="24" fill="#e76f3c"/></svg>',
     "image/svg+xml",
   ),
+  "broken-vector.svg": textAsset("not an svg", "image/svg+xml"),
   "mystery.blob": textAsset("Unknown attachment family fixture.\n", "application/octet-stream"),
   "readme.rtf": textAsset("{\\rtf1\\ansi Attachment fixture document}", "application/rtf"),
   "bundle.zip": zipAsset(
@@ -315,6 +316,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
         documentAttachment("deploy.yaml", "application/yaml"),
         documentAttachment("worker.py", "text/x-python"),
         documentAttachment("vector.svg", "image/svg+xml"),
+        documentAttachment("broken-vector.svg", "image/svg+xml"),
         documentAttachment("readme.rtf", "application/rtf"),
       ],
       timestamp: baseTime + 4,

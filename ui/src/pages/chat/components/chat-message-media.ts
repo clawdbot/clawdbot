@@ -357,6 +357,12 @@ export function isImageMediaPath(path: string, mediaType: unknown): boolean {
   );
 }
 
+export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
+  const normalizedMediaType =
+    typeof mediaType === "string" ? mediaType.split(";", 1)[0]?.trim().toLowerCase() : "";
+  return normalizedMediaType === "image/svg+xml" || getMediaFileExtension(path) === "svg";
+}
+
 function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
     return true;

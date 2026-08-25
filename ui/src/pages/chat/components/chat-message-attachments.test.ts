@@ -34,14 +34,15 @@ afterEach(() => {
     releaseChatMediaResourceSubscriber(subscriber);
   }
   subscribers.clear();
+  document.body.replaceChildren();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("attachment sidebar source ownership", () => {
   it.each([
     ["sample-image.png", "image/png"],
     ["photo.jpg", "image/jpeg"],
-    ["vector.svg", "image/svg+xml"],
   ])("renders document-shaped %s attachments as expandable images", (label, mimeType) => {
     const source = `https://example.com/${label}`;
     const container = document.body.appendChild(document.createElement("div"));
@@ -66,6 +67,125 @@ describe("attachment sidebar source ownership", () => {
       expect.objectContaining({ src: source, title: label }),
     );
     container.remove();
+  });
+
+  it("loads SVG attachments through an image object URL", async () => {
+    const source = "https://example.com/vector.svg";
+    const objectUrl = "blob:svg-attachment";
+    let objectBlob: Blob | undefined;
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn((object: Blob | MediaSource) => {
+          if (object instanceof Blob) {
+            objectBlob = object;
+          }
+          return objectUrl;
+        });
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>', {
+        headers: { "Content-Type": "image/svg+xml" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenImage = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "vector.svg",
+              mimeType: "image/svg+xml",
+              url: source,
+            },
+          },
+        ],
+        { onOpenImage },
+      ),
+      container,
+    );
+
+    await vi.waitFor(() =>
+      expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(
+        objectUrl,
+      ),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      source,
+      expect.objectContaining({
+        credentials: "same-origin",
+        headers: { Accept: "image/svg+xml" },
+        method: "GET",
+      }),
+    );
+    expect(objectBlob?.type).toBe("image/svg+xml");
+    expect(container.querySelector("iframe")).toBeNull();
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    expect(onOpenImage).toHaveBeenCalledWith(
+      expect.objectContaining({ src: objectUrl, title: "vector.svg" }),
+    );
+  });
+
+  it("falls back to a compact file card when an SVG image cannot render", async () => {
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => "blob:broken-svg");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        new Response("<svg><broken", { headers: { "Content-Type": "image/svg+xml" } }),
+      ),
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "broken.svg",
+              mimeType: "image/svg+xml",
+              url: "https://example.com/broken.svg",
+            },
+          },
+        ],
+        {},
+        undefined,
+        onOpenSidebar,
+      ),
+      container,
+    );
+
+    const image = await vi.waitFor(() => {
+      const candidate = container.querySelector<HTMLImageElement>("img.chat-message-image");
+      expect(candidate).not.toBeNull();
+      return candidate!;
+    });
+    image.dispatchEvent(new Event("error"));
+
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
+    );
+    expect(container.querySelector("img.chat-message-image")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toContain(
+      "broken.svg",
+    );
+    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    expect(onOpenSidebar).toHaveBeenCalledOnce();
   });
 
   it("retries a failed managed attachment resolution", async () => {
