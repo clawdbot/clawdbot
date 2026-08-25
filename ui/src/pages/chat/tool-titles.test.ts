@@ -194,4 +194,212 @@ describe("title fetch batching", () => {
       expect.objectContaining({ sessionKey: "agent:b:main", agentId: "b" }),
     ]);
   });
+
+  it("bounds one owner's queue and drains retained batches without another debounce", async () => {
+    vi.useFakeTimers();
+    const requestedInputs: string[] = [];
+    const requestTimes: number[] = [];
+    const request = vi.fn(async (_method: string, params: unknown) => {
+      const items = (params as { items: Array<{ input: string }> }).items;
+      requestedInputs.push(...items.map((item) => item.input));
+      requestTimes.push(Date.now());
+      return { titles: {} };
+    });
+    configureToolTitleFetcher({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessionKey: "main",
+      onTitlesChanged: null,
+    });
+
+    for (let index = 0; index < 240; index += 1) {
+      getToolCallTitle("bash", { command: `printf retained-command-${index}` });
+    }
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(requestedInputs).toHaveLength(96);
+    expect(requestedInputs[0]).toBe("printf retained-command-144");
+    expect(requestedInputs.at(-1)).toBe("printf retained-command-239");
+    expect(new Set(requestTimes).size).toBe(1);
+  });
+
+  it("bounds the queue across owners", async () => {
+    vi.useFakeTimers();
+    const requestedSessions: string[] = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: unknown) => {
+        requestedSessions.push((params as { sessionKey: string }).sessionKey);
+        return { titles: {} };
+      }),
+    } as unknown as GatewayBrowserClient;
+
+    for (const sessionKey of ["owner-a", "owner-b", "owner-c"]) {
+      configureToolTitleFetcher({ client, sessionKey, onTitlesChanged: null });
+      for (let index = 0; index < 96; index += 1) {
+        getToolCallTitle("bash", { command: `printf ${sessionKey}-command-${index}` });
+      }
+    }
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(requestedSessions).toHaveLength(8);
+    expect(requestedSessions).not.toContain("owner-a");
+    expect(new Set(requestedSessions)).toEqual(new Set(["owner-b", "owner-c"]));
+  });
+
+  it("bounds retained failures even before their retry time", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => ({ titles: {} }));
+    configureToolTitleFetcher({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessionKey: "main",
+      onTitlesChanged: null,
+    });
+    const argsFor = (index: number) => ({ command: `printf failed-command-${index}` });
+
+    for (let start = 0; start < 501; start += 96) {
+      for (let index = start; index < Math.min(start + 96, 501); index += 1) {
+        getToolCallTitle("bash", argsFor(index));
+      }
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    getToolCallTitle("bash", argsFor(0));
+    getToolCallTitle("bash", argsFor(500));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(request).toHaveBeenCalledTimes(22);
+  });
+
+  it("retries transient failures after their bounded retention expires", async () => {
+    vi.useFakeTimers();
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValue({ titles: {} });
+    configureToolTitleFetcher({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessionKey: "main",
+      onTitlesChanged: null,
+    });
+    const args = { command: "pnpm test ui transient title retry" };
+
+    getToolCallTitle("bash", args);
+    await vi.advanceTimersByTimeAsync(250);
+    getToolCallTitle("bash", args);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    getToolCallTitle("bash", args);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not publish a title after its client lifecycle is cleared", async () => {
+    vi.useFakeTimers();
+    let resolveRequest: ((value: { titles: Record<string, string> }) => void) | undefined;
+    const request = vi.fn(
+      async () =>
+        await new Promise<{ titles: Record<string, string> }>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const notify = vi.fn();
+    const args = { command: "pnpm test ui stale title owner" };
+    configureToolTitleFetcher({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessionKey: "main",
+      onTitlesChanged: notify,
+    });
+
+    getToolCallTitle("bash", args);
+    await vi.advanceTimersByTimeAsync(250);
+    const params = requireFirstRequestParams(request) as { items: Array<{ id: string }> };
+    const id = params.items[0]?.id;
+    if (!id || !resolveRequest) {
+      throw new Error("expected pending tool title request");
+    }
+    const replacementRequest = vi.fn(async () => ({ titles: {} }));
+    configureToolTitleFetcher({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+      sessionKey: "replacement-session",
+      onTitlesChanged: null,
+    });
+    resolveRequest({ titles: { [id]: "Stale title" } });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(getToolCallTitle("bash", args)).toBeUndefined();
+    expect(replacementRequest).not.toHaveBeenCalled();
+  });
+
+  it("times out a hung owner before continuing another owner", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(
+      async (
+        _method: string,
+        params: unknown,
+        options?: { timeoutMs?: number },
+      ): Promise<{ titles: Record<string, string> }> => {
+        if ((params as { sessionKey: string }).sessionKey === "new-session") {
+          return { titles: {} };
+        }
+        return await new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("request timed out")), options?.timeoutMs);
+        });
+      },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    configureToolTitleFetcher({
+      client,
+      sessionKey: "old-session",
+      onTitlesChanged: null,
+    });
+    getToolCallTitle("bash", { command: "pnpm test ui obsolete title owner" });
+    await vi.advanceTimersByTimeAsync(250);
+
+    configureToolTitleFetcher({
+      client,
+      sessionKey: "new-session",
+      onTitlesChanged: null,
+    });
+    getToolCallTitle("bash", { command: "pnpm test ui replacement title owner" });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(29_750);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[0]?.[2]).toEqual({ timeoutMs: 30_000 });
+    expect(request.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({ sessionKey: "new-session" }),
+    );
+  });
+
+  it("evicts least-recently-used successful titles", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (_method: string, params: unknown) => {
+      const items = (params as { items: Array<{ id: string; input: string }> }).items;
+      return { titles: Object.fromEntries(items.map((item) => [item.id, item.input])) };
+    });
+    configureToolTitleFetcher({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessionKey: "main",
+      onTitlesChanged: null,
+    });
+    const argsFor = (index: number) => ({ command: `printf cached-command-${index}` });
+
+    for (let start = 0; start < 500; start += 96) {
+      for (let index = start; index < Math.min(start + 96, 500); index += 1) {
+        getToolCallTitle("bash", argsFor(index));
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(getToolCallTitle("bash", argsFor(0))).toBe("printf cached-command-0");
+    getToolCallTitle("bash", argsFor(500));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(getToolCallTitle("bash", argsFor(0))).toBe("printf cached-command-0");
+    expect(getToolCallTitle("bash", argsFor(1))).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(23);
+  });
 });
