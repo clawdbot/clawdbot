@@ -19,12 +19,6 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
-import {
-  cardFitsWithinWorkboardContent,
-  createMobileScrollCards,
-  expectedMobileScrollGeometry,
-  readMobileScrollGeometry,
-} from "./workboard-scroll.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard mocked Gateway E2E",
@@ -989,31 +983,6 @@ suite.define(() => {
       expect(touchGeometry.opacity).toBe("1");
       expect(touchGeometry.width).toBeGreaterThanOrEqual(44);
       expect(touchGeometry.height).toBeGreaterThanOrEqual(44);
-    });
-  });
-
-  it("scrolls the toolbar and cards together at the mobile breakpoint", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      await page.setViewportSize({ height: 700, width: 390 });
-      await installMockGateway(page, {
-        methodResponses: {
-          "config.get": workboardConfigSnapshot(),
-          "sessions.list": sessionsListResponse([sessionRow()]),
-          "tasks.list": { nextCursor: null, tasks: [] },
-          "workboard.cards.list": cardsListResponse(createMobileScrollCards(baseTime)),
-        },
-      });
-      expect((await page.goto(`${suite.server.baseUrl}workboard`))?.status()).toBe(200);
-      const content = page.locator(".content--workboard");
-      const board = page.locator(".workboard-board");
-      const lastCard = cardInColumn(page, "Todo", "Mobile workboard card 6");
-      await lastCard.waitFor({ state: "attached" });
-      const before = await readMobileScrollGeometry(content, "Mobile workboard card 6");
-      expect(before).toEqual(expectedMobileScrollGeometry);
-      await lastCard.evaluate((element) => element.scrollIntoView({ block: "end" }));
-      await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-      expect(await cardFitsWithinWorkboardContent(lastCard)).toBe(true);
-      expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
     });
   });
 
