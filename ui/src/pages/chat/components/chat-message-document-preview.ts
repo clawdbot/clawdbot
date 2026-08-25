@@ -1,10 +1,12 @@
+import { html } from "lit";
+import { t } from "../../../i18n/index.ts";
+import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import {
   isChatMediaResourceCurrent,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   type AttachmentItem,
 } from "./chat-message-media.ts";
-import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
 const DOCUMENT_PREVIEW_MAX_BYTES = 256 * 1024;
 const DOCUMENT_PREVIEW_MAX_CHARS = 16 * 1024;
@@ -110,11 +112,12 @@ export function parseDelimitedPreview(text: string): DelimitedPreview {
   let index = 0;
   for (
     ;
-    index < text.length &&
-    rows.length < DOCUMENT_PREVIEW_MAX_ROWS &&
-    cellCount < DOCUMENT_PREVIEW_MAX_CELLS;
+    index < text.length && rows.length < DOCUMENT_PREVIEW_MAX_ROWS;
     index += 1
   ) {
+    if (cellCount >= DOCUMENT_PREVIEW_MAX_CELLS) {
+      break;
+    }
     const character = text[index];
     if (character === '"') {
       if (quoted && text[index + 1] === '"') {
@@ -151,7 +154,7 @@ export function parseDelimitedPreview(text: string): DelimitedPreview {
   return { rows, truncated };
 }
 
-export function activateDocumentPreview(event: Event, source: string): void {
+function activateDocumentPreview(event: Event, source: string): void {
   event.stopPropagation();
   const trigger = event.currentTarget;
   if (!(trigger instanceof HTMLButtonElement)) {
@@ -164,6 +167,119 @@ export function activateDocumentPreview(event: Event, source: string): void {
   frame.src = source;
   frame.hidden = false;
   trigger.hidden = true;
+}
+
+function renderAttachmentTablePreview(previewText: string | null | undefined) {
+  if (previewText === undefined) {
+    return html`<div class="chat-assistant-attachment-card__preview-unavailable">
+      ${t("chat.mediaPlayer.preparing")}
+    </div>`;
+  }
+  const preview = previewText ? parseDelimitedPreview(previewText) : { rows: [], truncated: false };
+  const { rows } = preview;
+  if (rows.length === 0) {
+    return html`<div class="chat-assistant-attachment-card__preview-unavailable">
+      ${t("chat.attachments.previewUnavailable")}
+    </div>`;
+  }
+  const columnCount = Math.max(...rows.map((row) => row.length));
+  return html`
+    <div class="chat-assistant-attachment-card__table-wrap">
+      <table class="chat-assistant-attachment-card__table">
+        <thead>
+          <tr>
+            ${Array.from({ length: columnCount }, (_, index) =>
+              html`<th>${rows[0]?.[index] ?? ""}</th>`,
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.slice(1).map(
+            (row) => html`<tr>
+              ${Array.from({ length: columnCount }, (_, index) => html`<td>${row[index] ?? ""}</td>`)}
+            </tr>`,
+          )}
+        </tbody>
+      </table>
+      ${preview.truncated
+        ? html`<div class="chat-assistant-attachment-card__table-truncated" role="note">
+            ${t("chat.attachments.previewTruncated")}
+          </div>`
+        : null}
+    </div>
+  `;
+}
+
+export function renderAttachmentDocumentPreview(
+  previewKind: Exclude<AttachmentDocumentPreviewKind, null>,
+  attachment: AttachmentItem["attachment"],
+  attachmentUrl: string,
+  previewText: string | null | undefined,
+) {
+  const updatePreviewState = (event: Event, state: "ready" | "failed") => {
+    const frame = event.currentTarget as HTMLIFrameElement;
+    if (!frame.hasAttribute("src") || state === "ready") {
+      return;
+    }
+    const card = frame.closest<HTMLElement>(".chat-assistant-attachment-card");
+    if (!card) {
+      return;
+    }
+    card.dataset.previewFailed = "";
+    card.classList.remove("chat-assistant-attachment-card--preview");
+    card.classList.add("chat-assistant-attachment-card--compact");
+    card
+      .querySelector<HTMLElement>(".chat-attachment-file-icon")
+      ?.setAttribute("data-mode", "large-placeholder");
+  };
+  if (previewKind === "html") {
+    return html`<div class="chat-assistant-attachment-card__html-preview">
+      <iframe
+        hidden
+        title=${attachment.label}
+        sandbox=""
+        loading="lazy"
+        scrolling="no"
+        @load=${(event: Event) => updatePreviewState(event, "ready")}
+        @error=${(event: Event) => updatePreviewState(event, "failed")}
+      ></iframe>
+      <button
+        type="button"
+        class="chat-assistant-attachment-card__preview-load"
+        @click=${(event: Event) => activateDocumentPreview(event, attachmentUrl)}
+        >${t("chat.attachments.loadPreview")}</button
+      >
+      <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
+    </div>`;
+  }
+  if (previewKind === "table") {
+    return renderAttachmentTablePreview(previewText);
+  }
+  if (previewKind === "text") {
+    if (previewText === undefined) {
+      return html`<div class="chat-assistant-attachment-card__preview-unavailable">
+        ${t("chat.mediaPlayer.preparing")}
+      </div>`;
+    }
+    return html`<pre class="chat-assistant-attachment-card__preview-text">${previewText}</pre>`;
+  }
+  const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
+  return html`<div class="chat-assistant-attachment-card__page-preview">
+    <iframe
+      hidden
+      title=${attachment.label}
+      sandbox="allow-scripts"
+      loading="lazy"
+      @load=${(event: Event) => updatePreviewState(event, "ready")}
+      @error=${(event: Event) => updatePreviewState(event, "failed")}
+    ></iframe>
+    <button
+      type="button"
+      class="chat-assistant-attachment-card__preview-load"
+      @click=${(event: Event) => activateDocumentPreview(event, previewUrl)}
+      >${t("chat.attachments.loadPreview")}</button
+    >
+  </div>`;
 }
 
 function capPreviewText(text: string): string {

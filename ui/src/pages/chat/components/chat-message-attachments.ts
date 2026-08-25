@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
@@ -21,12 +22,11 @@ import {
 } from "./chat-message-attachment-availability.ts";
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
 import {
-  activateDocumentPreview,
   isTextyDocumentAttachment,
   parseDelimitedPreview,
+  renderAttachmentDocumentPreview,
   resolveDocumentPreviewText,
   resolveDocumentPreviewKind,
-  type AttachmentDocumentPreviewKind,
 } from "./chat-message-document-preview.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
@@ -322,125 +322,6 @@ function resolveManagedAttachmentAvailability(
   return current ?? { status: "checking" };
 }
 
-function renderAttachmentTablePreview(previewText: string | null | undefined) {
-  if (previewText === undefined) {
-    return html`<div class="chat-assistant-attachment-card__preview-unavailable">
-      ${t("chat.mediaPlayer.preparing")}
-    </div>`;
-  }
-  const preview = previewText ? parseDelimitedPreview(previewText) : { rows: [], truncated: false };
-  const { rows } = preview;
-  if (rows.length === 0) {
-    return html`<div class="chat-assistant-attachment-card__preview-unavailable">
-      ${t("chat.attachments.previewUnavailable")}
-    </div>`;
-  }
-  const columnCount = Math.max(...rows.map((row) => row.length));
-  return html`
-    <div class="chat-assistant-attachment-card__table-wrap">
-      <table class="chat-assistant-attachment-card__table">
-        <thead>
-          <tr>
-            ${Array.from({ length: columnCount }, (_, index) =>
-              html`<th>${rows[0]?.[index] ?? ""}</th>`,
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.slice(1).map(
-            (row) => html`<tr>
-              ${Array.from({ length: columnCount }, (_, index) => html`<td>${row[index] ?? ""}</td>`)}
-            </tr>`,
-          )}
-        </tbody>
-      </table>
-      ${preview.truncated
-        ? html`<div class="chat-assistant-attachment-card__table-truncated" role="note">
-            ${t("chat.attachments.previewTruncated")}
-          </div>`
-        : null}
-    </div>
-  `;
-}
-
-function renderAttachmentDocumentPreview(
-  previewKind: Exclude<AttachmentDocumentPreviewKind, null>,
-  attachment: AttachmentItem["attachment"],
-  attachmentUrl: string,
-  previewText: string | null | undefined,
-) {
-  const updatePreviewState = (event: Event, state: "ready" | "failed") => {
-    const frame = event.currentTarget as HTMLIFrameElement;
-    if (!frame.hasAttribute("src")) {
-      return;
-    }
-    const card = (event.currentTarget as Element).closest<HTMLElement>(
-      ".chat-assistant-attachment-card",
-    );
-    if (!card) {
-      return;
-    }
-    if (state === "ready") {
-      card.dataset.previewRendered = "";
-      return;
-    }
-    card.dataset.previewFailed = "";
-    card.classList.remove("chat-assistant-attachment-card--preview");
-    card.classList.add("chat-assistant-attachment-card--compact");
-    card
-      .querySelector<HTMLElement>(".chat-attachment-file-icon")
-      ?.setAttribute("data-mode", "large-placeholder");
-  };
-  if (previewKind === "html") {
-    return html`<div class="chat-assistant-attachment-card__html-preview">
-      <iframe
-        hidden
-        title=${attachment.label}
-        sandbox=""
-        loading="lazy"
-        scrolling="no"
-        @load=${(event: Event) => updatePreviewState(event, "ready")}
-        @error=${(event: Event) => updatePreviewState(event, "failed")}
-      ></iframe>
-      <button
-        type="button"
-        class="chat-assistant-attachment-card__preview-load"
-        @click=${(event: Event) => activateDocumentPreview(event, attachmentUrl)}
-        >${t("chat.attachments.loadPreview")}</button
-      >
-      <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
-    </div>`;
-  }
-  if (previewKind === "table") {
-    return renderAttachmentTablePreview(previewText);
-  }
-  if (previewKind === "text") {
-    if (previewText === undefined) {
-      return html`<div class="chat-assistant-attachment-card__preview-unavailable">
-        ${t("chat.mediaPlayer.preparing")}
-      </div>`;
-    }
-    return html`<pre class="chat-assistant-attachment-card__preview-text">${previewText}</pre>`;
-  }
-  const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
-  return html`<div class="chat-assistant-attachment-card__page-preview">
-    <iframe
-      hidden
-      title=${attachment.label}
-      sandbox="allow-scripts"
-      loading="lazy"
-      @load=${(event: Event) => updatePreviewState(event, "ready")}
-      @error=${(event: Event) => updatePreviewState(event, "failed")}
-    ></iframe>
-    <button
-      type="button"
-      class="chat-assistant-attachment-card__preview-load"
-      @click=${(event: Event) => activateDocumentPreview(event, previewUrl)}
-      >${t("chat.attachments.loadPreview")}</button
-    >
-  </div>`;
-}
-
 export function renderAssistantAttachments(
   attachments: AttachmentItem[],
   options: ImageRenderOptions,
@@ -703,7 +584,9 @@ export function renderAssistantAttachments(
       previewText !== undefined &&
       parseDelimitedPreview(previewText ?? "").rows.length === 0;
     const showPreview = previewKind !== null && !tablePreviewFailed && !textPreviewFailed;
-    return html`
+    return keyed(
+      attachmentUrl,
+      html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--document ${
           showPreview
@@ -728,7 +611,8 @@ export function renderAssistantAttachments(
           ? renderAttachmentDocumentPreview(previewKind, attachment, attachmentUrl, previewText)
           : null}
       </div>
-    `;
+    `,
+    );
   };
 
   return html`

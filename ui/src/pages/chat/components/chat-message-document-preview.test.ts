@@ -7,14 +7,14 @@ import {
 } from "./chat-message-document-preview.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
 
-function documentAttachment(label: string, mimeType: string): AttachmentItem {
+function documentAttachment(label: string, mimeType: string, url?: string): AttachmentItem {
   return {
     type: "attachment",
     attachment: {
       kind: "document",
       label,
       mimeType,
-      url: `https://example.com/${label}`,
+      url: url ?? `https://example.com/${label}`,
     },
   };
 }
@@ -58,5 +58,36 @@ describe("parseDelimitedPreview", () => {
 
     expect(iframe?.getAttribute("src")).toContain(label);
     expect(trigger?.hidden).toBe(true);
+  });
+
+  it("resets an activated frame when its resolved source changes", () => {
+    const container = document.createElement("div");
+    const renderSource = (source: string) =>
+      render(
+        renderAssistantAttachments(
+          [documentAttachment("preview.html", "text/html", source)],
+          {},
+          undefined,
+          vi.fn(),
+        ),
+        container,
+      );
+
+    renderSource("https://example.com/ticket-A/preview.html");
+    container
+      .querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__preview-load")
+      ?.click();
+    const activatedFrame = container.querySelector<HTMLIFrameElement>("iframe");
+    expect(activatedFrame?.getAttribute("src")).toContain("ticket-A");
+
+    renderSource("https://example.com/ticket-B/preview.html");
+
+    const renewedFrame = container.querySelector<HTMLIFrameElement>("iframe");
+    const renewedTrigger = container.querySelector<HTMLButtonElement>(
+      ".chat-assistant-attachment-card__preview-load",
+    );
+    expect(renewedFrame).not.toBe(activatedFrame);
+    expect(renewedFrame?.hasAttribute("src")).toBe(false);
+    expect(renewedTrigger?.hidden).toBe(false);
   });
 });
