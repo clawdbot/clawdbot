@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
   isDefaultInstallIdentity: vi.fn(() => true),
+  isContainerEnvironment: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   needsNodeRuntimeMigration: vi.fn(() => false),
@@ -124,6 +125,10 @@ vi.mock("../daemon/systemd.js", () => ({
 
 vi.mock("../infra/windows-port-pids.js", () => ({
   readWindowsProcessArgsSync: mocks.readWindowsProcessArgsSync,
+}));
+
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -1673,6 +1678,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 describe("maybeScanExtraGatewayServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.isContainerEnvironment.mockReturnValue(false);
     mocks.findExtraGatewayServices.mockResolvedValue([]);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
@@ -1772,6 +1778,15 @@ describe("maybeScanExtraGatewayServices", () => {
     await detectExtraGatewayServiceIssues({ deep: true });
 
     expect(mocks.findExtraGatewayServices).toHaveBeenCalledWith(process.env, { deep: true });
+  });
+
+  it("skips structured host-service discovery in externally managed containers", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+
+    await expect(detectExtraGatewayServiceIssues({ deep: true })).resolves.toEqual([]);
+
+    expect(mocks.findExtraGatewayServices).not.toHaveBeenCalled();
+    expect(mocks.isSystemdUnitActive).not.toHaveBeenCalled();
   });
 
   it("maps intentional extra gateway services to informational structured findings", () => {

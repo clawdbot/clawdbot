@@ -1,6 +1,7 @@
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -277,7 +278,8 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   if (
     ctx.options.nonInteractive === true ||
     process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local"
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !isGatewayHostServiceEnvironment(ctx.env ?? process.env)
   ) {
     return;
   }
@@ -304,7 +306,11 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function detectSystemdLingerFindings(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
+  if (
+    process.platform !== "linux" ||
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !isGatewayHostServiceEnvironment(ctx.env ?? process.env)
+  ) {
     return [];
   }
   const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");

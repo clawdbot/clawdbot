@@ -40,7 +40,10 @@ import {
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
+import {
+  isGatewayHostServiceEnvironment,
+  NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON,
+} from "../infra/gateway-supervision.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -361,7 +364,7 @@ async function filterInactiveExtraGatewayServices(
 export async function detectExtraGatewayServiceIssues(
   options: Pick<DoctorOptions, "deep"> = {},
 ): Promise<readonly ExtraGatewayService[]> {
-  if (!isDefaultInstallIdentity(process.env)) {
+  if (!isDefaultInstallIdentity(process.env) || !isGatewayHostServiceEnvironment()) {
     return [];
   }
   const detectedExtraServices = await findExtraGatewayServices(process.env, {

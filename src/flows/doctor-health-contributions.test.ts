@@ -33,6 +33,7 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
 
 const mocks = vi.hoisted(() => ({
   isDefaultInstallIdentity: vi.fn(() => true),
+  isContainerEnvironment: vi.fn(() => false),
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
   runDoctorHealthRepairs: vi.fn(),
@@ -267,6 +268,10 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
 
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: mocks.maybeRepairGatewayDaemon,
+}));
+
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 
 vi.mock("../daemon/service.js", async (importOriginal) => {
@@ -626,6 +631,7 @@ describe("doctor health contributions", () => {
   }
 
   beforeEach(() => {
+    mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
     mocks.runDoctorHealthRepairs.mockReset();
@@ -676,6 +682,7 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairGatewayServiceConfig.mockResolvedValue(undefined);
     mocks.maybeScanExtraGatewayServices.mockClear();
     mocks.maybeScanExtraGatewayServices.mockResolvedValue(undefined);
+    mocks.maybeResolveDuelingSystemdGatewayScopes.mockClear();
     mocks.noteMacLaunchAgentOverrides.mockClear();
     mocks.noteMacLaunchctlGatewayEnvOverrides.mockClear();
     mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockClear();
@@ -1731,6 +1738,35 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("keeps workspace diagnostics without probing host services in Kubernetes", async () => {
+    vi.stubEnv("KUBERNETES_SERVICE_HOST", "10.96.0.1");
+    vi.stubEnv("KUBERNETES_SERVICE_PORT", "443");
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
+
+    await contribution.run(
+      createDoctorHealthFlowContext({ cfg, options: { nonInteractive: true } }),
+    );
+
+    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
+
+    const ctx = createDoctorLintContext({
+      cfg,
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    const check = contribution.healthChecks[0] as HealthCheck;
+    await runDoctorLintChecks(ctx, { checks: [check], onlyIds: ["core/doctor/workspace-status"] });
+
+    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
+  });
+
   it("lets daemon status decide exec SecretRef probing from daemon config", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
@@ -2017,6 +2053,26 @@ describe("doctor health contributions", () => {
       ctx.prompter,
       expect.objectContaining({ allowExecSecretRefs: true }),
     );
+  });
+
+  it("silently skips the host-service contribution in an externally managed container", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+    const contribution = requireDoctorContribution("doctor:gateway-services");
+    const ctx = createDoctorHealthFlowContext({
+      cfg: { gateway: { mode: "local" } },
+      configResult: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeScanExtraGatewayServices).not.toHaveBeenCalled();
+    expect(mocks.maybeResolveDuelingSystemdGatewayScopes).not.toHaveBeenCalled();
+    expect(mocks.maybeRepairGatewayServiceConfig).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it("hints how to enable authenticated GitHub project search", async () => {
@@ -2457,6 +2513,29 @@ describe("doctor health contributions", () => {
         findings: [],
       });
     });
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+  });
+
+  it("never probes systemd linger when selected inside an externally managed container", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+    const checks = await resolveDoctorContributionHealthChecks();
+    const lingerCheck = checks.find((check) => check.id === "core/doctor/systemd-linger");
+    expect(lingerCheck).toBeDefined();
+
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: { gateway: { mode: "local" } },
+            mode: "lint",
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          },
+          { checks: [lingerCheck!], onlyIds: ["core/doctor/systemd-linger"] },
+        ),
+      ).resolves.toMatchObject({ checksRun: 1, findings: [] });
+    });
+
+    expect(mocks.gatewayServiceIsLoaded).not.toHaveBeenCalled();
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
