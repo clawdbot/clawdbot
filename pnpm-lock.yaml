@@ -1287,6 +1287,9 @@ importers:
 
   extensions/llama-cpp:
     dependencies:
+      jszip:
+        specifier: 3.10.1
+        version: 3.10.1
       tar:
         specifier: 7.5.22
         version: 7.5.22
@@ -1294,9 +1297,6 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      jszip:
-        specifier: 3.10.1
-        version: 3.10.1
 
   extensions/llm-task:
     dependencies:
