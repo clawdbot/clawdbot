@@ -229,6 +229,16 @@ beforeEach(() => {
 describe("prepared model runtime Gateway catalog mode", () => {
   it("imports and materializes only configured and auth-candidate providers", async () => {
     const config = {
+      models: {
+        providers: {
+          alpha: {
+            api: "openai-completions" as const,
+            baseUrl: "https://alpha.invalid",
+            models: [],
+          },
+          beta: { api: "openai-completions" as const, baseUrl: "https://beta.invalid", models: [] },
+        },
+      },
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     };
 
