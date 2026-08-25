@@ -351,7 +351,11 @@ function validateConfigObjectWithPluginsBase(
             schema: entry.configSchema,
             pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
           });
-        } else if (!current) {
+        } else if (!current || entry.replacesGeneratedSchema) {
+          // A winner that ships no descriptor leaves the channel permissive. Keeping the
+          // pre-seeded generated schema here would validate the operator's config against the
+          // bundled plugin the declared replacement displaced, rejecting every key the winner
+          // accepts — the same handoff `applyChannelSchemas` drops from `config.schema`.
           info.channelSchemas.set(entry.id, {});
         }
       }

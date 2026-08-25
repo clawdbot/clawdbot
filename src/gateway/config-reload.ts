@@ -4,8 +4,6 @@ import nodePath from "node:path";
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import { collectChannelSchemaMetadataWithOwnership } from "../config/channel-config-metadata.js";
-import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
 import {
   configSnapshotAuditRecordMatchesPath,
@@ -21,13 +19,11 @@ import {
   type ConfigExternalChangeAuditRecord,
 } from "../config/io.audit.js";
 import type { ConfigWriteNotification } from "../config/io.js";
-import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
 import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { collectCededChannelIdsByPlugin } from "../plugins/channel-cede-planning.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
@@ -35,6 +31,11 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import {
+  findChannelOwnershipChange,
+  isChannelOwnershipSourcePath,
+  type ChannelOwnershipChange,
+} from "./channel-ownership-change.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
@@ -150,119 +151,24 @@ function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
 }
 
 /**
- * The channel owner each side of a config transaction selects, keyed by canonical channel id, on
- * both planes the codebase distinguishes: the schema owner is computed with the same registry and
- * ownership policy the schema plane uses (`loadGatewayRuntimeConfigSchema` pairs them the same
- * way), and the runtime cede owner comes from the collector plugin registration shares, so the
- * reload path cannot judge ownership by a different rule than validation, the Control UI, or the
- * loader apply.
- *
- * The pairing matters: ownership reads explicit selection and the per-channel activation
- * candidates from the SOURCE config, because auto-enable materializes
- * `plugins.entries.<id>.enabled` into the runtime config and a materialized-config read would
- * report every auto-enabled claimant as hand-picked. The runtime config still supplies policy
- * disablement and the registry workspace roots, mirroring how the schema endpoint pairs
- * `getRuntimeConfig()` with the published source snapshot.
- */
-type ChannelOwnersSnapshot = {
-  /** Selected schema owner per channel; undefined when no claimant ships a descriptor. */
-  schemaOwners: Map<string, string | undefined>;
-  /** Runtime cede owner per contested channel: the claimant registration hands the channel to. */
-  runtimeOwners: Map<string, string>;
-};
-
-function collectChannelOwners(side: {
-  config: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-}): ChannelOwnersSnapshot {
-  const registry = resolveConfigWidePluginManifestRegistry({
-    config: side.config,
-    env: process.env,
-  });
-  const policy = createConfiguredChannelOwnershipPolicy({
-    config: side.config,
-    sourceConfig: side.sourceConfig,
-    registry,
-    env: process.env,
-  });
-  const schemaOwners = new Map<string, string | undefined>();
-  for (const entry of collectChannelSchemaMetadataWithOwnership(registry, policy)) {
-    schemaOwners.set(entry.id, entry.schemaPluginId);
-  }
-  // A contest can exist with no schema descriptor on any side: a bare `record.channels` claim
-  // serves a channel, and a `preferOver` declaration can travel on `channelCatalogMeta` alone,
-  // which auto-enable honors like a `channelConfigs` one. The schema map reports no owner for
-  // such a channel however ownership settles, so the runtime plane's cede owner — the same
-  // shared rule plugin registration applies — travels alongside it, or a hot edit could still
-  // restart the stale owner while activation would select the replacement. The two planes stay
-  // in separate maps because manifest channel ids are arbitrary strings, so no composite key
-  // can be proven collision-free.
-  const { cededChannelOwners } = collectCededChannelIdsByPlugin({
-    registry,
-    config: side.config,
-    sourceConfig: side.sourceConfig,
-    env: process.env,
-    onlyPluginIdSet: null,
-    dreamingSidecar: null,
-  });
-  return { schemaOwners, runtimeOwners: cededChannelOwners };
-}
-
-type ChannelOwnershipChange = {
-  channelId: string;
-  previousOwner: string | undefined;
-  nextOwner: string | undefined;
-};
-
-/** The first channel whose selected owner differs between the two config pairs, on either plane. */
-function findChannelOwnershipChange(params: {
-  previous: { config: OpenClawConfig; sourceConfig: OpenClawConfig };
-  next: { config: OpenClawConfig; sourceConfig: OpenClawConfig };
-}): ChannelOwnershipChange | null {
-  const previous = collectChannelOwners(params.previous);
-  const next = collectChannelOwners(params.next);
-  const planes: ReadonlyArray<
-    [ReadonlyMap<string, string | undefined>, ReadonlyMap<string, string | undefined>]
-  > = [
-    [previous.schemaOwners, next.schemaOwners],
-    [previous.runtimeOwners, next.runtimeOwners],
-  ];
-  for (const [previousOwners, nextOwners] of planes) {
-    for (const channelId of new Set([...previousOwners.keys(), ...nextOwners.keys()])) {
-      const previousOwner = previousOwners.get(channelId);
-      const nextOwner = nextOwners.get(channelId);
-      if (previousOwner !== nextOwner) {
-        return { channelId, previousOwner, nextOwner };
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Whether an authored edit touched anything channel ownership SELECTION reads. Selection resolves
- * from explicit plugin selection and the per-channel activation candidates, both of which live
- * under `plugins` or `channels` in the source config. Ownership can still move without either
- * when an `agents.*` edit changes the workspace roots plugin discovery scans; the
+ * Whether an authored edit touches the broad source surface guarded for ownership changes.
+ * Selection resolves from explicit plugin selection and the per-channel activation candidates,
+ * both of which live under `plugins` or `channels` in the source config. Ownership can still move
+ * without either when an `agents.*` edit changes the workspace roots plugin discovery scans; the
  * `agentWorkspaceRootsMoved` trigger below owns that case.
  *
- * Both ownership-comparison triggers gate on it — the zero-diff guard (`noDiffOwnershipChange`)
- * and the hot-edit escalation gate below it — to keep the comparison off ordinary reload paths:
- * resolving a manifest registry and walking ownership on both sides costs a few milliseconds warm
- * and far more when no process-current plugin metadata snapshot is published, while
- * `diffConfigPaths` is the same walk this file already runs on other source-only paths.
+ * Both ownership-comparison triggers gate on this predicate — the zero-diff guard
+ * (`noDiffOwnershipChange`, which keeps the diff it walked so the commit notification can report
+ * it) and the hot-edit escalation gate below it — to keep the comparison off ordinary reload
+ * paths: resolving a manifest registry and walking ownership on both sides costs a few
+ * milliseconds warm and far more when no process-current plugin metadata snapshot is published,
+ * while `diffConfigPaths` is the same walk this file already runs on other source-only paths.
  */
 function sourceEditTouchesChannelOwnership(
   previousSourceConfig: OpenClawConfig,
   nextSourceConfig: OpenClawConfig,
 ): boolean {
-  return diffConfigPaths(previousSourceConfig, nextSourceConfig).some(
-    (path) =>
-      path === "plugins" ||
-      path === "channels" ||
-      path.startsWith("plugins.") ||
-      path.startsWith("channels."),
-  );
+  return diffConfigPaths(previousSourceConfig, nextSourceConfig).some(isChannelOwnershipSourcePath);
 }
 
 /**
@@ -736,11 +642,17 @@ export function startGatewayConfigReloader(opts: {
       // Persisted content changed even when the runtime skipped applying it
       // (writer intent, reload mode off): change listeners still refresh.
       const notifyCommitted = () => {
-        if (changedPaths.length > 0) {
+        // `changedPaths` is the effective-config diff. When an authored plugins/channels edit leaves
+        // it empty, retain the authored diff walked below so config clients learn the persisted file
+        // changed. This intentionally also notifies for ownership-neutral edits on that surface; the
+        // trigger is the authored edit with an empty effective diff, not the comparison result.
+        const committedChangedPaths =
+          changedPaths.length > 0 ? changedPaths : ownershipCommitChangedPaths;
+        if (committedChangedPaths.length > 0) {
           opts.onConfigCandidateCommitted?.({
             path: opts.watchPath,
             persistedHash: persistedHash ?? null,
-            changedPaths,
+            changedPaths: committedChangedPaths,
           });
         }
       };
@@ -825,14 +737,23 @@ export function startGatewayConfigReloader(opts: {
     //
     // The source-diff guard runs first so an ordinary no-op reload never pays for the comparison,
     // and a resolution failure escalates rather than being read as "ownership held still".
+    // The authored delta behind an empty-effective-diff plugins/channels edit. Assign it before
+    // resolving ownership so a comparison failure still notifies listeners; only a failure while
+    // computing this diff leaves it empty.
+    let ownershipCommitChangedPaths: string[] = [];
     const noDiffOwnershipChange = ((): ChannelOwnershipChange | null => {
       if (changedPaths.length > 0 || forcePluginMetadataReload) {
         return null;
       }
       try {
-        if (!sourceEditTouchesChannelOwnership(currentRuntimeEnvSourceConfig, nextSourceConfig)) {
+        const authoredChangedPaths = diffConfigPaths(
+          currentRuntimeEnvSourceConfig,
+          nextSourceConfig,
+        );
+        if (!authoredChangedPaths.some(isChannelOwnershipSourcePath)) {
           return null;
         }
+        ownershipCommitChangedPaths = authoredChangedPaths;
         return findChannelOwnershipChange({
           previous: { config: currentConfig, sourceConfig: currentRuntimeEnvSourceConfig },
           next: { config: nextConfig, sourceConfig: nextSourceConfig },

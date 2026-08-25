@@ -1,7 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOwnedChannelId } from "../channels/ids.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
@@ -11,8 +9,9 @@ import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
+import { isRecord } from "../utils.js";
 import { collectPreferenceCycleComponents } from "./channel-preference-cycles.js";
+import { resolveExternalPluginCatalogPaths } from "./external-plugin-catalog-paths.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -27,33 +26,6 @@ type ExternalCatalogChannelEntry = {
   pluginId?: string;
   packageName?: string;
 };
-
-const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
-
-function splitEnvPaths(value: string): string[] {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return [];
-  }
-  return normalizeStringEntries(
-    trimmed.split(/[;,]/g).flatMap((chunk) => chunk.split(path.delimiter)),
-  );
-}
-
-function resolveExternalCatalogPaths(env: NodeJS.ProcessEnv): string[] {
-  for (const key of ENV_CATALOG_PATHS) {
-    const raw = normalizeOptionalString(env[key]);
-    if (raw) {
-      return splitEnvPaths(raw);
-    }
-  }
-  const configDir = resolveConfigDir(env);
-  return [
-    path.join(configDir, "mpm", "plugins.json"),
-    path.join(configDir, "mpm", "catalog.json"),
-    path.join(configDir, "plugins", "catalog.json"),
-  ];
-}
 
 function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChannelEntry[] {
   const list = (() => {
@@ -151,11 +123,9 @@ function resolveExternalCatalogEntry(
   channelId: string,
   env: NodeJS.ProcessEnv,
 ): ExternalCatalogChannelEntry | undefined {
-  // Key on the resolved absolute paths: the same configured `~/catalog.json` resolves differently
-  // per HOME, so a raw-path key would hand one environment another's parsed catalog.
-  const resolvedPaths = resolveExternalCatalogPaths(env).map((rawPath) =>
-    resolveUserPath(rawPath, env),
-  );
+  // Keyed on the resolved absolute paths: the same configured `~/catalog.json` resolves
+  // differently per HOME, so a raw-path key would hand one environment another's parsed catalog.
+  const resolvedPaths = resolveExternalPluginCatalogPaths(env);
   const pathsKey = JSON.stringify(resolvedPaths);
   if (externalCatalogSnapshot?.pathsKey !== pathsKey) {
     externalCatalogSnapshot = {

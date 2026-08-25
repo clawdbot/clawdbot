@@ -597,6 +597,33 @@ export function collectChannelSchemaMetadataWithOwnership(
   // record that claims the channel, and a displaced claimant may not seed an empty channel while
   // an active claimant that beat it serves the channel.
   const claimantsByChannel = collectChannelClaimants(registry);
+  // This rule is deliberately narrow: only a `preferOver` handoff that displaces a bundled
+  // claimant in favor of a non-bundled runtime winner replaces the generated schema. Rank loss
+  // without `preferOver` and bundled-to-bundled displacement remain unmarked, so those schemas
+  // continue to merge with the generated entry.
+  //
+  // The generated bundled schema for a channel describes its bundled claimant. Once a declared
+  // replacement displaces that claimant and a non-bundled winner serves the channel, that schema
+  // describes nobody: merging the winner's into it leaves `config.schema` advertising the
+  // displaced plugin's properties and required fields while validation runs the winner's, so the
+  // Control UI offers fields the winner rejects. Recorded per channel so the schema build and
+  // validation both replace — or drop, when the winner ships no descriptor — instead of merging.
+  const generatedSchemaDisplacedChannels = new Set<string>();
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    const winnerId = runtimeWinners.get(claimedId);
+    const winnerOrigin = claimants.find((record) => record.id === winnerId)?.origin;
+    if (winnerOrigin === undefined || winnerOrigin === "bundled") {
+      continue;
+    }
+    const displacedBundledClaimant = claimants.some(
+      (record) =>
+        record.origin === "bundled" &&
+        isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
+    );
+    if (displacedBundledClaimant) {
+      generatedSchemaDisplacedChannels.add(claimedId);
+    }
+  }
   // Redaction is a property of the field, not of whichever claimant wins the schema. A displaced
   // plugin's config can survive under the shared channel when the replacement accepts additional
   // properties, so dropping its hints with its schema would leave a retained secret with no hint
@@ -795,6 +822,9 @@ export function collectChannelSchemaMetadataWithOwnership(
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
     .map(({ originRank: _originRank, ...entry }) => {
+      if (generatedSchemaDisplacedChannels.has(entry.id)) {
+        entry.replacesGeneratedSchema = true;
+      }
       const carried = redactionByChannel.get(entry.id);
       if (!carried) {
         return entry;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { collectAutoEnableConfiguredChannelIds } from "../config/channel-activation-candidates.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { resolveExternalPluginCatalogPaths } from "../config/external-plugin-catalog-paths.js";
 import { hasMaterialPluginEntryConfig } from "../config/plugin-replacement-eligibility.js";
 import { getGatewayAmbientEnvTriggerPolicy } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -139,6 +140,7 @@ function buildActivationMetadataHash(params: {
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
   configuredChannelIds: readonly string[];
+  externalCatalogPaths: readonly string[];
 }): string {
   const configuredChannels = [...new Set(params.configuredChannelIds)].toSorted((left, right) =>
     left.localeCompare(right),
@@ -186,6 +188,7 @@ function buildActivationMetadataHash(params: {
         materialSourceEntries: materialSourceEntryIds,
         enabledChannels: enabledSourceChannels,
         configuredChannels,
+        externalCatalogPaths: params.externalCatalogPaths,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
@@ -408,6 +411,15 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
         undefined,
         getGatewayAmbientEnvTriggerPolicy(),
       ),
+      // Cede planning reads `preferOver` out of the external plugin catalogs too, and which files
+      // those are is decided entirely by `OPENCLAW_PLUGIN_CATALOG_PATHS`/`OPENCLAW_MPM_CATALOG_PATHS`
+      // (falling back to the config dir). Neither variable reaches the discovery fingerprint, so
+      // without them here two loads that differ only by catalog file share one cache entry and the
+      // second gets the first's cede map — the wrong runtime channel owner. Paths only: rewriting
+      // a catalog at the same path remains a known limitation because it leaves this key unchanged.
+      // The registry cache that would need clearing is cleared on plugin config mutation, not on
+      // catalog rewrite or the plugin metadata lifecycle clear.
+      externalCatalogPaths: resolveExternalPluginCatalogPaths(env),
     }),
     installs: installRecords,
     env,

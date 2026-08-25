@@ -52,6 +52,7 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -63,9 +64,17 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
 import type { ConfigUiHints } from "../../shared/config-ui-hints-types.js";
+import {
+  findChannelOwnershipChange,
+  isChannelOwnershipSourcePath,
+} from "../channel-ownership-change.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
-import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
+import {
+  buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
+  resolveConfigReloadMetadata,
+} from "../config-reload-plan.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import {
   getCachedConfigSchemaResponse,
@@ -814,6 +823,17 @@ async function respondWithConfigRestartWrite(params: {
   previousConfig: OpenClawConfig;
   /** Authored counterpart of previousConfig; ownership reads explicit selection from it. */
   previousSourceConfig: OpenClawConfig;
+  /** Runtime config produced from the committed source and used to plan effective reloads. */
+  nextRuntimeConfig: OpenClawConfig;
+  /** Persisted source leaves that can participate in channel ownership selection. */
+  persistedOwnershipPaths: string[];
+  /**
+   * Metadata graph paired with the pre-write config snapshot. Plugin discovery edits normally have
+   * non-noop plans, but a no-op-classified `agents.*` edit can move the workspace roots discovery
+   * scans. The ownership resolver reuses this only when both configs resolve identical roots and
+   * otherwise falls back to fresh per-side registries.
+   */
+  basePluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Request-scoped memoized builder, shared with the caller's earlier pre-write hint builds. */
   buildSchemaForConfig: typeof buildRuntimeConfigSchemaForConfig;
   changedPaths: string[];
@@ -836,12 +856,51 @@ async function respondWithConfigRestartWrite(params: {
     // operator selection.
     params.buildSchemaForConfig(params.writeResult.config, params.writeResult.config).uiHints,
   );
+  let restartPlanningChangedPaths = params.changedPaths;
+  const persistedPlan = buildGatewayReloadPlan(params.changedPaths, {
+    // Match the authoritative persisted config used by final restart planning below. Today the
+    // candidate only refines account-scoped hot targets and cannot change no-op classification;
+    // keeping both calls aligned prevents that gate from diverging if planning grows new rules.
+    candidateConfig: params.writeResult.config,
+  });
+  if (params.persistedOwnershipPaths.length > 0 && isNoopGatewayReloadPlan(persistedPlan)) {
+    // A runtime no-op can hide a source-only owner move, but it also covers ordinary authored
+    // values already present in the runtime config. Compare the actual committed source on both
+    // ownership planes so neutral writes do not acquire a restart solely from their source diff.
+    try {
+      const ownershipChange = findChannelOwnershipChange({
+        previous: {
+          config: params.previousConfig,
+          sourceConfig: params.previousSourceConfig,
+        },
+        next: {
+          config: params.nextRuntimeConfig,
+          sourceConfig: params.writeResult.config,
+        },
+        pluginMetadataSnapshot: params.basePluginMetadataSnapshot,
+      });
+      if (ownershipChange) {
+        restartPlanningChangedPaths = [
+          ...new Set([...params.changedPaths, ...params.persistedOwnershipPaths]),
+        ];
+      }
+    } catch (error) {
+      // The write is already durable. Fail safe by planning from its ownership paths rather than
+      // acknowledging a no-op that can leave the previous owner running.
+      params.context.logGateway.warn(
+        `config ownership comparison failed; scheduling conservatively: ${formatErrorMessage(error)}`,
+      );
+      restartPlanningChangedPaths = [
+        ...new Set([...params.changedPaths, ...params.persistedOwnershipPaths]),
+      ];
+    }
+  }
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
     mode: params.mode,
     configPath: params.writeResult.path,
-    changedPaths: params.changedPaths,
+    changedPaths: restartPlanningChangedPaths,
     nextConfig: params.writeResult.config,
     actor: params.actor,
     context: params.context,
@@ -1302,15 +1361,15 @@ export const configHandlers: GatewayRequestHandlers = {
     // the same effective config. Both diffs above compare runtime shapes only, so such an edit was
     // reported as applied and never written. Ownership reads the authored config, so the authored
     // diff decides the no-op alongside them.
-    // Scoped to the authored surface explicit selection is read from — `plugins.*` entries,
-    // allow/deny and slots, plus `channels.<id>.enabled` for a bundled claimant. A patch validation
-    // normalizes away is still a no-op: persisting the authored value there would write back
-    // exactly what validation rejected. Only an ownership input can be materially identical and
-    // still change which plugin serves a channel, which is the case both diffs above miss.
+    // Scoped to every key under `plugins` or `channels`, including the bare roots. Ownership
+    // selection reads only part of that surface, but the broad source-path guard is paired with an
+    // exact ownership comparison before any source-only path reaches restart planning. A patch
+    // validation normalizes away is still a no-op: persisting the authored value there would write
+    // back exactly what validation rejected.
     const authoredChangedPaths = diffConfigLeafPaths(
       snapshot.sourceConfig,
       authoredCandidate,
-    ).filter((path) => path === "plugins" || /^(?:plugins|channels)\./u.test(path));
+    ).filter(isChannelOwnershipSourcePath);
     const actor = resolveControlPlaneActor(client);
     if (restoredChangedPaths.length === 0 && authoredChangedPaths.length === 0) {
       respondConfigPatchNoop({
@@ -1383,6 +1442,10 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!writeResult) {
       return;
     }
+    const persistedOwnershipPaths = diffConfigLeafPaths(
+      snapshot.sourceConfig,
+      writeResult.config,
+    ).filter(isChannelOwnershipSourcePath);
     await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-patch",
@@ -1390,6 +1453,9 @@ export const configHandlers: GatewayRequestHandlers = {
       writeResult,
       previousConfig: snapshot.config,
       previousSourceConfig: snapshot.sourceConfig,
+      nextRuntimeConfig: validatedConfig,
+      persistedOwnershipPaths,
+      basePluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
       buildSchemaForConfig,
       changedPaths,
       actor,
@@ -1454,6 +1520,10 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!writeResult) {
       return;
     }
+    const persistedOwnershipPaths = diffConfigLeafPaths(
+      snapshot.sourceConfig,
+      writeResult.config,
+    ).filter(isChannelOwnershipSourcePath);
     await respondWithConfigRestartWrite({
       requestParams: params,
       kind: "config-apply",
@@ -1461,6 +1531,9 @@ export const configHandlers: GatewayRequestHandlers = {
       writeResult,
       previousConfig: snapshot.config,
       previousSourceConfig: snapshot.sourceConfig,
+      nextRuntimeConfig: parsed.config,
+      persistedOwnershipPaths,
+      basePluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
       buildSchemaForConfig,
       changedPaths,
       actor,

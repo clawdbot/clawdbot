@@ -299,6 +299,7 @@ describe("gateway config reload channel ownership escalation", () => {
     });
 
     let nextSnapshot = makeSnapshot(params.nextConfig, "next-hash");
+    const onConfigCandidateCommitted = vi.fn();
     const onNoopConfigCommit = vi.fn(async () => {});
     const watcher = createWatcherMock();
     vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
@@ -331,6 +332,7 @@ describe("gateway config reload channel ownership escalation", () => {
       initialPluginInstallRecords: {},
       readPluginInstallRecords: async () => ({}),
       onNoopConfigCommit,
+      onConfigCandidateCommitted,
       onHotReload,
       onRestart,
       log,
@@ -339,6 +341,7 @@ describe("gateway config reload channel ownership escalation", () => {
 
     return {
       log,
+      onConfigCandidateCommitted,
       onHotReload,
       onNoopConfigCommit,
       onRestart,
@@ -525,6 +528,18 @@ describe("gateway config reload channel ownership escalation", () => {
       expect(plan?.reloadPlugins).toBe(true);
       expect(plan?.disposeMcpRuntimes).toBe(true);
       expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
+      // Regression on #128904: the transaction's `changedPaths` is the effective diff, empty
+      // by construction here, so the commit notification — the single point the `config.changed`
+      // broadcast hangs off — never fired and subscribed config clients kept the previous owner's
+      // config and schema until an unrelated edit landed.
+      expect(harness.onConfigCandidateCommitted).toHaveBeenCalledTimes(1);
+      expect(harness.onConfigCandidateCommitted.mock.calls[0]?.[0]).toMatchObject({
+        path: "/tmp/openclaw.json",
+        persistedHash: "next-hash",
+        // `diffConfigPaths` reports the added subtree root, the same granularity every other
+        // `changedPaths` on this transaction uses.
+        changedPaths: ["plugins"],
+      });
     } finally {
       await harness.reloader.stop();
     }
@@ -602,32 +617,42 @@ describe("gateway config reload channel ownership escalation", () => {
     }
   });
 
-  // The property the widened trigger must not spend: an ownership-neutral edit under the noop
-  // prefix pays the comparison, finds no move, and keeps the fully-noop commit — no plugin
-  // reload, no hot reload, no channel restart.
-  it("keeps the noop commit for an ownership-neutral edit under a noop prefix", async () => {
+  // The notification fallback intentionally follows the authored surface the ownership comparison
+  // reads, not its result: an ownership-neutral plugins edit with no effective diff still tells
+  // config clients that the persisted source changed.
+  it("notifies an ownership-neutral authored plugins edit with unchanged effective config", async () => {
+    const authoredConfig = {
+      gateway: { reload: {} },
+      channels: { [CHANNEL_ID]: { token: "abc" } },
+    } as unknown as OpenClawConfig;
+    const materializedConfig = {
+      ...authoredConfig,
+      plugins: { entries: { [REPLACEMENT_PLUGIN_ID]: { enabled: true } } },
+    } as unknown as OpenClawConfig;
     const harness = startReloader({
-      initialConfig: {
-        gateway: { reload: {} },
-        channels: { [CHANNEL_ID]: { token: "a" } },
-      } as OpenClawConfig,
-      nextConfig: {
-        gateway: { reload: {} },
-        channels: { [CHANNEL_ID]: { token: "b" } },
-      } as OpenClawConfig,
+      initialConfig: authoredConfig,
+      materializedConfig,
+      nextConfig: materializedConfig,
       staleRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
       reloadedRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
-      channelReload: NOOP_CLASSIFIED_RELOAD,
     });
     try {
       harness.watcher.emit("change");
       await vi.runAllTimersAsync();
 
       expect(harness.onRestart).not.toHaveBeenCalled();
-      expect(harness.onNoopConfigCommit).toHaveBeenCalledTimes(1);
+      // This binds the effective-diff-empty branch; the ordinary nonempty-diff/noop-plan path calls
+      // `onNoopConfigCommit` instead.
+      expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
       expect(harness.onHotReload).not.toHaveBeenCalled();
       expect(harness.reloadPlugins).not.toHaveBeenCalled();
       expect(harness.startChannel).not.toHaveBeenCalled();
+      expect(harness.onConfigCandidateCommitted).toHaveBeenCalledTimes(1);
+      expect(harness.onConfigCandidateCommitted.mock.calls[0]?.[0]).toEqual({
+        path: "/tmp/openclaw.json",
+        persistedHash: "next-hash",
+        changedPaths: ["plugins"],
+      });
       expect(harness.log.info).not.toHaveBeenCalledWith(
         expect.stringContaining("channel ownership moved"),
       );

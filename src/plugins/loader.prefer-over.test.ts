@@ -410,6 +410,69 @@ describe("plugin loader preferOver activation", () => {
     ]);
   });
 
+  // Regression on #128904: cede planning resolves `preferOver` out of the external plugin
+  // catalogs, whose location is decided entirely by `OPENCLAW_PLUGIN_CATALOG_PATHS`. Neither that
+  // variable nor its sibling reached the discovery fingerprint or the activation metadata hash, so
+  // two loads that differed only by catalog file shared one cache entry and the second inherited
+  // the first's cede map — and with it the wrong runtime channel owner.
+  it("does not reuse a cached registry across a different external catalog path", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+    });
+    const writeCatalog = (preferOver: string[]): string => {
+      const catalogPath = path.join(makePluginLoaderTempDir(), "catalog.json");
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          entries: [
+            {
+              name: "@openclaw/zz-replacement",
+              openclaw: {
+                plugin: { id: "zz-replacement" },
+                channel: { id: "zzalpha", preferOver },
+              },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+      return catalogPath;
+    };
+    const preferringCatalog = writeCatalog(["zz-fallback"]);
+    const neutralCatalog = writeCatalog([]);
+    const baseEnv = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    // One catalog-free activation result feeds both loads on purpose: the catalog file is then the
+    // only input that differs, which is exactly the pair the cache identity could not tell apart.
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env: baseEnv });
+    const ownerWithCatalog = (catalogPath: string) =>
+      loadOpenClawPlugins({
+        config: autoEnabled.config,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: autoEnabled.autoEnabledReasons,
+        env: { ...baseEnv, OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath },
+      }).channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId;
+
+    expect(ownerWithCatalog(preferringCatalog)).toBe("zz-replacement");
+    expect(ownerWithCatalog(neutralCatalog)).toBe("zz-fallback");
+  });
+
   // Neither claimant has to supply a descriptor at all: a catalog-declared preference between
   // two bare claims must still cede the channel, or the schemaless pair falls back to discovery
   // order.

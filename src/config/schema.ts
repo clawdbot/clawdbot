@@ -146,6 +146,13 @@ export type ChannelUiMetadata = {
   description?: string;
   configSchema?: JsonSchemaNode;
   configUiHints?: Record<string, ConfigUiHint>;
+  /**
+   * The generated bundled schema for this channel no longer describes its owner: a declared
+   * replacement displaced the bundled claimant. `configSchema` then replaces that entry outright,
+   * and a winner shipping none removes it, because merging leaves the schema advertising the
+   * displaced plugin's properties and required fields while validation runs the winner's.
+   */
+  replacesGeneratedSchema?: boolean;
 };
 
 const EXTENSION_SCHEMA_MAX_BYTES = 256 * 1024;
@@ -446,9 +453,18 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
 
   for (const channel of channels) {
     if (!channel.configSchema) {
+      // An ownership handoff to a winner that ships no descriptor removes the generated entry
+      // instead of leaving it: the displaced plugin's strict schema would otherwise keep
+      // rejecting keys the winner accepts. The channel falls back to the permissive
+      // `channels.additionalProperties`, which is what the runtime owner actually enforces.
+      if (channel.replacesGeneratedSchema) {
+        delete channelProps[channel.id];
+      }
       continue;
     }
-    const existing = asSchemaObject(channelProps[channel.id]);
+    const existing = channel.replacesGeneratedSchema
+      ? undefined
+      : asSchemaObject(channelProps[channel.id]);
     const incoming = asSchemaObject(channel.configSchema);
     if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
       channelProps[channel.id] = mergeObjectSchema(existing, incoming);
@@ -484,6 +500,9 @@ function buildMergedSchemaCacheKey(params: {
       description: channel.description,
       configSchema: channel.configSchema ?? null,
       configUiHints: channel.configUiHints ?? null,
+      // Two metadata sets can carry the same descriptors and still build different schemas: the
+      // handoff decides whether the generated bundled entry survives.
+      replacesGeneratedSchema: channel.replacesGeneratedSchema === true,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
   // Build the hash incrementally so we never materialize one giant JSON string.
