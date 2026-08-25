@@ -1403,13 +1403,25 @@ jobs:
           fi
 
       - name: Pack built runtime artifacts
-        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
+        env:
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/dist-runtime-build-artifact.mjs ]]; then
+            node scripts/dist-runtime-build-artifact.mjs "$RUNNER_TEMP/dist-runtime-build.tar.zst"
+          elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Selected compatibility target predates the runtime artifact manifest; using its legacy build outputs."
+            tar --posix -cf "$RUNNER_TEMP/dist-runtime-build.tar.zst" --use-compress-program zstdmt dist dist-runtime packages/*/dist
+          else
+            echo "Current CI target is missing scripts/dist-runtime-build-artifact.mjs" >&2
+            exit 1
+          fi
 
       - name: Upload built runtime artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist-runtime-build
-          path: dist-runtime-build.tar.zst
+          path: ${{ runner.temp }}/dist-runtime-build.tar.zst
           retention-days: 1
 
       - name: Upload bundled plugin asset artifacts
