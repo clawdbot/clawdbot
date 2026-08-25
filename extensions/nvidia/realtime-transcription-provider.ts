@@ -38,6 +38,12 @@ const WEBSOCKET_URL = "wss://grpc.nvcf.nvidia.com:443/v1/realtime?intent=transcr
 const MODEL = "nvidia/nemotron-asr-streaming";
 const SESSION_TIMEOUT_MS = 10_000;
 const SESSION_RESPONSE_MAX_BYTES = 64 * 1024;
+const INPUT_SAMPLE_RATE_HZ = 8_000;
+const PCM16_BYTES_PER_SAMPLE = 2;
+const PERIODIC_COMMIT_SECONDS = 20;
+const PERIODIC_COMMIT_BYTES =
+  INPUT_SAMPLE_RATE_HZ * PCM16_BYTES_PER_SAMPLE * PERIODIC_COMMIT_SECONDS;
+const FINAL_TRANSCRIPT_TIMEOUT_MS = 10_000;
 
 type NvidiaConfig = { apiKey?: string; language?: string; model?: string };
 type NvidiaEvent = {
@@ -168,7 +174,7 @@ function sessionUpdate(params: {
     session: {
       modalities: ["text"],
       input_audio_format: "pcm16",
-      input_audio_params: { sample_rate_hz: 8_000, num_channels: 1 },
+      input_audio_params: { sample_rate_hz: INPUT_SAMPLE_RATE_HZ, num_channels: 1 },
       input_audio_transcription: {
         ...transcription,
         language: params.language,
@@ -247,6 +253,7 @@ function createSession(
   };
   let functionId = FUNCTION_ID;
   let language = config.language ?? "en-US";
+  let uncommittedPcmBytes = 0;
   const speechStarted = { value: false };
 
   return createRealtimeTranscriptionWebSocketSession<NvidiaEvent>({
@@ -271,6 +278,7 @@ function createSession(
     protocols: () => ["realtime", `realtime-token.${token}`],
     parseMessage: parseRealtimeEvent,
     onOpen: (transport) => {
+      uncommittedPcmBytes = 0;
       if (!hostedSession) {
         transport.failConnect(new Error("NVIDIA realtime ASR session was not initialized"));
         return;
@@ -280,12 +288,30 @@ function createSession(
     onMessage: (event, transport) => handleEvent(event, transport, speechStarted),
     sendAudio: (audio, transport) => {
       const pcm = mulawToPcm(audio);
-      transport.sendJson({ type: "input_audio_buffer.append", audio: pcm.toString("base64") });
-      transport.sendJson({ type: "input_audio_buffer.commit" });
+      if (
+        !transport.sendJson({
+          type: "input_audio_buffer.append",
+          audio: pcm.toString("base64"),
+        })
+      ) {
+        return;
+      }
+      uncommittedPcmBytes += pcm.byteLength;
+      if (
+        uncommittedPcmBytes >= PERIODIC_COMMIT_BYTES &&
+        transport.sendJson({ type: "input_audio_buffer.commit" })
+      ) {
+        uncommittedPcmBytes = 0;
+      }
     },
     onClose: (transport) => {
+      if (uncommittedPcmBytes > 0) {
+        transport.sendJson({ type: "input_audio_buffer.commit" });
+        uncommittedPcmBytes = 0;
+      }
       transport.sendJson({ type: "input_audio_buffer.done" });
     },
+    closeTimeoutMs: FINAL_TRANSCRIPT_TIMEOUT_MS,
     connectTimeoutMessage: "NVIDIA realtime ASR connection timeout",
     connectClosedBeforeReadyMessage: "NVIDIA realtime ASR connection closed before ready",
   });

@@ -114,6 +114,7 @@ describeLive("nvidia speech plugin live", () => {
       providerConfig: { apiKey: NVIDIA_API_KEY, language: "en-US" },
       audio,
       expectedNormalizedText: /nvidia.*realtime.*transcription/,
+      closeBeforeWait: true,
     });
     const normalized = normalizeTranscriptForMatch(transcripts.join(" "));
     expect(normalized).toContain("nvidia");

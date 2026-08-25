@@ -14,6 +14,7 @@ type Transport = {
 };
 type SessionOptions = {
   callbacks: Transport["callbacks"];
+  closeTimeoutMs?: number;
   headers: () => Record<string, string> | Promise<Record<string, string>>;
   protocols: () => string[] | Promise<string[]>;
   url: () => string | Promise<string>;
@@ -181,7 +182,12 @@ describe("NVIDIA realtime transcription provider", () => {
     const append = mocks.sent[1] as { audio: string; type: string };
     expect(append.type).toBe("input_audio_buffer.append");
     expect(Buffer.from(append.audio, "base64")).toHaveLength(6);
+    expect(mocks.sent).toHaveLength(2);
+
+    session.close();
     expect(mocks.sent[2]).toEqual({ type: "input_audio_buffer.commit" });
+    expect(mocks.sent[3]).toEqual({ type: "input_audio_buffer.done" });
+    expect(mocks.options?.closeTimeoutMs).toBe(10_000);
 
     const transport = {
       callbacks: mocks.options!.callbacks,
@@ -204,6 +210,22 @@ describe("NVIDIA realtime transcription provider", () => {
     expect(partials).toEqual(["hello"]);
     expect(transcripts).toEqual(["hello NVIDIA"]);
     expect(speechStarts).toHaveBeenCalledOnce();
+  });
+
+  it("commits continuous audio only at the streaming interval and turn boundary", async () => {
+    const provider = buildNvidiaRealtimeTranscriptionProvider();
+    const session = provider.createSession({ providerConfig: { apiKey: "nvapi-test" } });
+    await session.connect();
+
+    session.sendAudio(Buffer.alloc(8_000 * 20, 0xff));
+    expect(mocks.sent[1]).toEqual(expect.objectContaining({ type: "input_audio_buffer.append" }));
+    expect(mocks.sent[2]).toEqual({ type: "input_audio_buffer.commit" });
+
+    session.sendAudio(Buffer.from([1, 2, 3]));
+    expect(mocks.sent[3]).toEqual(expect.objectContaining({ type: "input_audio_buffer.append" }));
+    session.close();
+    expect(mocks.sent[4]).toEqual({ type: "input_audio_buffer.commit" });
+    expect(mocks.sent[5]).toEqual({ type: "input_audio_buffer.done" });
   });
 
   it("does not replace the hosted model name with the public catalog id", async () => {

@@ -37,7 +37,7 @@ import {
 const TRANSCRIPTION_SESSION_TTL_MS = 30 * 60 * 1000;
 // Realtime transcription websocket owners retain provider sockets for this
 // bounded interval so a graceful close can still deliver its final transcript.
-const TRANSCRIPTION_PROVIDER_FINAL_DRAIN_MS = 5_000;
+const TRANSCRIPTION_PROVIDER_FINAL_DRAIN_MS = 10_000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_TRANSCRIPTION_SESSIONS_PER_CONN = 2;
 const MAX_TRANSCRIPTION_SESSIONS_GLOBAL = 64;
