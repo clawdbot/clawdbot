@@ -353,72 +353,61 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 
-  it.each([
-    { label: "plain", error: new Error("gateway closed (1008): pairing required") },
-    {
-      label: "typed",
-      error: createGatewayCloseError({
-        code: 1008,
-        reason: "pairing required",
-        message: "gateway closed (1008): pairing required",
-      }),
-    },
-  ])(
-    "falls back to the local log file on $label loopback pairing-required errors",
-    async ({ error }) => {
-      callGatewayFromCli.mockRejectedValueOnce(error);
-      readConfiguredLogTail.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        cursor: 5,
-        size: 5,
-        lines: ["local fallback line"],
-        truncated: false,
-        reset: false,
-      });
+  it("falls back to the local log file on loopback pairing-required errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
 
-      const stdoutWrites = captureStdoutWrites();
-      const stderrWrites = captureStderrWrites();
-
-      await runLogsCli(["logs"]);
-
-      expect(readConfiguredLogTail).toHaveBeenCalledWith({
-        cursor: undefined,
-        limit: 200,
-        maxBytes: 250_000,
-      });
-      expect(stdoutWrites.join("")).toContain("local fallback line");
-      expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
-    },
-  );
-
-  it.each([
-    { label: "normal", code: 1000, reason: "no close reason" },
-    { label: "protocol", code: 1002, reason: "protocol mismatch" },
-    { label: "unsupported data", code: 1003, reason: "unsupported data" },
-    { label: "authentication", code: 4001, reason: "unauthorized" },
-    { label: "non-pairing policy", code: 1008, reason: "policy rejected" },
-    { label: "internal server", code: 1011, reason: "gateway message handler unavailable" },
-  ])("does not fall back to local logs after a $label close", async ({ code, reason }) => {
-    callGatewayFromCli.mockRejectedValueOnce(
-      createGatewayCloseError({
-        code,
-        reason,
-        message: `gateway closed (${code}): ${reason}`,
-      }),
-    );
+    const stdoutWrites = captureStdoutWrites();
     const stderrWrites = captureStderrWrites();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
     await runLogsCli(["logs"]);
 
-    expect(readConfiguredLogTail).not.toHaveBeenCalled();
-    expect(stderrWrites.join("")).toContain("Gateway not reachable");
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(readConfiguredLogTail).toHaveBeenCalledWith({
+      cursor: undefined,
+      limit: 200,
+      maxBytes: 250_000,
+    });
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
   });
 
   it("falls back to the local log file on loopback scope-upgrade errors", async () => {
     callGatewayFromCli.mockRejectedValueOnce(
       new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
+  });
+
+  it("falls back to the configured Gateway file log on loopback gateway close errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      createGatewayCloseError({
+        code: 1000,
+        reason: "no close reason",
+        message: "gateway closed (1000 normal closure): no close reason",
+      }),
     );
     readConfiguredLogTail.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",

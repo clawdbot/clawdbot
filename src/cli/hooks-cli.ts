@@ -111,8 +111,12 @@ function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): Ho
 async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const target = resolveHooksReportTarget(config, agentId);
-  const { callGateway, isGatewayClientRequestError, isImplicitLocalGatewayTarget } =
-    await import("../gateway/call.js");
+  const {
+    callGateway,
+    isGatewayClientRequestError,
+    isGatewayCredentialsRequiredError,
+    isImplicitLocalGatewayTarget,
+  } = await import("../gateway/call.js");
   try {
     return await callGateway<HookStatusReport>({
       config,
@@ -131,7 +135,11 @@ async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
           error.message,
         ));
     if (
-      !(isGatewayRpcUnavailableError(error) || isLegacyHookReport) ||
+      !(
+        isGatewayCredentialsRequiredError(error) ||
+        isGatewayRpcUnavailableError(error) ||
+        isLegacyHookReport
+      ) ||
       !(await isImplicitLocalGatewayTarget({ config }))
     ) {
       throw error;

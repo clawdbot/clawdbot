@@ -266,6 +266,8 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
   isGatewayClientRequestError: (error: unknown) =>
     error instanceof Error && error.name === "GatewayClientRequestError",
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
@@ -1681,15 +1683,6 @@ describe("skills cli commands", () => {
 
   it.each([
     {
-      label: "missing credentials",
-      outcome: "root",
-      error: Object.assign(new Error("gateway requires credentials"), {
-        name: "GatewayCredentialsRequiredError",
-        method: "skills.status",
-        configPath: "/tmp/openclaw.json",
-      }),
-    },
-    {
       label: "request validation",
       outcome: "command",
       error: new GatewayClientRequestError({
@@ -1743,6 +1736,14 @@ describe("skills cli commands", () => {
   });
 
   it.each([
+    {
+      label: "missing credentials before connecting",
+      error: Object.assign(new Error("gateway requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.status",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
     {
       label: "typed timeout",
       error: new GatewayTransportError({

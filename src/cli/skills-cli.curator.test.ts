@@ -34,6 +34,8 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   isGatewayClientRequestError: (error: unknown) =>
     error instanceof Error && error.name === "GatewayClientRequestError",
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
@@ -207,11 +209,19 @@ describe("skills curator cli", () => {
   );
 
   it.each([
+    {
+      label: "missing credentials before connecting",
+      error: Object.assign(new Error("gateway requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.curator.status",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
     { label: "close", error: createGatewayTransportError("closed") },
     { label: "timeout", error: createGatewayTransportError("timeout") },
     { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },
   ])(
-    "retains local curator status and mutations after an implicit-local transport $label",
+    "retains local curator status and ownership-locked mutations after implicit-local $label",
     async ({ error }) => {
       mocks.callGateway.mockRejectedValue(error);
 
@@ -236,9 +246,18 @@ describe("skills curator cli", () => {
     },
   );
 
-  it("preserves an ambiguous transport close when the Gateway still owns the lock", async () => {
-    const gatewayError = createGatewayTransportError("closed");
-    mocks.callGateway.mockRejectedValue(gatewayError);
+  it.each([
+    {
+      label: "missing credentials",
+      error: Object.assign(new Error("gateway requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.curator.pin",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
+    { label: "an ambiguous transport close", error: createGatewayTransportError("closed") },
+  ])("preserves $label when the Gateway still owns the lock", async ({ error }) => {
+    mocks.callGateway.mockRejectedValue(error);
     mocks.acquireGatewayLock.mockRejectedValue(new Error("gateway already running"));
 
     for (const action of curatorActions.slice(1)) {
@@ -247,7 +266,7 @@ describe("skills curator cli", () => {
           from: "user",
         }),
         action.label,
-      ).rejects.toBe(gatewayError);
+      ).rejects.toBe(error);
     }
 
     expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
@@ -301,15 +320,6 @@ describe("skills curator cli", () => {
   });
 
   it.each([
-    {
-      label: "missing credentials",
-      outcome: "root",
-      error: Object.assign(new Error("gateway requires credentials"), {
-        name: "GatewayCredentialsRequiredError",
-        method: "skills.curator.status",
-        configPath: "/tmp/openclaw.json",
-      }),
-    },
     {
       label: "request validation",
       outcome: "command",

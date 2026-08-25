@@ -377,7 +377,6 @@ describe("hooks CLI process lifecycle", () => {
         OPENCLAW_CONFIG_PATH: fixture.configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_GATEWAY_PORT: String(unavailableGatewayPort),
-        OPENCLAW_GATEWAY_TOKEN: "fixture-token",
         OPENCLAW_STATE_DIR: fixture.stateDir,
       },
     });

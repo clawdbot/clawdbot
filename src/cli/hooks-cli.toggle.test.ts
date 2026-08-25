@@ -49,6 +49,8 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   isGatewayClientRequestError: (error: unknown) =>
     error instanceof Error && error.name === "GatewayClientRequestError",
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
   isImplicitLocalGatewayTarget: async ({ config }: { config?: OpenClawConfig }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
@@ -650,14 +652,6 @@ describe("hooks CLI metadata config keys", () => {
 
   it.each([
     {
-      label: "missing credentials",
-      error: Object.assign(new Error("gateway requires credentials"), {
-        name: "GatewayCredentialsRequiredError",
-        method: "hooks.status",
-        configPath: "/tmp/openclaw.json",
-      }),
-    },
-    {
       label: "request validation",
       error: new GatewayClientRequestError({
         code: "INVALID_REQUEST",
@@ -691,6 +685,14 @@ describe("hooks CLI metadata config keys", () => {
   });
 
   it.each([
+    {
+      label: "missing credentials before connecting",
+      error: Object.assign(new Error("gateway requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "hooks.status",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
     { label: "typed timeout", error: createGatewayTransportError("timeout") },
     { label: "pending-request close", error: new Error("gateway closed (1006): abnormal closure") },
     { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },

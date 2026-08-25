@@ -508,7 +508,6 @@ describe("cli json stdout contract", () => {
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_GATEWAY_PORT: "29791",
-          OPENCLAW_GATEWAY_TOKEN: "fixture-token",
           OPENCLAW_STATE_DIR: stateDir,
           ...("explicitGateway" in testCase
             ? {
@@ -571,7 +570,6 @@ describe("cli json stdout contract", () => {
           OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_GATEWAY_PORT: "1",
-          OPENCLAW_GATEWAY_TOKEN: "fixture-token",
           OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
         });
 
@@ -2562,10 +2560,10 @@ describe("cli json stdout contract", () => {
           OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_GATEWAY_PORT: "1",
-          OPENCLAW_GATEWAY_TOKEN: "fixture-token",
           ...("explicitGateway" in testCase
             ? {
                 OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
+                OPENCLAW_GATEWAY_TOKEN: "fixture-token",
               }
             : {}),
         });

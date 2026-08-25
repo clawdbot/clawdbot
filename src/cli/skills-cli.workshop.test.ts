@@ -63,6 +63,8 @@ vi.mock("../gateway/call.js", () => ({
       },
     });
   }),
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
   isImplicitLocalGatewayTarget: async () => !process.env.OPENCLAW_GATEWAY_URL,
 }));
 

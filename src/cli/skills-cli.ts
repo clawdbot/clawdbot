@@ -188,8 +188,12 @@ async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
   const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
-  const { callGateway, isGatewayClientRequestError, isImplicitLocalGatewayTarget } =
-    await import("../gateway/call.js");
+  const {
+    callGateway,
+    isGatewayClientRequestError,
+    isGatewayCredentialsRequiredError,
+    isImplicitLocalGatewayTarget,
+  } = await import("../gateway/call.js");
   try {
     return await callGateway<SkillStatusReport>({
       config: resolved.config,
@@ -208,7 +212,11 @@ async function loadSkillsStatusReport(
           error.message,
         ));
     if (
-      !(isGatewayRpcUnavailableError(error) || isLegacySkillReport) ||
+      !(
+        isGatewayCredentialsRequiredError(error) ||
+        isGatewayRpcUnavailableError(error) ||
+        isLegacySkillReport
+      ) ||
       !(await isImplicitLocalGatewayTarget({ config: resolved.config }))
     ) {
       throw error;
@@ -432,7 +440,7 @@ async function withOfflineGatewayLock<T>(
   if (!lock) {
     throw gatewayError;
   }
-  // Timeout/close may follow dispatch; exclusive ownership proves the Gateway is gone.
+  // Missing credentials cannot prove a Gateway is absent; only its ownership lock can.
   try {
     return await action();
   } finally {
@@ -446,8 +454,12 @@ async function callSkillCurator<T>(
   loadLocal: () => T,
 ): Promise<T> {
   const config = getRuntimeConfig();
-  const { callGateway, isGatewayClientRequestError, isImplicitLocalGatewayTarget } =
-    await import("../gateway/call.js");
+  const {
+    callGateway,
+    isGatewayClientRequestError,
+    isGatewayCredentialsRequiredError,
+    isImplicitLocalGatewayTarget,
+  } = await import("../gateway/call.js");
   try {
     return await callGateway<T>({
       config,
@@ -464,7 +476,11 @@ async function callSkillCurator<T>(
       error.gatewayCode === "INVALID_REQUEST" &&
       error.message === `unknown method: skills.curator.${method}`;
     if (
-      !(isGatewayRpcUnavailableError(error) || isLegacyCuratorStatus) ||
+      !(
+        isGatewayCredentialsRequiredError(error) ||
+        isGatewayRpcUnavailableError(error) ||
+        isLegacyCuratorStatus
+      ) ||
       !(await isImplicitLocalGatewayTarget({ config }))
     ) {
       throw error;
@@ -495,7 +511,8 @@ async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
-  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+  const { callGateway, isGatewayCredentialsRequiredError, isImplicitLocalGatewayTarget } =
+    await import("../gateway/call.js");
   let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
@@ -511,7 +528,7 @@ async function runSkillProposalApply(
     });
   } catch (err) {
     if (
-      !isGatewayRpcUnavailableError(err) ||
+      !(isGatewayCredentialsRequiredError(err) || isGatewayRpcUnavailableError(err)) ||
       !(await isImplicitLocalGatewayTarget({ config: resolved.config }))
     ) {
       throw err;
