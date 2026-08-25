@@ -669,14 +669,14 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("guides visible terminal work separately from quiet exec", () => {
+  it("describes operator-owned terminals and policy-governed agent input", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["exec", "terminal"],
     });
 
     expect(prompt).toContain(
-      "- terminal: Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
+      "- terminal: List/read/resize/close operator-opened session terminals; input follows exec policy and may require exact-input approval; never open shells",
     );
   });
 

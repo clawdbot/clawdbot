@@ -483,6 +483,18 @@ export function renderChat(props: ChatProps) {
     onRemoveAttachment: props.onRemoveAttachment,
     onOpenImage: openImmediateImage,
   });
+  const taskSuggestionTray = renderChatTaskSuggestionTray(props);
+  const dockedProgressCard =
+    props.progressCard?.placement === "dock"
+      ? renderSessionProgressCard(props.progressCard.card, "dock", props.onDismissProgressCard)
+      : nothing;
+  // One column owns the conversation's top-right gutter. Both members float over
+  // the transcript, so sharing a stack is what stops the wider suggestion tray
+  // from silently covering the progress card when they appear together.
+  const gutterStack =
+    taskSuggestionTray === nothing && dockedProgressCard === nothing
+      ? nothing
+      : html`<div class="chat-gutter-stack">${taskSuggestionTray}${dockedProgressCard}</div>`;
   const scrollToBottomButton =
     props.showNewMessages && props.onScrollToBottom
       ? html`
@@ -586,7 +598,7 @@ export function renderChat(props: ChatProps) {
                         })}
                       </div>`
                     : nothing}
-                  ${renderChatTaskSuggestionTray(props)}
+                  ${gutterStack}
                   ${renderChatPullRequests({
                     pullRequests: props.pullRequests ?? [],
                     branch: props.pullRequestsBranch,
@@ -614,13 +626,6 @@ export function renderChat(props: ChatProps) {
                     sessions: props.swarmSessions ?? [],
                     sessionKey: props.sessionKey,
                   })}
-                  ${props.progressCard?.placement === "dock"
-                    ? renderSessionProgressCard(
-                        props.progressCard.card,
-                        "dock",
-                        props.onDismissProgressCard,
-                      )
-                    : nothing}
                   ${showModelSetupSplash ? nothing : chatColumnFooter}
                 </div>
               </div>

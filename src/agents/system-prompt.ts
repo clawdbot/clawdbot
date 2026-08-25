@@ -909,9 +909,8 @@ export function buildAgentSystemPrompt(params: {
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
     screen: "Drive operator web UI",
-    terminal: availableTools.has("exec")
-      ? "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work"
-      : "Own visible shell. Use for long/interactive jobs user should watch",
+    terminal:
+      "List/read/resize/close operator-opened session terminals; input follows exec policy and may require exact-input approval; never open shells",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     [AUTOMATIONS_TOOL_NAME]:
