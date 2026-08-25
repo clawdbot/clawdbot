@@ -110,8 +110,6 @@ describe("channel package-state probes", () => {
           id: "env-chat",
           configuredState: {
             env: { allOf: ["ENV_CHAT_TOKEN"] },
-            specifier: "./missing-configured-state",
-            exportName: "missingConfiguredState",
           },
         },
       } satisfies PluginChannelCatalogEntry,

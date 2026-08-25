@@ -209,7 +209,7 @@ function resolveChannelPackageStateChecker(params: {
     return null;
   }
 
-  if (metadata.env) {
+  if (metadata.env && (!metadata.specifier || !metadata.exportName)) {
     return ({ env }) => {
       const allOf = metadata.env?.allOf ?? [];
       const anyOf = metadata.env?.anyOf ?? [];
@@ -306,8 +306,23 @@ export function hasBundledChannelPackageState(params: {
   if (!entry) {
     return false;
   }
-  const checker = resolveChannelPackageStateChecker({
+  return hasChannelPackageState({
     entry,
+    metadataKey: params.metadataKey,
+    cfg: params.cfg,
+    env: params.env,
+  });
+}
+
+/** Evaluates the exact channel package owner already selected and trusted by its caller. */
+export function hasChannelPackageState(params: {
+  entry: PluginChannelCatalogEntry;
+  metadataKey: ChannelPackageStateMetadataKey;
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const checker = resolveChannelPackageStateChecker({
+    entry: params.entry,
     metadataKey: params.metadataKey,
   });
   return checker ? checker({ cfg: params.cfg, env: params.env }) : false;

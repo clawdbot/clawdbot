@@ -226,6 +226,7 @@ const bundledPluginEntries = [
   "*-api.ts!",
   "cli-metadata.ts!",
   "channel-entry.ts!",
+  "configured-state.ts!",
   // Manifest and SDK loaders resolve these public artifacts by basename.
   "auth-presence.ts!",
   "thread-bindings-runtime.ts!",
