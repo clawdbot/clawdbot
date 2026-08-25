@@ -127,7 +127,7 @@ struct ChatGatewayRequestTests {
         #expect(request.params["expectedMarkedUnreadAt"]?.value is NSNull)
     }
 
-    @Test func `explicit session read identifies user intent`() {
+    @Test func `explicit session read uses the legacy-compatible payload`() {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "main",
             agentID: nil,
@@ -135,10 +135,10 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: nil,
-            unreadPatch: .explicitRead)
+            unreadPatch: .read)
 
         #expect(request.params["unread"]?.value as? Bool == false)
-        #expect(request.params["readIntent"]?.value as? String == "explicit")
+        #expect(request.params["readIntent"] == nil)
         #expect(request.params["expectedMarkedUnreadAt"] == nil)
     }
 
@@ -146,7 +146,7 @@ struct ChatGatewayRequestTests {
         #expect(OpenClawChatSessionUnreadPatch.routed(
             unread: false,
             expectedMarkedUnreadAt: nil,
-            supportsReadContract: true) == .explicitRead)
+            supportsReadContract: true) == .read)
         #expect(OpenClawChatSessionUnreadPatch.routed(
             unread: false,
             expectedMarkedUnreadAt: .some(nil),
@@ -154,7 +154,7 @@ struct ChatGatewayRequestTests {
         #expect(OpenClawChatSessionUnreadPatch.routed(
             unread: false,
             expectedMarkedUnreadAt: .some(10),
-            supportsReadContract: false) == .legacyRead)
+            supportsReadContract: false) == .read)
     }
 
     @Test func `settings patch request encodes default model as null`() {

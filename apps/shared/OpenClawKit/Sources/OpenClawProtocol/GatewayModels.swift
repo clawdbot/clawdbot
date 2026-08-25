@@ -9353,7 +9353,6 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let expectedsessionid: String?
     public let expectedlifecyclerevision: String?
     public let expectedmarkedunreadat: AnyCodable?
-    public let readintent: String?
     public let label: AnyCodable?
     public let icon: AnyCodable?
     public let category: AnyCodable?
@@ -9392,7 +9391,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         expectedsessionid: String? = nil,
         expectedlifecyclerevision: String? = nil,
         expectedmarkedunreadat: AnyCodable? = nil,
-        readintent: String? = nil,
         label: AnyCodable? = nil,
         icon: AnyCodable? = nil,
         category: AnyCodable? = nil,
@@ -9430,7 +9428,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.expectedsessionid = expectedsessionid
         self.expectedlifecyclerevision = expectedlifecyclerevision
         self.expectedmarkedunreadat = expectedmarkedunreadat
-        self.readintent = readintent
         self.label = label
         self.icon = icon
         self.category = category
@@ -9470,7 +9467,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         case expectedsessionid = "expectedSessionId"
         case expectedlifecyclerevision = "expectedLifecycleRevision"
         case expectedmarkedunreadat = "expectedMarkedUnreadAt"
-        case readintent = "readIntent"
         case label
         case icon
         case category
@@ -9644,20 +9640,17 @@ public struct SessionsPatchManyTarget: Codable, Sendable {
     public let agentid: String?
     public let expectedsessionid: String?
     public let expectedlifecyclerevision: String?
-    public let readintent: String?
 
     public init(
         key: String,
         agentid: String? = nil,
         expectedsessionid: String? = nil,
-        expectedlifecyclerevision: String? = nil,
-        readintent: String? = nil)
+        expectedlifecyclerevision: String? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.expectedsessionid = expectedsessionid
         self.expectedlifecyclerevision = expectedlifecyclerevision
-        self.readintent = readintent
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -9665,7 +9658,6 @@ public struct SessionsPatchManyTarget: Codable, Sendable {
         case agentid = "agentId"
         case expectedsessionid = "expectedSessionId"
         case expectedlifecyclerevision = "expectedLifecycleRevision"
-        case readintent = "readIntent"
     }
 }
 

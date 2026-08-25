@@ -6,12 +6,8 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../src/shared/session-archive-timeout.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import {
-  isGatewayMethodAdvertised,
-  supportsSessionUnreadAckContract,
-} from "../lib/gateway-methods.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { isExplicitSessionReadPatch } from "../lib/sessions/patch.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type {
   SidebarRecentSession,
@@ -123,10 +119,6 @@ export async function patchSessionRows(
     result: SessionsPatchManyResult;
   }> = [];
   let terminalError: unknown = null;
-  const readIntent =
-    isExplicitSessionReadPatch(patch) && supportsSessionUnreadAckContract(scope.gateway.snapshot)
-      ? ("explicit" as const)
-      : undefined;
   for (let offset = 0; offset < rows.length; offset += SESSIONS_PATCH_MANY_MAX_TARGETS) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return null;
@@ -136,7 +128,6 @@ export async function patchSessionRows(
       targets: chunkRows.map((row) => ({
         key: row.key,
         agentId: sessionRowAgentId(row, scope),
-        ...(readIntent ? { readIntent } : {}),
         ...(typeof patch.archived === "boolean" && row.sessionId
           ? { expectedSessionId: row.sessionId }
           : {}),

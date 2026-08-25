@@ -3,12 +3,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 
 export type SessionPatchTargetIdentity = Pick<
   SessionsPatchParams,
-  | "agentId"
-  | "expectedLifecycleRevision"
-  | "expectedMarkedUnreadAt"
-  | "expectedSessionId"
-  | "key"
-  | "readIntent"
+  "agentId" | "expectedLifecycleRevision" | "expectedMarkedUnreadAt" | "expectedSessionId" | "key"
 >;
 
 const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
@@ -17,7 +12,6 @@ const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
   "expectedMarkedUnreadAt",
   "expectedSessionId",
   "key",
-  "readIntent",
   "unread",
 ]);
 
@@ -29,35 +23,24 @@ function hasOtherMutation(patch: { unread?: boolean }): boolean {
 
 export function validateSessionUnreadAck(
   patch: { unread?: boolean },
-  target: Pick<SessionPatchTargetIdentity, "expectedMarkedUnreadAt" | "readIntent">,
+  target: Pick<SessionPatchTargetIdentity, "expectedMarkedUnreadAt">,
 ): string | undefined {
-  const { expectedMarkedUnreadAt, readIntent } = target;
-  if (expectedMarkedUnreadAt !== undefined && readIntent !== undefined) {
-    return "expectedMarkedUnreadAt and readIntent are mutually exclusive.";
-  }
-  if (expectedMarkedUnreadAt === undefined && readIntent === undefined) {
+  if (target.expectedMarkedUnreadAt === undefined) {
     return undefined;
   }
   if (patch.unread === false && !hasOtherMutation(patch)) {
     return undefined;
   }
-  return readIntent === undefined
-    ? "expectedMarkedUnreadAt requires unread=false as the only mutation."
-    : "readIntent requires unread=false as the only mutation.";
+  return "expectedMarkedUnreadAt requires unread=false as the only mutation.";
 }
 
 export function resolveSessionUnreadAck(
   entry: SessionEntry | undefined,
-  patch: Pick<SessionsPatchParams, "expectedMarkedUnreadAt" | "readIntent" | "unread">,
+  patch: Pick<SessionsPatchParams, "expectedMarkedUnreadAt" | "unread">,
 ): { kind: "apply" | "missing" } | { kind: "stale"; entry: SessionEntry } {
-  const { expectedMarkedUnreadAt, readIntent } = patch;
-  if (patch.unread !== false || hasOtherMutation(patch) || readIntent === "explicit") {
+  const { expectedMarkedUnreadAt } = patch;
+  if (patch.unread !== false || hasOtherMutation(patch) || expectedMarkedUnreadAt === undefined) {
     return { kind: "apply" };
-  }
-  if (expectedMarkedUnreadAt === undefined) {
-    // Stable clients used the same payload for automatic and explicit reads.
-    // Preserve a manual marker until a current client declares its intent.
-    return entry?.markedUnreadAt === undefined ? { kind: "apply" } : { kind: "stale", entry };
   }
   if (!entry) {
     return { kind: "missing" };

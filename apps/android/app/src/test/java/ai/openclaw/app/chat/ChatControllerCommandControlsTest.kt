@@ -554,7 +554,7 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun explicitMarkReadDeclaresIntentOnCurrentGateway() =
+  fun explicitMarkReadUsesLegacyCompatiblePayloadOnCurrentGateway() =
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
@@ -566,7 +566,7 @@ class ChatControllerCommandControlsTest {
 
       val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"unread\":false"))
-      assertTrue(patch.contains("\"readIntent\":\"explicit\""))
+      assertFalse(patch.contains("readIntent"))
       assertFalse(patch.contains("expectedMarkedUnreadAt"))
     }
 

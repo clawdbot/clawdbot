@@ -3,7 +3,6 @@ import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/s
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { isExplicitSessionReadPatch } from "../lib/sessions/patch.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -55,12 +54,10 @@ export async function patchSession(
     return "stale";
   }
   const agentId = sessionRowAgentId(session, scope);
-  const readIntent = isExplicitSessionReadPatch(patch) ? "explicit" : undefined;
   const requestParams = {
     key: session.key,
     ...patch,
     agentId,
-    ...(readIntent ? { readIntent } : {}),
     ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
   };
   if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
@@ -78,7 +75,6 @@ export async function patchSession(
   try {
     const patched = await scope.sessions.patch(session.key, patch, {
       agentId,
-      ...(readIntent ? { readIntent } : {}),
       ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });

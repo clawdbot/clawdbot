@@ -687,7 +687,6 @@ export async function executeSessionPatch(params: {
       ? { expectedLifecycleRevision: params.patch.expectedLifecycleRevision }
       : {}),
     expectedMarkedUnreadAt: params.patch.expectedMarkedUnreadAt,
-    readIntent: params.patch.readIntent,
   };
   const executed = await executeSessionPatchMutations({
     client: params.client,

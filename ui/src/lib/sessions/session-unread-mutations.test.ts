@@ -24,13 +24,13 @@ describe("session unread mutation capability", () => {
     {
       name: "current Gateway explicit read",
       capabilities: [GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT],
-      options: { readIntent: "explicit" as const },
-      expected: { readIntent: "explicit" },
+      options: {},
+      expected: {},
     },
     {
       name: "legacy Gateway explicit read",
       capabilities: [],
-      options: { readIntent: "explicit" as const },
+      options: {},
       expected: {},
     },
   ])("uses the compatible payload for $name", async ({ capabilities, expected, options }) => {

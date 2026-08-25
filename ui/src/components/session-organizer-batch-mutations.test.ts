@@ -173,7 +173,7 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
-  it("identifies a single Mark as read action explicitly", async () => {
+  it("uses the legacy-compatible Mark as read payload", async () => {
     const row = sessionRow(0);
     const harness = createHarness();
 
@@ -181,11 +181,7 @@ describe("patchSessionRows", () => {
       "completed",
     );
 
-    expect(harness.patch).toHaveBeenCalledWith(
-      row.key,
-      { unread: false },
-      { agentId: "main", readIntent: "explicit" },
-    );
+    expect(harness.patch).toHaveBeenCalledWith(row.key, { unread: false }, { agentId: "main" });
   });
 
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {
@@ -248,7 +244,7 @@ describe("patchSessionRows", () => {
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
   });
 
-  it("identifies every batch Mark as read target explicitly", async () => {
+  it("uses the legacy-compatible batch Mark as read payload", async () => {
     const rows = [sessionRow(0), sessionRow(1)];
     const harness = createHarness();
 
@@ -258,7 +254,6 @@ describe("patchSessionRows", () => {
       targets: rows.map((row) => ({
         key: row.key,
         agentId: "main",
-        readIntent: "explicit",
       })),
       patch: { unread: false },
     });

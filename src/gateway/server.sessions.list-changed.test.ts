@@ -1142,22 +1142,36 @@ test("sessions.changed mutation events include session management metadata", asy
     marker,
   );
 
-  const legacyRead = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    unread: false,
-  });
-  expectFields(legacyRead.responsePayload, { ok: true, key: "agent:main:discord:group:dev" });
-  expect(legacyRead.broadcastToConnIds).not.toHaveBeenCalled();
-  expect(requireRecord(legacyRead.responsePayload.entry, "legacy read entry").markedUnreadAt).toBe(
-    marker,
-  );
-
   const read = await invokeSessionsPatch({
     key: "discord:group:dev",
     unread: false,
     expectedMarkedUnreadAt: marker,
   });
   expectChangedBroadcast(read.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: false,
+    lastReadAt: expect.any(Number),
+    markedUnreadAt: null,
+    lastActivityAt: 5,
+  });
+
+  const remarked = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: true,
+  });
+  expectChangedBroadcast(remarked.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: true,
+    markedUnreadAt: expect.any(Number),
+  });
+
+  const legacyRead = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+  });
+  expectChangedBroadcast(legacyRead.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
     unread: false,

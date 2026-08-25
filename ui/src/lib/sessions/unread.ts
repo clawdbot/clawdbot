@@ -19,9 +19,10 @@ export class SessionUnreadPatchGuard {
   shouldPatch(
     activeSessionKey: string,
     unread: boolean | undefined,
-    markedUnreadAt?: number,
+    markedUnreadAt?: number | null,
   ): boolean {
     const key = activeSessionKey.trim();
+    const marker = markedUnreadAt ?? undefined;
     if (key !== this.activeSessionKey) {
       this.beginActivation(key);
     }
@@ -30,14 +31,14 @@ export class SessionUnreadPatchGuard {
     }
     if (!this.activationObserved) {
       this.activationObserved = true;
-      this.activationMarkedUnreadAt = markedUnreadAt;
+      this.activationMarkedUnreadAt = marker;
     }
     if (unread === false) {
       this.activationMarkedUnreadAt = undefined;
       this.requested = false;
       return false;
     }
-    if (markedUnreadAt !== undefined && markedUnreadAt !== this.activationMarkedUnreadAt) {
+    if (marker !== undefined && marker !== this.activationMarkedUnreadAt) {
       return false;
     }
     if (unread !== true || this.requested) {

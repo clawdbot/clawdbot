@@ -146,7 +146,6 @@ export function requestSessionPatch(
     agentId?: string | null;
     expectedSessionId?: string | null;
     expectedMarkedUnreadAt?: number | null;
-    readIntent?: "explicit";
   } = {},
 ): Promise<SessionsPatchResult> {
   const expectedSessionId = options.expectedSessionId?.trim();
@@ -156,7 +155,6 @@ export function requestSessionPatch(
     ...(options.expectedMarkedUnreadAt !== undefined
       ? { expectedMarkedUnreadAt: options.expectedMarkedUnreadAt }
       : {}),
-    ...(options.readIntent ? { readIntent: options.readIntent } : {}),
     ...patch,
   };
   return patch.archived === true

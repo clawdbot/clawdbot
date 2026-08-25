@@ -16,9 +16,8 @@ public struct OpenClawChatGatewayRequest: Sendable, Equatable {
 
 public enum OpenClawChatSessionUnreadPatch: Sendable, Equatable {
     case markUnread
-    case legacyRead
+    case read
     case automaticRead(expectedMarkedUnreadAt: Double?)
-    case explicitRead
 
     public static func routed(
         unread: Bool?,
@@ -27,11 +26,11 @@ public enum OpenClawChatSessionUnreadPatch: Sendable, Equatable {
     {
         guard let unread else { return nil }
         guard !unread else { return .markUnread }
-        guard supportsReadContract else { return .legacyRead }
+        guard supportsReadContract else { return .read }
         if let expectedMarkedUnreadAt {
             return .automaticRead(expectedMarkedUnreadAt: expectedMarkedUnreadAt)
         }
-        return .explicitRead
+        return .read
     }
 }
 
@@ -386,14 +385,11 @@ public enum OpenClawChatGatewayRequests {
         switch unreadPatch {
         case .markUnread:
             params["unread"] = AnyCodable(true)
-        case .legacyRead:
+        case .read:
             params["unread"] = AnyCodable(false)
         case let .automaticRead(expectedMarkedUnreadAt):
             params["unread"] = AnyCodable(false)
             params["expectedMarkedUnreadAt"] = expectedMarkedUnreadAt.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        case .explicitRead:
-            params["unread"] = AnyCodable(false)
-            params["readIntent"] = AnyCodable("explicit")
         case nil:
             break
         }

@@ -66,7 +66,6 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
       },
     },
     { name: "automatic read envelope", patch: { expectedMarkedUnreadAt: 10 } },
-    { name: "explicit read envelope", patch: { readIntent: "explicit" } },
   ])("keeps $name write-scoped", ({ patch }) => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patch", {

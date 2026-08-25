@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateSessionsPatchManyParams, validateSessionsPatchParams } from "../index.js";
+import { validateSessionsPatchParams } from "../index.js";
 
 describe("session patch schema", () => {
-  it("validates lifecycle and unread intent identities", () => {
+  it("validates lifecycle and unread acknowledgement identities", () => {
     expect(
       validateSessionsPatchParams({
         key: "agent:main:self-archive",
@@ -15,7 +15,7 @@ describe("session patch schema", () => {
       validateSessionsPatchParams({
         key: "agent:main:mark-read",
         unread: false,
-        readIntent: "explicit",
+        expectedMarkedUnreadAt: 42,
       }),
     ).toBe(true);
     expect(
@@ -31,22 +31,7 @@ describe("session patch schema", () => {
       validateSessionsPatchParams({
         key: "agent:main:mark-read",
         unread: false,
-        readIntent: "automatic",
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts explicit read intent on bulk targets", () => {
-    expect(
-      validateSessionsPatchManyParams({
-        targets: [{ key: "agent:main:mark-read", readIntent: "explicit" }],
-        patch: { unread: false },
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsPatchManyParams({
-        targets: [{ key: "agent:main:mark-read", readIntent: "automatic" }],
-        patch: { unread: false },
+        expectedMarkedUnreadAt: -1,
       }),
     ).toBe(false);
   });

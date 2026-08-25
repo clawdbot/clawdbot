@@ -1072,16 +1072,6 @@ class ChatController internal constructor(
       updateErrorText("Session lifecycle action requires a durable session identity.")
       return false
     }
-    val explicitRead =
-      unread == false &&
-        unreadExpectation == null &&
-        !clearLabel &&
-        label == null &&
-        !clearCategory &&
-        category == null &&
-        pinned == null &&
-        archived == null &&
-        gatewayAdvertisesCapability(SESSION_UNREAD_ACK_CAPABILITY) == true
     try {
       val params =
         buildJsonObject {
@@ -1105,7 +1095,6 @@ class ChatController internal constructor(
             val marker = unreadExpectation.markedUnreadAt
             put("expectedMarkedUnreadAt", marker?.let(::JsonPrimitive) ?: JsonNull)
           }
-          if (explicitRead) put("readIntent", JsonPrimitive("explicit"))
         }
       if (archived == true) {
         requestGatewayWithTimeout("sessions.patch", params.toString(), 10 * 60_000L)

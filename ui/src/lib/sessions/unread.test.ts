@@ -29,6 +29,12 @@ describe("SessionUnreadPatchGuard", () => {
     expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
   });
 
+  it("treats a null marker as no manual marker", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, null)).toBe(true);
+  });
+
   it("does not patch read sessions and resets after changing sessions", () => {
     const guard = new SessionUnreadPatchGuard();
     expect(guard.shouldPatch("agent:main:a", false)).toBe(false);

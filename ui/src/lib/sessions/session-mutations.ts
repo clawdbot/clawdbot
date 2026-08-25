@@ -384,7 +384,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // Their legacy unread=false behavior remains the only compatible path.
       const requestOptions = host.supportsSessionUnreadAckContract()
         ? options
-        : { ...options, expectedMarkedUnreadAt: undefined, readIntent: undefined };
+        : { ...options, expectedMarkedUnreadAt: undefined };
       const result = await requestSessionPatch(scope.client, key, patchParams, requestOptions);
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);

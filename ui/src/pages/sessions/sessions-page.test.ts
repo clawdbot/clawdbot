@@ -300,7 +300,7 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
 
-  it("identifies Mark as read as an explicit user action", async () => {
+  it("uses the legacy-compatible Mark as read payload", async () => {
     const patch = vi.fn(async () => ({
       ok: true as const,
       path: "",
@@ -316,11 +316,7 @@ describe("sessions page lifecycle", () => {
       "completed",
     );
 
-    expect(patch).toHaveBeenCalledWith(
-      "agent:main:main",
-      { unread: false },
-      { agentId: "main", readIntent: "explicit" },
-    );
+    expect(patch).toHaveBeenCalledWith("agent:main:main", { unread: false }, { agentId: "main" });
   });
 
   it("shows a connection error in the checkpoints drawer while disconnected", async () => {
