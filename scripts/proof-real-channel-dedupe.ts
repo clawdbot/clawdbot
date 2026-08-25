@@ -216,6 +216,17 @@ try {
   if (!sendPayload) {
     throw new Error("Telegram production plugin has no outbound.sendPayload");
   }
+  const telegramCallsBeforeBlank = api.calls.length;
+  for (const payload of blankResult.replyPayloads) {
+    await sendPayload({
+      cfg,
+      to: CHAT_ID,
+      text: payload.text ?? "",
+      payload,
+      deps: { telegram: sendMessageTelegram },
+      mediaAccess: { localRoots: [workspace] },
+    });
+  }
   const telegramCallsBeforeRealMedia = api.calls.length;
   for (const payload of realResult.replyPayloads) {
     await sendPayload({
@@ -229,7 +240,7 @@ try {
   }
   const blankParts = resolveSendableOutboundReplyParts(blankPayload);
   const realParts = resolveSendableOutboundReplyParts(realPayload);
-  const blankApiCalls = api.calls.slice(0, telegramCallsBeforeRealMedia);
+  const blankApiCalls = api.calls.slice(telegramCallsBeforeBlank, telegramCallsBeforeRealMedia);
   const telegramSendCalls = api.calls.filter((call) => call.method === "sendMessage");
   const telegramMediaCalls = api.calls.filter((call) => call.method === "sendPhoto");
   const blankSendCalls = blankApiCalls.filter((call) => call.method === "sendMessage");
