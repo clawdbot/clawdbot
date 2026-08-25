@@ -1277,6 +1277,40 @@ struct TalkModeRuntimeSpeechTests {
         #expect(probe.values() == ["discard-processed"])
     }
 
+    @Test @MainActor func `successful relay startup starts silence monitor for idle deadline`() async throws {
+        let bootstrap = try makeRuntimeTestBootstrap()
+        let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { bootstrap })
+        await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        await runtime._test_enableRealtimeRelaySelection()
+
+        try await runtime.startRealtimeRelay(generation: lifecycleGeneration)
+
+        #expect(await runtime._test_isSilenceMonitorActive())
+        #expect(await runtime.lastInteractionAt != nil)
+        await runtime.setEnabled(false)
+        if let session = await runtime.realtimeSession {
+            session.stop()
+        }
+    }
+
+    @Test @MainActor func `relay user transcript resets idle interaction anchor`() async throws {
+        let runtime = TalkModeRuntime()
+        let session = makeRuntimeTestRealtimeSession()
+        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+        await runtime.lastInteractionAt = Date(timeIntervalSince1970: 0)
+
+        await runtime.handleRealtimeTranscript(
+            .init(role: "user", text: "hello", isFinal: false),
+            relayGeneration: relayGeneration)
+
+        let anchor = try #require(await runtime.lastInteractionAt)
+        #expect(anchor.timeIntervalSince1970 > 1_000_000_000)
+
+        await runtime.setEnabled(false)
+        session.stop()
+    }
+
     @Test func `talk speak params carry resolved voice and directive overrides`() {
         let params = TalkModeRuntime.makeTalkSpeakParams(
             text: "hello",

@@ -70,7 +70,7 @@ actor TalkModeRuntime {
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
     private var lastTranscript: String = ""
-    private var lastSpeechEnergyAt: Date?
+    var lastSpeechEnergyAt: Date?
 
     private var defaultVoiceId: String?
     private var currentVoiceId: String?
@@ -129,7 +129,7 @@ actor TalkModeRuntime {
 
     private var silenceWindow: TimeInterval = .init(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
     private var idleTimeout: TimeInterval?
-    private var lastInteractionAt: Date?
+    var lastInteractionAt: Date?
     private static let idleSpeechRecognitionGrace: TimeInterval = 1.0
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0

@@ -36,10 +36,18 @@ type TimeoutContractCase = {
   talk: Record<string, unknown>;
 };
 
+/** Fixture row that validates Talk idle-timeout normalization. */
+type IdleTimeoutContractCase = {
+  id: string;
+  expectedIdleTimeoutS: number | null;
+  talk: Record<string, unknown>;
+};
+
 /** JSON fixture file shape used by this contract test. */
 type TalkConfigContractFixture = {
   selectionCases: SelectionContractCase[];
   timeoutCases: TimeoutContractCase[];
+  idleTimeoutCases: IdleTimeoutContractCase[];
 };
 
 /** External fixture keeps the matrix readable and reusable across config edits. */
