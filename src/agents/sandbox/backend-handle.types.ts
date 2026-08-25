@@ -30,6 +30,8 @@ export type SandboxBackendCommandParams = {
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
+  /** Owner-issued token allowing process-tree cleanup under its existing execution lease. */
+  activityToken?: unknown;
 };
 
 /** Buffered command result returned by sandbox backend shell helpers. */
@@ -84,6 +86,7 @@ export type SandboxBackendHandle = {
     workdir?: string;
     env: Record<string, string>;
     usePty: boolean;
+    signal?: AbortSignal;
   }): Promise<SandboxBackendExecSpec>;
   finalizeExec?: (params: {
     status: "completed" | "failed";

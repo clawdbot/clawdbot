@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
@@ -532,6 +533,58 @@ describe("exec foreground failures", () => {
     } finally {
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("retains sandbox execution ownership until its entire process tree settles", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-extinction-");
+    const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
+    const { tool } = createBackendSandboxTool({
+      workspaceDir,
+      finalizeExec,
+      finalizeToken: { session: "active-descendants" },
+    });
+    let settleTree!: () => void;
+    let settleRoot!: () => void;
+    const treeExtinction = new Promise<void>((resolve) => {
+      settleTree = resolve;
+    });
+    const rootExited = new Promise<void>((resolve) => {
+      settleRoot = resolve;
+    });
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      runId: input.runId ?? "call",
+      pid: 1234,
+      startedAtMs: Date.now(),
+      wait: async () => {
+        settleRoot();
+        return {
+          reason: "exit" as const,
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+      waitForExtinction: async () => await treeExtinction,
+      cancel: vi.fn(),
+    }));
+
+    const execution = tool.execute("call-sandbox-live-descendants", {
+      command: "echo ok",
+      workdir: "/remote/workspace/generated",
+    });
+    await rootExited;
+    const progress = await Promise.race([execution.then(() => "finished"), delay(0, "waiting")]);
+    const finalizedBeforeExtinction = finalizeExec.mock.calls.length;
+    settleTree();
+    await execution;
+
+    expect(progress).toBe("waiting");
+    expect(finalizedBeforeExtinction).toBe(0);
+    expect(finalizeExec).toHaveBeenCalledOnce();
   });
 
   it("rejects unsafe commands before backend workdir validation", async () => {

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -383,6 +384,35 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
     expect(registryUpdate?.containerName).toBe("oc-test-shared");
     expect(registryUpdate?.configHash).toBe(newHash);
+  });
+
+  it("waits for an active sandbox execution before replacing its stale container", async () => {
+    const workspaceDir = tempDirs.make("openclaw-docker-active-exec-");
+    const cfg = createSandboxConfig(["1.1.1.1"], [`${workspaceDir}:/workspace:rw`]);
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    const params = { scopeKey: "shared", workspaceDir, agentWorkspaceDir: workspaceDir, cfg };
+    const { createDockerSandboxBackend } = await import("./docker-backend.js");
+    const backend = await createDockerSandboxBackend({ sessionKey: "shared", ...params });
+    const activeExec = await backend.buildExecSpec({ command: "sleep 60", env: {}, usePty: false });
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      ...registryMocks.updateRegistry.mock.calls.at(-1)?.[0],
+      lastUsedAtMs: 0,
+    });
+    cfg.docker.dns = ["8.8.8.8"];
+    const rollout = ensureSandboxContainer(params);
+    const progress = await Promise.race([rollout.then(() => "replaced"), delay(0, "waiting")]);
+    expect(progress).toBe("waiting");
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: activeExec.finalizeToken,
+    });
+    await expect(rollout).resolves.toBe(backend.runtimeId);
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(true);
   });
 
   it("recreates a cold container when the shared Docker create-args epoch changes", async () => {

@@ -50,7 +50,7 @@ export async function httpRequest(
   if (request.streamResponse) {
     return await runStreamingSandboxHttpRequest(execServer, notifications, requestId, request);
   }
-  const result = await runSandboxHttpRequest(execServer, {
+  const result = await runSandboxHttpRequest(execServer, notifications.signal, {
     ...request,
     streamResponse: false,
   });
@@ -88,12 +88,14 @@ function assertSandboxHttpRequestTargetAllowed(url: string): void {
 
 async function runSandboxHttpRequest(
   execServer: OpenClawExecServer,
+  signal: AbortSignal,
   params: SandboxHttpRequest,
 ): Promise<JsonObject & { status: number; headers: HttpHeader[]; bodyBase64: string }> {
   const result = await execServer.backend.runShellCommand({
     script: SANDBOX_HTTP_REQUEST_SCRIPT,
     stdin: JSON.stringify(params),
     allowFailure: true,
+    signal,
   });
   if (result.code !== 0) {
     const stderr = result.stderr.toString("utf8").trim();
@@ -127,7 +129,18 @@ async function runStreamingSandboxHttpRequest(
     workdir: execServer.sandbox.containerWorkdir,
     env: remoteExec.env,
     usePty: false,
+    signal: notifications.signal,
   });
+  if (notifications.signal.aborted) {
+    await backend.finalizeExec?.({
+      status: "failed",
+      exitCode: null,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
+    notifications.signal.throwIfAborted();
+  }
+  remoteExec.bindActivityToken(execSpec.finalizeToken);
   const lifecycle = { failed: false };
   const owner = await spawnSandboxChild({
     argv: execSpec.argv,

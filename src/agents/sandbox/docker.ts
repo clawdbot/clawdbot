@@ -9,6 +9,10 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import {
+  resolveSandboxContainerActivityKey,
+  withSandboxContainerMutation,
+} from "./container-activity.js";
+import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
   execContainerRaw,
@@ -636,8 +640,23 @@ async function ensureSandboxContainerLifecycle(
         })
       : genericConfigHash;
   const now = Date.now();
+  const createContainer = async () =>
+    await createSandboxContainer({
+      engine,
+      name: containerName,
+      cfg: params.cfg.docker,
+      dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+      workspaceDir: params.workspaceDir,
+      workspaceAccess: params.cfg.workspaceAccess,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
+      scopeKey: params.scopeKey,
+      configHash: expectedHash,
+      readOnlyWorkspaceSkillMounts,
+      podmanRuntimeInfo,
+    });
   const state = await containerState(engine, containerName);
-  let hasContainer = state.exists;
+  const hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
@@ -663,27 +682,20 @@ async function ensureSandboxContainerLifecycle(
             : {}),
         });
       } else {
-        await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
-        hasContainer = false;
-        running = false;
+        await withSandboxContainerMutation(
+          resolveSandboxContainerActivityKey(engine, containerName, podmanRuntimeInfo?.target),
+          async () => {
+            await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
+            await createContainer();
+          },
+        );
+        hashMismatch = false;
+        running = true;
       }
     }
   }
   if (!hasContainer) {
-    await createSandboxContainer({
-      engine,
-      name: containerName,
-      cfg: params.cfg.docker,
-      dockerTmpfsSource: params.cfg.dockerTmpfsSource,
-      workspaceDir: params.workspaceDir,
-      workspaceAccess: params.cfg.workspaceAccess,
-      agentWorkspaceDir: params.agentWorkspaceDir,
-      skillsWorkspaceDir: params.skillsWorkspaceDir,
-      scopeKey: params.scopeKey,
-      configHash: expectedHash,
-      readOnlyWorkspaceSkillMounts,
-      podmanRuntimeInfo,
-    });
+    await createContainer();
   } else if (!running) {
     await execContainer(engine, ["start", containerName]);
   }

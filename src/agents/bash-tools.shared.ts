@@ -35,6 +35,7 @@ export type BashSandboxConfig = {
     workdir?: string;
     env: Record<string, string>;
     usePty: boolean;
+    signal?: AbortSignal;
   }) => Promise<SandboxBackendExecSpec>;
   finalizeExec?: (params: {
     status: "completed" | "failed";

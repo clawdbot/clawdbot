@@ -95,6 +95,59 @@ afterEach(() => {
 });
 
 describe("Codex sandbox exec-server lifecycle", () => {
+  it("cancels process preparation before a queued backend execution is granted", async () => {
+    const buildExecSpec = vi.fn(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("process start cancelled")), {
+            once: true,
+          });
+        }),
+    );
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const processes = new Map<string, ManagedProcess>();
+    const starting = startProcess(
+      createExecServer(sandbox),
+      processes,
+      createFakeNotifications().send,
+      processStartParams("queued-process"),
+    );
+    await vi.waitFor(() => expect(buildExecSpec).toHaveBeenCalledOnce());
+
+    expect(buildExecSpec.mock.calls[0]?.[0]?.signal).toBeInstanceOf(AbortSignal);
+    const startFailure = expect(starting).rejects.toThrow("process start cancelled");
+    await expect(terminateProcess(processes, { processId: "queued-process" })).resolves.toEqual({
+      running: true,
+    });
+    await startFailure;
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a queued streaming HTTP execution when its session closes", async () => {
+    const buildExecSpec = vi.fn(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("stream session closed")), {
+            once: true,
+          });
+        }),
+    );
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const notifications = createFakeNotifications();
+    const request = httpRequest(
+      createExecServer(sandbox),
+      notifications,
+      streamingHttpParams("queued-http"),
+    );
+    await vi.waitFor(() => expect(buildExecSpec).toHaveBeenCalledOnce());
+
+    expect(buildExecSpec.mock.calls[0]?.[0]?.signal).toBe(notifications.signal);
+    const requestFailure = expect(request).rejects.toThrow("stream session closed");
+    notifications.close();
+    await requestFailure;
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("owns JSON-RPC delivery, ordered process notifications, and idempotent session cleanup", async () => {
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);

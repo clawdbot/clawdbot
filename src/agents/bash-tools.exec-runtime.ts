@@ -997,7 +997,11 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
         processContinuationAvailable: opts.processContinuationAvailable !== false,
       });
-
+      // A root process can exit before its owned descendants; destructive sandbox
+      // changes must remain fenced until the supervisor confirms tree extinction.
+      if (opts.sandbox) {
+        await managedRun?.waitForExtinction?.();
+      }
       const finalOutcome = await finalizeAndSettleSession(outcome);
       emitExecProcessCompleted({
         command: opts.command,
@@ -1010,6 +1014,9 @@ export async function runExecProcess(opts: {
     })
     .catch(async (err: unknown): Promise<ExecProcessOutcome> => {
       updatesDisabled = true;
+      if (opts.sandbox) {
+        await managedRun?.waitForExtinction?.();
+      }
       const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),

@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -444,6 +445,53 @@ describe("ensureSandboxBrowser create args", () => {
       dockerMocks.execDocker.mock.invocationCallOrder[rmCallIndex] ?? Number.MAX_SAFE_INTEGER,
     );
     expect(requireDockerCreateArgs()).toContain("--init");
+  });
+
+  it("waits for an active browser request before replacing its stale container", async () => {
+    const cfg = buildConfig(false);
+    const containerName = "openclaw-sbx-browser-session-test-0661d10a";
+    const oldHash = computeTestBrowserHash({ cfg, createArgsEpoch: "pre-init" });
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+    dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
+    dockerMocks.readDockerContainerLabel.mockResolvedValue(oldHash);
+    registryMocks.readBrowserRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName,
+          sessionKey: "session:test",
+          createdAtMs: 1,
+          lastUsedAtMs: 0,
+          image: cfg.browser.image,
+          configHash: oldHash,
+          cdpPort: 49100,
+        },
+      ],
+    });
+    const { acquireSandboxContainerActivity, resolveSandboxContainerActivityKey } =
+      await import("./container-activity.js");
+    const { DOCKER_SANDBOX_ENGINE } = await import("./container-engine.js");
+    const request = await acquireSandboxContainerActivity(
+      resolveSandboxContainerActivityKey(DOCKER_SANDBOX_ENGINE, containerName),
+    );
+
+    const rollout = ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+    const progress = await Promise.race([rollout.then(() => "replaced"), delay(0, "waiting")]);
+    const removedBeforeRequestEnded = dockerMocks.execDocker.mock.calls.some(
+      ([args]) => args[0] === "rm",
+    );
+    request.release();
+    await rollout;
+
+    expect(progress).toBe("waiting");
+    expect(removedBeforeRequestEnded).toBe(false);
+    expect(dockerMocks.execDocker).toHaveBeenCalledWith(["rm", "-f", containerName], {
+      allowFailure: true,
+    });
   });
 
   it("keeps a hot pre-init browser running and emits the recreate hint", async () => {

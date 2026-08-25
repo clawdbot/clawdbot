@@ -35,7 +35,13 @@ import {
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
 } from "./constants.js";
 import {
+  resolveSandboxContainerActivityKey,
+  tryAcquireSandboxContainerActivity,
+  withSandboxContainerMutation,
+} from "./container-activity.js";
+import {
   buildSandboxCreateArgs,
+  DOCKER_SANDBOX_ENGINE,
   dockerContainerState,
   execDocker,
   formatDockerDaemonUnavailableError,
@@ -267,6 +273,7 @@ async function ensureSandboxBrowserContainer(
   params: EnsureSandboxBrowserParams,
   containerName: string,
 ): Promise<SandboxBrowserContext> {
+  const activityKey = resolveSandboxContainerActivityKey(DOCKER_SANDBOX_ENGINE, containerName);
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
   const stopExistingForContainer = async () => {
     await stopCachedBrowserBridgesForContainer(containerName);
@@ -329,8 +336,10 @@ async function ensureSandboxBrowserContainer(
       defaultRuntime.log(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
-      await stopExistingForContainer();
-      await execDocker(["rm", "-f", containerName], { allowFailure: true });
+      await withSandboxContainerMutation(activityKey, async () => {
+        await stopExistingForContainer();
+        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+      });
       hasContainer = false;
       running = false;
     }
@@ -364,8 +373,10 @@ async function ensureSandboxBrowserContainer(
           `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
       } else {
-        await stopExistingForContainer();
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        await withSandboxContainerMutation(activityKey, async () => {
+          await stopExistingForContainer();
+          await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        });
         hasContainer = false;
         running = false;
       }
@@ -545,6 +556,7 @@ async function ensureSandboxBrowserContainer(
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
+      acquireRequestActivity: () => tryAcquireSandboxContainerActivity(activityKey),
       onEnsureAttachTarget,
       resolveSandboxNoVncToken: consumeNoVncObserverToken,
     });

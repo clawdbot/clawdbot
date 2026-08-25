@@ -88,6 +88,30 @@ describe("startBrowserBridgeServer auth", () => {
     );
   });
 
+  it("fences requests only after authentication and releases admitted activity", async () => {
+    const release = vi.fn();
+    const acquireRequestActivity = vi
+      .fn<() => { release(): void } | null>()
+      .mockReturnValueOnce({ release })
+      .mockReturnValueOnce(null);
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      acquireRequestActivity,
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    expect((await fetch(`${bridge.baseUrl}/?profile=missing`)).status).toBe(401);
+    expect(acquireRequestActivity).not.toHaveBeenCalled();
+
+    const headers = { Authorization: "Bearer secret-token" };
+    expect((await fetch(`${bridge.baseUrl}/?profile=missing`, { headers })).status).toBe(404);
+    expect(release).toHaveBeenCalledOnce();
+    expect((await fetch(`${bridge.baseUrl}/?profile=missing`, { headers })).status).toBe(503);
+    expect(acquireRequestActivity).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("requires auth params", async () => {
     await expect(
       startBrowserBridgeServer({

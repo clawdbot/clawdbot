@@ -12,6 +12,12 @@ import type {
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
+  acquireSandboxContainerActivity,
+  resolveSandboxContainerActivityKey,
+  withSandboxContainerMutation,
+  type SandboxContainerActivityLease,
+} from "./container-activity.js";
+import {
   containerState,
   bindPodmanSandboxEngine,
   DOCKER_SANDBOX_ENGINE,
@@ -94,6 +100,12 @@ function createContainerSandboxBackendHandle(params: {
   image: string;
   podmanTarget?: SandboxContainerEngineTarget;
 }): SandboxBackendHandle {
+  const activityKey = resolveSandboxContainerActivityKey(
+    params.engine,
+    params.containerName,
+    params.podmanTarget,
+  );
+  const pendingExecutions = new Map<unknown, SandboxContainerActivityLease>();
   return {
     id: params.engine.id,
     runtimeId: params.containerName,
@@ -105,31 +117,58 @@ function createContainerSandboxBackendHandle(params: {
     capabilities: {
       browser: params.engine.id === "docker",
     },
-    async buildExecSpec({ command, workdir, env, usePty }) {
-      await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
-      return {
-        argv: [
-          params.engine.command,
-          ...(params.engine.globalArgs ?? []),
-          ...buildDockerExecArgs({
-            containerName: params.containerName,
-            command,
-            workdir: workdir ?? params.workdir,
-            env,
-            tty: usePty,
-          }),
-        ],
-        env: process.env,
-        stdinMode: usePty ? "pipe-open" : "pipe-closed",
-      };
+    async buildExecSpec({ command, workdir, env, usePty, signal }) {
+      const activity = await acquireSandboxContainerActivity(activityKey, signal);
+      try {
+        await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
+        signal?.throwIfAborted();
+        const token = {};
+        pendingExecutions.set(token, activity);
+        return {
+          argv: [
+            params.engine.command,
+            ...(params.engine.globalArgs ?? []),
+            ...buildDockerExecArgs({
+              containerName: params.containerName,
+              command,
+              workdir: workdir ?? params.workdir,
+              env,
+              tty: usePty,
+            }),
+          ],
+          env: process.env,
+          stdinMode: usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+          finalizeToken: token,
+        };
+      } catch (error) {
+        activity.release();
+        throw error;
+      }
     },
-    runShellCommand(command) {
-      return runContainerSandboxShellCommand({
-        engine: params.engine,
-        containerName: params.containerName,
-        podmanTarget: params.podmanTarget,
-        ...command,
-      });
+    async finalizeExec({ token }) {
+      const activity = pendingExecutions.get(token);
+      if (activity) {
+        pendingExecutions.delete(token);
+        activity.release();
+      }
+    },
+    async runShellCommand(command) {
+      // Process-tree cleanup is owned by its still-live parent execution; waiting
+      // behind a queued mutation would deadlock the lease that mutation drains.
+      const inherited = pendingExecutions.has(command.activityToken);
+      const activity = inherited
+        ? undefined
+        : await acquireSandboxContainerActivity(activityKey, command.signal);
+      try {
+        return await runContainerSandboxShellCommand({
+          engine: params.engine,
+          containerName: params.containerName,
+          podmanTarget: params.podmanTarget,
+          ...command,
+        });
+      } finally {
+        activity?.release();
+      }
     },
   };
 }
@@ -254,18 +293,23 @@ function createContainerSandboxBackendManager(
       const podmanTarget = resolvePodmanTarget(entry);
       await validateSandboxContainerEngineTarget(engine, podmanTarget);
       const runtimeEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
-      const result = await execContainer(runtimeEngine, ["rm", "-f", entry.containerName], {
-        allowFailure: true,
-      });
-      if (result.code !== 0) {
-        const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
-        if (/No such (container|object)|does not exist/iu.test(detail)) {
-          return;
-        }
-        throw new Error(
-          `Failed to remove ${engine.displayName} sandbox runtime ${entry.containerName}: ${detail}`,
-        );
-      }
+      await withSandboxContainerMutation(
+        resolveSandboxContainerActivityKey(runtimeEngine, entry.containerName, podmanTarget),
+        async () => {
+          const result = await execContainer(runtimeEngine, ["rm", "-f", entry.containerName], {
+            allowFailure: true,
+          });
+          if (result.code !== 0) {
+            const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+            if (/No such (container|object)|does not exist/iu.test(detail)) {
+              return;
+            }
+            throw new Error(
+              `Failed to remove ${engine.displayName} sandbox runtime ${entry.containerName}: ${detail}`,
+            );
+          }
+        },
+      );
     },
   };
 }

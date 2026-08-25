@@ -1,5 +1,6 @@
 // Docker backend manager tests cover runtime image matching and removal error
 // handling for sandbox and browser containers.
+import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -132,6 +133,131 @@ describe("docker sandbox backend manager", () => {
       podmanTarget,
     );
     expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
+  });
+
+  it.each(["docker", "podman"] as const)(
+    "keeps an active %s execution alive until its owner finalizes",
+    async (engineId) => {
+      const containerName = `sandbox-active-${engineId}`;
+      dockerMocks.ensureSandboxContainer.mockResolvedValueOnce(containerName);
+      const config = createConfig();
+      config.agents!.defaults!.sandbox!.backend = engineId;
+      config.agents!.defaults!.sandbox!.browser!.enabled = false;
+      const backend = await (
+        engineId === "podman" ? createPodmanSandboxBackend : createDockerSandboxBackend
+      )({
+        sessionKey: "agent:coder:main",
+        scopeKey: "agent:coder:main",
+        workspaceDir: "/workspace",
+        agentWorkspaceDir: "/workspace",
+        cfg: resolveSandboxConfigForAgent(config),
+      });
+      const activeExec = await backend.buildExecSpec({
+        command: "sleep 60",
+        env: {},
+        usePty: false,
+      });
+      const manager =
+        engineId === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
+      const removal = manager.removeRuntime({
+        entry: {
+          containerName,
+          backendId: engineId,
+          ...(engineId === "podman" ? { backendTarget: { key: "local", globalArgs: [] } } : {}),
+          runtimeLabel: containerName,
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config,
+      });
+
+      const progress = await Promise.race([removal.then(() => "removed"), delay(0, "waiting")]);
+      expect(progress).toBe("waiting");
+      expect(dockerMocks.execContainer).not.toHaveBeenCalled();
+
+      await backend.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: activeExec.finalizeToken,
+      });
+      await expect(removal).resolves.toBeUndefined();
+      expect(dockerMocks.execContainer).toHaveBeenCalledWith(
+        expect.objectContaining({ id: engineId }),
+        ["rm", "-f", containerName],
+        { allowFailure: true },
+      );
+    },
+  );
+
+  it("aborts queued executions without pinning a later destructive mutation", async () => {
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-cancelled");
+    const config = createConfig();
+    config.agents!.defaults!.sandbox!.browser!.enabled = false;
+    const backend = await createDockerSandboxBackend({
+      sessionKey: "agent:coder:main",
+      scopeKey: "agent:coder:main",
+      workspaceDir: "/workspace",
+      agentWorkspaceDir: "/workspace",
+      cfg: resolveSandboxConfigForAgent(config),
+    });
+    const activeExec = await backend.buildExecSpec({
+      command: "sleep 60",
+      env: {},
+      usePty: false,
+    });
+    const removal = dockerSandboxBackendManager.removeRuntime({
+      entry: {
+        containerName: "sandbox-cancelled",
+        backendId: "docker",
+        runtimeLabel: "sandbox-cancelled",
+        sessionKey: "agent:coder:main",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "openclaw-sandbox:bookworm-slim",
+      },
+      config,
+    });
+    await delay(0);
+    const controller = new AbortController();
+    const queuedExec = backend.buildExecSpec({
+      command: "echo cancelled",
+      env: {},
+      usePty: false,
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(queuedExec).rejects.toMatchObject({ name: "AbortError" });
+
+    dockerMocks.execContainerRaw.mockResolvedValueOnce({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+    await expect(
+      backend.runShellCommand({
+        script: "kill-owned-descendants",
+        activityToken: activeExec.finalizeToken,
+      }),
+    ).resolves.toMatchObject({ code: 0 });
+    expect(dockerMocks.execContainer).not.toHaveBeenCalled();
+
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: activeExec.finalizeToken,
+    });
+    await expect(removal).resolves.toBeUndefined();
+    expect(dockerMocks.execContainer).toHaveBeenCalledOnce();
   });
 
   it("matches ordinary sandbox runtimes against sandbox.docker.image", async () => {

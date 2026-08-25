@@ -114,16 +114,25 @@ export async function spawnSandboxChild(params: {
 export function prepareSandboxChildExec(
   backend: NonNullable<SandboxContext["backend"]>,
   env: Record<string, string>,
-): { env: Record<string, string>; terminate: () => Promise<void> } {
+): {
+  env: Record<string, string>;
+  bindActivityToken: (token: unknown) => void;
+  terminate: () => Promise<void>;
+} {
   const marker = randomUUID();
+  let activityToken: unknown;
   return {
     env: { ...env, [SANDBOX_EXEC_MARKER]: marker },
+    bindActivityToken: (token) => {
+      activityToken = token;
+    },
     terminate: async () => {
       const result = await backend.runShellCommand({
         script: SANDBOX_REMOTE_TERMINATE_SCRIPT,
         args: [`${SANDBOX_EXEC_MARKER}=${marker}`],
         allowFailure: true,
         signal: AbortSignal.timeout(SANDBOX_CHILD_REAP_TIMEOUT_MS),
+        activityToken,
       });
       if (result.code !== 0) {
         const detail =

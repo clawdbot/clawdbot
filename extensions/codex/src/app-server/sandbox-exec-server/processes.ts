@@ -47,6 +47,7 @@ export async function startProcess(
     tty,
     pipeStdin,
     terminationRequested: false,
+    abortController: new AbortController(),
     child: null,
     waiters: [],
     emitNotification: notify,
@@ -130,6 +131,7 @@ async function runProcess(
     // backend for a PTY can produce commands such as `docker exec -t`, which
     // require this process itself to own a real TTY.
     usePty: false,
+    signal: managed.abortController.signal,
   });
   if (managed.terminationRequested) {
     await backend.finalizeExec?.({
@@ -140,6 +142,7 @@ async function runProcess(
     });
     throw new Error("process start cancelled");
   }
+  remoteExec.bindActivityToken(execSpec.finalizeToken);
   const owner = await spawnSandboxChild({
     argv: execSpec.argv,
     env: execSpec.env,
@@ -330,6 +333,7 @@ export async function terminateProcess(
   }
   const running = !managed.exited;
   managed.terminationRequested = true;
+  managed.abortController.abort();
   await managed.startPromise?.catch(() => undefined);
   if (managed.child) {
     await managed.child.terminate();
