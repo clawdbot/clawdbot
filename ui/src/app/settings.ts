@@ -22,7 +22,13 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
-import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
+import {
+  parseColorVisionMode,
+  parseThemeSelection,
+  type ColorVisionMode,
+  type ThemeMode,
+  type ThemeName,
+} from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
 // Control UI module implements storage behavior.
@@ -182,6 +188,7 @@ export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100
 export const UI_APPEARANCE_DEFAULTS = {
   theme: "claw",
   themeMode: "system",
+  colorVision: "standard",
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
@@ -200,6 +207,7 @@ export type UiSettings = {
   lastActiveSessionKey: string;
   theme: ThemeName;
   themeMode: ThemeMode;
+  colorVision: ColorVisionMode;
   accent?: string;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
@@ -447,6 +455,7 @@ export function loadSettings(): UiSettings {
     lastActiveSessionKey: "main",
     theme: UI_APPEARANCE_DEFAULTS.theme,
     themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
+    colorVision: UI_APPEARANCE_DEFAULTS.colorVision,
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
@@ -509,6 +518,7 @@ export function loadSettings(): UiSettings {
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
+      colorVision: parseColorVisionMode(parsed.colorVision),
       accent: normalizeAccentColor(parsed.accent),
       chatShowThinking:
         typeof parsed.chatShowThinking === "boolean"
@@ -659,6 +669,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
     themeMode: next.themeMode,
+    colorVision: next.colorVision,
     ...(accent ? { accent } : {}),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,

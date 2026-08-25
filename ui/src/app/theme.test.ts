@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover theme behavior.
 import { describe, expect, it, vi } from "vitest";
-import { parseThemeSelection, resolveTheme } from "./theme.ts";
+import { parseColorVisionMode, parseThemeSelection, resolveTheme } from "./theme.ts";
 
 describe("resolveTheme", () => {
   it("resolves named theme families when mode is provided", () => {
@@ -26,5 +26,17 @@ describe("parseThemeSelection", () => {
       theme: "dash",
       mode: "light",
     });
+  });
+});
+
+describe("parseColorVisionMode", () => {
+  it.each([
+    ["protanopia", "protanopia"],
+    ["deuteranopia", "deuteranopia"],
+    ["tritanopia", "tritanopia"],
+    ["unknown", "standard"],
+    [null, "standard"],
+  ] as const)("normalizes %s to %s", (value, expected) => {
+    expect(parseColorVisionMode(value)).toBe(expected);
   });
 });

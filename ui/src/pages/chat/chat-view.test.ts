@@ -453,6 +453,7 @@ function createChatHeaderState(
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "dark",
+      colorVision: "standard",
       navCollapsed: false,
       navWidth: 280,
       sidebarEntries: [],

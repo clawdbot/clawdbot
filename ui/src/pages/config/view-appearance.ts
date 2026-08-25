@@ -6,11 +6,17 @@ import {
   type TextScaleStop,
 } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
-import type { ThemeName } from "../../app/theme.ts";
+import {
+  COLOR_VISION_MODES,
+  parseColorVisionMode,
+  type ColorVisionMode,
+  type ThemeName,
+} from "../../app/theme.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderDocsLink,
   renderSettingsDefaultDescription,
+  renderSettingsDefaultState,
   renderSettingsRow,
   renderSettingsSegmented,
   renderSettingsStatus,
@@ -35,6 +41,13 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   110: "configView.textSizes.large",
   125: "configView.textSizes.xl",
   140: "configView.textSizes.xxl",
+};
+
+const COLOR_VISION_LABELS: Record<ColorVisionMode, string> = {
+  standard: "configView.appearance.colorVisionOptions.standard",
+  protanopia: "configView.appearance.colorVisionOptions.protanopia",
+  deuteranopia: "configView.appearance.colorVisionOptions.deuteranopia",
+  tritanopia: "configView.appearance.colorVisionOptions.tritanopia",
 };
 
 type ThemeOption = {
@@ -157,8 +170,15 @@ export function renderAppearanceSection(
       : props.themeModeResetValue === "dark"
         ? t("common.dark")
         : t("common.system");
+  const colorVisionDefaultState = renderSettingsDefaultState({
+    value: t(COLOR_VISION_LABELS[props.colorVisionResetValue]),
+    overridden: props.colorVisionOverridden,
+    onReset: () => props.setColorVision(props.colorVisionResetValue),
+  });
+  const colorVisionUnavailable = props.theme === "custom";
   const themeProvenance = serverUiPrefProvenanceHint(props.themeProvenance);
   const themeModeProvenance = serverUiPrefProvenanceHint(props.themeModeProvenance);
+  const colorVisionProvenance = serverUiPrefProvenanceHint(props.colorVisionProvenance);
   const accentProvenance = serverUiPrefProvenanceHint(props.accentProvenance);
   const customAccentSelected = Boolean(
     props.accent && !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
@@ -244,6 +264,35 @@ export function renderAppearanceSection(
                 }
               },
             }),
+          })}
+          ${renderSettingsRow({
+            title: t("configView.appearance.colorVision"),
+            description: html`${t(
+              colorVisionUnavailable
+                ? "configView.appearance.colorVisionCustomThemeHint"
+                : "configView.appearance.colorVisionHint",
+            )}
+            ${colorVisionDefaultState.description} ${colorVisionProvenance}`,
+            control: html`
+              ${colorVisionDefaultState.action}
+              <select
+                class="settings-select"
+                data-settings-color-vision
+                aria-label=${t("configView.appearance.colorVision")}
+                .value=${props.colorVision}
+                ?disabled=${colorVisionUnavailable}
+                @change=${(event: Event & { currentTarget: HTMLSelectElement }) =>
+                  props.setColorVision(parseColorVisionMode(event.currentTarget.value))}
+              >
+                ${COLOR_VISION_MODES.map(
+                  (mode) => html`
+                    <option value=${mode} ?selected=${mode === props.colorVision}>
+                      ${t(COLOR_VISION_LABELS[mode])}
+                    </option>
+                  `,
+                )}
+              </select>
+            `,
           })}
           <div class="settings-row settings-row--stacked">
             ${showCustomThemeImport

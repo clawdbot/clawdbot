@@ -23,6 +23,7 @@
       (function () {
         var THEMES = { claw: 1, knot: 1, dash: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
+        var COLOR_VISION_MODES = { protanopia: 1, deuteranopia: 1, tritanopia: 1 };
         var LEGACY = {
           dark: "claw:dark",
           light: "claw:light",
@@ -44,6 +45,7 @@
           var s = JSON.parse(raw);
           var t = s && s.theme;
           var m = s && s.themeMode;
+          var colorVision = s && s.colorVision;
           if (typeof t !== "string") t = "";
           if (typeof m !== "string") m = "";
           var legacy = LEGACY[t];
@@ -69,6 +71,9 @@
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
           // Carapace CSS selects on [data-theme-resolved]; keep in lockstep.
           document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
+          if (COLOR_VISION_MODES[colorVision]) {
+            document.documentElement.setAttribute("data-color-vision", colorVision);
+          }
         } catch (e) {}
       })();
     </script>

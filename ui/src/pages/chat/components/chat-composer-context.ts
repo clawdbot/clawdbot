@@ -75,41 +75,6 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
   return null;
 }
 
-function parseHexRgb(hex: string): [number, number, number] | null {
-  const h = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
-    return null;
-  }
-  return [
-    Number.parseInt(h.slice(0, 2), 16),
-    Number.parseInt(h.slice(2, 4), 16),
-    Number.parseInt(h.slice(4, 6), 16),
-  ];
-}
-
-let cachedThemeNoticeColors: {
-  warnHex: string;
-  dangerHex: string;
-  warnRgb: [number, number, number];
-  dangerRgb: [number, number, number];
-} | null = null;
-
-function getThemeNoticeColors() {
-  if (cachedThemeNoticeColors) {
-    return cachedThemeNoticeColors;
-  }
-  const rootStyle = getComputedStyle(document.documentElement);
-  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
-  cachedThemeNoticeColors = {
-    warnHex,
-    dangerHex,
-    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
-    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
-  };
-  return cachedThemeNoticeColors;
-}
-
 function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
@@ -166,16 +131,18 @@ function getContextNoticeViewModel(
       approximate,
     };
   }
-  const { warnRgb, dangerRgb } = getThemeNoticeColors();
-  const [wr, wg, wb] = warnRgb;
-  const [dr, dg, db] = dangerRgb;
   const mix = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * mix);
-  const g = Math.round(wg + (dg - wg) * mix);
-  const b = Math.round(wb + (db - wb) * mix);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * mix;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+  const dangerWeight = Math.round(mix * 100);
+  // Keep semantic tokens in the declaration so a live palette change lets the
+  // browser repaint this already-rendered warning without a cache invalidation.
+  const color =
+    dangerWeight === 0
+      ? "var(--warn)"
+      : dangerWeight === 100
+        ? "var(--danger)"
+        : `color-mix(in srgb, var(--warn) ${100 - dangerWeight}%, var(--danger) ${dangerWeight}%)`;
+  const bgWeight = Math.round(8 + 8 * mix);
+  const bg = `color-mix(in srgb, ${color} ${bgWeight}%, transparent)`;
   return {
     pct,
     ...usage,

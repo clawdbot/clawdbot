@@ -114,6 +114,18 @@ describe("Control UI mount fallback", () => {
     },
   );
 
+  it("applies color-vision preferences before the app stylesheet loads", async () => {
+    const frameWindow = createIsolatedWindow();
+    frameWindow.localStorage.clear();
+    frameWindow.localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({ colorVision: "tritanopia", themeMode: "dark" }),
+    );
+    installStartupPaintShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+    expect(frameWindow.document.documentElement.dataset.colorVision).toBe("tritanopia");
+  });
+
   it("shows the static troubleshooting panel when the app never renders", async () => {
     const frameWindow = createIsolatedWindow();
     installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));

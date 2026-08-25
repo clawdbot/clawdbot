@@ -536,6 +536,7 @@ See [Plugins](/tools/plugin).
     prefs: {
       theme: "claw", // claw | knot | dash | custom
       themeMode: "system", // light | dark | system
+      colorVision: "standard", // standard | protanopia | deuteranopia | tritanopia
       locale: "en",
       chatShowThinking: true,
       chatShowToolCalls: true,

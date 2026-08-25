@@ -18,6 +18,7 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
+      colorVision: "standard",
       chatShowThinking: true,
       chatShowToolCalls: true,
       navCollapsed: false,

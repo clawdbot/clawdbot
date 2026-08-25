@@ -37,7 +37,12 @@ import {
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
-import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import {
+  resolveTheme,
+  type ColorVisionMode,
+  type ThemeMode,
+  type ThemeName,
+} from "../../app/theme.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
@@ -885,6 +890,16 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
+  private currentColorVisionPref(): ServerUiPrefState<ColorVisionMode> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "colorVision",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
+    );
+  }
+
   private currentAccentPref(): ServerUiPrefState<string> {
     return resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
@@ -934,7 +949,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private resetSyncedAppearancePref(
-    key: "theme" | "themeMode" | "accent" | "chatSendShortcut" | "chatFollowUpMode",
+    key: "theme" | "themeMode" | "colorVision" | "accent" | "chatSendShortcut" | "chatFollowUpMode",
   ) {
     switch (key) {
       case "theme":
@@ -948,6 +963,13 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.settings = resetServerUiPref(
           "themeMode",
           this.currentThemeModePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
+        break;
+      case "colorVision":
+        this.settings = resetServerUiPref(
+          "colorVision",
+          this.currentColorVisionPref(),
           this.context.gateway.connection.gatewayUrl,
         );
         break;
@@ -1009,6 +1031,16 @@ export class ConfigPage extends OpenClawLightDomElement {
           ? this.resetSyncedAppearancePref("themeMode")
           : this.applySettings({ themeMode: mode }),
     });
+  }
+
+  private setColorVision(mode: ColorVisionMode) {
+    const preference = this.currentColorVisionPref();
+    const reset = preference.overridden && mode === preference.resetValue;
+    if (reset) {
+      this.resetSyncedAppearancePref("colorVision");
+      return;
+    }
+    this.applySettings({ colorVision: mode });
   }
 
   private setSetting<K extends ConfigPageSetting>(key: K, value: UiSettings[K]) {
@@ -1175,6 +1207,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const themePref = this.currentThemePref();
     const themeModePref = this.currentThemeModePref();
+    const colorVisionPref = this.currentColorVisionPref();
     const accentPref = this.currentAccentPref();
     const localePref = this.currentLocalePref();
     const chatSendShortcutPref = this.currentChatSendShortcutPref();
@@ -1242,6 +1275,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeModeOverridden: themeModePref.overridden,
       themeModeProvenance: themeModePref.provenance,
       themeModeResetValue: themeModePref.resetValue ?? UI_APPEARANCE_DEFAULTS.themeMode,
+      colorVision: this.settings.colorVision,
+      colorVisionOverridden: colorVisionPref.overridden,
+      colorVisionProvenance: colorVisionPref.provenance,
+      colorVisionResetValue: colorVisionPref.resetValue ?? UI_APPEARANCE_DEFAULTS.colorVision,
       accent: this.settings.accent,
       accentOverridden: accentPref.overridden,
       accentProvenance: accentPref.provenance,
@@ -1256,6 +1293,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
+      setColorVision: (mode) => this.setColorVision(mode),
       setAccent: (accent) =>
         accent === undefined
           ? this.resetSyncedAppearancePref("accent")

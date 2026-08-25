@@ -1135,32 +1135,12 @@ details.msg-meta:not([open]) .msg-meta__details {
 }
 
 .chat-confirm-popover__yes {
-  background: var(--danger);
-  color: var(--media-foreground);
-}
-
-:root[data-theme="dark"] .chat-confirm-popover__yes {
-  background: var(--destructive);
-  color: var(--destructive-foreground);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes,
-:root[data-theme="dash"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
 
 .chat-confirm-popover__yes:hover {
-  background: var(--danger-solid-hover);
-}
-
-:root[data-theme="dark"] .chat-confirm-popover__yes:hover {
-  background: var(--destructive-hover);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes:hover,
-:root[data-theme="dash"] .chat-confirm-popover__yes:hover {
-  background: var(--destructive-hover);
+  background: color-mix(in srgb, var(--destructive) 86%, black);
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {

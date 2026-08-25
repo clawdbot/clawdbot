@@ -106,6 +106,6 @@ export function installWidgetThemeObserver(): void {
     attributes: true,
     // "style" carries the accent override (inline custom properties on <html>);
     // without it a user accent change would only reach frames incidentally.
-    attributeFilter: ["data-theme", "data-theme-mode", "style"],
+    attributeFilter: ["data-theme", "data-theme-mode", "data-color-vision", "style"],
   });
 }

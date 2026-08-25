@@ -30,6 +30,14 @@ const TEXT_TOKENS = [
 const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 const AA_NORMAL_TEXT_MIN = 4.5;
+const UI_COMPONENT_MIN = 3;
+const COLOR_VISION_MODES = ["protanopia", "deuteranopia", "tritanopia"] as const;
+const SEMANTIC_STATUS_TOKENS = [
+  { ink: "--ok", muted: "--ok-muted", subtle: "--ok-subtle" },
+  { ink: "--warn", muted: "--warn-muted", subtle: "--warn-subtle" },
+  { ink: "--danger", muted: "--danger-muted", subtle: "--danger-subtle" },
+  { ink: "--info", subtle: "--info-subtle" },
+] as const;
 
 /*
  * Separation guardrail for the markdown code chip.
@@ -81,6 +89,19 @@ type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
 type Color = { rgb: RGB; alpha: number };
 
+function parseTokenDeclarations(body: string): TokenMap {
+  const tokens: TokenMap = new Map();
+  for (const line of body.split("\n")) {
+    const declaration = line.match(/^\s*(--[\w-]+)\s*:\s*([^;]+);/);
+    const name = declaration?.[1];
+    const value = declaration?.[2];
+    if (name && value) {
+      tokens.set(name, value.trim());
+    }
+  }
+  return tokens;
+}
+
 function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
   const blocks = new Map<string, TokenMap>();
   const blockPattern = /(:root(?:\[data-theme(?:-mode)?="[^"]+"\])?)\s*\{([^}]*)\}/g;
@@ -91,17 +112,35 @@ function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
     // --cursor-action blocks). Merging keeps the palette; overwriting made the
     // default `dark` theme resolve to an empty map and skip every assertion.
     const tokens: TokenMap = blocks.get(selector) ?? new Map();
-    for (const line of body.split("\n")) {
-      const declaration = line.match(/^\s*(--[\w-]+)\s*:\s*([^;]+);/);
-      const name = declaration?.[1];
-      const value = declaration?.[2];
-      if (name && value) {
-        tokens.set(name, value.trim());
-      }
+    for (const [name, value] of parseTokenDeclarations(body)) {
+      tokens.set(name, value);
     }
     blocks.set(selector, tokens);
   }
   return blocks;
+}
+
+function resolveColorVisionThemes(baseCss: string, themes: Map<string, TokenMap>) {
+  const results = new Map<string, TokenMap>();
+  const shared = parseTokenDeclarations(readRuleBody(baseCss, ":root[data-color-vision]"));
+  for (const mode of COLOR_VISION_MODES) {
+    const darkSelector = `:root[data-color-vision="${mode}"]`;
+    const lightSelector = `:root[data-theme-mode="light"][data-color-vision="${mode}"]`;
+    const dark = parseTokenDeclarations(readRuleBody(baseCss, darkSelector));
+    const light = parseTokenDeclarations(readRuleBody(baseCss, lightSelector));
+    for (const [themeName, themeTokens] of themes) {
+      const resolved = new Map(themeTokens);
+      for (const [key, value] of shared) {
+        resolved.set(key, value);
+      }
+      const palette = themeName === "light" || themeName.endsWith("-light") ? light : dark;
+      for (const [key, value] of palette) {
+        resolved.set(key, value);
+      }
+      results.set(`${themeName}/${mode}`, resolved);
+    }
+  }
+  return results;
 }
 
 /** Compose each selectable theme the way theme.ts layers blocks over :root. */
@@ -254,13 +293,17 @@ function resolveColor(value: string, tokens: TokenMap, resolving = new Set<strin
   }
 
   const mix = color.match(
-    /^color-mix\(in srgb,\s*(var\(--[\w-]+\))\s+([\d.]+)%,\s*(var\(--[\w-]+\))\s*\)$/u,
+    /^color-mix\(in srgb,\s*(var\(--[\w-]+\))\s+([\d.]+)%,\s*(var\(--[\w-]+\)|transparent)\s*\)$/u,
   );
   if (mix) {
+    const second =
+      mix[3] === "transparent"
+        ? ({ rgb: [0, 0, 0], alpha: 0 } satisfies Color)
+        : resolveColor(mix[3] ?? "", tokens, resolving);
     return mixColors(
       resolveColor(mix[1] ?? "", tokens, resolving),
       Number.parseFloat(mix[2] ?? "") / 100,
-      resolveColor(mix[3] ?? "", tokens, resolving),
+      second,
     );
   }
 
@@ -341,6 +384,7 @@ function readBubbleBackgrounds(groupedCss: string): {
 describe("Control UI theme contrast", () => {
   const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
   const themes = resolveThemes(parseThemeBlocks(baseCss));
+  const colorVisionThemes = resolveColorVisionThemes(baseCss, themes);
 
   it("keeps every text token at WCAG AA on every theme surface", () => {
     const failures: string[] = [];
@@ -362,6 +406,46 @@ describe("Control UI theme contrast", () => {
             );
           }
         }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps color-vision status labels and run indicators distinguishable from their surfaces", () => {
+    const failures: string[] = [];
+    for (const [themeName, tokens] of colorVisionThemes) {
+      for (const status of SEMANTIC_STATUS_TOKENS) {
+        const ink = resolveOpaqueColor(`var(${status.ink})`, tokens);
+        const alphaTokens = "muted" in status ? [status.muted, status.subtle] : [status.subtle];
+        for (const alphaToken of alphaTokens) {
+          const alphaColor = resolveColor(`var(${alphaToken})`, tokens);
+          const hueDelta = Math.max(
+            Math.abs(alphaColor.rgb[0] - ink[0]),
+            Math.abs(alphaColor.rgb[1] - ink[1]),
+            Math.abs(alphaColor.rgb[2] - ink[2]),
+          );
+          if (hueDelta > 1e-6) {
+            failures.push(`${themeName}: ${alphaToken} hue does not match ${status.ink}`);
+          }
+        }
+        for (const surfaceToken of ["--card", "--bg"] as const) {
+          const surface = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const tintedSurface = composite(resolveColor(`var(${status.subtle})`, tokens), surface);
+          const ratio = contrastRatio(ink, tintedSurface);
+          if (ratio < AA_NORMAL_TEXT_MIN) {
+            failures.push(
+              `${themeName}: ${status.ink} on ${status.subtle} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+            );
+          }
+        }
+      }
+      const run = resolveOpaqueColor("var(--run)", tokens);
+      const background = resolveOpaqueColor("var(--bg)", tokens);
+      const runRatio = contrastRatio(run, background);
+      if (runRatio < UI_COMPONENT_MIN) {
+        failures.push(
+          `${themeName}: --run on --bg = ${runRatio.toFixed(2)}:1 (< ${UI_COMPONENT_MIN}:1)`,
+        );
       }
     }
     expect(failures).toEqual([]);

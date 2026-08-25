@@ -530,6 +530,18 @@ describe("ui.prefs.accent", () => {
   });
 });
 
+describe("ui.prefs.colorVision", () => {
+  it.each([
+    ["standard", true],
+    ["protanopia", true],
+    ["deuteranopia", true],
+    ["tritanopia", true],
+    ["tetartanopia", false],
+  ])("validates %s", (colorVision, valid) => {
+    expect(validateConfigObject({ ui: { prefs: { colorVision } } }).ok).toBe(valid);
+  });
+});
+
 describe("ui.prefs.sidebarEntries", () => {
   it("accepts the route and session entries synchronized by the Control UI", () => {
     const result = validateConfigObject({

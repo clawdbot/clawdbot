@@ -10,7 +10,12 @@ import {
   type ChatSendShortcut,
   type UiSettings,
 } from "./settings.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
+import {
+  isColorVisionMode,
+  type ColorVisionMode,
+  type ThemeMode,
+  type ThemeName,
+} from "./theme.ts";
 
 const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "custom"]);
 const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
@@ -47,6 +52,13 @@ export const SYNCED_PREFS = {
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
     clearable: true,
     reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
+  }),
+  colorVision: prefSpec<ColorVisionMode>({
+    extract: (value) => (isColorVisionMode(value) ? value : undefined),
+    local: (settings) => settings.colorVision,
+    write: (value) => ({ colorVision: value ?? UI_APPEARANCE_DEFAULTS.colorVision }),
+    clearable: true,
+    reset: () => ({ colorVision: UI_APPEARANCE_DEFAULTS.colorVision }),
   }),
   accent: prefSpec<string>({
     extract: normalizeAccentColor,
@@ -103,6 +115,7 @@ export type SyncedPrefKey = keyof typeof SYNCED_PREFS;
 export type ResettableServerUiPrefKey =
   | "theme"
   | "themeMode"
+  | "colorVision"
   | "accent"
   | "locale"
   | "chatSendShortcut"

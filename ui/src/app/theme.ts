@@ -1,6 +1,8 @@
 // Control UI module implements theme behavior.
 export type ThemeName = "claw" | "knot" | "dash" | "custom";
 export type ThemeMode = "system" | "light" | "dark";
+export const COLOR_VISION_MODES = ["standard", "protanopia", "deuteranopia", "tritanopia"] as const;
+export type ColorVisionMode = (typeof COLOR_VISION_MODES)[number];
 export type ResolvedTheme =
   | "dark"
   | "light"
@@ -13,6 +15,15 @@ export type ResolvedTheme =
 
 const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash", "custom"]);
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
+const VALID_COLOR_VISION_MODES: ReadonlySet<unknown> = new Set(COLOR_VISION_MODES);
+
+export function isColorVisionMode(value: unknown): value is ColorVisionMode {
+  return VALID_COLOR_VISION_MODES.has(value);
+}
+
+export function parseColorVisionMode(value: unknown): ColorVisionMode {
+  return isColorVisionMode(value) ? value : "standard";
+}
 
 function prefersLightScheme(): boolean {
   if (typeof globalThis.matchMedia !== "function") {

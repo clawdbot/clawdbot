@@ -231,6 +231,14 @@ export const OpenClawSchemaShape = {
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
+          colorVision: z
+            .union([
+              z.literal("standard"),
+              z.literal("protanopia"),
+              z.literal("deuteranopia"),
+              z.literal("tritanopia"),
+            ])
+            .optional(),
           accent: HexColorSchema.startsWith("#").optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),

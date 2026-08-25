@@ -204,6 +204,7 @@ suite.define(() => {
     const page = await context.newPage();
     const initialPrefs: Record<string, unknown> = {
       chatSendShortcut: "modifier-enter",
+      colorVision: "deuteranopia",
       locale: "en",
       theme: "knot",
       themeMode: "dark",
@@ -224,10 +225,12 @@ suite.define(() => {
       const languageRow = settingsRow(page, "Language");
       const themeSection = page.locator("#settings-appearance-theme");
       const colorModeRow = settingsRow(page, "Color mode");
+      const colorVisionRow = settingsRow(page, "Color vision");
       const textSizeSection = page.locator("#settings-appearance-text-size");
       const sendShortcutRow = settingsRow(page, "Send shortcut");
       const languageSelect = languageRow.locator("wa-select");
       const colorModeGroup = colorModeRow.locator("wa-radio-group");
+      const colorVisionSelect = colorVisionRow.locator("[data-settings-color-vision]");
       const sendShortcutSelect = sendShortcutRow.locator("[data-settings-send-shortcut]");
 
       await expect.poll(() => selectValue(languageSelect)).toBe("en");
@@ -235,6 +238,7 @@ suite.define(() => {
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");
       await expect.poll(() => selectValue(colorModeGroup)).toBe("dark");
+      await expect.poll(() => colorVisionSelect.inputValue()).toBe("deuteranopia");
       await expect
         .poll(() =>
           textSizeSection
@@ -246,9 +250,20 @@ suite.define(() => {
       await expect.poll(() => languageRow.textContent()).toContain("Default: System");
       await expect.poll(() => themeSection.textContent()).toContain("Default: Claw");
       await expect.poll(() => colorModeRow.textContent()).toContain("Default: System");
+      await expect.poll(() => colorVisionRow.textContent()).toContain("Default: Standard");
       await expect.poll(() => textSizeSection.textContent()).toContain("Default: 100%");
       await expect.poll(() => sendShortcutRow.textContent()).toContain("Default: Enter");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+      await expect
+        .poll(() => page.locator("html").getAttribute("data-color-vision"))
+        .toBe("deuteranopia");
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            getComputedStyle(document.documentElement).getPropertyValue("--ok").trim(),
+          ),
+        )
+        .toBe("#5ab4ac");
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "01-explicit-overrides.png");
@@ -297,6 +312,16 @@ suite.define(() => {
         remainingPrefs: withoutThemeMode,
       });
 
+      const withoutColorVision = { ...withoutThemeMode };
+      delete withoutColorVision.colorVision;
+      await resetSyncedPreference({
+        click: () => colorVisionSelect.selectOption("standard").then(() => undefined),
+        expectedKey: "colorVision",
+        gateway,
+        hash: "appearance-defaults-5",
+        remainingPrefs: withoutColorVision,
+      });
+
       await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
 
@@ -308,7 +333,7 @@ suite.define(() => {
             .then(() => undefined),
         expectedKey: "chatSendShortcut",
         gateway,
-        hash: "appearance-defaults-5",
+        hash: "appearance-defaults-6",
         remainingPrefs: {},
       });
 
@@ -317,6 +342,7 @@ suite.define(() => {
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
         .toBe("true");
       await expect.poll(() => selectValue(colorModeGroup)).toBe("system");
+      await expect.poll(() => colorVisionSelect.inputValue()).toBe("standard");
       await expect
         .poll(() =>
           textSizeSection
@@ -333,6 +359,7 @@ suite.define(() => {
       const reloadedLanguageRow = settingsRow(page, "Language");
       const reloadedThemeSection = page.locator("#settings-appearance-theme");
       const reloadedColorModeRow = settingsRow(page, "Color mode");
+      const reloadedColorVisionRow = settingsRow(page, "Color vision");
       const reloadedTextSizeSection = page.locator("#settings-appearance-text-size");
       const reloadedSendShortcutRow = settingsRow(page, "Send shortcut");
 
@@ -345,6 +372,9 @@ suite.define(() => {
       await expect
         .poll(() => selectValue(reloadedColorModeRow.locator("wa-radio-group")))
         .toBe("system");
+      await expect
+        .poll(() => reloadedColorVisionRow.locator("[data-settings-color-vision]").inputValue())
+        .toBe("standard");
       await expect
         .poll(() =>
           reloadedTextSizeSection
@@ -361,6 +391,9 @@ suite.define(() => {
         .poll(() => reloadedColorModeRow.textContent())
         .toContain("Using default: System");
       await expect
+        .poll(() => reloadedColorVisionRow.textContent())
+        .toContain("Using default: Standard");
+      await expect
         .poll(() => reloadedTextSizeSection.textContent())
         .toContain("Using default: 100%");
       await expect
@@ -371,6 +404,7 @@ suite.define(() => {
         .toBe(0);
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+      await expect.poll(() => page.locator("html").getAttribute("data-color-vision")).toBeNull();
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "03-inherited-defaults.png");

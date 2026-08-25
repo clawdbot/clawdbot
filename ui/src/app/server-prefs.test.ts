@@ -102,6 +102,7 @@ describe("server pref extraction", () => {
     const config = configWithPrefs({
       theme: "claw",
       themeMode: "system",
+      colorVision: "standard",
       chatSendShortcut: "enter",
     });
 
@@ -296,8 +297,15 @@ describe("applyServerUiPrefs", () => {
 describe("changedServerUiPrefs", () => {
   it("returns only the synced keys that changed", () => {
     const previous = loadSettings();
-    const next = { ...previous, themeMode: "dark" as const, navCollapsed: !previous.navCollapsed };
-    expect(changedServerUiPrefs(previous, next)).toEqual({ themeMode: "dark" });
+    const next = {
+      ...previous,
+      themeMode: "dark" as const,
+      colorVision: "protanopia" as const,
+    };
+    expect(changedServerUiPrefs(previous, next)).toEqual({
+      themeMode: "dark",
+      colorVision: "protanopia",
+    });
     expect(changedServerUiPrefs(previous, { ...previous })).toBeNull();
   });
 

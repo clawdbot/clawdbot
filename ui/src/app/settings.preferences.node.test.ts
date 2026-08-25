@@ -125,6 +125,7 @@ describe("settings preference persistence", () => {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
+      colorVision: "standard",
       chatShowThinking: true,
       chatShowToolCalls: true,
       navCollapsed: false,
@@ -322,7 +323,7 @@ describe("settings preference persistence", () => {
     expect(loadSettings().talkCameraAutoEnable).toBeUndefined();
   });
 
-  it("persists themeMode and navWidth alongside the selected theme", () => {
+  it("persists color vision, theme mode, and nav width alongside the selected theme", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -337,6 +338,7 @@ describe("settings preference persistence", () => {
       lastActiveSessionKey: "main",
       theme: "dash",
       themeMode: "light",
+      colorVision: "deuteranopia",
       chatShowThinking: true,
       chatShowToolCalls: true,
       navCollapsed: false,
@@ -351,6 +353,7 @@ describe("settings preference persistence", () => {
     >;
     expect(persisted.theme).toBe("dash");
     expect(persisted.themeMode).toBe("light");
+    expect(persisted.colorVision).toBe("deuteranopia");
     expect(persisted.navWidth).toBe(320);
   });
 
@@ -424,6 +427,7 @@ describe("settings preference persistence", () => {
       lastActiveSessionKey: "main",
       theme: "custom",
       themeMode: "system",
+      colorVision: "standard",
       chatShowThinking: true,
       chatShowToolCalls: true,
       navCollapsed: false,

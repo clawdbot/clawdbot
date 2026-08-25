@@ -82,6 +82,11 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   const resolvedTheme = resolveTheme(settings.theme, settings.themeMode);
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  if (settings.colorVision === "standard" || resolvedTheme.startsWith("custom")) {
+    delete root.dataset.colorVision;
+  } else {
+    root.dataset.colorVision = settings.colorVision;
+  }
   // Carapace CSS (openclaw/carapace) selects on [data-theme-resolved]; keep it
   // in lockstep with data-theme-mode so its stylesheets work unmodified here.
   root.dataset.themeResolved = root.dataset.themeMode;

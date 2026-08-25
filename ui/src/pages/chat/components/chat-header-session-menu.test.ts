@@ -44,6 +44,7 @@ function settings(): UiSettings {
     lastActiveSessionKey: "main",
     theme: "claw",
     themeMode: "dark",
+    colorVision: "standard",
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,

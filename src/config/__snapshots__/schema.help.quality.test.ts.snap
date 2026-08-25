@@ -611,6 +611,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "ui.prefs.chatSendShortcut",
   "ui.prefs.chatShowThinking",
   "ui.prefs.chatShowToolCalls",
+  "ui.prefs.colorVision",
   "ui.prefs.locale",
   "ui.prefs.theme",
   "ui.prefs.themeMode",

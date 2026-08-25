@@ -50,6 +50,7 @@ export function makeUiSettings(
     lastActiveSessionKey: "main",
     theme: "claw",
     themeMode: "system",
+    colorVision: "standard",
     chatShowThinking: true,
     chatShowToolCalls: true,
     navCollapsed: false,

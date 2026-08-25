@@ -51,6 +51,7 @@ describe("read-only server preference lifecycle", () => {
     const config = configWithPrefs({
       theme: "claw",
       themeMode: "light",
+      colorVision: "standard",
       locale: "en",
       chatShowThinking: true,
       chatShowToolCalls: true,
@@ -64,6 +65,7 @@ describe("read-only server preference lifecycle", () => {
     const next = patchSettings({
       theme: "knot",
       themeMode: "dark",
+      colorVision: "tritanopia",
       locale: "fr",
       chatShowThinking: false,
       chatShowToolCalls: false,
@@ -80,6 +82,7 @@ describe("read-only server preference lifecycle", () => {
       [
         "theme",
         "themeMode",
+        "colorVision",
         "locale",
         "chatShowThinking",
         "chatShowToolCalls",
@@ -102,6 +105,7 @@ describe("read-only server preference lifecycle", () => {
     for (const key of [
       "theme",
       "themeMode",
+      "colorVision",
       "locale",
       "chatShowThinking",
       "chatShowToolCalls",

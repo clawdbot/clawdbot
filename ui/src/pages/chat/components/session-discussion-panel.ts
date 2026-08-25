@@ -169,7 +169,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     this.themeObserver = new MutationObserver(() => this.postDiscussionTheme());
     this.themeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme", "data-theme-mode", "style"],
+      attributeFilter: ["data-theme", "data-theme-mode", "data-color-vision", "style"],
     });
   }
 

@@ -725,6 +725,7 @@ export const FIELD_LABELS: Record<string, string> = {
   ui: "UI",
   "ui.seamColor": "Accent Color",
   "ui.prefs.accent": "User Accent Color",
+  "ui.prefs.colorVision": "Color Vision",
   "ui.assistant": "Assistant Appearance",
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",

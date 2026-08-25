@@ -2,7 +2,7 @@
 import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
-import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import type { ColorVisionMode, ThemeMode, ThemeName } from "../../app/theme.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
@@ -56,6 +56,10 @@ describe("config view", () => {
     themeModeOverridden: false,
     themeModeProvenance: "default" as const,
     themeModeResetValue: "system" as ThemeMode,
+    colorVision: "standard" as ColorVisionMode,
+    colorVisionOverridden: false,
+    colorVisionProvenance: "default" as const,
+    colorVisionResetValue: "standard" as ColorVisionMode,
     accent: undefined,
     accentOverridden: false,
     accentProvenance: "default" as const,
@@ -68,6 +72,7 @@ describe("config view", () => {
     resetLocale: vi.fn(),
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
+    setColorVision: vi.fn(),
     setAccent: vi.fn(),
     hasCustomTheme: false,
     customThemeLabel: null,

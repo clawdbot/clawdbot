@@ -70,6 +70,8 @@ The synced `ui.prefs.accent` preference overrides `ui.seamColor`, which override
 
 Each `--x` has `-muted` (0.75 alpha) and `-subtle` (0.08 alpha) rgba siblings that must stay in sync with the base hex — the base doubles as label text on its own subtle tint, and re-tinting one without the other silently drops the pair below AA. Bases stay literal hex because `widget-theme.ts` publishes them to MCP app guest documents where `color-mix()` would not resolve. See the audit comments in `base.css` for the per-theme measurements.
 
+The synced `ui.prefs.colorVision` preference layers protanopia, deuteranopia, or tritanopia status colors over the active built-in theme. Imported themes are excluded because their arbitrary surfaces do not share the built-in contrast contract. These selectors change `--ok`, `--warn`, `--danger`, `--info`, `--run`, and their tint partners only; surfaces, accents, and brand colors remain theme-owned. Keep text or icon cues on every semantic state because the palette supplements meaning rather than carrying it alone.
+
 The dark `--destructive` value is the claw-family override (`:root[data-theme="dark"]`); the shared `:root` fallback is `#ef4444`.
 
 ## Border
