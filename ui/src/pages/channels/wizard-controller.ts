@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
+import { scheduleWizardQrExpiry } from "../../lib/wizard-qr-expiry.ts";
 
 type WizardGatewayClient = Pick<GatewayBrowserClient, "request">;
 
@@ -90,6 +91,7 @@ export class ChannelWizardController {
   private stepIndex = 0;
   private generation = 0;
   private abortController: AbortController | null = null;
+  private cancelQrExpiry: (() => void) | null = null;
 
   constructor(
     private readonly getClient: () => WizardGatewayClient | null,
@@ -271,7 +273,17 @@ export class ChannelWizardController {
   }
 
   private setState(next: ChannelWizardState): void {
+    this.cancelQrExpiry?.();
+    this.cancelQrExpiry = null;
     this.currentState = next;
+    if (next.phase === "step") {
+      this.cancelQrExpiry = scheduleWizardQrExpiry(next.step, (expiredStep) => {
+        const current = this.currentState;
+        if (current.phase === "step" && current.step.id === expiredStep.id) {
+          this.setState({ ...current, step: expiredStep });
+        }
+      });
+    }
     this.onChange();
   }
 }

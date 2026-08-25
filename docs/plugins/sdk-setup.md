@@ -556,6 +556,36 @@ const setupWizard: ChannelSetupWizard = {
 `ChannelSetupWizard` also supports `textInputs`, `dmPolicy`, `allowFrom`, `groupAccess`, `prepare`, `finalize`, and more. See the Discord plugin's `src/setup-core.ts` for a full bundled example.
 
 <AccordionGroup>
+  <Accordion title="Owner-controlled QR prompts">
+    Use `WizardPrompter.qrCode` when setup owns an operation that completes after the operator scans a QR code. Pass the raw QR payload only through `text`; OpenClaw renders it inside the host and never places it in protocol text or chat history.
+
+    ```typescript
+    if (!prompter.qrCode) {
+      throw new Error("This setup client cannot present QR codes. Use the plugin's native setup flow.");
+    }
+
+    const linking = startDeviceLink();
+    try {
+      const account = await prompter.qrCode({
+        title: "Link a device",
+        message: "Scan the code and approve the device.",
+        text: linking.uri,
+        expiresInMs: 120_000,
+        settled: linking.result,
+      });
+      await saveLinkedAccount(account);
+    } finally {
+      await linking.stop();
+    }
+    ```
+
+    `expiresInMs` is optional. When set, it must be an integer from `0` through `2_147_000_000` milliseconds (about 24.8 days), inclusive; `0` expires immediately. A value outside that range rejects with a `RangeError` before OpenClaw presents the QR, so choose a valid duration before starting transient link work. If you omit the field, the QR has no host-owned deadline.
+
+    `settled` is the producer's lifecycle: its result dismisses the QR and becomes the return value. Client answers never settle the step. If the wizard is cancelled or the deadline passes, `qrCode` rejects so the producer can stop transient work in `finally`. Check the optional capability before starting credential-bearing work; do not fall back to placing the raw payload in a note, URL, error, or transcript.
+
+    When the deadline passes, OpenClaw scrubs the QR image and rejects `qrCode` with an expiry error that tells the operator to restart setup. Treat expiry like cancellation: stop the producer in `finally`, leave no linking process behind, and require a fresh setup attempt.
+
+  </Accordion>
   <Accordion title="Shared allowFrom prompts">
     For DM allowlist prompts that only need the standard `note -> prompt -> parse -> merge -> patch` flow, prefer the shared setup helpers from `openclaw/plugin-sdk/setup`: `createPromptParsedAllowFromForAccount(...)` and `createTopLevelChannelParsedAllowFromPrompt(...)`.
   </Accordion>

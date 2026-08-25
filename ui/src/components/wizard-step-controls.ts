@@ -30,6 +30,11 @@ type WizardStepControlsProps = {
   onToggleSensitiveVisibility?: () => void;
 };
 
+/** Whether the current wizard step exposes a truthful cancellation action. */
+export function canCancelWizardStep(step: WizardStep): boolean {
+  return step.type !== "qr" || step.canCancel !== false;
+}
+
 function stepClass(props: WizardStepControlsProps, name: string): string {
   return `${props.presentation === "channels" ? "channels-wizard" : "wizard-step"}__${name}`;
 }
@@ -187,6 +192,28 @@ function renderProgressStep(props: WizardStepControlsProps) {
   `;
 }
 
+function renderQrStep(props: WizardStepControlsProps) {
+  const dataUrl = props.step.qrDataUrl;
+  const active =
+    typeof dataUrl === "string" &&
+    dataUrl.startsWith("data:image/png;base64,") &&
+    (props.step.expiresInMs === undefined || props.step.expiresInMs > 0);
+  return html`
+    ${renderMessage(props)}
+    ${active
+      ? html`<img class="wizard-step__qr" src=${dataUrl} alt=${t("custodian.setupQrCodeAlt")} />
+          <div class="muted" role="status" aria-live="polite">
+            ${t("custodian.setupQrCodeWaiting")}
+          </div>`
+      : html`<div class="muted" role="status">${t("custodian.setupQrCodeExpired")}</div>`}
+    ${props.leadingAction
+      ? html`<div class="wizard-step__actions wizard-step__actions--split">
+          ${props.leadingAction}
+        </div>`
+      : nothing}
+  `;
+}
+
 function renderTextStep(props: WizardStepControlsProps) {
   const step = props.step;
   const value = typeof props.value === "string" ? props.value : "";
@@ -333,6 +360,8 @@ export function renderWizardStepControls(
       return props.step.executor === "gateway"
         ? renderProgressStep(props)
         : renderContinueStep(props);
+    case "qr":
+      return renderQrStep(props);
     // These show whatever the step supplies behind a single Continue.
     case "note":
     case "action":

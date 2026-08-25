@@ -8,7 +8,9 @@ const options = [
   { label: "Twitch", value: "twitch" },
 ];
 
-function step(patch: Partial<WizardStep>): WizardStep {
+type InteractiveWizardStep = Exclude<WizardStep, { type: "qr" }>;
+
+function step(patch: Partial<InteractiveWizardStep>): InteractiveWizardStep {
   return { id: "step", type: "select", options, ...patch };
 }
 
@@ -43,6 +45,18 @@ describe("Custodian rich wizard answers", () => {
       answer: { stepId: "step" },
       display: "Continue",
     });
+    expect(
+      custodianWizardSubmission(
+        {
+          id: "qr-step",
+          type: "qr",
+          qrDataUrl: "data:image/png;base64,aGVsbG8=",
+          canCancel: true,
+          executor: "gateway",
+        },
+        undefined,
+      ),
+    ).toBeNull();
   });
 
   it("copies multiselect defaults and rejects values outside the step", () => {

@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
+import { scheduleWizardQrExpiry } from "../../lib/wizard-qr-expiry.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
@@ -33,6 +34,7 @@ export class ModelSetupWizardRunner {
   private abortController: AbortController | null = null;
   private generation = 0;
   private startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start";
+  private cancelQrExpiry: (() => void) | null = null;
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
@@ -254,7 +256,17 @@ export class ModelSetupWizardRunner {
   }
 
   private setState(state: ModelSetupWizardState): void {
+    this.cancelQrExpiry?.();
+    this.cancelQrExpiry = null;
     this.currentState = state;
+    if (state.phase === "step") {
+      this.cancelQrExpiry = scheduleWizardQrExpiry(state.step, (expiredStep) => {
+        const current = this.currentState;
+        if (current.phase === "step" && current.step.id === expiredStep.id) {
+          this.setState({ ...current, step: expiredStep });
+        }
+      });
+    }
     this.options.onChange(state);
   }
 }

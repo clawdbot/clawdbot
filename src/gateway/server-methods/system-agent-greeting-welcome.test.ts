@@ -73,7 +73,7 @@ function makeEngine(): FakeEngine {
       history.push({ role: "assistant", text });
     }),
     planGreeting: vi.fn(),
-    decorateRejoinReply: vi.fn((reply: unknown) => reply),
+    decorateRejoinReply: vi.fn(async (reply: unknown) => reply),
   };
 }
 

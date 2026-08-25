@@ -96,6 +96,34 @@ export async function renderQrPngDataUrl(
   return formatQrPngDataUrl(await renderQrPngBase64(input, opts));
 }
 
+/** Render the largest readable QR PNG that fits a protocol data-URL budget. */
+export async function renderQrPngDataUrlWithinLimit(
+  input: string,
+  maxDataUrlLength: number,
+  opts: QrPngRenderOptions = {},
+): Promise<string> {
+  if (
+    !Number.isSafeInteger(maxDataUrlLength) ||
+    maxDataUrlLength <= QR_PNG_DATA_URL_PREFIX.length
+  ) {
+    throw new RangeError("maxDataUrlLength must be a safe positive data URL length.");
+  }
+  const initialScale = resolveQrPngIntegerOption({
+    name: "scale",
+    value: opts.scale,
+    defaultValue: DEFAULT_QR_PNG_SCALE,
+    min: MIN_QR_PNG_SCALE,
+    max: MAX_QR_PNG_SCALE,
+  });
+  for (let scale = initialScale; scale >= MIN_QR_PNG_SCALE; scale -= 1) {
+    const dataUrl = await renderQrPngDataUrl(input, { ...opts, scale });
+    if (dataUrl.length <= maxDataUrlLength) {
+      return dataUrl;
+    }
+  }
+  throw new RangeError("QR PNG data URL exceeds the presentation limit.");
+}
+
 /** Writes QR PNG output into a scoped temp directory and returns that directory as a media root. */
 export async function writeQrPngTempFile(
   input: string,

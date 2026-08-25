@@ -1,5 +1,6 @@
 // @vitest-environment node
 // Channel wizard controller: step/answer state machine over wizard.* RPCs.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { ChannelWizardController } from "./wizard-controller.ts";
@@ -220,6 +221,76 @@ describe("ChannelWizardController", () => {
       });
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("retires QR data while gateway progress remains pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const { controller } = createController(async (method) => {
+        if (method === "wizard.start") {
+          return {
+            sessionId: "s-qr-expiry",
+            done: false,
+            status: "running",
+            step: {
+              id: "qr-expiry",
+              type: "qr",
+              executor: "gateway",
+              qrDataUrl: "data:image/png;base64,aGVsbG8=",
+              expiresInMs: 50,
+            },
+          };
+        }
+        if (method === "wizard.next") {
+          return await new Promise(() => {});
+        }
+        return { status: "cancelled" };
+      });
+
+      await controller.start("signal");
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(controller.state).toMatchObject({
+        phase: "step",
+        step: { id: "qr-expiry", qrDataUrl: "", expiresInMs: 0 },
+      });
+      await controller.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps QR expiry scheduling at the timer-safe maximum", async () => {
+    const timeout = vi.spyOn(globalThis, "setTimeout").mockReturnValue(1 as never);
+    try {
+      const { controller } = createController(async (method) => {
+        if (method === "wizard.start") {
+          return {
+            sessionId: "s-qr-max",
+            done: false,
+            status: "running",
+            step: {
+              id: "qr-max",
+              type: "qr",
+              executor: "gateway",
+              qrDataUrl: "data:image/png;base64,aGVsbG8=",
+              expiresInMs: MAX_TIMER_TIMEOUT_MS + 1,
+            },
+          };
+        }
+        if (method === "wizard.next") {
+          return await new Promise(() => {});
+        }
+        return { status: "cancelled" };
+      });
+
+      await controller.start("signal");
+
+      expect(timeout).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      await controller.cancel();
+    } finally {
+      timeout.mockRestore();
     }
   });
 

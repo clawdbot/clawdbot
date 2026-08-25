@@ -1,5 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+import {
+  canCancelWizardStep,
+  renderWizardStepControls,
+} from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
 import type { ModelSetupWizardState } from "./state.ts";
@@ -21,10 +24,12 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
   if (props.state.phase === "idle") {
     return nothing;
   }
+  const cancellationLocked = props.state.phase === "step" && !canCancelWizardStep(props.state.step);
   const canCancel =
-    props.state.phase === "starting" ||
-    props.state.phase === "step" ||
-    props.state.phase === "done";
+    !cancellationLocked &&
+    (props.state.phase === "starting" ||
+      props.state.phase === "step" ||
+      props.state.phase === "done");
   return html`
     <openclaw-modal-dialog
       label=${t(
@@ -32,7 +37,13 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
           ? "modelSetup.wizard.prepareDialogLabel"
           : "modelSetup.wizard.dialogLabel",
       )}
-      @modal-cancel=${canCancel ? props.onCancel : props.onClose}
+      @modal-cancel=${(event: Event) => {
+        if (cancellationLocked) {
+          event.preventDefault();
+          return;
+        }
+        (canCancel ? props.onCancel : props.onClose)();
+      }}
     >
       <div class="model-setup-wizard">
         <div class="model-setup-wizard__header">
@@ -77,13 +88,11 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                         props.mode === "prepare" && props.state.step.type === "confirm"
                           ? t("modelSetup.wizard.continue")
                           : undefined,
-                      leadingAction: html`<button
-                        type="button"
-                        class="btn"
-                        @click=${props.onCancel}
-                      >
-                        ${t("common.cancel")}
-                      </button>`,
+                      leadingAction: cancellationLocked
+                        ? undefined
+                        : html`<button type="button" class="btn" @click=${props.onCancel}>
+                            ${t("common.cancel")}
+                          </button>`,
                       onValueChange: props.onValueChange,
                       onAnswer: props.onAnswer,
                     })}

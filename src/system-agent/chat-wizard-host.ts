@@ -2,16 +2,12 @@ import type {
   SystemAgentChatQuestion,
   SystemAgentWizardCancel,
   WizardAnswer,
+  WizardStep as ProtocolWizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  sanitizeWizardStepForClient,
-  WizardSession,
-  wizardStepAwaitsInput,
-  type WizardStep,
-} from "../wizard/session.js";
+import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "../wizard/session.js";
 import type { MemoryImportProviderOutcome } from "../wizard/setup.memory-import.js";
 import type { SystemAgentOperation } from "./operations.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
@@ -32,7 +28,7 @@ export type SystemAgentChatReply = {
   wizardInputPending?: boolean;
   handoff?: SystemAgentOperation;
   question?: SystemAgentChatQuestion;
-  step?: WizardStep;
+  step?: ProtocolWizardStep;
 };
 
 export type ChatWizardResult = {
@@ -49,7 +45,9 @@ export type ChatWizardHostDependencies = {
   runChannelSetupWizard?: (
     channel: string,
     prompter: WizardPrompter,
+    beforeExternalApply: (runtime: RuntimeEnv) => Promise<void>,
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+    signal: AbortSignal,
   ) => Promise<void | HostedSetupCompletion>;
   runSkillsSetupWizard?: (
     prompter: WizardPrompter,
@@ -86,6 +84,7 @@ type ActiveWizardBridge = {
 
 const log = createSubsystemLogger("system-agent/chat-wizard-host");
 const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
+const WIZARD_CANCEL_LOCKED_MESSAGE = "The hosted wizard cannot be cancelled right now.";
 let hostedRuntimePromise: Promise<HostedRuntime> | undefined;
 
 function loadHostedRuntime(): Promise<HostedRuntime> {
@@ -256,6 +255,7 @@ export class ChatWizardHost {
   constructor(
     private readonly options: {
       surface?: "cli" | "gateway";
+      supportsQrCode?: boolean;
       beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
       dependencies?: ChatWizardHostDependencies;
     },
@@ -270,25 +270,45 @@ export class ChatWizardHost {
   }
 
   dispose(): void {
+    // Locked post-commit work may outlive this host. Drop presentation state
+    // immediately so reset and eviction never wait behind provider finalization.
     this.bridge?.session.cancel();
     this.bridge = null;
   }
 
   decorateReply(reply: SystemAgentChatReply): SystemAgentChatReply {
-    const step = this.bridge?.step ?? null;
+    if (this.bridge?.step?.type === "qr" && !this.bridge.step.qrDataUrl) {
+      this.bridge.step = null;
+    }
+    const ownedStep = this.bridge?.step ?? null;
+    const clientStep =
+      ownedStep && this.bridge ? this.bridge.session.projectStepForClient(ownedStep) : null;
+    if (ownedStep && !clientStep && this.bridge) {
+      this.bridge.step = null;
+    }
+    const step = clientStep;
     const completedReply =
       reply.text && step && wizardStepAwaitsInput(step)
         ? { ...reply, text: `${reply.text}\n${WIZARD_CANCEL_HINT}` }
         : reply;
     const question = wizardStepChatQuestion(step);
-    const clientStep = step ? sanitizeWizardStepForClient(step) : null;
     return {
       ...completedReply,
       ...(step?.sensitive === true ? { sensitive: true } : {}),
-      ...(this.bridge ? { wizardInputPending: true } : {}),
+      ...(step && wizardStepAwaitsInput(step) ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
       ...(clientStep ? { step: clientStep } : {}),
     };
+  }
+
+  /** Advance a producer-settled passive step during an input-free rejoin poll. */
+  async refreshReply(fallback: SystemAgentChatReply): Promise<SystemAgentChatReply> {
+    const projected = this.decorateReply(fallback);
+    if (!this.bridge || this.bridge.step !== null) {
+      return projected;
+    }
+    const result = await this.pump();
+    return this.decorateReply({ ...fallback, text: result.text || fallback.text });
   }
 
   async answer(answer: WizardAnswer): Promise<ChatWizardAnswerResult> {
@@ -320,7 +340,7 @@ export class ChatWizardHost {
       throw new SystemAgentWizardAnswerError("The hosted wizard cancel targets a stale step.");
     }
     if (!bridge.session.cancel()) {
-      throw new SystemAgentWizardAnswerError("The hosted wizard cannot be cancelled right now.");
+      throw new SystemAgentWizardAnswerError(WIZARD_CANCEL_LOCKED_MESSAGE);
     }
     return { ...(await this.pump()), userHistoryText: "Cancel" };
   }
@@ -331,12 +351,27 @@ export class ChatWizardHost {
       return { text: "", configWritten: false };
     }
     if (/^(cancel|abort|stop|quit|exit)$/i.test(text.trim())) {
-      bridge.session.cancel();
+      if (!bridge.session.cancel()) {
+        return { text: WIZARD_CANCEL_LOCKED_MESSAGE, configWritten: false };
+      }
       return await this.pump();
     }
     const step = bridge.step;
     if (!step) {
       return await this.pump();
+    }
+    if (step.type === "qr") {
+      if (!step.qrDataUrl) {
+        bridge.step = null;
+        return await this.pump();
+      }
+      return {
+        text:
+          step.canCancel !== false
+            ? "Scan the QR code to continue, or say `cancel` to stop setup."
+            : "Scan the QR code to continue. Setup will finish or time out.",
+        configWritten: false,
+      };
     }
     const answer = parseWizardAnswer(step, text);
     if (!answer) {
@@ -357,12 +392,19 @@ export class ChatWizardHost {
       kind: "channel",
       label: channel,
       autoSelectChannel: channel,
-      run: async (prompter) =>
+      run: async (prompter, signal, beforeExternalApply, beforePersistentApply) =>
         run
-          ? await run(channel, prompter, this.options.beforePersistentApply)
+          ? await run(channel, prompter, beforeExternalApply, beforePersistentApply, signal)
           : await (
               await loadHostedRuntime()
-            ).runHostedChannelSetup(channel, prompter, this.options.beforePersistentApply),
+            ).runHostedChannelSetup(
+              channel,
+              prompter,
+              beforePersistentApply,
+              undefined,
+              signal,
+              beforeExternalApply,
+            ),
     });
   }
 
@@ -371,12 +413,10 @@ export class ChatWizardHost {
     return await this.start({
       kind: "skills",
       label: "skills",
-      run: async (prompter) =>
+      run: async (prompter, _signal, _beforeExternalApply, beforePersistentApply) =>
         run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSkillsSetup(prompter, this.options.beforePersistentApply),
+          ? await run(prompter, beforePersistentApply)
+          : await (await loadHostedRuntime()).runHostedSkillsSetup(prompter, beforePersistentApply),
     });
   }
 
@@ -385,12 +425,10 @@ export class ChatWizardHost {
     return await this.start({
       kind: "search",
       label: "web search",
-      run: async (prompter) =>
+      run: async (prompter, _signal, _beforeExternalApply, beforePersistentApply) =>
         run
-          ? await run(prompter, this.options.beforePersistentApply)
-          : await (
-              await loadHostedRuntime()
-            ).runHostedSearchSetup(prompter, this.options.beforePersistentApply),
+          ? await run(prompter, beforePersistentApply)
+          : await (await loadHostedRuntime()).runHostedSearchSetup(prompter, beforePersistentApply),
     });
   }
 
@@ -399,12 +437,12 @@ export class ChatWizardHost {
     const result = await this.start({
       kind: "gateway",
       label: "gateway",
-      run: async (prompter) =>
+      run: async (prompter, _signal, _beforeExternalApply, beforePersistentApply) =>
         run
-          ? await run(prompter, this.options.beforePersistentApply)
+          ? await run(prompter, beforePersistentApply)
           : await (
               await loadHostedRuntime()
-            ).runHostedGatewaySetup(prompter, this.options.beforePersistentApply),
+            ).runHostedGatewaySetup(prompter, beforePersistentApply),
     });
     if (this.options.surface !== "gateway" || !this.bridge) {
       return result;
@@ -423,14 +461,12 @@ export class ChatWizardHost {
       kind: "memory-import",
       label: "memory import",
       memoryImportProviders: providers,
-      run: async (prompter) =>
+      run: async (prompter, _signal, _beforeExternalApply, beforePersistentApply) =>
         run
-          ? await run(prompter, this.options.beforePersistentApply, (value) =>
-              providers.push(value),
-            )
+          ? await run(prompter, beforePersistentApply, (value) => providers.push(value))
           : await (
               await loadHostedRuntime()
-            ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
+            ).runHostedMemoryImport(prompter, beforePersistentApply, (value) =>
               providers.push(value),
             ),
     });
@@ -441,7 +477,12 @@ export class ChatWizardHost {
     label: string;
     autoSelectChannel?: string;
     memoryImportProviders?: MemoryImportProviderOutcome[];
-    run: (prompter: WizardPrompter) => Promise<HostedWizardRunResult>;
+    run: (
+      prompter: WizardPrompter,
+      signal: AbortSignal,
+      beforeExternalApply: (runtime: RuntimeEnv) => Promise<void>,
+      beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+    ) => Promise<HostedWizardRunResult>;
   }): Promise<ChatWizardResult> {
     const completion: ActiveWizardBridge["completion"] = {
       status: "applied",
@@ -449,14 +490,26 @@ export class ChatWizardHost {
         ? { memoryImportProviders: params.memoryImportProviders }
         : {}),
     };
-    const session = new WizardSession(async (prompter) => {
-      const result = await params.run(prompter);
-      if (typeof result === "string") {
-        completion.status = result;
-      } else if (result) {
-        completion.memoryImport = result;
-      }
-    });
+    const session = new WizardSession(
+      async (prompter, signal, owner) => {
+        const beforeExternalApply = async (runtime: RuntimeEnv) => {
+          signal.throwIfAborted();
+          await this.options.beforePersistentApply(runtime);
+          signal.throwIfAborted();
+        };
+        const result = await params.run(prompter, signal, beforeExternalApply, async (runtime) => {
+          await beforeExternalApply(runtime);
+          signal.throwIfAborted();
+          owner.lockCancellation();
+        });
+        if (typeof result === "string") {
+          completion.status = result;
+        } else if (result) {
+          completion.memoryImport = result;
+        }
+      },
+      { supportsQrCode: this.options.supportsQrCode === true },
+    );
     this.bridge = {
       session,
       step: null,
@@ -489,7 +542,9 @@ export class ChatWizardHost {
     if (!bridge) {
       return { text: "", configWritten: false };
     }
-    const result = await bridge.session.next();
+    const result = await bridge.session.next({
+      supportsQrCode: this.options.supportsQrCode === true,
+    });
     if (result.done) {
       this.bridge = null;
       const label = bridge.label;

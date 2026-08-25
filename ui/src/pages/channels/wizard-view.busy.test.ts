@@ -123,6 +123,23 @@ describe("renderChannelWizard busy controls", () => {
     expect(group?.querySelector('[slot="label"]')?.textContent).toBe("Pick one");
   });
 
+  it("keeps a cancellation-locked QR visible when the modal is dismissed", () => {
+    const qr = renderStep({
+      id: "signal-link",
+      type: "qr",
+      executor: "gateway",
+      qrDataUrl: "data:image/png;base64,aGVsbG8=",
+      canCancel: false,
+    });
+    const modal = qr.container.querySelector("openclaw-modal-dialog");
+    const dismissal = new CustomEvent("modal-cancel", { cancelable: true });
+
+    modal?.dispatchEvent(dismissal);
+
+    expect(dismissal.defaultPrevented).toBe(true);
+    expect(qr.onClose).not.toHaveBeenCalled();
+  });
+
   it("disables multiselect choices and submission while a step is running", () => {
     const multiselect = renderStep({
       id: "multi",

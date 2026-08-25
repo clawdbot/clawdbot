@@ -1,8 +1,16 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type {
   SystemAgentChatParams,
   SystemAgentChatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import {
+  assertWizardStepClientCapability,
+  WizardClientCapabilityError,
+} from "../../wizard/session.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
 type SystemAgentChatEngineInput = Pick<
@@ -10,39 +18,61 @@ type SystemAgentChatEngineInput = Pick<
   "answerWizard" | "cancelWizard" | "handle"
 >;
 
+export function supportsSystemAgentWizardQr(caps: string[] | null | undefined): boolean {
+  return hasGatewayClientCap(caps, GATEWAY_CLIENT_CAPS.WIZARD_QR);
+}
+
 /**
  * Build the welcome-only result for rejoining an existing session. A
  * reconnecting client must re-render the live wizard/question controls the
  * session still awaits; the stale welcome question only fills in when no live
  * interaction exists.
  */
-export function buildSystemAgentRejoinResult(params: {
-  sessionId: string;
-  welcome: string;
-  welcomeQuestion?: SystemAgentChatResult["question"];
-  engine: {
-    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
-      text: string;
-      sensitive?: boolean;
-      wizardInputPending?: boolean;
-      question?: SystemAgentChatResult["question"];
-      step?: SystemAgentChatResult["step"];
+export async function buildSystemAgentRejoinResult(
+  sessionId: string,
+  session: {
+    welcome: string;
+    welcomeQuestion?: SystemAgentChatResult["question"];
+    engine: {
+      decorateRejoinReply: (reply: { text: string; action: "none" }) => Promise<{
+        text: string;
+        sensitive?: boolean;
+        wizardInputPending?: boolean;
+        question?: SystemAgentChatResult["question"];
+        step?: SystemAgentChatResult["step"];
+      }>;
     };
-  };
-}): SystemAgentChatResult {
-  const rejoin = params.engine.decorateRejoinReply({ text: params.welcome, action: "none" });
-  return {
-    sessionId: params.sessionId,
-    reply: rejoin.text || params.welcome,
+  },
+  supportsQrCode: boolean,
+): Promise<{ result: SystemAgentChatResult } | { error: WizardClientCapabilityError }> {
+  const rejoin = await session.engine.decorateRejoinReply({
+    text: session.welcome,
     action: "none",
-    ...(rejoin.sensitive === true ? { sensitive: true } : {}),
-    ...(rejoin.wizardInputPending === true ? { wizardInputPending: true } : {}),
-    ...(rejoin.step ? { step: rejoin.step } : {}),
-    ...(rejoin.question
-      ? { question: rejoin.question }
-      : params.welcomeQuestion
-        ? { question: params.welcomeQuestion }
-        : {}),
+  });
+  if (rejoin.step) {
+    try {
+      assertWizardStepClientCapability(rejoin.step, supportsQrCode);
+    } catch (error) {
+      if (error instanceof WizardClientCapabilityError) {
+        return { error };
+      }
+      throw error;
+    }
+  }
+  return {
+    result: {
+      sessionId,
+      reply: rejoin.text || session.welcome,
+      action: "none",
+      ...(rejoin.sensitive === true ? { sensitive: true } : {}),
+      ...(rejoin.wizardInputPending === true ? { wizardInputPending: true } : {}),
+      ...(rejoin.step ? { step: rejoin.step } : {}),
+      ...(rejoin.question
+        ? { question: rejoin.question }
+        : !rejoin.step && session.welcomeQuestion
+          ? { question: session.welcomeQuestion }
+          : {}),
+    },
   };
 }
 
@@ -89,11 +119,24 @@ export async function runSystemAgentChatInput(params: {
     : await params.engine.handle(params.input.message);
 }
 
-export function buildSystemAgentChatResult(params: {
-  sessionId: string;
-  reply: SystemAgentChatReply;
-  proposalId?: string;
-}): SystemAgentChatResult {
+export function buildSystemAgentChatResult(
+  params: {
+    sessionId: string;
+    reply: SystemAgentChatReply;
+    proposalId?: string;
+  },
+  supportsQrCode = false,
+): SystemAgentChatResult {
+  if (params.reply.step) {
+    try {
+      assertWizardStepClientCapability(params.reply.step, supportsQrCode);
+    } catch (error) {
+      if (error instanceof WizardClientCapabilityError) {
+        return { sessionId: params.sessionId, reply: error.message, action: "none" };
+      }
+      throw error;
+    }
+  }
   const action =
     params.reply.action === "open-tui"
       ? "open-agent"

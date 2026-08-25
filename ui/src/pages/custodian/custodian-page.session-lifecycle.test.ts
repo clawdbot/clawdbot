@@ -22,6 +22,28 @@ describe("custodian page session lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps a cancellation-locked QR visible without a Cancel action", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      sessionId: "locked-qr-session",
+      reply: "Scan to link Signal.",
+      action: "none",
+      step: {
+        id: "signal-link",
+        type: "qr",
+        executor: "gateway",
+        qrDataUrl: "data:image/png;base64,aGVsbG8=",
+        canCancel: false,
+      },
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+
+    await waitForFast(() => {
+      expect(page.querySelector(".custodian__wizard-step img")).not.toBeNull();
+    });
+    expect(page.querySelector(".custodian__wizard-cancel")).toBeNull();
+  });
+
   it("starts fresh after the gateway invalidates the live session", async () => {
     const request = vi
       .fn()

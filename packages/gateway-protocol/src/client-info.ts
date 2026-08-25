@@ -92,6 +92,8 @@ export const GATEWAY_CLIENT_CAPS = {
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
+  /** Renders and retires passive QR wizard steps. */
+  WIZARD_QR: "wizard-qr",
 } as const;
 
 /** Optional capability advertised by clients during gateway handshake. */

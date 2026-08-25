@@ -65,12 +65,25 @@ type WizardDeviceCodeParams = {
   message?: string;
 };
 
+export type WizardQrCodeParams<T> = {
+  title: string;
+  message?: string;
+  /** Raw QR payload. Hosts render it without exposing the text to clients or transcripts. */
+  text: string;
+  /** Relative presentation deadline owned by the producer. */
+  expiresInMs?: number;
+  /** Producer lifecycle whose result dismisses the presentation. */
+  settled: Promise<T>;
+};
+
 export type WizardPrompter = {
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
   /** Present a browser device code as structured UI when the client supports it. */
   deviceCode?: (params: WizardDeviceCodeParams) => Promise<void>;
+  /** Present an owner-controlled QR until its producer settles or setup is cancelled. */
+  qrCode?: <T>(params: WizardQrCodeParams<T>) => Promise<T>;
   plain?: (message: string) => Promise<void>;
   select: <T>(params: WizardSelectParams<T>) => Promise<T>;
   multiselect: <T>(params: WizardMultiSelectParams<T>) => Promise<T[]>;

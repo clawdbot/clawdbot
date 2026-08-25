@@ -29,6 +29,14 @@
   letter-spacing: 0.08em;
 }
 
+.wizard-step__qr {
+  display: block;
+  width: min(100%, 360px);
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+
 .wizard-step__options {
   display: grid;
   gap: 8px;

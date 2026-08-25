@@ -49,6 +49,8 @@ export type SystemAgentChatEngineOptions = {
   runAgentTurn?: SystemAgentTurnRunner;
   classifyApproval?: SystemAgentApprovalClassifier;
   surface?: "cli" | "gateway";
+  /** Whether the connected client can render passive QR wizard steps. */
+  supportsQrCode?: boolean;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   operatorApprovalOnly?: boolean;
   /** Host-recorded origin for delegated create-agent proposals. */
@@ -85,6 +87,7 @@ export class SystemAgentChatEngine {
     this.agentSession = createSystemAgentSession(binding);
     this.wizard = new ChatWizardHost({
       surface: options.surface,
+      supportsQrCode: options.supportsQrCode,
       beforePersistentApply: async (runtime) => {
         await this.requirePersistentApplyInference(runtime);
       },
@@ -166,8 +169,12 @@ export class SystemAgentChatEngine {
    * reconnecting client re-renders the answer controls this session still
    * awaits; a no-op when no wizard is active.
    */
-  decorateRejoinReply(reply: SystemAgentChatReply): SystemAgentChatReply {
-    return this.wizard.decorateReply(reply);
+  async decorateRejoinReply(reply: SystemAgentChatReply): Promise<SystemAgentChatReply> {
+    const refreshed = await this.wizard.refreshReply(reply);
+    if (refreshed.text && refreshed.text !== reply.text) {
+      this.history.push({ role: "assistant", text: refreshed.text });
+    }
+    return refreshed;
   }
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {

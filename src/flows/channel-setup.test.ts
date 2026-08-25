@@ -1274,7 +1274,9 @@ describe("setupChannels workspace shadow exclusion", () => {
   });
 
   it("disables Back after a channel declares a persistent effect boundary", async () => {
+    const signal = new AbortController().signal;
     const configure = vi.fn(async ({ cfg, prompter, options }) => {
+      expect(options.signal).toBe(signal);
       await prompter.text({ message: "Before effect" });
       await options.beforePersistentEffect?.();
       await prompter.text({ message: "After effect" });
@@ -1299,6 +1301,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         } as never,
         {
           beforePersistentEffect,
+          signal,
           deferStatusUntilSelection: true,
           skipConfirm: true,
           skipDmPolicyPrompt: true,

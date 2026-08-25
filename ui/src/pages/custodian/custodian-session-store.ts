@@ -4,11 +4,11 @@ import {
   type SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { performCustodianAgentHandoff } from "./custodian-navigation.ts";
+import { CustodianQrSession } from "./custodian-qr-session.ts";
 import {
   createCustodianSessionId,
   CustodianSessionOwner,
@@ -31,11 +31,11 @@ import {
   isCustodianSessionInvalidatedError,
   type CustodianSessionVariant,
 } from "./session-lifecycle.ts";
-import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
+import { parseCustodianQuestion } from "./structured-question.ts";
 import {
+  appendCustodianAssistantMessage,
   createCustodianTranscriptMessages,
   custodianErrorMessage,
-  hasUnresolvedCustodianQuestion,
   readCustodianTranscript,
   retireCustodianQuestions,
   type CustodianMessage,
@@ -85,6 +85,7 @@ export class CustodianSessionStore {
   private sessionClient: GatewayBrowserClient | null = null;
   private sessionOwnershipKey: string | null = null;
   private readonly sessionOwner = new CustodianSessionOwner();
+  private readonly qrSession = new CustodianQrSession(this, () => this.emit());
   private sessionStarted = false;
   private configuredInferenceState: CustodianConfiguredInferenceState = "unresolved";
   private eventNudgeClosed = false;
@@ -105,6 +106,7 @@ export class CustodianSessionStore {
       return;
     }
     if (contextChanged) {
+      this.qrSession.clear();
       this.gatewayCleanup?.();
       this.agentCleanup?.();
       this.eventCleanup?.();
@@ -158,13 +160,7 @@ export class CustodianSessionStore {
   }
 
   hasUnresolvedQuestion(): boolean {
-    return hasUnresolvedCustodianQuestion(
-      this.messages,
-      this.dismissedQuestions,
-      this.answeredQuestions,
-      this.wizardInputPending,
-      this.questionReplyUncertain,
-    );
+    return this.qrSession.hasUnresolved(this);
   }
 
   async refreshTranscriptIfIdle(): Promise<void> {
@@ -180,9 +176,7 @@ export class CustodianSessionStore {
     }
   }
 
-  canRetry(): boolean {
-    return this.retryParams !== null && !hasCustodianUserInput(this.retryParams);
-  }
+  canRetry = () => this.retryParams !== null && !hasCustodianUserInput(this.retryParams);
 
   get setupRequired(): boolean {
     return this.setupIssue !== null;
@@ -351,7 +345,7 @@ export class CustodianSessionStore {
     const client = this.activeClient;
     if (
       !step ||
-      !this.wizardInputPending ||
+      (!this.wizardInputPending && step.type !== "qr") ||
       !client ||
       !this.chatAvailable ||
       !this.wizardCancelAvailable ||
@@ -377,6 +371,7 @@ export class CustodianSessionStore {
   }
 
   private revokeNavigationAuthority(): void {
+    this.qrSession.clear();
     this.requestAbort?.abort();
     this.requestAbort = null;
     this.requestEpoch += 1;
@@ -437,6 +432,7 @@ export class CustodianSessionStore {
     variant: CustodianSessionVariant,
     rotateSessionId: boolean,
   ): void {
+    this.qrSession.reset();
     if (rotateSessionId) {
       this.replaceSessionId();
     }
@@ -515,7 +511,11 @@ export class CustodianSessionStore {
       this.requestAbort = null;
       this.sessionClient = client;
       this.sessionOwnershipKey = ownershipKey;
-      if (this.questionReplyUncertain || this.abandonedTurnOutcomeUnknown) {
+      if (
+        this.questionReplyUncertain ||
+        this.abandonedTurnOutcomeUnknown ||
+        this.qrSession.hasActive()
+      ) {
         // A SUBMITTED reply with an unknown outcome blocks the idle refresh by
         // design; only a full rejoin can settle it — the Gateway session owns
         // whether the answer was consumed and which control is live now, and
@@ -542,6 +542,7 @@ export class CustodianSessionStore {
       this.abandonPendingUserTurn(pendingParams);
     }
     if (!client) {
+      this.qrSession.clear();
       return;
     }
     if (!chatSupported) {
@@ -614,6 +615,7 @@ export class CustodianSessionStore {
   }
 
   private clearConversation(): void {
+    this.qrSession.reset();
     this.messages = [];
     this.dismissedQuestions = new Set();
     this.answeredQuestions = new Set();
@@ -627,27 +629,15 @@ export class CustodianSessionStore {
     this.earlierBoundaryAfterId = null;
   }
 
-  private appendAssistant(
-    reply: string,
-    question: CustodianStructuredQuestion | null,
-    step: WizardStep | null,
-  ): void {
-    this.messages = [
-      ...this.messages,
-      {
-        id: this.nextMessageId++,
-        role: "assistant",
-        text: reply,
-        at: Date.now(),
-        question,
-        step,
-      },
-    ];
+  pollQrStep(client: GatewayBrowserClient, stepId: string): void {
+    const params = { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
+    void this.requestReply(client, params, stepId);
   }
 
   private async requestReply(
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
+    qrPollStepId?: string,
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const context = this.context;
     if (!context) {
@@ -660,6 +650,7 @@ export class CustodianSessionStore {
     ) {
       return "rejected";
     }
+    this.qrSession.clearForRequest(qrPollStepId);
     this.requestAbort?.abort();
     const requestAbort = new AbortController();
     this.requestAbort = requestAbort;
@@ -703,9 +694,23 @@ export class CustodianSessionStore {
       }
       this.wizardValue = step ? initialCustodianWizardValue(step) : undefined;
       this.wizardSecretVisible = false;
+      const polledQr = this.qrSession.reconcile(this.messages, qrPollStepId, step);
+      if (polledQr) {
+        this.qrSession.schedule(client, polledQr);
+        return "sent";
+      }
       const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
       if (!silentReply || question || step) {
-        this.appendAssistant(silentReply ? "" : result.reply, question, step);
+        this.messages = appendCustodianAssistantMessage({
+          messages: this.messages,
+          id: this.nextMessageId++,
+          reply: silentReply ? "" : result.reply,
+          question,
+          step,
+        });
+      }
+      if (step?.type === "qr") {
+        this.qrSession.schedule(client, step);
       }
       if (result.action === "open-agent") {
         const handoff = await performCustodianAgentHandoff({

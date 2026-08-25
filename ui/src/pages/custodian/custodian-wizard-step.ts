@@ -19,6 +19,9 @@ export function custodianWizardSubmission(
   step: WizardStep,
   value: unknown,
 ): CustodianWizardSubmission | null {
+  if (step.type === "qr") {
+    return null;
+  }
   if (step.type === "note" || step.type === "action" || step.type === "progress") {
     return { answer: { stepId: step.id }, display: t("common.continue") };
   }

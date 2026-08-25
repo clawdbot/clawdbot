@@ -305,8 +305,12 @@ export type SetupChannelsOptions = {
   allowDisable?: boolean;
   allowIMessageInstall?: boolean;
   allowSignalInstall?: boolean;
+  /** Revalidate host authority before an externally observable, still-cancellable effect. */
+  beforeExternalEffect?: () => Promise<void>;
   /** Revalidate host authority immediately before an installer or other durable effect. */
   beforePersistentEffect?: () => Promise<void>;
+  /** Abort setup-owned transient work when its host session closes. */
+  signal?: AbortSignal;
   onSelection?: (selection: ChannelId[]) => void;
   onPostWriteHook?: (hook: ChannelOnboardingPostWriteHook) => void;
   accountIds?: Partial<Record<ChannelId, string>>;

@@ -3,7 +3,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
-import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+import {
+  canCancelWizardStep,
+  renderWizardStepControls,
+} from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
 import { channelDocsUrl, channelHubMeta } from "./hub-meta.ts";
@@ -226,6 +229,7 @@ export function renderChannelWizard(
   const channel = wizard.channel;
   const label = channel ? props.channelLabel(channel) : t("channels.setup.genericTitle");
   const step = wizard.phase === "step" ? wizard.step : null;
+  const canCancel = step === null || canCancelWizardStep(step);
 
   let body: unknown;
   if (wizard.phase === "starting") {
@@ -256,7 +260,13 @@ export function renderChannelWizard(
   return html`
     <openclaw-modal-dialog
       label=${t("channels.setup.dialogLabel", { channel: label })}
-      @modal-cancel=${() => props.onClose()}
+      @modal-cancel=${(event: Event) => {
+        if (!canCancel) {
+          event.preventDefault();
+          return;
+        }
+        props.onClose();
+      }}
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">

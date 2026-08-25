@@ -2,7 +2,7 @@
 import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString, QrPngDataUrlSchema } from "./primitives.js";
 
 /**
  * Device pairing and token-management protocol schemas.
@@ -183,11 +183,6 @@ export const DevicePairSetupStatusResultSchema = closedObject({
   deliveryUncertain: Type.Optional(DevicePairSetupDeliveryUncertainEventSchema),
 });
 
-const SetupCodeQrDataUrlSchema = Type.String({
-  maxLength: 16_384,
-  pattern: "^data:image/png;base64,",
-});
-
 /**
  * Generates a device-pairing setup code (and optional QR) so a mobile/companion
  * client can scan it and connect to this gateway. The embedded setup code mints
@@ -220,7 +215,7 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   setupId: Type.Optional(SetupIdSchema),
   setupCode: NonEmptyString,
   joinUrl: Type.Optional(NonEmptyString),
-  qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
+  qrDataUrl: Type.Optional(QrPngDataUrlSchema),
   gatewayUrl: NonEmptyString,
   gatewayUrls: Type.Optional(
     Type.Array(NonEmptyString, { minItems: 2, maxItems: 8, uniqueItems: true }),

@@ -490,6 +490,7 @@ export class GatewayBrowserClient {
           GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
           GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
           GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+          GATEWAY_CLIENT_CAPS.WIZARD_QR,
         ],
         auth: buildGatewayConnectAuth(selectedAuth),
         userAgent: navigator.userAgent,

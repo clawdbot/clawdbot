@@ -26,11 +26,13 @@ vi.mock("qrcode", async (importOriginal) => {
 
 let renderQrPngBase64: typeof import("./qr-image.ts").renderQrPngBase64;
 let renderQrPngDataUrl: typeof import("./qr-image.ts").renderQrPngDataUrl;
+let renderQrPngDataUrlWithinLimit: typeof import("./qr-image.ts").renderQrPngDataUrlWithinLimit;
 let writeQrPngTempFile: typeof import("./qr-image.ts").writeQrPngTempFile;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } = await import("./qr-image.ts"));
+  ({ renderQrPngBase64, renderQrPngDataUrl, renderQrPngDataUrlWithinLimit, writeQrPngTempFile } =
+    await import("./qr-image.ts"));
 });
 
 describe("renderQrPngBase64", () => {
@@ -87,6 +89,16 @@ describe("renderQrPngBase64", () => {
     await expect(renderQrPngDataUrl("openclaw")).resolves.toBe(
       `data:image/png;base64,${MOCK_PNG_BASE64}`,
     );
+  });
+
+  it("reduces scale until a QR fits the presentation budget", async () => {
+    toBuffer.mockResolvedValueOnce(Buffer.alloc(20)).mockResolvedValueOnce(Buffer.from("fits"));
+
+    await expect(renderQrPngDataUrlWithinLimit("openclaw", 40, { scale: 2 })).resolves.toBe(
+      `data:image/png;base64,${Buffer.from("fits").toString("base64")}`,
+    );
+    expect(toBuffer).toHaveBeenNthCalledWith(1, "openclaw", { margin: 4, scale: 2 });
+    expect(toBuffer).toHaveBeenNthCalledWith(2, "openclaw", { margin: 4, scale: 1 });
   });
 
   it("writes QR PNGs to a scoped temp file", async () => {

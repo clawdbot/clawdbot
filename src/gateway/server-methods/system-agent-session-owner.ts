@@ -1,5 +1,5 @@
 import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
-import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
+import { resolveGatewaySessionOwnerKey } from "./gateway-session-owner.js";
 import type { GatewayClient } from "./types.js";
 
 export function resolveSystemAgentSessionOwnerKey(params: {
@@ -11,22 +11,5 @@ export function resolveSystemAgentSessionOwnerKey(params: {
     // Delegation is a host-only cross-connection owner from the regular-agent tool path.
     return delegationKey;
   }
-  const profileId = params.client?.authenticatedUserProfile?.profileId.trim();
-  if (profileId) {
-    return `user:${profileId}`;
-  }
-  // A GitHub-backed connection has no durable owner until immutable profile sync succeeds.
-  if (isGatewayClientProfilePending(params.client)) {
-    return undefined;
-  }
-  const userId = params.client?.authenticatedUserId?.trim();
-  if (userId) {
-    return `user:${userId}`;
-  }
-  const deviceId = params.client?.connect.device?.id.trim();
-  if (deviceId) {
-    return `device:${deviceId}`;
-  }
-  const connId = params.client?.connId?.trim();
-  return connId ? `connection:${connId}` : undefined;
+  return resolveGatewaySessionOwnerKey(params.client);
 }

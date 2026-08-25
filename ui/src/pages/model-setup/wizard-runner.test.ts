@@ -528,4 +528,59 @@ describe("ModelSetupWizardRunner", () => {
       "wizard.next",
     ]);
   });
+
+  it("retires QR data while gateway progress remains pending", async () => {
+    vi.useFakeTimers();
+    try {
+      let nextCount = 0;
+      const request = vi.fn(
+        (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+          if (method === "openclaw.setup.auth.start") {
+            return Promise.resolve({ sessionId: "session-qr", done: false, status: "running" });
+          }
+          if (method === "wizard.next" && nextCount++ === 0) {
+            return Promise.resolve({
+              done: false,
+              status: "running",
+              step: {
+                id: "qr-expiry",
+                type: "qr",
+                executor: "gateway",
+                qrDataUrl: "data:image/png;base64,aGVsbG8=",
+                expiresInMs: 50,
+              },
+            });
+          }
+          if (method === "wizard.next") {
+            return new Promise((_, reject) => {
+              options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+                once: true,
+              });
+            });
+          }
+          return Promise.resolve({ status: "cancelled" });
+        },
+      );
+      const runner = new ModelSetupWizardRunner({
+        getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+        getAgentId: () => null,
+        onChange: () => undefined,
+        requestFailedMessage: () => "failed",
+        cancelledMessage: () => "cancelled",
+        sessionExpiredMessage: () => "expired",
+      });
+
+      const start = runner.start("signal-link");
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(runner.state).toMatchObject({
+        phase: "step",
+        step: { id: "qr-expiry", qrDataUrl: "", expiresInMs: 0 },
+      });
+      await runner.cancel();
+      await expect(start).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

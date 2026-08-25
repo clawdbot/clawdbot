@@ -13,6 +13,7 @@ import {
   handleMarkdownTableInteraction,
   releaseMarkdownTables,
 } from "../../components/markdown-tables.ts";
+import { canCancelWizardStep } from "../../components/wizard-step-controls.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -182,9 +183,10 @@ class CustodianSurface extends OpenClawLightDomElement {
       `;
     }
     const emptyError = store.messages.length === 0 && store.error !== null && !store.sending;
-    const activeWizardMessage = store.wizardInputPending
-      ? store.messages.findLast((message) => message.step !== null)
-      : undefined;
+    const activeWizardMessage = store.messages.findLast(
+      (message) =>
+        message.step !== null && (store.wizardInputPending || message.step.type === "qr"),
+    );
     return html`
       <section
         class="custodian-surface ${this.compact ? "custodian-surface--panel" : ""} ${emptyError
@@ -244,7 +246,9 @@ class CustodianSurface extends OpenClawLightDomElement {
               wizardSecretVisible: store.wizardSecretVisible,
               onWizardValueChange: (value) => store.setWizardValue(value),
               onWizardAnswer: (value) => store.answerWizardStep(message, value),
-              showWizardCancel: store.wizardCancelAvailable,
+              showWizardCancel:
+                store.wizardCancelAvailable &&
+                (message.step === null || canCancelWizardStep(message.step)),
               onWizardCancel: () => store.cancelWizardStep(message),
               onToggleWizardSecretVisibility: () => store.toggleWizardSecretVisibility(),
             });

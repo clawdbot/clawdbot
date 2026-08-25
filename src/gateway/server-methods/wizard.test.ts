@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -47,7 +48,10 @@ import {
 } from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
+import { bindWizardTestClient, createWizardTestClient } from "./wizard-test-client.test-support.js";
+import { type SetupWizardRunner, wizardHandlers as rawWizardHandlers } from "./wizard.js";
+
+const wizardHandlers = bindWizardTestClient(rawWizardHandlers);
 
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
@@ -124,6 +128,52 @@ describe("wizard session lookup", () => {
 });
 
 describe("hosted wizard runtime isolation", () => {
+  it("forwards cancellation to transient channel setup work", async () => {
+    const abortObserved = createDeferred();
+    const runnerRelease = createDeferred();
+    let receivedSignal: AbortSignal | undefined;
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      channelWizardRunner: async (
+        opts: { signal?: AbortSignal },
+        _runtime: RuntimeEnv,
+        prompter: WizardPrompter,
+      ) => {
+        receivedSignal = opts.signal;
+        opts.signal?.addEventListener("abort", () => abortObserved.resolve(), { once: true });
+        prompter.progress("Waiting for channel setup");
+        await runnerRelease.promise;
+      },
+    };
+
+    try {
+      const start = await invokeWizard("wizard.start", { flow: "channels" }, context as never);
+      expect(receivedSignal).toBeDefined();
+
+      const respond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.cancel"],
+        "wizard.cancel test invariant",
+      )({
+        params: { sessionId: start.sessionId },
+        respond,
+        context,
+      } as never);
+
+      await abortObserved.promise;
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { status: "cancelled", error: "cancelled" },
+        undefined,
+      );
+    } finally {
+      runnerRelease.resolve();
+      await cancelWizardSessions(tracker.wizardSessions);
+    }
+  });
+
   it.each([
     { flow: "setup", exitCode: 0, status: "done" },
     { flow: "setup", exitCode: 23, status: "error" },
@@ -570,6 +620,66 @@ describe("wizard setup ownership", () => {
 });
 
 describe("wizard step serialization", () => {
+  it("rejects QR projection to a polling client without QR capability", async () => {
+    const qrSettled = createDeferred<string>();
+    const context = createWizardContext(async (_opts, _runtime, prompter) => {
+      await prompter.confirm({ message: "Link Signal now?", initialValue: true });
+      await prompter.qrCode?.({
+        title: "Link Signal",
+        text: "sgnl://linkdevice?uuid=test",
+        settled: qrSettled.promise,
+      });
+    });
+    const startRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: {},
+      client: createWizardTestClient([GATEWAY_CLIENT_CAPS.WIZARD_QR]),
+      respond: startRespond,
+      context,
+    } as never);
+    const start = readSuccessfulResponse(startRespond);
+
+    const unsupportedRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.next"],
+      "wizard.next test invariant",
+    )({
+      params: {
+        sessionId: start.sessionId,
+        answer: { stepId: (start.step as { id: string }).id, value: true },
+      },
+      client: createWizardTestClient(),
+      respond: unsupportedRespond,
+      context,
+    } as never);
+
+    expect(unsupportedRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(JSON.stringify(unsupportedRespond.mock.calls)).not.toContain("data:image/png");
+
+    const supportedRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.next"],
+      "wizard.next test invariant",
+    )({
+      params: { sessionId: start.sessionId },
+      client: createWizardTestClient([GATEWAY_CLIENT_CAPS.WIZARD_QR]),
+      respond: supportedRespond,
+      context,
+    } as never);
+    expect(readSuccessfulResponse(supportedRespond).step).toMatchObject({ type: "qr" });
+
+    const session = expectDefined([...context.wizardSessions.values()][0], "QR wizard session");
+    session.cancel();
+    await whenAdmittedWizardSessionSettled(session);
+  });
+
   it("strips a sensitive initial value from wizard.start", async () => {
     const context = createWizardContext(async (_opts, _runtime, prompter) => {
       await prompter.text({

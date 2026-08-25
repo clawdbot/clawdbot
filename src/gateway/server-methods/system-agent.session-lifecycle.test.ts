@@ -55,7 +55,7 @@ function makeEngine(): FakeEngine {
   return {
     answerWizard: vi.fn(),
     cancelWizard: vi.fn(),
-    decorateRejoinReply: vi.fn((reply: unknown) => reply),
+    decorateRejoinReply: vi.fn(async (reply: unknown) => reply),
     dispose: vi.fn(async () => undefined),
     getPendingOperatorProposal: vi.fn(() => null),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
@@ -198,6 +198,30 @@ describe("openclaw.chat session lifecycle", () => {
       question: liveQuestion,
       step: liveStep,
     });
+  });
+
+  it("does not pair a stale welcome question with a live wizard step", async () => {
+    const engine = makeEngine();
+    const liveStep = { id: "step-1", type: "text", message: "Enter a value" };
+    engine.decorateRejoinReply = vi.fn(async (reply: Record<string, unknown>) => ({
+      ...reply,
+      wizardInputPending: true,
+      step: liveStep,
+    }));
+    const session = seededSession({ engine });
+    (session as { welcomeQuestion?: unknown }).welcomeQuestion = {
+      id: "welcome-q",
+      header: "Welcome",
+      options: [],
+    };
+
+    const call = await callChat(
+      makeContext(new Map<string, SystemAgentChatSession>([["s1", session]])),
+      { sessionId: "s1" },
+    );
+
+    expect(call.payload).toMatchObject({ step: liveStep });
+    expect((call.payload as { question?: unknown }).question).toBeUndefined();
   });
 
   it("falls back to the welcome question when no interaction is live", async () => {

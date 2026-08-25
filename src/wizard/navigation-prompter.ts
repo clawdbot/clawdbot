@@ -3,6 +3,7 @@ import type {
   WizardMultiSelectParams,
   WizardProgress,
   WizardPrompter,
+  WizardQrCodeParams,
   WizardSelectParams,
 } from "./prompts.js";
 import { WizardNavigationError } from "./prompts.js";
@@ -44,6 +45,12 @@ function inertProgress(): WizardProgress {
     update: () => {},
     stop: () => {},
   };
+}
+
+function wrapQrCode(
+  qrCode: NonNullable<WizardPrompter["qrCode"]>,
+): NonNullable<WizardPrompter["qrCode"]> {
+  return async <T>(params: WizardQrCodeParams<T>) => await qrCode(params);
 }
 
 function stableKey(value: unknown): string {
@@ -121,6 +128,11 @@ class WizardPromptNavigator {
               await this.base.deviceCode?.(params);
             }
           },
+        }
+      : {}),
+    ...(this.base.qrCode
+      ? {
+          qrCode: wrapQrCode(this.base.qrCode),
         }
       : {}),
     plain: async (message) => {

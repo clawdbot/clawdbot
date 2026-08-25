@@ -1,7 +1,10 @@
 // Wizard session tests cover session creation and state transitions.
 
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, test, vi } from "vitest";
+import * as qrImage from "../media/qr-image.js";
 import { DEVICE_CODE_PHISHING_WARNING } from "./prompts.js";
+import type { WizardPrompter } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 function noteRunner() {
@@ -26,6 +29,249 @@ describe("WizardSession", () => {
     readonly [WizardStep["type"], WizardStep["executor"], boolean]
   >)("classifies whether %s/%s awaits user input", (type, executor, expected) => {
     expect(wizardStepAwaitsInput({ id: "step", type, executor })).toBe(expected);
+  });
+
+  test("long-polls after delivering a QR, then settles and scrubs through its producer", async () => {
+    let finish!: (account: string) => void;
+    const settled = new Promise<string>((resolve) => {
+      finish = resolve;
+    });
+    let releaseRunner!: () => void;
+    const holdRunner = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let qrReturned!: () => void;
+    const returned = new Promise<void>((resolve) => {
+      qrReturned = resolve;
+    });
+    let account: string | undefined;
+    const session = new WizardSession(
+      async (prompter) => {
+        account = await prompter.qrCode?.({
+          title: "Link device",
+          text: "sgnl://linkdevice?uuid=test",
+          settled,
+        });
+        qrReturned();
+        await holdRunner;
+      },
+      { supportsQrCode: true },
+    );
+
+    const presented = await session.next({ supportsQrCode: true });
+    expect(presented.step).toMatchObject({
+      type: "qr",
+      executor: "gateway",
+      canCancel: true,
+    });
+    if (!presented.step) {
+      throw new Error("expected QR step");
+    }
+    expect(wizardStepAwaitsInput(presented.step)).toBe(false);
+    await expect(session.answer(presented.step.id, true)).rejects.toThrow(
+      "wizard: QR steps settle through their producer",
+    );
+
+    let pollCompleted = false;
+    const poll = session.next({ supportsQrCode: true }).finally(() => {
+      pollCompleted = true;
+    });
+    await Promise.resolve();
+    expect(pollCompleted).toBe(false);
+
+    finish("+15555550123");
+    await returned;
+    expect(session.cancel()).toBe(false);
+    releaseRunner();
+    await session.whenSettled();
+
+    expect(account).toBe("+15555550123");
+    expect(presented.step.qrDataUrl).toBeUndefined();
+    await expect(poll).resolves.toMatchObject({ done: true, status: "done" });
+  });
+
+  test("does not project a QR when its producer settles during rendering", async () => {
+    let releaseRender!: () => void;
+    const renderGate = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    let markRenderStarted!: () => void;
+    const renderStarted = new Promise<void>((resolve) => {
+      markRenderStarted = resolve;
+    });
+    const render = vi
+      .spyOn(qrImage, "renderQrPngDataUrlWithinLimit")
+      .mockImplementationOnce(async () => {
+        markRenderStarted();
+        await renderGate;
+        return "data:image/png;base64,cXItcG5n";
+      });
+    try {
+      let finish!: (account: string) => void;
+      const settled = new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+      let account: string | undefined;
+      const session = new WizardSession(
+        async (prompter) => {
+          account = await prompter.qrCode?.({
+            title: "Link device",
+            text: "sgnl://linkdevice?uuid=test",
+            settled,
+          });
+        },
+        { supportsQrCode: true },
+      );
+
+      await renderStarted;
+      const next = session.next({ supportsQrCode: true });
+      finish("+15555550123");
+      await Promise.resolve();
+      releaseRender();
+
+      await expect(next).resolves.toMatchObject({ done: true, status: "done" });
+      expect(account).toBe("+15555550123");
+    } finally {
+      render.mockRestore();
+    }
+  });
+
+  test("retires an expired QR before delayed timer cleanup can project it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const session = new WizardSession(
+        async (prompter) => {
+          await prompter.qrCode?.({
+            title: "Link device",
+            text: "sgnl://linkdevice?uuid=expired",
+            expiresInMs: 100,
+            settled: new Promise(() => {}),
+          });
+        },
+        { supportsQrCode: true },
+      );
+
+      const presented = await session.next({ supportsQrCode: true });
+      expect(presented.step).toMatchObject({ type: "qr", qrExpiresAtMs: 1_100 });
+      if (!presented.step) {
+        throw new Error("expected QR step");
+      }
+
+      // Advance the wall clock without running the scheduled expiry callback.
+      vi.setSystemTime(1_101);
+      expect(session.projectStepForClient(presented.step)).toBeNull();
+      await expect(session.next({ supportsQrCode: true })).resolves.toMatchObject({
+        done: true,
+        status: "error",
+        error: "Error: wizard: QR presentation expired; restart setup to retry",
+      });
+      expect(presented.step?.qrDataUrl).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("bounds QR deadlines to the timer-safe maximum", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const accepted = new WizardSession(
+        async (prompter) => {
+          await prompter.qrCode?.({
+            title: "Link device",
+            text: "sgnl://linkdevice?uuid=max",
+            expiresInMs: MAX_TIMER_TIMEOUT_MS,
+            settled: new Promise(() => {}),
+          });
+        },
+        { supportsQrCode: true },
+      );
+      await expect(accepted.next({ supportsQrCode: true })).resolves.toMatchObject({
+        step: { type: "qr", qrExpiresAtMs: 1_000 + MAX_TIMER_TIMEOUT_MS },
+      });
+      accepted.cancel();
+      await accepted.whenSettled();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    let rejected: unknown;
+    const session = new WizardSession(
+      async (prompter) => {
+        try {
+          await prompter.qrCode?.({
+            title: "Link device",
+            text: "sgnl://linkdevice?uuid=overflow",
+            expiresInMs: MAX_TIMER_TIMEOUT_MS + 1,
+            settled: new Promise(() => {}),
+          });
+        } catch (error) {
+          rejected = error;
+        }
+      },
+      { supportsQrCode: true },
+    );
+
+    await session.whenSettled();
+
+    expect(rejected).toBeInstanceOf(RangeError);
+  });
+
+  test("cancels and scrubs a delivered QR without exposing the capability by default", async () => {
+    let unsupportedQrCode: WizardPrompter["qrCode"];
+    const unsupported = new WizardSession(async (prompter) => {
+      unsupportedQrCode = prompter.qrCode;
+    });
+    await unsupported.whenSettled();
+    expect(unsupportedQrCode).toBeUndefined();
+
+    const session = new WizardSession(
+      async (prompter) => {
+        await prompter.qrCode?.({
+          title: "Link device",
+          text: "sgnl://linkdevice?uuid=test",
+          settled: new Promise(() => {}),
+        });
+      },
+      { supportsQrCode: true },
+    );
+    const presented = await session.next({ supportsQrCode: true });
+    expect(presented.step?.type).toBe("qr");
+
+    session.cancel();
+    await session.whenSettled();
+
+    expect(presented.step?.qrDataUrl).toBeUndefined();
+    await expect(session.next()).resolves.toMatchObject({ done: true, status: "cancelled" });
+  });
+
+  test("marks a QR as non-cancellable after the durable commit point", async () => {
+    let finish!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const session = new WizardSession(
+      async (prompter, _signal, owner) => {
+        owner.lockCancellation();
+        await prompter.qrCode?.({
+          title: "Link device",
+          text: "sgnl://linkdevice?uuid=test",
+          settled,
+        });
+      },
+      { supportsQrCode: true },
+    );
+
+    const presented = await session.next({ supportsQrCode: true });
+    expect(presented.step).toMatchObject({ type: "qr", canCancel: false });
+    expect(session.cancel()).toBe(false);
+
+    finish();
+    await expect(session.next({ supportsQrCode: true })).resolves.toMatchObject({
+      done: true,
+      status: "done",
+    });
   });
 
   test("steps progress in order", async () => {
