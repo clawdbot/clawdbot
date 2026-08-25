@@ -22,7 +22,7 @@ import {
   clearStoredChatSnapshots,
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
-import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { readStoredChatSnapshot, SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 function snapshot(message: unknown, sessionId = "session-1"): ChatSessionSnapshot {
   return {
@@ -176,6 +176,17 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
 
     expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(cached);
+  });
+
+  it("serves large snapshots to the startup reader and rejects an empty cache miss", async () => {
+    const sessionKey = "agent:main:startup-large";
+    const largeBody = "x".repeat(5 * 1024 * 1024);
+    const writer = new SessionSnapshotStore();
+    writer.write(sessionKey, snapshot(largeBody));
+    await writer.flush();
+
+    expect((await readStoredChatSnapshot(sessionKey))?.messages[0]).toBe(largeBody);
+    expect(await readStoredChatSnapshot("agent:main:missing")).toBeNull();
   });
 
   it("does not let an append miss replace a richer persisted snapshot", async () => {

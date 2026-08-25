@@ -32,10 +32,16 @@ beforeEach(() => {
     ? createControlUiE2eArtifactDir("initial-connect-splash", artifactRoot)
     : undefined;
 });
+const builtControlUi = process.env.OPENCLAW_UI_E2E_USE_BUILT === "1";
+const delayedHelloMs = 2_000;
 const viewport = { height: 900, width: 1280 };
+const cachedSessionPath = "chat/main/telegram/12345";
+const cachedSessionKey = "agent:main:telegram:12345";
+const cachedTranscriptMarker = "cached-transcript-marker";
 
 let browser: Browser;
 let server: ControlUiE2eServer;
+let cachedTranscriptVisibleAfterMs: number | null = null;
 const openContexts = new Set<BrowserContext>();
 
 async function createPage(): Promise<Page> {
@@ -44,6 +50,12 @@ async function createPage(): Promise<Page> {
     ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
   });
   openContexts.add(context);
+  const page = await context.newPage();
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+  return page;
+}
+
+async function createPageIn(context: BrowserContext): Promise<Page> {
   const page = await context.newPage();
   page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   return page;
@@ -137,6 +149,81 @@ async function traceLoginGateMounts(page: Page): Promise<() => Promise<boolean>>
     );
 }
 
+async function seedStoredTranscript(
+  page: Page,
+  messages: unknown[],
+  options: { version?: number } = {},
+): Promise<void> {
+  await page.evaluate(
+    async ({ cachedMessages, sessionKey, version }) => {
+      const request = indexedDB.open("openclaw-chat-snapshots", version);
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        request.addEventListener("upgradeneeded", () => {
+          for (const name of Array.from(request.result.objectStoreNames)) {
+            request.result.deleteObjectStore(name);
+          }
+          request.result.createObjectStore("snapshots", { keyPath: "sessionKey" });
+          if (version >= 2) {
+            request.result.createObjectStore("snapshotMetadata", { keyPath: "sessionKey" });
+          }
+        });
+        request.addEventListener("success", () => resolve(request.result));
+        request.addEventListener("error", () =>
+          reject(request.error ?? new Error("snapshot database open failed")),
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        const storeNames = version >= 2 ? ["snapshots", "snapshotMetadata"] : ["snapshots"];
+        const transaction = database.transaction(storeNames, "readwrite");
+        const savedAt = Date.now();
+        transaction.objectStore("snapshots").put({
+          savedAt,
+          sessionId: null,
+          sessionKey,
+          snapshot: {
+            messages: cachedMessages,
+            pagination: { hasMore: false },
+            sessionId: null,
+          },
+        });
+        if (version >= 2) {
+          transaction.objectStore("snapshotMetadata").put({
+            savedAt,
+            sessionKey,
+            weight: JSON.stringify(cachedMessages).length,
+          });
+        }
+        transaction.addEventListener("complete", () => resolve());
+        transaction.addEventListener("error", () =>
+          reject(transaction.error ?? new Error("snapshot write failed")),
+        );
+      });
+      database.close();
+    },
+    { cachedMessages: messages, sessionKey: cachedSessionKey, version: options.version ?? 2 },
+  );
+}
+
+async function seedCachedSessionSettings(page: Page): Promise<void> {
+  await page.evaluate(
+    ({ gatewayUrl, sessionKey }) => {
+      localStorage.setItem(
+        `openclaw.control.settings.v1:${gatewayUrl}`,
+        JSON.stringify({
+          gatewayUrl,
+          sessionsByGateway: {
+            [gatewayUrl]: { sessionKey, lastActiveSessionKey: sessionKey },
+          },
+        }),
+      );
+    },
+    {
+      gatewayUrl: server.baseUrl.replace(/^http/, "ws").replace(/\/$/, ""),
+      sessionKey: cachedSessionKey,
+    },
+  );
+}
+
 describeControlUiE2e("Control UI initial connect splash E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -144,7 +231,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}.`,
       );
     }
-    server = await startControlUiE2eServer(undefined, { source: true });
+    server = await startControlUiE2eServer(undefined, { source: !builtControlUi });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 
@@ -157,6 +244,215 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
   afterEach(async () => {
     await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
     openContexts.clear();
+  });
+
+  it("paints a stored transcript before a delayed first hello", async () => {
+    const page = await createPage();
+    await page.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(page, [
+      { role: "assistant", content: cachedTranscriptMarker, timestamp: 1 },
+    ]);
+    await seedCachedSessionSettings(page);
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["connect"],
+      historyMessages: [
+        { role: "assistant", content: cachedTranscriptMarker, timestamp: Date.now() },
+      ],
+    });
+    const startedAt = performance.now();
+
+    await page.goto(new URL(cachedSessionPath, server.baseUrl).href);
+    await gateway.waitForRequest("connect");
+    const helloTimer = builtControlUi
+      ? setTimeout(() => void gateway.resolveDeferred("connect"), delayedHelloMs)
+      : undefined;
+    try {
+      await page.getByText(cachedTranscriptMarker, { exact: true }).first().waitFor();
+    } finally {
+      if (helloTimer !== undefined) {
+        clearTimeout(helloTimer);
+      }
+    }
+    const visibleAfterMs = Math.round(performance.now() - startedAt);
+    cachedTranscriptVisibleAfterMs = visibleAfterMs;
+
+    expect(visibleAfterMs).toBeLessThan(builtControlUi ? delayedHelloMs : 10_000);
+    expect(await page.locator(".connect-splash").count()).toBe(0);
+    await captureProof(page, "cached-transcript-connecting", [
+      page.getByText(cachedTranscriptMarker, { exact: true }).first(),
+    ]);
+    await gateway.resolveDeferred("connect");
+    await page.locator("openclaw-app-shell").waitFor();
+    await captureProof(page, "cached-transcript-reconciled", [
+      page.getByText(cachedTranscriptMarker, { exact: true }).first(),
+    ]);
+  });
+
+  afterAll(() => {
+    if (cachedTranscriptVisibleAfterMs !== null) {
+      console.info(`cached-transcript-visible-after-ms=${cachedTranscriptVisibleAfterMs}`);
+    }
+  });
+
+  it("keeps the cached shell through retry and removes it on rejected credentials", async () => {
+    const page = await createPage();
+    await page.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(page, [
+      { role: "assistant", content: cachedTranscriptMarker, timestamp: 1 },
+    ]);
+    await seedCachedSessionSettings(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(new URL(cachedSessionPath, server.baseUrl).href);
+    await gateway.waitForRequest("connect");
+    await page.getByText(cachedTranscriptMarker, { exact: true }).first().waitFor();
+    const initialConnectCount = (await gateway.getRequests("connect")).length;
+    await gateway.deferNext("connect");
+    await gateway.rejectDeferred("connect", {
+      code: "UNAVAILABLE",
+      message: "gateway starting; retry shortly",
+      details: { reason: "startup-sidecars" },
+      retryable: true,
+    });
+    await expect
+      .poll(async () => (await gateway.getRequests("connect")).length)
+      .toBeGreaterThan(initialConnectCount);
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBeGreaterThan(
+      0,
+    );
+
+    await gateway.rejectDeferred("connect", {
+      code: "UNAUTHORIZED",
+      message: "unauthorized: gateway token mismatch",
+      details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH },
+    });
+    await page.locator("openclaw-login-gate").waitFor();
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBe(0);
+    expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+  });
+
+  it("shares one stored transcript across concurrently opening tabs", async () => {
+    const context = await browser.newContext({ viewport });
+    openContexts.add(context);
+    const writer = await createPageIn(context);
+    await writer.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(writer, [
+      { role: "assistant", content: cachedTranscriptMarker, timestamp: 1 },
+    ]);
+    await seedCachedSessionSettings(writer);
+
+    const pages = await Promise.all([createPageIn(context), createPageIn(context)]);
+    const gateways = await Promise.all(
+      pages.map((page) => installMockGateway(page, { deferredMethods: ["connect"] })),
+    );
+    await Promise.all(
+      pages.map((page) => page.goto(new URL(cachedSessionPath, server.baseUrl).href)),
+    );
+    await Promise.all(gateways.map((gateway) => gateway.waitForRequest("connect")));
+    await Promise.all(
+      pages.map((page) =>
+        page.getByText(cachedTranscriptMarker, { exact: true }).first().waitFor(),
+      ),
+    );
+    expect(await pages[0]!.locator(".connect-splash").count()).toBe(0);
+    expect(await pages[1]!.locator(".connect-splash").count()).toBe(0);
+  });
+
+  it("keeps the splash for an empty stored transcript", async () => {
+    const page = await createPage();
+    await page.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(page, []);
+    await seedCachedSessionSettings(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(new URL(cachedSessionPath, server.baseUrl).href);
+    await gateway.waitForRequest("connect");
+    await page.locator(".connect-splash").waitFor();
+    expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+  });
+
+  it("keeps a saved transcript from releasing a non-chat startup route", async () => {
+    const page = await createPage();
+    await page.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(page, [
+      { role: "assistant", content: cachedTranscriptMarker, timestamp: 1 },
+    ]);
+    await seedCachedSessionSettings(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(new URL("settings/appearance", server.baseUrl).href);
+    await gateway.waitForRequest("connect");
+    await page.locator(".connect-splash").waitFor();
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBe(0);
+    expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+  });
+
+  it("keeps the splash when an older snapshot database is upgraded", async () => {
+    const page = await createPage();
+    await page.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(
+      page,
+      [{ role: "assistant", content: cachedTranscriptMarker, timestamp: 1 }],
+      { version: 1 },
+    );
+    await seedCachedSessionSettings(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(new URL(cachedSessionPath, server.baseUrl).href);
+    await gateway.waitForRequest("connect");
+    await page.locator(".connect-splash").waitFor();
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBe(0);
+  });
+
+  it("does not remount a cached conversation after navigation before hello", async () => {
+    const page = await createPage();
+    await page.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(page, [
+      { role: "assistant", content: cachedTranscriptMarker, timestamp: 1 },
+    ]);
+    await seedCachedSessionSettings(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(new URL(cachedSessionPath, server.baseUrl).href);
+    await gateway.waitForRequest("connect");
+    await page.getByText(cachedTranscriptMarker, { exact: true }).first().waitFor();
+    await page.evaluate(() => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: { context: { navigate: (routeId: string) => void } };
+      };
+      app.runtime?.context.navigate("appearance");
+    });
+    await page.waitForURL("**/settings/appearance");
+    await page.locator(".connect-splash").waitFor();
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBe(0);
+    await gateway.resolveDeferred("connect");
+    await page.locator(".settings-page").waitFor();
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBe(0);
+  });
+
+  it("clears a cached conversation when a pending navigation is cancelled", async () => {
+    const page = await createPage();
+    await page.goto(new URL("favicon.svg", server.baseUrl).href);
+    await seedStoredTranscript(page, [
+      { role: "assistant", content: cachedTranscriptMarker, timestamp: 1 },
+    ]);
+    await seedCachedSessionSettings(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(new URL(cachedSessionPath, server.baseUrl).href);
+    await gateway.waitForRequest("connect");
+    await page.getByText(cachedTranscriptMarker, { exact: true }).first().waitFor();
+    await page.evaluate(() => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime?: { context: { navigate: (routeId: string, options: object) => void } };
+      };
+      app.runtime?.context.navigate("chat", { pathname: "/chat/main/unknown-session" });
+    });
+    await page.locator(".connect-splash").waitFor();
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBe(0);
+
+    await page.goBack();
+    expect(await page.getByText(cachedTranscriptMarker, { exact: true }).count()).toBe(0);
   });
 
   it("shows the splash instead of the login gate while a configured token connects", async () => {

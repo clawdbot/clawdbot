@@ -55,7 +55,7 @@ export function canGoBackInNativeEmbed(): boolean {
   return nativeEmbedHistoryDepth() > 0;
 }
 
-export function createBrowserHistory(): RouterHistory {
+export function createBrowserHistory(onNavigate?: () => void): RouterHistory {
   const embedded = isNativeEmbedHost();
   const listeners = new Set<(location: RouteLocation) => void>();
   let stopPopState: (() => void) | undefined;
@@ -65,6 +65,7 @@ export function createBrowserHistory(): RouterHistory {
       return;
     }
     const onPopState = () => {
+      onNavigate?.();
       const location = readLocation();
       for (const listener of listeners) {
         listener(location);

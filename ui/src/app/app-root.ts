@@ -46,6 +46,10 @@ function routeLocationHref(location: RouteLocation): string {
   return `${location.pathname}${location.search}${location.hash}`;
 }
 
+function currentLocationHref(): string {
+  return `${globalThis.location?.pathname ?? ""}${globalThis.location?.search ?? ""}${globalThis.location?.hash ?? ""}`;
+}
+
 function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is RouteNotFound {
   return "type" in result && result.type === "notFound";
 }
@@ -62,6 +66,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
+  @state() private savedTranscriptReady = false;
 
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
@@ -70,6 +75,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this);
   private loginGatewaySource: ApplicationContext["gateway"] | null = null;
   private loginConnectionClient: GatewayBrowserClient | null = null;
+  private savedTranscriptLocation = "";
+  private savedTranscriptNavigationGeneration = 0;
+  private savedTranscriptAuthorizationEpoch = 0;
   private focusDashboardAbort: AbortController | null = null;
   private readonly loginGateLoader = new LazyCustomElementRequestController(this);
   private readonly lazyCustomElements = new LazyCustomElementRequestController(this, () =>
@@ -89,6 +97,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return this.focusTarget?.kind === "terminal";
   }
 
+  private retireSavedTranscript(): void {
+    this.savedTranscriptAuthorizationEpoch += 1;
+    this.savedTranscriptReady = false;
+    this.savedTranscriptLocation = "";
+    this.savedTranscriptNavigationGeneration = 0;
+  }
+
   constructor() {
     super();
     this.subscriptions
@@ -96,6 +111,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway),
+      )
+      .watch(
+        () => this.runtime?.router,
+        (router, notify) => router.subscribe(notify),
       )
       .watch(
         () => (this.terminalOnly ? this.context?.config : undefined),
@@ -147,6 +166,38 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // descendants reconnect and rebuild their controller-owned state afterward.
     this.contextProvider.setValue(context);
     this.syncLoginConnection();
+    const runtime = this.runtime;
+    const pathname = globalThis.location?.pathname ?? "";
+    const location = currentLocationHref();
+    const navigationGeneration = runtime.navigationGeneration;
+    const gateway = context.gateway;
+    const authorizationEpoch = this.savedTranscriptAuthorizationEpoch;
+    if (runtime.canPaintSavedTranscript) {
+      void import("./saved-transcript-probe.runtime.ts")
+        .then((probe) =>
+          probe.hasSavedTranscript({
+            basePath: context.basePath,
+            pathname,
+            persistedSessionKey: context.gateway.snapshot.sessionKey,
+          }),
+        )
+        .then((ready) => {
+          if (
+            ready &&
+            this.runtime === runtime &&
+            this.context?.gateway === gateway &&
+            runtime.navigationGeneration === navigationGeneration &&
+            this.savedTranscriptAuthorizationEpoch === authorizationEpoch &&
+            currentLocationHref() === location
+          ) {
+            this.savedTranscriptReady = true;
+            this.savedTranscriptLocation = location;
+            this.savedTranscriptNavigationGeneration = navigationGeneration;
+            runtime.releaseStartupRouteGate();
+          }
+        })
+        .catch(() => undefined);
+    }
     // The runtime is created after controller hostConnected hooks run. Ensure
     // their lazy source getters bind on both the initial mount and reconnect.
     this.requestUpdate();
@@ -167,6 +218,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginGateLoader.abandon();
     this.runtime?.stop();
     this.runtime = undefined;
+    this.retireSavedTranscript();
     this.loginGatewaySource = null;
     this.loginConnectionClient = null;
     this.pendingGatewayUrl = null;
@@ -183,8 +235,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
     const sourceChanged = gateway !== this.loginGatewaySource;
     if (sourceChanged) {
+      const sourceReplaced = this.loginGatewaySource !== null;
       this.loginGatewaySource = gateway;
       this.loginConnectionClient = null;
+      if (sourceReplaced) {
+        this.retireSavedTranscript();
+      }
       this.resetLoginSensitivePresentation();
     }
     const snapshot = gateway.snapshot;
@@ -198,6 +254,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (snapshot.phase === "connected") {
       this.loginGatePinned = false;
+    } else if (snapshot.lastError !== null) {
+      this.retireSavedTranscript();
     }
   }
 
@@ -571,12 +629,18 @@ export class OpenClawApp extends OpenClawLightDomElement {
       gatewaySnapshot.lastError === null &&
       (gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    if (initialConnectPending) {
+    const savedTranscriptPaintsConnection =
+      initialConnectPending &&
+      this.savedTranscriptReady &&
+      runtime.navigationGeneration === this.savedTranscriptNavigationGeneration &&
+      currentLocationHref() === this.savedTranscriptLocation;
+    if (initialConnectPending && !savedTranscriptPaintsConnection) {
       return renderConnectingSplash(gatewayStartupStatus);
     }
     const shellOwnsRecovery =
       gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
-    const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
+    const showLoginGate =
+      !gatewayConnected && !shellOwnsRecovery && !savedTranscriptPaintsConnection;
     if (showLoginGate && !isOptionalElementDefined(LOGIN_GATE_ELEMENT)) {
       const loadState = this.loginGateLoader.visibleState;
       // Normal admission needs no login renderer. Keep failures visible and retryable
@@ -627,6 +691,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
               this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
             },
             onConnect: () => {
+              this.retireSavedTranscript();
               this.loginGatePinned = true;
               context.gateway.connect({
                 gatewayUrl: this.loginGatewayUrl,
