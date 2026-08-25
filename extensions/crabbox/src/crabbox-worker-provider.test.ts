@@ -14,6 +14,7 @@ import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
 import {
   findCrabboxBinary,
   operationLeaseId,
+  parseCrabboxProfile,
   resolveCrabboxBinary,
 } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-worker-provider.js";
@@ -39,6 +40,7 @@ const PROFILE = {
   idleTimeout: "60m",
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 type CrabboxWorkerProviderDependencies = NonNullable<
   Parameters<typeof createCrabboxWorkerProvider>[0]
@@ -634,42 +636,88 @@ describe("Crabbox worker provider", () => {
     expect(calls.flatMap((call) => call.argv)).not.toContain("rsync");
   });
 
-  it("runs the profile setup command on the ready lease and keeps it", async () => {
-    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
-    let warmed = false;
-    const provider = providerWithRunner(async (argv, options) => {
-      calls.push({ argv, options });
-      if (argv[1] === "warmup") {
-        warmed = true;
-        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+  it.each([
+    { name: "without forwarded environment", setupEnv: undefined, forwardedEnv: undefined },
+    {
+      name: "with only explicitly forwarded Gateway environment",
+      setupEnv: ["OPENCLAW_WORKER_ARTIFACT_TOKEN", "CRABBOX_EMPTY_VALUE"],
+      forwardedEnv: {
+        OPENCLAW_WORKER_ARTIFACT_TOKEN: "fixture-artifact-token",
+        CRABBOX_EMPTY_VALUE: "",
+      },
+    },
+  ])(
+    "runs profile setup $name without widening node enrollment",
+    async ({ setupEnv, forwardedEnv }) => {
+      for (const [name, value] of Object.entries(forwardedEnv ?? {})) {
+        vi.stubEnv(name, value);
       }
-      if (argv[1] === "run") {
-        return commandResult();
-      }
-      return warmed || argv.includes(LEASE_ID)
-        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
-        : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
-    });
+      const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+      let warmed = false;
+      const provider = providerWithRunner(async (argv, options) => {
+        calls.push({ argv, options });
+        if (argv[1] === "warmup") {
+          warmed = true;
+          return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+        }
+        if (argv[1] === "run") {
+          return commandResult();
+        }
+        return warmed || argv.includes(LEASE_ID)
+          ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+          : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
+      });
 
-    const setup = "command -v node || install-node";
-    await expect(provider.provision({ ...PROFILE, setup }, OPERATION_ID)).resolves.toMatchObject({
-      leaseId: LEASE_ID,
+      const setup = "command -v node || install-node";
+      const profile = { ...PROFILE, setup, ...(setupEnv ? { setupEnv } : {}) };
+      await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
+        leaseId: LEASE_ID,
+      });
+      const [setupCall, enrollmentCall] = calls.filter((call) => call.argv[1] === "run");
+      expect(setupCall?.argv.slice(1)).toEqual([
+        "run",
+        "--provider",
+        "aws",
+        "--network",
+        "public",
+        "--tailscale=false",
+        "--id",
+        LEASE_ID,
+        "--keep=true",
+        "--no-sync",
+        ...Object.keys(forwardedEnv ?? {}).flatMap((name) => ["--allow-env", name]),
+        "--script-stdin",
+      ]);
+      expect(setupCall?.options.env).toEqual(forwardedEnv);
+      expect(setupCall?.options.input).toBe(setup);
+      expect(enrollmentCall?.options.env).toEqual({
+        CRABBOX_WORKER_SETUP_CODE: "secret-setup-value",
+      });
+      expect(
+        enrollmentCall?.argv.filter((argument, index, argv) => argv[index - 1] === "--allow-env"),
+      ).toEqual(["CRABBOX_WORKER_SETUP_CODE"]);
+      expect(
+        calls.filter((call) => call.argv[1] !== "run").every((call) => !call.options.env),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects a missing profile setup environment variable before invoking Crabbox", async () => {
+    const missingName = "OPENCLAW_MISSING_WORKER_ARTIFACT_TOKEN";
+    vi.stubEnv(missingName, undefined);
+    const runCommand = vi.fn<CrabboxCommandRunner>();
+    const provider = providerWithRawRunner(runCommand);
+
+    await expect(
+      provider.provision(
+        { ...PROFILE, setup: "install-node", setupEnv: [missingName] },
+        OPERATION_ID,
+      ),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: expect.stringContaining(missingName),
     });
-    const runCall = calls.find((call) => call.argv[1] === "run");
-    expect(runCall?.argv.slice(1)).toEqual([
-      "run",
-      "--provider",
-      "aws",
-      "--network",
-      "public",
-      "--tailscale=false",
-      "--id",
-      LEASE_ID,
-      "--keep=true",
-      "--no-sync",
-      "--script-stdin",
-    ]);
-    expect(runCall?.options.input).toBe(setup);
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("waits for post-setup SSH readiness and returns the final endpoint", async () => {
@@ -1284,6 +1332,16 @@ describe("Crabbox worker provider", () => {
     await expect(provider.provision({ ...PROFILE, setup: "  " }, "provision:x")).rejects.toThrow(
       "Crabbox profile setup must be a non-empty command string",
     );
+  });
+
+  it.each([
+    ["OPENCLAW_WORKER_ARTIFACT_TOKEN"],
+    ["OPENCLAW_WORKER_ARTIFACT_TOKEN", "_SECOND_VALUE2"],
+  ])("accepts valid profile setup environment names %j", (...setupEnv) => {
+    expect(parseCrabboxProfile({ ...PROFILE, setup: "install-node", setupEnv })).toMatchObject({
+      setup: "install-node",
+      setupEnv,
+    });
   });
 
   it.each([
@@ -2250,6 +2308,25 @@ describe("Crabbox worker provider", () => {
     { profile: { ...PROFILE, idleTimeout: "0s" }, message: "positive Go duration" },
     { profile: { ...PROFILE, binary: " " }, message: "binary" },
     { profile: { ...PROFILE, binary: "crabbox" }, message: "absolute path" },
+    { profile: { ...PROFILE, setup: "install-node", setupEnv: "TOKEN" }, message: "array" },
+    { profile: { ...PROFILE, setup: "install-node", setupEnv: null }, message: "array" },
+    { profile: { ...PROFILE, setup: "install-node", setupEnv: [4] }, message: "valid" },
+    { profile: { ...PROFILE, setup: "install-node", setupEnv: [""] }, message: "valid" },
+    { profile: { ...PROFILE, setup: "install-node", setupEnv: ["1TOKEN"] }, message: "valid" },
+    { profile: { ...PROFILE, setup: "install-node", setupEnv: ["BAD-NAME"] }, message: "valid" },
+    {
+      profile: { ...PROFILE, setup: "install-node", setupEnv: ["TOKEN", "TOKEN"] },
+      message: "duplicate",
+    },
+    {
+      profile: {
+        ...PROFILE,
+        setup: "install-node",
+        setupEnv: Array.from({ length: 17 }, (_, index) => `TOKEN_${index}`),
+      },
+      message: "at most 16",
+    },
+    { profile: { ...PROFILE, setupEnv: ["TOKEN"] }, message: "requires setup" },
     { profile: { ...PROFILE, typo: true }, message: "unknown" },
   ])("rejects an invalid profile ($message)", async ({ profile, message }) => {
     let invoked = false;

@@ -35,11 +35,11 @@ import {
 import {
   buildCrabboxWarmupArgs,
   CRABBOX_WORKER_PROVIDER_ID,
-  nonEmptyString,
   operationLeaseId,
   operationSlug,
   parseCrabboxProfile,
   resolveCrabboxBinary,
+  resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
 import {
   countCrabboxProvisionSetupPhases,
@@ -515,14 +515,10 @@ export function createCrabboxWorkerProvider(
       ) {
         throw new WorkerProviderError("Crabbox execution mode is unsupported");
       }
-      const configured = parseCrabboxProfile(profile);
-      const requestedClass = nonEmptyString(options?.machineClass);
-      if (options?.machineClass !== undefined && (!requestedClass || requestedClass.length > 128)) {
-        throw new WorkerProviderError(
-          "Crabbox machine class must be a non-empty string of at most 128 characters",
-        );
-      }
-      const parsed = requestedClass ? { ...configured, class: requestedClass } : configured;
+      const { profile: parsed, forwardedEnv } = resolveCrabboxProvisionProfile(
+        profile,
+        options?.machineClass,
+      );
       const warmupTimeoutMs = parsed.desktop
         ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
         : CRABBOX_WARMUP_TIMEOUT_MS;
@@ -621,6 +617,7 @@ export function createCrabboxWorkerProvider(
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
           setup: parsed.setup,
+          forwardedEnv,
           sleep,
         });
       }
