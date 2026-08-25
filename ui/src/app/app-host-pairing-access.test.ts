@@ -7,11 +7,9 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import "./app-host.ts";
-import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
 
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
-  lazyCustomElements: LazyCustomElementRequestController;
   render: () => TemplateResult;
   routeState: {
     routeId?: string;
@@ -33,7 +31,7 @@ type PairingSidebar = HTMLElement & {
 
 type PairingAuth = { role: string; scopes?: string[] };
 
-const pairingShells = new Set<PairingShell>();
+let renderedSidebar = false;
 
 function createPairingShell(params: {
   auth: PairingAuth | null;
@@ -105,7 +103,6 @@ function createPairingShell(params: {
     theme: { mode: "system" },
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
-  pairingShells.add(shell);
   shell.runtime = { context, router: {} } as ApplicationRuntime;
   shell.routeState = {
     routeId: "chat",
@@ -114,6 +111,7 @@ function createPairingShell(params: {
   const container = document.createElement("div");
 
   const renderSidebar = () => {
+    renderedSidebar = true;
     render(shell.render(), container);
     const sidebar = container.querySelector<PairingSidebar>("openclaw-app-sidebar");
     if (!sidebar) {
@@ -151,8 +149,10 @@ function createPairingShell(params: {
 
 afterEach(async () => {
   vi.useRealTimers();
-  await Promise.all([...pairingShells].map((shell) => shell.lazyCustomElements.drain()));
-  pairingShells.clear();
+  if (renderedSidebar) {
+    await waitForFast(() => expect(customElements.get("openclaw-app-sidebar")).toBeDefined());
+    renderedSidebar = false;
+  }
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();

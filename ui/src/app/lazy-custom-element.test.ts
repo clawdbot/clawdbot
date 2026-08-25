@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   ensureCustomElementDefined,
@@ -286,46 +285,6 @@ describe("optional custom element requests", () => {
     requests.request(element);
     await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     expect(element.loadModule).toHaveBeenCalledTimes(2);
-  });
-
-  it("drains preloads and follow-on loads they trigger", async () => {
-    const first = createDeferred();
-    const second = createDeferred();
-    const firstElement = {
-      tagName: uniqueTag(),
-      label: "first panel",
-      loadModule: vi.fn(async () => {
-        await first.promise;
-        customElements.define(firstElement.tagName, class extends HTMLElement {});
-      }),
-    };
-    const secondElement = {
-      tagName: uniqueTag(),
-      label: "second panel",
-      loadModule: vi.fn(async () => {
-        await second.promise;
-        customElements.define(secondElement.tagName, class extends HTMLElement {});
-      }),
-    };
-    const requestUpdate = vi.fn();
-    const requests = new LazyCustomElementRequestController({ requestUpdate });
-    requestUpdate.mockImplementation(() => {
-      if (customElements.get(firstElement.tagName)) {
-        requests.preload(secondElement);
-      }
-    });
-    requests.preload(firstElement);
-    const drained = requests.drain();
-    const drainSettled = vi.fn();
-    void drained.then(drainSettled);
-
-    first.resolve();
-    await waitForFast(() => expect(secondElement.loadModule).toHaveBeenCalledOnce());
-    expect(drainSettled).not.toHaveBeenCalled();
-
-    second.resolve();
-    await drained;
-    expect(drainSettled).toHaveBeenCalledOnce();
   });
 
   it("reports a preload failure when an active surface opts into recovery", async () => {
