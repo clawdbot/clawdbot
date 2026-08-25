@@ -4749,27 +4749,41 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("redacts stale draft when payload reply target mismatches", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });
-    const { deliver, opts, finish } = await dispatch();
+  it.each([
+    {
+      name: "an implicit reply with reply mode first",
+      replyToMode: "first" as const,
+      payload: { text: "Final text", replyToId: "$different_msg" },
+    },
+    {
+      name: "an explicit reply tag with reply mode off",
+      replyToMode: "off" as const,
+      payload: { text: "Final text", replyToId: "$different_msg", replyToTag: true },
+    },
+  ])(
+    "redacts stale draft when $name targets a different event",
+    async ({ replyToMode, payload }) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode });
+      const { deliver, opts, finish } = await dispatch();
 
-    // Simulate streaming: partial reply creates draft message.
-    opts.onPartialReply?.({ text: "Partial reply" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+      // Simulate streaming: partial reply creates draft message.
+      opts.onPartialReply?.({ text: "Partial reply" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
 
-    // Final delivery carries a different replyToId than the draft's.
-    deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Final text", replyToId: "$different_msg" }, { kind: "final" });
+      // Final delivery carries a different replyToId than the draft's.
+      deliverMatrixRepliesMock.mockClear();
+      await deliver(payload, { kind: "final" });
 
-    expect(editMessageMatrixMock).not.toHaveBeenCalled();
-    // Draft should be redacted since it can't change reply relation.
-    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
-    // Final answer delivered via normal path.
-    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
-    await finish();
-  });
+      expect(editMessageMatrixMock).not.toHaveBeenCalled();
+      // Draft should be redacted since it can't change reply relation.
+      expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+      // Final answer delivered via normal path.
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+      await finish();
+    },
+  );
 
   it("redacts stale draft when final payload intentionally drops reply threading", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });

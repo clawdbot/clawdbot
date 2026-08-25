@@ -153,12 +153,12 @@ export async function deliverMatrixReplies(params: {
         params.runtime.error?.("matrix reply missing text/media");
         continue;
       }
-      const replyToIdRaw = (reply.replyToId ?? params.replyToId)?.trim();
-      const replyToId = params.threadId
-        ? replyToIdRaw
-        : params.replyToMode === "off"
-          ? undefined
-          : replyToIdRaw;
+      const replyToId =
+        params.threadId || params.replyToMode !== "off"
+          ? (reply.replyToId ?? params.replyToId)?.trim()
+          : reply.replyToTag || reply.replyToCurrent
+            ? reply.replyToId?.trim()
+            : undefined;
       const rawText = visibleText ?? "";
       const mediaList = reply.mediaUrls?.length
         ? reply.mediaUrls

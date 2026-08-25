@@ -82,6 +82,7 @@ describe("deliverMatrixReplies", () => {
     channel: {
       text: {
         resolveMarkdownTableMode: (params: unknown) => resolveMarkdownTableModeMock(params),
+        resolveTextChunkLimit: () => 4000,
         convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
         resolveChunkMode: (cfgLocal: unknown, channel: unknown, accountId?: unknown) =>
           resolveChunkModeMock(cfgLocal, channel, accountId),
@@ -111,6 +112,82 @@ describe("deliverMatrixReplies", () => {
       chunks: text ? [text] : [],
     }));
   });
+
+  const offModeReplyCases: Array<{
+    name: string;
+    reply: Parameters<typeof deliverMatrixReplies>[0]["replies"][number];
+    expectedReplyToId?: string;
+    threadId?: string;
+  }> = [
+    {
+      name: "an explicit reply tag",
+      reply: { text: "hello", replyToId: "$chosen", replyToTag: true },
+      expectedReplyToId: "$chosen",
+    },
+    {
+      name: "an explicit current-message reply",
+      reply: { text: "hello", replyToId: "$chosen", replyToCurrent: true },
+      expectedReplyToId: "$chosen",
+    },
+    {
+      name: "an implicit payload reply",
+      reply: { text: "hello", replyToId: "$implicit" },
+    },
+    {
+      name: "an ambient implicit reply",
+      reply: { text: "hello" },
+    },
+    {
+      name: "a status notice whose explicit reply was stripped upstream",
+      reply: { text: "hello", replyToCurrent: true, isCompactionNotice: true },
+    },
+    {
+      name: "a thread's ambient fallback reply",
+      reply: { text: "hello" },
+      expectedReplyToId: "$ambient",
+      threadId: "$thread",
+    },
+  ];
+
+  it.each(offModeReplyCases)(
+    "encodes the actual Matrix provider reply relation for $name when replyToMode=off",
+    async ({ reply, expectedReplyToId, threadId }) => {
+      const actualSend = await vi.importActual<typeof import("../send.js")>("../send.js");
+      sendMessageMatrixMock.mockImplementation(actualSend.sendMessageMatrix);
+      const sendMessage = vi.fn(
+        async (_roomId: string, _content: Record<string, unknown>) => "$sent",
+      );
+      const client = {
+        sendMessage,
+        prepareRoomForMessageSend: async () => "m.room.message",
+        getJoinedRoomMembers: async () => [],
+        getUserId: async () => "@bot:example.org",
+      } as unknown as MatrixClient;
+
+      const result = await deliverMatrixReplies({
+        cfg,
+        replies: [reply],
+        roomId: "!room:example.org",
+        client,
+        runtime: runtimeEnv,
+        textLimit: 4000,
+        replyToMode: "off",
+        replyToId: "$ambient",
+        threadId,
+      });
+
+      expect(result.visibleReplySent).toBe(true);
+      expect(sendMessage).toHaveBeenCalledOnce();
+      const content = sendMessage.mock.calls[0]?.[1];
+      const relation = content?.["m.relates_to"] as
+        | { "m.in_reply_to"?: { event_id?: string }; event_id?: string }
+        | undefined;
+      expect(relation?.["m.in_reply_to"]?.event_id).toBe(expectedReplyToId);
+      if (threadId) {
+        expect(relation?.event_id).toBe(threadId);
+      }
+    },
+  );
 
   it("keeps replyToId on first reply only when replyToMode=first", async () => {
     chunkMatrixTextMock.mockImplementation((text: string) => ({
