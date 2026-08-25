@@ -20,6 +20,7 @@ import {
   hasEffectivePairedDeviceRole,
   listApprovedPairedDeviceRoles,
   listDevicePairing,
+  listEffectivePairedDeviceRoles,
   requestDevicePairing,
   updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
@@ -327,19 +328,16 @@ export async function authorizeGatewayConnectDevice(
     ? normalizeChromeExtensionOrigin(requestOrigin)
     : undefined;
   if (device && devicePublicKey) {
-    const formatAuditList = (items: string[] | undefined): string => {
-      const normalized = normalizeSortedUniqueTrimmedStringList(items);
-      return normalized.length > 0 ? normalized.join(",") : "<none>";
-    };
+    const formatAuditList = (items: string[] | undefined): string =>
+      normalizeSortedUniqueTrimmedStringList(items).join(",") || "<none>";
     const logUpgradeAudit = (
       reason: "role-upgrade" | "scope-upgrade",
       currentRoles: string[] | undefined,
       currentScopes: string[] | undefined,
-    ) => {
+    ) =>
       logGateway.warn(
         `security audit: device access upgrade requested reason=${reason} device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} roleFrom=${formatAuditList(currentRoles)} roleTo=${role} scopesFrom=${formatAuditList(currentScopes)} scopesTo=${formatAuditList(scopes)} client=${connectParams.client.id} conn=${connId}`,
       );
-    };
     const clientPairingMetadata = {
       displayName: connectParams.client.displayName,
       platform: connectParams.client.platform,
@@ -363,6 +361,7 @@ export async function authorizeGatewayConnectDevice(
     ) => {
       const pairingStateAllowsRequestedAccess = (
         pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
+        requestedScopes = scopes,
       ): boolean => {
         if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
           return false;
@@ -370,17 +369,10 @@ export async function authorizeGatewayConnectDevice(
         if (!hasEffectivePairedDeviceRole(pairedCandidate, role)) {
           return false;
         }
-        if (scopes.length === 0) {
-          return true;
-        }
-        const pairedScopes = resolvePairedAccessScopes(pairedCandidate);
-        if (pairedScopes.length === 0) {
-          return false;
-        }
         return roleScopesAllow({
           role,
-          requestedScopes: scopes,
-          allowedScopes: pairedScopes,
+          requestedScopes,
+          allowedScopes: resolvePairedAccessScopes(pairedCandidate),
         });
       };
       const plan = await resolvePairingApprovalPlan({
@@ -396,6 +388,46 @@ export async function authorizeGatewayConnectDevice(
         devicePublicKey,
         scopes,
       });
+      const trustedProxyAutoApproveConfig =
+        configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
+      const trustedProxyUser = authResult.user?.trim();
+      const trustedProxyAutoApproveScopes = plan.allowTrustedProxyDeviceAutoApproval
+        ? applyConnectionScopeCap({
+            scopes: resolveTrustedProxyDeviceAutoApproveScopes({
+              requestedScopes: scopes,
+              hasRequestedScopes,
+              configuredScopes: trustedProxyAutoApproveConfig?.scopes,
+            }),
+            upgradeReq: context.handler.upgradeReq,
+          })
+        : null;
+      // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
+      if (
+        reason === "scope-upgrade" &&
+        plan.isTrustedProxySameKeyUpgrade &&
+        trustedProxyAutoApproveScopes !== null &&
+        existingPairedDevice
+      ) {
+        const pairedScopes = resolvePairedAccessScopes(existingPairedDevice);
+        if (
+          pairingStateAllowsRequestedAccess(existingPairedDevice, trustedProxyAutoApproveScopes)
+        ) {
+          scopes = normalizeSortedUniqueTrimmedStringList(
+            [...scopes, ...trustedProxyAutoApproveScopes].filter((scope) =>
+              roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: pairedScopes }),
+            ),
+          );
+          connectParams.scopes = scopes;
+          return true;
+        }
+      }
+      if (reason === "role-upgrade" || reason === "scope-upgrade") {
+        logUpgradeAudit(
+          reason,
+          existingPairedDevice ? listEffectivePairedDeviceRoles(existingPairedDevice) : undefined,
+          existingPairedDevice ? resolvePairedAccessScopes(existingPairedDevice) : undefined,
+        );
+      }
       const pairing = await requestDevicePairing({
         deviceId: device.id,
         publicKey: devicePublicKey,
@@ -409,20 +441,9 @@ export async function authorizeGatewayConnectDevice(
           : {}),
         silent: plan.silent,
       });
-      const trustedProxyAutoApproveConfig =
-        configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
-      const trustedProxyUser = authResult.user?.trim();
-      const trustedProxyAutoApproveScopes =
-        plan.allowTrustedProxyDeviceAutoApproval &&
-        (pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade)
-          ? applyConnectionScopeCap({
-              scopes: resolveTrustedProxyDeviceAutoApproveScopes({
-                requestedScopes: scopes,
-                hasRequestedScopes,
-                configuredScopes: trustedProxyAutoApproveConfig?.scopes,
-              }),
-              upgradeReq: context.handler.upgradeReq,
-            })
+      const trustedProxyApprovalScopes =
+        pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade
+          ? trustedProxyAutoApproveScopes
           : null;
       const requestContext = buildRequestContext();
       // A replacement request obsoletes older pending requestIds; tell approval
@@ -457,15 +478,15 @@ export async function authorizeGatewayConnectDevice(
         return replacementPending?.requestId;
       };
       const inlineApprovalAttempted =
-        trustedProxyAutoApproveScopes !== null || pairing.request.silent === true;
+        trustedProxyApprovalScopes !== null || pairing.request.silent === true;
       if (inlineApprovalAttempted) {
         approved =
-          trustedProxyAutoApproveScopes !== null
+          trustedProxyApprovalScopes !== null
             ? await approveDevicePairing(pairing.request.requestId, {
-                callerScopes: trustedProxyAutoApproveScopes,
+                callerScopes: trustedProxyApprovalScopes,
                 accessMetadata: clientAccessMetadata,
                 approvedVia: "trusted-proxy",
-                autoApproveNewDeviceScopes: trustedProxyAutoApproveScopes,
+                autoApproveNewDeviceScopes: trustedProxyApprovalScopes,
               })
             : plan.bootstrapApprovalProfile
               ? await approveBootstrapDevicePairing(
@@ -491,14 +512,14 @@ export async function authorizeGatewayConnectDevice(
                   approvedVia: plan.allowSilentLocalPairing ? "silent" : "trusted-cidr",
                 });
         if (approved?.status === "approved") {
-          if (trustedProxyAutoApproveScopes !== null) {
-            scopes = trustedProxyAutoApproveScopes;
+          if (trustedProxyApprovalScopes !== null) {
+            scopes = trustedProxyApprovalScopes;
             connectParams.scopes = scopes;
           }
           if (plan.bootstrapApprovalProfile) {
             handoffBootstrapProfile = plan.bootstrapApprovalProfile;
           }
-          if (trustedProxyAutoApproveScopes !== null && trustedProxyUser) {
+          if (trustedProxyApprovalScopes !== null && trustedProxyUser) {
             logGateway.warn(
               `security audit: trusted-proxy browser device auto-approved user=${formatForLog(trustedProxyUser)} device=${formatForLog(approved.device.deviceId.slice(0, 12))} scopes=${formatAuditList(scopes)}`,
             );
@@ -693,7 +714,6 @@ export async function authorizeGatewayConnectDevice(
         clientAccessMetadata,
         handoffBootstrapProfile,
         requirePairing,
-        logUpgradeAudit,
       });
       if (!existingDevice.ok) {
         return undefined;
