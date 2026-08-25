@@ -25,5 +25,5 @@ export function resolveSubagentCompletionResultText(entry: {
   if (entry.execution.outcome?.status === "ok") {
     return selectDeliverableSessionsReply(primary, fallback);
   }
-  return (primary ?? fallback)?.trim() || undefined;
+  return primary?.trim() || fallback?.trim() || undefined;
 }
