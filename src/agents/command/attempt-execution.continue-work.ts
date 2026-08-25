@@ -76,6 +76,10 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
     log.info(
       `[continuation] Ignoring spawn-init continue_work election(s) without a durable session store for session ${sanitizeForLog(params.sessionKey)}`,
     );
+    enqueueSystemEvent(
+      "[continuation] continue_work election(s) were not scheduled because durable session state is unavailable.",
+      { sessionKey: params.sessionKey, trusted: true },
+    );
     return;
   }
 
@@ -117,39 +121,48 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
   };
 
   let prior: PriorChainState | undefined;
-  const reservedEntry = await persistChainState({
-    count: initialChainState.currentChainCount + params.requests.length,
-    startedAt: initialChainState.chainStartedAt,
-    tokens: initialChainState.accumulatedChainTokens,
-    chainId: workChainId,
-    update: (entry, proposed) => {
-      const persistedCount = entry.continuationChainCount ?? 0;
-      const persistedTokens = entry.continuationChainTokens ?? 0;
-      const persistedChainId =
-        persistedCount > 0 && entry.continuationChainId
-          ? entry.continuationChainId
-          : proposed.continuationChainId;
-      const persistedStartedAt =
-        persistedCount > 0
-          ? (entry.continuationChainStartedAt ?? proposed.continuationChainStartedAt)
-          : proposed.continuationChainStartedAt;
-      prior = {
-        count: persistedCount,
-        startedAt: entry.continuationChainStartedAt,
-        tokens: persistedTokens,
-        chainId: entry.continuationChainId,
-      };
-      return {
-        continuationChainCount: Math.min(
-          continuationConfig.maxChainLength,
-          persistedCount + params.requests.length,
-        ),
-        continuationChainStartedAt: persistedStartedAt,
-        continuationChainTokens: persistedTokens + turnTokens,
-        continuationChainId: persistedChainId,
-      };
-    },
-  });
+  let reservedEntry: SessionEntry;
+  try {
+    reservedEntry = await persistChainState({
+      count: initialChainState.currentChainCount + params.requests.length,
+      startedAt: initialChainState.chainStartedAt,
+      tokens: initialChainState.accumulatedChainTokens,
+      chainId: workChainId,
+      update: (entry, proposed) => {
+        const persistedCount = entry.continuationChainCount ?? 0;
+        const persistedTokens = entry.continuationChainTokens ?? 0;
+        const persistedChainId =
+          persistedCount > 0 && entry.continuationChainId
+            ? entry.continuationChainId
+            : proposed.continuationChainId;
+        const persistedStartedAt =
+          persistedCount > 0
+            ? (entry.continuationChainStartedAt ?? proposed.continuationChainStartedAt)
+            : proposed.continuationChainStartedAt;
+        prior = {
+          count: persistedCount,
+          startedAt: entry.continuationChainStartedAt,
+          tokens: persistedTokens,
+          chainId: entry.continuationChainId,
+        };
+        return {
+          continuationChainCount: Math.min(
+            continuationConfig.maxChainLength,
+            persistedCount + params.requests.length,
+          ),
+          continuationChainStartedAt: persistedStartedAt,
+          continuationChainTokens: persistedTokens + turnTokens,
+          continuationChainId: persistedChainId,
+        };
+      },
+    });
+  } catch (error) {
+    enqueueSystemEvent(
+      "[continuation] continue_work election(s) were not scheduled because chain state could not be persisted.",
+      { sessionKey: params.sessionKey, trusted: true },
+    );
+    throw error;
+  }
   if (!prior) {
     throw new Error("continuation chain reservation did not return prior session state");
   }
@@ -169,32 +182,40 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
   };
   const restorePriorChainState = async (): Promise<void> => {
     let rolledBack = false;
-    await persistChainState({
-      count: reservation.prior.count,
-      startedAt: reservation.prior.startedAt ?? initialChainState.chainStartedAt,
-      tokens: reservation.prior.tokens,
-      chainId: reservation.prior.chainId,
-      update: (entry) => {
-        if (
-          entry.continuationChainId !== reservation.reserved.chainId ||
-          (entry.continuationChainCount ?? 0) !== reservation.reservedCount
-        ) {
-          return {};
-        }
-        rolledBack = true;
-        return {
-          continuationChainCount: reservation.prior.count,
-          continuationChainStartedAt: reservation.prior.startedAt,
-          continuationChainTokens: Math.max(
-            reservation.prior.tokens,
-            (entry.continuationChainTokens ?? 0) - turnTokens,
-          ),
-          continuationChainId: reservation.prior.chainId,
-        };
-      },
-    });
-    if (!rolledBack) {
-      throw new Error("session chain advanced after spawn-init reservation");
+    try {
+      await persistChainState({
+        count: reservation.prior.count,
+        startedAt: reservation.prior.startedAt ?? initialChainState.chainStartedAt,
+        tokens: reservation.prior.tokens,
+        chainId: reservation.prior.chainId,
+        update: (entry) => {
+          if (
+            entry.continuationChainId !== reservation.reserved.chainId ||
+            (entry.continuationChainCount ?? 0) !== reservation.reservedCount
+          ) {
+            return {};
+          }
+          rolledBack = true;
+          return {
+            continuationChainCount: reservation.prior.count,
+            continuationChainStartedAt: reservation.prior.startedAt,
+            continuationChainTokens: Math.max(
+              reservation.prior.tokens,
+              (entry.continuationChainTokens ?? 0) - turnTokens,
+            ),
+            continuationChainId: reservation.prior.chainId,
+          };
+        },
+      });
+      if (!rolledBack) {
+        throw new Error("session chain advanced after spawn-init reservation");
+      }
+    } catch (error) {
+      enqueueSystemEvent(
+        "[continuation] continue_work chain-state rollback failed; the reserved budget remains fail-closed.",
+        { sessionKey: params.sessionKey, trusted: true },
+      );
+      throw error;
     }
   };
 
@@ -210,28 +231,55 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
   const reservedRequestCount = Math.max(0, reservation.reservedCount - reservation.prior.count);
   const reservedRequests = params.requests.slice(0, reservedRequestCount);
   const unreservedRequestCount = params.requests.length - reservedRequests.length;
-  const result = await scheduleContinuationWorkBatch({
-    sessionKey: params.sessionKey,
-    chainState: reservation.reserved,
-    requests: reservedRequests.map((request) => {
-      const scheduledRequest: ScheduledSpawnInitContinueWorkRequest = {
-        reason: request.reason,
-        delaySeconds: request.delaySeconds ?? liveSchedulingConfig.defaultDelayMs / 1000,
-      };
-      if (request.traceparent) {
-        scheduledRequest.traceparent = request.traceparent;
-      }
-      return scheduledRequest;
-    }),
-    config: liveSchedulingConfig,
-    // Same-session own-turn work has no spawning parent. Adding parentRunId
-    // would let orphan recovery reap the row after its electing turn settles.
-    ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
-    ...(params.originTurnId !== undefined ? { originTurnId: params.originTurnId } : {}),
-    log: (message) => log.info(message),
-  });
-  result.cappedCount += unreservedRequestCount;
-  result.capped ||= unreservedRequestCount > 0;
+  const { checkContinuationBudget } = await import("../../auto-reply/continuation/scheduler.js");
+  const liveBudgetRejection =
+    reservedRequests.length > 0
+      ? checkContinuationBudget({
+          chainState: reservation.reserved,
+          config: liveSchedulingConfig,
+          sessionKey: params.sessionKey,
+        })
+      : null;
+  let result: Awaited<ReturnType<typeof scheduleContinuationWorkBatch>>;
+  if (reservedRequests.length === 0 || liveBudgetRejection) {
+    result = {
+      scheduledCount: 0,
+      cappedCount: params.requests.length,
+      capped: params.requests.length > 0,
+      chainState: reservation.reserved,
+    };
+  } else {
+    try {
+      result = await scheduleContinuationWorkBatch({
+        sessionKey: params.sessionKey,
+        chainState: reservation.reserved,
+        requests: reservedRequests.map((request) => {
+          const scheduledRequest: ScheduledSpawnInitContinueWorkRequest = {
+            reason: request.reason,
+            delaySeconds: request.delaySeconds ?? liveSchedulingConfig.defaultDelayMs / 1000,
+          };
+          if (request.traceparent) {
+            scheduledRequest.traceparent = request.traceparent;
+          }
+          return scheduledRequest;
+        }),
+        config: liveSchedulingConfig,
+        // Same-session own-turn work has no spawning parent. Adding parentRunId
+        // would let orphan recovery reap the row after its electing turn settles.
+        ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
+        ...(params.originTurnId !== undefined ? { originTurnId: params.originTurnId } : {}),
+        log: (message) => log.info(message),
+      });
+      result.cappedCount += unreservedRequestCount;
+      result.capped ||= unreservedRequestCount > 0;
+    } catch (error) {
+      enqueueSystemEvent(
+        "[continuation] continue_work scheduling failed; the reserved chain budget remains fail-closed.",
+        { sessionKey: params.sessionKey, trusted: true },
+      );
+      throw error;
+    }
+  }
 
   if (result.cappedCount > 0 && params.requests.length > 1) {
     enqueueSystemEvent(
@@ -244,26 +292,34 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
     return;
   }
 
-  await persistChainState({
-    count: result.chainState.currentChainCount,
-    startedAt: result.chainState.chainStartedAt,
-    tokens: result.chainState.accumulatedChainTokens,
-    ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
-    update: (entry, proposed) => {
-      if (entry.continuationChainId !== reservation.reserved.chainId) {
-        return {};
-      }
-      return {
-        ...proposed,
-        continuationChainCount:
-          (entry.continuationChainCount ?? 0) === reservation.reservedCount
-            ? proposed.continuationChainCount
-            : Math.max(entry.continuationChainCount ?? 0, proposed.continuationChainCount),
-        continuationChainTokens: Math.max(
-          entry.continuationChainTokens ?? 0,
-          proposed.continuationChainTokens,
-        ),
-      };
-    },
-  });
+  try {
+    await persistChainState({
+      count: result.chainState.currentChainCount,
+      startedAt: result.chainState.chainStartedAt,
+      tokens: result.chainState.accumulatedChainTokens,
+      ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
+      update: (entry, proposed) => {
+        if (entry.continuationChainId !== reservation.reserved.chainId) {
+          return {};
+        }
+        return {
+          ...proposed,
+          continuationChainCount:
+            (entry.continuationChainCount ?? 0) === reservation.reservedCount
+              ? proposed.continuationChainCount
+              : Math.max(entry.continuationChainCount ?? 0, proposed.continuationChainCount),
+          continuationChainTokens: Math.max(
+            entry.continuationChainTokens ?? 0,
+            proposed.continuationChainTokens,
+          ),
+        };
+      },
+    });
+  } catch (error) {
+    enqueueSystemEvent(
+      "[continuation] continue_work wake was scheduled, but chain-state finalization failed; the reserved budget remains fail-closed.",
+      { sessionKey: params.sessionKey, trusted: true },
+    );
+    throw error;
+  }
 }

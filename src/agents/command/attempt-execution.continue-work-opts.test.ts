@@ -29,8 +29,8 @@ import { runAgentAttempt } from "./attempt-execution.js";
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const sessionAccessorState = vi.hoisted(() => ({
-  disableAfterPatch: false,
   failPatch: false,
+  runtimeConfigAfterPatch: undefined as OpenClawConfig | undefined,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
@@ -44,9 +44,9 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
         throw new Error("synthetic continuation reservation failure");
       }
       const result = await actual.patchSessionEntryCore(...args);
-      if (sessionAccessorState.disableAfterPatch) {
-        sessionAccessorState.disableAfterPatch = false;
-        setRuntimeConfigSnapshot(makeContinuationDisabledConfig());
+      if (sessionAccessorState.runtimeConfigAfterPatch) {
+        setRuntimeConfigSnapshot(sessionAccessorState.runtimeConfigAfterPatch);
+        sessionAccessorState.runtimeConfigAfterPatch = undefined;
       }
       return result;
     },
@@ -162,6 +162,29 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     replaceSessionEntrySync({ storePath, sessionKey }, sessionStore[sessionKey] as SessionEntry);
   }
 
+  async function enqueuePriorParkedWork(reason: string) {
+    const { enqueuePendingWork } = await import("../../auto-reply/continuation/work-store.js");
+    const now = Date.now();
+    const work = enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 30_000,
+      electedAt: now,
+      dueAt: now + 60_000,
+      maxChainLength: 200,
+      chainStartedAt: now,
+      accumulatedChainTokens: 2,
+      reason,
+      anchorPending: true,
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "follow-up-work",
+        armedAt: now,
+      },
+    });
+    expect(work).not.toBeNull();
+  }
+
   beforeEach(async () => {
     const { resetContinuationWorkDispatchForTests } =
       await import("../../auto-reply/continuation/work-dispatch.js");
@@ -173,8 +196,8 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     storePath = path.join(tmpDir, "sessions.json");
     runEmbeddedAgentMock.mockReset();
     runCliAgentMock.mockReset();
-    sessionAccessorState.disableAfterPatch = false;
     sessionAccessorState.failPatch = false;
+    sessionAccessorState.runtimeConfigAfterPatch = undefined;
     runEmbeddedAgentMock.mockResolvedValue(makeEmbeddedResult());
     sessionEntry = {
       sessionId: "session-embedded",
@@ -325,7 +348,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
         }
       ).continueWorkOpts;
       opts?.requestContinuation({ reason: "disabled during reservation", delaySeconds: 30 });
-      sessionAccessorState.disableAfterPatch = true;
+      sessionAccessorState.runtimeConfigAfterPatch = makeContinuationDisabledConfig();
       return makeEmbeddedResult();
     });
 
@@ -358,6 +381,11 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
     expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
     expect(sessionStore[sessionKey]?.continuationChainCount).toBeUndefined();
+    expect(
+      peekSystemEvents(sessionKey).some((event) =>
+        event.includes("chain state could not be persisted"),
+      ),
+    ).toBe(true);
   });
 
   it("does not create durable spawn-init work without a durable session store", async () => {
@@ -378,6 +406,68 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
     expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
     expect(sessionEntry.continuationChainCount).toBeUndefined();
+    expect(
+      peekSystemEvents(sessionKey).some((event) =>
+        event.includes("durable session state is unavailable"),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves prior parked work when a capped election receives no reservation", async () => {
+    sessionEntry.continuationChainCount = 1;
+    sessionEntry.continuationChainTokens = 2;
+    sessionStore[sessionKey] = sessionEntry;
+    persistSessionEntry();
+    clearSessionStoreCacheForTest();
+    await enqueuePriorParkedWork("prior parked work");
+
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "capped replacement", delaySeconds: 30 });
+      return makeEmbeddedResult();
+    });
+    await runEmbeddedAttempt(makeAtCapContinuationConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(1);
+    expect(flows[0]).toMatchObject({ status: "queued" });
+    expect(flows[0]?.stateJson).toMatchObject({ reason: "prior parked work" });
+  });
+
+  it("preserves prior parked work when a hot-smaller limit rejects the replacement", async () => {
+    sessionEntry.continuationChainCount = 1;
+    sessionEntry.continuationChainTokens = 2;
+    sessionStore[sessionKey] = sessionEntry;
+    persistSessionEntry();
+    clearSessionStoreCacheForTest();
+    await enqueuePriorParkedWork("prior parked work");
+
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "hot-capped replacement", delaySeconds: 30 });
+      sessionAccessorState.runtimeConfigAfterPatch = makeAtCapContinuationConfig();
+      return makeEmbeddedResult();
+    });
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const flows = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flows).toHaveLength(1);
+    expect(flows[0]).toMatchObject({ status: "queued" });
+    expect(flows[0]?.stateJson).toMatchObject({ reason: "prior parked work" });
   });
 
   it("merges a concurrent spawn-init chain advance before scheduling", async () => {
