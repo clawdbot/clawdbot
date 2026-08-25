@@ -82,6 +82,7 @@ const mocks = vi.hoisted(() => {
                   id: "gpt-5.5",
                   name: "GPT-5.5",
                   reasoning: true,
+                  thinkingLevelMap: { off: null, max: "max" },
                   input: ["text"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128_000,
@@ -560,6 +561,10 @@ describe("prepared model runtime Gateway catalog mode", () => {
         "openai/gpt-5.5",
       ]);
     }
+    expect(
+      snapshot?.modelCatalog.staticEntries?.find((entry) => entry.provider === "openai")
+        ?.thinkingLevelMap,
+    ).toEqual({ off: null, max: "max" });
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
         providerDiscoveryProviderIds: [provider, "openai"],

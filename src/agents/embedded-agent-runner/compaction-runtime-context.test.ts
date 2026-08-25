@@ -68,6 +68,23 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
     ).toBe("high");
   });
 
+  it("revalidates the compaction default against provider-denied thinking levels", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "custom",
+        modelId: "reasoning-model",
+        catalog: [
+          {
+            provider: "custom",
+            id: "reasoning-model",
+            reasoning: true,
+            thinkingLevelMap: { minimal: null, low: null, medium: null },
+          },
+        ],
+      }),
+    ).toBe("high");
+  });
+
   it("defaults compaction to low without inheriting the session level", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
