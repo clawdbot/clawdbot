@@ -221,6 +221,14 @@ describe("TUI plugin approvals", () => {
       visible: false,
     },
     {
+      label: "rejects a missing session key even with explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "main",
+      approvalSession: null,
+      visible: false,
+    },
+    {
       label: "rejects a matching canonical key with a contradictory explicit owner",
       selectedAgent: "main",
       selectedSession: "agent:main:support",

@@ -12,6 +12,7 @@ type TuiSessionEvent = {
   sessionKey?: string;
   agentId?: string;
 };
+type OwnedTuiEvent = { sessionKey?: string | null; agentId?: string | null };
 
 /** Reads the durable user identity without mistaking another run's prompt for this one. */
 export function readTuiSessionUserMessage(event: SessionMessageEvent): {
@@ -76,7 +77,7 @@ export function matchesSelectedTuiSession(
 }
 
 /** Requires explicit ownership for aliases before presenting actionable session prompts. */
-export function matchesOwnedTuiSession(session: string, agentId: string, event: TuiSessionEvent) {
+export function matchesOwnedTuiSession(session: string, agentId: string, event: OwnedTuiEvent) {
   const owner = normalizeLowercaseStringOrEmpty(event.agentId);
   const selected = normalizeLowercaseStringOrEmpty(agentId);
   return (
