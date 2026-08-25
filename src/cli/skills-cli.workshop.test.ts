@@ -52,6 +52,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => {
     throw Object.assign(new Error("gateway unavailable"), { kind: "closed", code: 1006 });
   }),
+  isImplicitLocalGatewayTarget: async () => !process.env.OPENCLAW_GATEWAY_URL,
   isGatewayCredentialsRequiredError: () => false,
   isGatewayTransportError: () => true,
 }));

@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const mocks = vi.hoisted(() => {
@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => {
   return {
     callGateway: vi.fn(),
     config: {} as { gateway?: { mode: "local" | "remote" } },
+    getSkillCuratorStatus: vi.fn(),
+    pinCuratedSkill: vi.fn(),
+    restoreCuratedSkill: vi.fn(),
+    unpinCuratedSkill: vi.fn(),
     output,
     defaultRuntime: {
       log: vi.fn(),
@@ -21,7 +25,17 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
-vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+  isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
+    !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
+}));
+vi.mock("../skills/workshop/curator.js", () => ({
+  getSkillCuratorStatus: mocks.getSkillCuratorStatus,
+  pinCuratedSkill: mocks.pinCuratedSkill,
+  restoreCuratedSkill: mocks.restoreCuratedSkill,
+  unpinCuratedSkill: mocks.unpinCuratedSkill,
+}));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
@@ -78,6 +92,10 @@ function createProgram(): Command {
 }
 
 describe("skills curator cli", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     delete mocks.config.gateway;
     mocks.output.length = 0;
@@ -89,6 +107,11 @@ describe("skills curator cli", () => {
     });
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.writeStdout.mockClear();
+    mocks.defaultRuntime.error.mockClear();
+    mocks.getSkillCuratorStatus.mockReset().mockReturnValue(status);
+    mocks.pinCuratedSkill.mockReset().mockReturnValue(status.skills[0]);
+    mocks.restoreCuratedSkill.mockReset().mockReturnValue(status.skills[0]);
+    mocks.unpinCuratedSkill.mockReset().mockReturnValue(status.skills[0]);
   });
 
   it("uses a parent --json when the leaf has its default false value", async () => {
@@ -125,16 +148,55 @@ describe("skills curator cli", () => {
     expect(mocks.output).toHaveLength(4);
   });
 
-  it("surfaces remote gateway failures without mutating local state", async () => {
-    mocks.config.gateway = { mode: "remote" };
-    mocks.callGateway.mockRejectedValue(new Error("remote unavailable"));
+  const curatorActions = [
+    { label: "status", argv: ["status"] },
+    { label: "pin", argv: ["pin", "daily-brief"] },
+    { label: "unpin", argv: ["unpin", "daily-brief"] },
+    { label: "restore", argv: ["restore", "daily-brief"] },
+  ];
 
-    await expect(
-      createProgram().parseAsync(["skills", "curator", "pin", "daily-brief", "--json"], {
+  it.each(["configured remote", "environment-selected"] as const)(
+    "does not touch local curator state after a %s gateway fails",
+    async (target) => {
+      if (target === "configured remote") {
+        mocks.config.gateway = { mode: "remote" };
+      } else {
+        vi.stubEnv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:9");
+      }
+      mocks.callGateway.mockRejectedValue(new Error("remote unavailable"));
+
+      for (const action of curatorActions) {
+        const failure = await createProgram()
+          .parseAsync(["skills", "curator", ...action.argv, "--json"], { from: "user" })
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(failure, action.label).toMatchObject({ message: "__exit__:1" });
+      }
+
+      expect(mocks.defaultRuntime.error).toHaveBeenCalledTimes(curatorActions.length);
+      expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("remote unavailable");
+      expect(mocks.getSkillCuratorStatus).not.toHaveBeenCalled();
+      expect(mocks.pinCuratedSkill).not.toHaveBeenCalled();
+      expect(mocks.unpinCuratedSkill).not.toHaveBeenCalled();
+      expect(mocks.restoreCuratedSkill).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains local curator status and mutations for an offline implicit local gateway", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("local gateway unavailable"));
+
+    for (const action of curatorActions) {
+      await createProgram().parseAsync(["skills", "curator", ...action.argv, "--json"], {
         from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("remote unavailable");
+      });
+    }
+
+    expect(mocks.getSkillCuratorStatus).toHaveBeenCalledOnce();
+    expect(mocks.pinCuratedSkill).toHaveBeenCalledWith("daily-brief");
+    expect(mocks.unpinCuratedSkill).toHaveBeenCalledWith("daily-brief");
+    expect(mocks.restoreCuratedSkill).toHaveBeenCalledWith("daily-brief");
   });
 
   it("disambiguates duplicate skill keys in text status", async () => {

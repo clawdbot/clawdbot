@@ -183,11 +183,12 @@ function resolveAgentOption(
   return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
 }
 
-async function loadGatewaySkillsStatusReport(
-  resolved: ResolvedSkillsWorkspace,
-): Promise<SkillStatusReport | null> {
+async function loadSkillsStatusReport(
+  options?: ResolveSkillsWorkspaceOptions,
+): Promise<SkillStatusReport> {
+  const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
+  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
   try {
-    const { callGateway } = await import("../gateway/call.js");
     return await callGateway<SkillStatusReport>({
       config: resolved.config,
       method: "skills.status",
@@ -196,24 +197,16 @@ async function loadGatewaySkillsStatusReport(
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
-  } catch {
-    return null;
+  } catch (error) {
+    if (!(await isImplicitLocalGatewayTarget({ config: resolved.config }))) {
+      throw error;
+    }
+    const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+    return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+      config: resolved.config,
+      agentId: resolved.agentId,
+    });
   }
-}
-
-async function loadSkillsStatusReport(
-  options?: ResolveSkillsWorkspaceOptions,
-): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
-  const gatewayReport = await loadGatewaySkillsStatusReport(resolved);
-  if (gatewayReport) {
-    return gatewayReport;
-  }
-  const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-  return buildWorkspaceSkillStatus(resolved.workspaceDir, {
-    config: resolved.config,
-    agentId: resolved.agentId,
-  });
 }
 
 async function runSkillsAction(
@@ -407,64 +400,56 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   return `${lines.join("\n")}\n`;
 }
 
-async function loadGatewaySkillCuratorStatus(
-  config: ReturnType<typeof getRuntimeConfig>,
-): Promise<SkillCuratorStatus | null> {
+async function callSkillCurator<T>(
+  method: "status" | "pin" | "restore" | "unpin",
+  params: { skill?: string },
+  loadLocal: () => T,
+): Promise<T> {
+  const config = getRuntimeConfig();
+  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
   try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillCuratorStatus>({
+    return await callGateway<T>({
       config,
-      method: "skills.curator.status",
-      params: {},
+      method: `skills.curator.${method}`,
+      params,
       timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
-  } catch (err) {
-    if (config.gateway?.mode === "remote") {
-      throw err;
+  } catch (error) {
+    if (!(await isImplicitLocalGatewayTarget({ config }))) {
+      throw error;
     }
-    return null;
+    return loadLocal();
   }
 }
 
 async function loadSkillCuratorStatus(): Promise<SkillCuratorStatus> {
-  const config = getRuntimeConfig();
-  return (await loadGatewaySkillCuratorStatus(config)) ?? getSkillCuratorStatus();
+  return await callSkillCurator("status", {}, getSkillCuratorStatus);
 }
 
 async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skill: string) {
-  const config = getRuntimeConfig();
-  try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillCuratorStatus["skills"][number]>({
-      config,
-      method: `skills.curator.${method}`,
-      params: { skill },
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    });
-  } catch (err) {
-    if (config.gateway?.mode === "remote") {
-      throw err;
+  return await callSkillCurator(method, { skill }, () => {
+    if (method === "pin") {
+      return pinCuratedSkill(skill);
     }
-  }
-  if (method === "pin") {
-    return pinCuratedSkill(skill);
-  }
-  if (method === "unpin") {
-    return unpinCuratedSkill(skill);
-  }
-  return restoreCuratedSkill(skill);
+    if (method === "unpin") {
+      return unpinCuratedSkill(skill);
+    }
+    return restoreCuratedSkill(skill);
+  });
 }
 
 async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
-  const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
-    await import("../gateway/call.js");
+  const {
+    callGateway,
+    isGatewayCredentialsRequiredError,
+    isGatewayTransportError,
+    isImplicitLocalGatewayTarget,
+  } = await import("../gateway/call.js");
   let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
@@ -482,7 +467,7 @@ async function runSkillProposalApply(
     const isOfflineCandidate =
       isGatewayCredentialsRequiredError(err) ||
       (isGatewayTransportError(err) && err.kind === "closed" && err.code === 1006);
-    if (resolved.config.gateway?.mode === "remote" || !isOfflineCandidate) {
+    if (!isOfflineCandidate || !(await isImplicitLocalGatewayTarget({ config: resolved.config }))) {
       throw err;
     }
 

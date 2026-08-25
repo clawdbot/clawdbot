@@ -1,6 +1,6 @@
 // Hook command tests cover metadata config keys and missing-hook exit status.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredInternalHookNames } from "../hooks/configured.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
@@ -45,6 +45,8 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  isImplicitLocalGatewayTarget: async ({ config }: { config?: OpenClawConfig }) =>
+    !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
 
 vi.mock("../hooks/hooks-status.js", () => ({
@@ -159,6 +161,10 @@ function configureExplicitFleet() {
 }
 
 describe("hooks CLI metadata config keys", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     capture.resetRuntimeCapture();
@@ -540,6 +546,98 @@ describe("hooks CLI metadata config keys", () => {
       mode: "cli",
     });
     expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
+  });
+
+  const explicitGatewayHookFailures = [
+    {
+      label: "configured remote missing URL",
+      config: { ...sourceConfig, gateway: { mode: "remote" as const } },
+      message: "gateway remote mode misconfigured: gateway.remote.url missing",
+    },
+    {
+      label: "configured remote transport failure",
+      config: {
+        ...sourceConfig,
+        gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } },
+      },
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "configured remote auth failure",
+      config: { ...sourceConfig, gateway: { mode: "remote" as const } },
+      message: "gateway authentication failed",
+    },
+    {
+      label: "configured remote unsupported method",
+      config: { ...sourceConfig, gateway: { mode: "remote" as const } },
+      message: "unknown method: hooks.status",
+      unsupported: true,
+    },
+    {
+      label: "environment-selected transport failure",
+      config: sourceConfig,
+      url: "ws://127.0.0.1:9",
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "environment-selected auth failure",
+      config: sourceConfig,
+      url: "ws://127.0.0.1:9",
+      message: "gateway authentication failed",
+    },
+    {
+      label: "environment-selected unsupported method",
+      config: sourceConfig,
+      url: "ws://127.0.0.1:9",
+      message: "unknown method: hooks.status",
+      unsupported: true,
+    },
+  ];
+  const hookReadCommands = [
+    { label: "default", argv: ["hooks"] },
+    { label: "list", argv: ["hooks", "list"] },
+    { label: "info", argv: ["hooks", "info", "display-name"] },
+    { label: "check", argv: ["hooks", "check"] },
+  ];
+
+  it.each(
+    explicitGatewayHookFailures.flatMap((target) =>
+      hookReadCommands.flatMap((command) =>
+        [false, true].map((json) => ({
+          target,
+          command,
+          json,
+          label: `${command.label} ${json ? "JSON" : "human"}: ${target.label}`,
+        })),
+      ),
+    ),
+  )("does not substitute local hooks after $label", async ({ target, command, json }) => {
+    mocks.getRuntimeConfig.mockReturnValue(target.config);
+    if (target.url) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", target.url);
+    }
+    const error = target.unsupported
+      ? Object.assign(new Error(target.message), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        })
+      : new Error(target.message);
+    mocks.callGateway.mockRejectedValue(error);
+
+    const failure = await createHooksProgram()
+      .parseAsync([...command.argv, ...(json ? ["--json"] : [])], { from: "user" })
+      .then(
+        () => undefined,
+        (caughtError: unknown) => caughtError,
+      );
+    expect(failure).toMatchObject({
+      name: "ExpectedCliError",
+      message: target.message,
+    });
+
+    expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
+    expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
+    expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
   });
 
   it.each([

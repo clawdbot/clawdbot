@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
+    !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
   isGatewayCredentialsRequiredError: (error: unknown) =>
     error instanceof Error && error.name === "GatewayCredentialsRequiredError",
   isGatewayTransportError: () => false,
@@ -96,6 +98,7 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
   afterEach(async () => {
     await testState.cleanup();
     await tempDirs.cleanup();
+    vi.unstubAllEnvs();
   });
 
   it("applies through the gateway process that owns the cached session skill index", async () => {
@@ -260,6 +263,51 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
       record: { status: "pending" },
     });
   });
+
+  it.each(["configured remote", "environment-selected"] as const)(
+    "does not apply locally after a %s gateway inspection fails",
+    async (target) => {
+      const proposal = await gatewayWorkshop.proposeCreateSkill({
+        workspaceDir: mocks.workspaceDir,
+        name: "Authoritative Gateway",
+        description: "Never mutate the client after an explicitly selected Gateway fails",
+        content: "# Authoritative Gateway\n\nLeave this proposal pending.\n",
+      });
+      if (target === "configured remote") {
+        mocks.config.gateway = { mode: "remote" };
+      } else {
+        vi.stubEnv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:9");
+      }
+      mocks.callGateway.mockRejectedValueOnce(
+        Object.assign(new Error("selected gateway requires credentials"), {
+          name: "GatewayCredentialsRequiredError",
+          method: "skills.proposals.inspect",
+          configPath: "/tmp/openclaw.json",
+        }),
+      );
+
+      const program = new Command();
+      program.exitOverride();
+      registerSkillsCli(program);
+      const failure = await program
+        .parseAsync(["skills", "workshop", "apply", proposal.record.id], { from: "user" })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(failure).toMatchObject({
+        name: "GatewayCredentialsRequiredError",
+        message: "selected gateway requires credentials",
+      });
+
+      expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+      await expect(gatewayWorkshop.inspectSkillProposal(proposal.record.id)).resolves.toMatchObject(
+        {
+          record: { status: "pending" },
+        },
+      );
+    },
+  );
 
   it("evaluates the exact inspected draft through the gateway plugin registry", async () => {
     mocks.gatewayApply = async (request) => {

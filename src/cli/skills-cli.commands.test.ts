@@ -262,6 +262,8 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
+  isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
+    !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
 
 vi.mock("../utils.js", async (importOriginal) => ({
@@ -1596,6 +1598,69 @@ describe("skills cli commands", () => {
     expect(output.workspaceDir).toBe("/gateway/workspace-writer");
     expect(output.eligible).toEqual(["apple-notes"]);
     expect(output.missingRequirements).toEqual([]);
+  });
+
+  const explicitGatewaySkillFailures = [
+    {
+      label: "configured remote missing URL",
+      config: { gateway: { mode: "remote" as const } },
+      message: "gateway remote mode misconfigured: gateway.remote.url missing",
+    },
+    {
+      label: "configured remote transport failure",
+      config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "configured remote auth failure",
+      config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
+      message: "gateway authentication failed",
+    },
+    {
+      label: "environment-selected transport failure",
+      config: {},
+      url: "ws://127.0.0.1:9",
+      message: "Gateway not reachable: ws://127.0.0.1:9",
+    },
+    {
+      label: "environment-selected auth failure",
+      config: {},
+      url: "ws://127.0.0.1:9",
+      message: "gateway authentication failed",
+    },
+  ];
+  const skillReadCommands = [
+    { label: "default", argv: ["skills"] },
+    { label: "list", argv: ["skills", "list"] },
+    { label: "info", argv: ["skills", "info", "calendar"] },
+    { label: "check", argv: ["skills", "check"] },
+  ];
+
+  it.each(
+    explicitGatewaySkillFailures.flatMap((target) =>
+      skillReadCommands.flatMap((command) =>
+        [false, true].map((json) => ({
+          target,
+          command,
+          json,
+          label: `${command.label} ${json ? "JSON" : "human"}: ${target.label}`,
+        })),
+      ),
+    ),
+  )("does not substitute local skills after $label", async ({ target, command, json }) => {
+    loadConfigMock.mockReturnValue(target.config);
+    if (target.url) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", target.url);
+    }
+    callGatewayMock.mockRejectedValue(new Error(target.message));
+
+    await expect(runCommand([...command.argv, ...(json ? ["--json"] : [])])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toEqual([target.message]);
+    expect(runtimeStdout).toEqual([]);
+    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
   });
 
   it.each([
