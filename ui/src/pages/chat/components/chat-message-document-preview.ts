@@ -16,6 +16,7 @@ const DOCUMENT_PREVIEW_MAX_CELLS = 128;
 const DOCUMENT_PREVIEW_VISIBLE_ROWS = 4;
 const DOCUMENT_PREVIEW_VISIBLE_COLUMNS = 8;
 const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
+export type DocumentFramePreviewState = "failed" | "loading" | "ready" | undefined;
 export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | null;
 
 export function resolveDocumentPreviewKind(
@@ -110,19 +111,93 @@ export function parseDelimitedPreview(text: string): DelimitedPreview {
   return { rows, truncated };
 }
 
-function activateDocumentPreview(event: Event, source: string): void {
+async function probeDocumentPreview(source: string, signal: AbortSignal): Promise<boolean> {
+  const url = source.split("#", 1)[0];
+  // Iframes report many HTTP failures as load events. Probe after explicit
+  // interaction, and cancel the GET fallback before it buffers the document.
+  let response = await fetch(url, {
+    credentials: "same-origin",
+    method: "HEAD",
+    signal,
+  });
+  if (response.status === 405 || response.status === 501) {
+    response = await fetch(url, {
+      credentials: "same-origin",
+      method: "GET",
+      signal,
+    });
+  }
+  await response.body?.cancel().catch(() => undefined);
+  return response.ok;
+}
+
+export function resolveDocumentFramePreviewState(
+  attachmentUrl: string,
+  sourceIdentity: string,
+  onRequestUpdate: (() => void) | undefined,
+): DocumentFramePreviewState {
+  return observeChatMediaResource<DocumentFramePreviewState>(
+    "document-frame",
+    attachmentUrl,
+    onRequestUpdate,
+    sourceIdentity,
+  ).value;
+}
+
+function requestDocumentFramePreview(
+  event: Event,
+  source: string,
+  sourceIdentity: string,
+  onRequestUpdate: (() => void) | undefined,
+): void {
   event.stopPropagation();
   const trigger = event.currentTarget;
   if (!(trigger instanceof HTMLButtonElement)) {
     return;
   }
-  const frame = trigger.parentElement?.querySelector<HTMLIFrameElement>("iframe");
-  if (!frame || frame.hasAttribute("src")) {
+  const cacheKey = source.split("#", 1)[0];
+  const resource = observeChatMediaResource<DocumentFramePreviewState>(
+    "document-frame",
+    cacheKey,
+    onRequestUpdate,
+    sourceIdentity,
+  );
+  if (resource.pending || resource.value === "loading" || resource.value === "ready") {
     return;
   }
-  frame.src = source;
-  frame.hidden = false;
-  trigger.hidden = true;
+  resource.value = "loading";
+  notifyChatMediaResourceSubscribers(resource);
+  const controller = new AbortController();
+  resource.abortController = controller;
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("document preview probe timed out", "TimeoutError")),
+    DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS,
+  );
+  const pending = probeDocumentPreview(source, controller.signal)
+    .then((available) => {
+      if (!isChatMediaResourceCurrent(resource)) {
+        return null;
+      }
+      resource.value = available ? "ready" : "failed";
+      return resource.value;
+    })
+    .catch(() => {
+      if (isChatMediaResourceCurrent(resource)) {
+        resource.value = "failed";
+      }
+      return null;
+    })
+    .finally(() => {
+      clearTimeout(timeout);
+      if (resource.abortController === controller) {
+        resource.abortController = undefined;
+      }
+      if (resource.pending === pending) {
+        resource.pending = undefined;
+      }
+      notifyChatMediaResourceSubscribers(resource);
+    });
+  resource.pending = pending;
 }
 
 function renderAttachmentTablePreview(previewText: string | null | undefined) {
@@ -191,41 +266,36 @@ export function renderAttachmentDocumentPreview(
   attachment: AttachmentItem["attachment"],
   attachmentUrl: string,
   previewText: string | null | undefined,
+  framePreviewState: DocumentFramePreviewState,
+  onRequestUpdate: (() => void) | undefined,
 ) {
-  const updatePreviewState = (event: Event, state: "ready" | "failed") => {
-    const frame = event.currentTarget as HTMLIFrameElement;
-    if (!frame.hasAttribute("src") || state === "ready") {
-      return;
-    }
-    const card = frame.closest<HTMLElement>(".chat-assistant-attachment-card");
-    if (!card) {
-      return;
-    }
-    card.dataset.previewFailed = "";
-    card.classList.remove("chat-assistant-attachment-card--preview");
-    card.classList.add("chat-assistant-attachment-card--compact");
-    card
-      .querySelector<HTMLElement>(".chat-attachment-file-icon")
-      ?.setAttribute("data-mode", "large-placeholder");
-  };
   if (previewKind === "html") {
     return html`<div class="chat-assistant-attachment-card__html-preview">
-      <iframe
-        hidden
-        title=${attachment.label}
-        sandbox=""
-        loading="lazy"
-        scrolling="no"
-        @load=${(event: Event) => updatePreviewState(event, "ready")}
-        @error=${(event: Event) => updatePreviewState(event, "failed")}
-      ></iframe>
-      <button
-        type="button"
-        class="chat-assistant-attachment-card__preview-load"
-        @click=${(event: Event) => activateDocumentPreview(event, attachmentUrl)}
-      >
-        ${t("chat.attachments.loadPreview")}
-      </button>
+      ${framePreviewState === "ready"
+        ? html`<iframe
+            src=${attachmentUrl}
+            title=${attachment.label}
+            sandbox=""
+            loading="lazy"
+            scrolling="no"
+          ></iframe>`
+        : framePreviewState === "loading"
+          ? html`<div class="chat-assistant-attachment-card__preview-unavailable">
+              ${t("chat.mediaPlayer.preparing")}
+            </div>`
+          : html`<button
+              type="button"
+              class="chat-assistant-attachment-card__preview-load"
+              @click=${(event: Event) =>
+                requestDocumentFramePreview(
+                  event,
+                  attachmentUrl,
+                  attachment.url,
+                  onRequestUpdate,
+                )}
+            >
+              ${t("chat.attachments.loadPreview")}
+            </button>`}
       <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
     </div>`;
   }
@@ -234,21 +304,25 @@ export function renderAttachmentDocumentPreview(
   }
   const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">
-    <iframe
-      hidden
-      title=${attachment.label}
-      sandbox="allow-scripts"
-      loading="lazy"
-      @load=${(event: Event) => updatePreviewState(event, "ready")}
-      @error=${(event: Event) => updatePreviewState(event, "failed")}
-    ></iframe>
-    <button
-      type="button"
-      class="chat-assistant-attachment-card__preview-load"
-      @click=${(event: Event) => activateDocumentPreview(event, previewUrl)}
-    >
-      ${t("chat.attachments.loadPreview")}
-    </button>
+    ${framePreviewState === "ready"
+      ? html`<iframe
+          src=${previewUrl}
+          title=${attachment.label}
+          sandbox="allow-scripts"
+          loading="lazy"
+        ></iframe>`
+      : framePreviewState === "loading"
+        ? html`<div class="chat-assistant-attachment-card__preview-unavailable">
+            ${t("chat.mediaPlayer.preparing")}
+          </div>`
+        : html`<button
+            type="button"
+            class="chat-assistant-attachment-card__preview-load"
+            @click=${(event: Event) =>
+              requestDocumentFramePreview(event, previewUrl, attachment.url, onRequestUpdate)}
+          >
+            ${t("chat.attachments.loadPreview")}
+          </button>`}
   </div>`;
 }
 

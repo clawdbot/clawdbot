@@ -47,6 +47,7 @@ export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>
 
 type ChatMediaResourceKind =
   | "assistant-attachment"
+  | "document-frame"
   | "document-preview"
   | "managed-image"
   | "managed-media"

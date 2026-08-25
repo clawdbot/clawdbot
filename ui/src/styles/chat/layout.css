@@ -2043,12 +2043,6 @@ openclaw-chat-video-player {
   cursor: var(--cursor-action);
 }
 
-.chat-assistant-attachment-card__preview-load[hidden],
-.chat-assistant-attachment-card__html-preview iframe[hidden],
-.chat-assistant-attachment-card__page-preview iframe[hidden] {
-  display: none;
-}
-
 .chat-assistant-attachment-card__preview-load:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--media-foreground) 4%, transparent);
@@ -2057,11 +2051,6 @@ openclaw-chat-video-player {
 .chat-assistant-attachment-card__preview-load:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -3px;
-}
-
-.chat-assistant-attachment-card[data-preview-failed]
-  :is(.chat-assistant-attachment-card__html-preview, .chat-assistant-attachment-card__page-preview) {
-  display: none;
 }
 
 .chat-assistant-attachment-card__html-preview iframe {

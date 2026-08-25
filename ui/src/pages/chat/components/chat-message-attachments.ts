@@ -21,6 +21,7 @@ import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-s
 import {
   parseDelimitedPreview,
   renderAttachmentDocumentPreview,
+  resolveDocumentFramePreviewState,
   resolveDocumentPreviewText,
   resolveDocumentPreviewKind,
 } from "./chat-message-document-preview.ts";
@@ -564,11 +565,16 @@ export function renderAssistantAttachments(
       previewKind === "table"
         ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)
         : null;
+    const framePreviewState =
+      previewKind === "html" || previewKind === "page"
+        ? resolveDocumentFramePreviewState(attachmentUrl, attachment.url, onRequestUpdate)
+        : undefined;
     const tablePreviewFailed =
       previewKind === "table" &&
       previewText !== undefined &&
       parseDelimitedPreview(previewText ?? "").rows.length === 0;
-    const showPreview = previewKind !== null && !tablePreviewFailed;
+    const showPreview =
+      previewKind !== null && !tablePreviewFailed && framePreviewState !== "failed";
     return keyed(
       attachmentUrl,
       html`
@@ -590,7 +596,14 @@ export function renderAssistantAttachments(
             visualMode: showPreview ? "preview-with-favicon" : "large-placeholder",
           })}
           ${showPreview && previewKind
-            ? renderAttachmentDocumentPreview(previewKind, attachment, attachmentUrl, previewText)
+            ? renderAttachmentDocumentPreview(
+                previewKind,
+                attachment,
+                attachmentUrl,
+                previewText,
+                framePreviewState,
+                onRequestUpdate,
+              )
             : null}
         </div>
       `,
