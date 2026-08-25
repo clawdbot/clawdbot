@@ -35,6 +35,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): number {
+    this.ensureCompletePersistedHistory();
     let preservedStart = this.fileEntries.length;
     while (preservedStart > 1) {
       const entry = this.fileEntries[preservedStart - 1];

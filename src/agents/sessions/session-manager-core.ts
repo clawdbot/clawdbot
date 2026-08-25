@@ -1,5 +1,6 @@
 import {
   loadTranscriptEventsSync,
+  readSessionTranscriptBoundedActiveContextCore,
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
@@ -23,6 +24,7 @@ import type {
 } from "./session-manager-types.js";
 
 export type SessionManagerPersistenceTarget = SessionTranscriptRuntimeTarget;
+export type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
 
 export class SessionManagerCore {
   migrated = false;
@@ -42,14 +44,25 @@ export class SessionManagerCore {
   protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
+  protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
+  protected boundedContextTruncated = false;
+  protected persistedBoundaryCount: number | undefined;
 
   constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    boundedContext?: {
+      boundaryCount: number;
+      limits: SessionManagerBoundedContextLimits;
+      truncated: boolean;
+    },
   ) {
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
+    this.boundedContextLimits = boundedContext?.limits;
+    this.boundedContextTruncated = boundedContext?.truncated ?? false;
+    this.persistedBoundaryCount = boundedContext?.boundaryCount;
     if (persistenceTarget || loadedEntries) {
       this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
     } else {
@@ -58,7 +71,12 @@ export class SessionManagerCore {
   }
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const bounded = this.boundedContextLimits
+      ? readSessionTranscriptBoundedActiveContextCore(target, this.boundedContextLimits)
+      : undefined;
+    const entries = (bounded?.events ?? loadTranscriptEventsSync(target)) as FileEntry[];
+    this.boundedContextTruncated = bounded?.truncated ?? false;
+    this.persistedBoundaryCount = bounded?.boundaryCount;
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
@@ -66,6 +84,17 @@ export class SessionManagerCore {
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
+  }
+
+  /** Whole-transcript rewrites and historical branch operations must never discard unloaded rows. */
+  protected ensureCompletePersistedHistory(): void {
+    if (!this.persistenceTarget || !this.boundedContextTruncated) {
+      return;
+    }
+    const limits = this.boundedContextLimits;
+    this.boundedContextLimits = undefined;
+    this.setSessionTarget(this.persistenceTarget);
+    this.boundedContextLimits = limits;
   }
 
   protected setLoadedSessionTarget(

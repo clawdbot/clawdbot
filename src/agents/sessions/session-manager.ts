@@ -7,13 +7,17 @@
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
+  readSessionTranscriptBoundedActiveContextCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
+import type {
+  SessionManagerBoundedContextLimits,
+  SessionManagerPersistenceTarget,
+} from "./session-manager-core.js";
 import type { AppendPersistenceOptions, FileEntry } from "./session-manager-types.js";
 
 export { CURRENT_SESSION_VERSION };
@@ -51,8 +55,13 @@ export class SessionManager extends SessionManagerBranching {
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    boundedContext?: {
+      boundaryCount: number;
+      limits: SessionManagerBoundedContextLimits;
+      truncated: boolean;
+    },
   ) {
-    super(cwd, persistenceTarget, loadedEntries);
+    super(cwd, persistenceTarget, loadedEntries, boundedContext);
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */
@@ -75,12 +84,40 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessageWithTranscriptAnchor(message, options);
   }
 
-  static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
+  static open(
+    target: SessionTranscriptRuntimeTarget,
+    cwdOverride?: string,
+    contextLimits?: SessionManagerBoundedContextLimits,
+  ): SessionManager {
+    if (contextLimits) {
+      return SessionManager.openBounded(target, {
+        ...contextLimits,
+        ...(cwdOverride !== undefined ? { cwd: cwdOverride } : {}),
+      });
+    }
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
     return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+  }
+
+  /** Opens only the selected model-context tail while preserving the complete durable transcript. */
+  static openBounded(
+    target: SessionTranscriptRuntimeTarget,
+    options: SessionManagerBoundedContextLimits & { cwd?: string },
+  ): SessionManager {
+    const { cwd, ...limits } = options;
+    const context = readSessionTranscriptBoundedActiveContextCore(target, limits);
+    const entries = context.events as FileEntry[];
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
+    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), target, entries, {
+      boundaryCount: context.boundaryCount,
+      limits,
+      truncated: context.truncated,
+    });
   }
 
   /** Appends to the current transcript leaf without hydrating its history. */
