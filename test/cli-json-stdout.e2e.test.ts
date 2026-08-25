@@ -212,6 +212,33 @@ describe("cli json stdout contract", () => {
       tty: true,
     },
     {
+      name: "routed Gateway health config failure in JSON mode",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+    },
+    {
+      name: "Gateway health config failure in human mode",
+      args: ["gateway", "health", "--port", "29793"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      human: true,
+    },
+    {
+      name: "Gateway health config failure through forced Commander",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      commander: true,
+    },
+    {
+      name: "routed Gateway health config failure with dual TTYs",
+      args: ["gateway", "health", "--port", "29793", "--json"],
+      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      configReadFailure: true,
+      tty: true,
+    },
+    {
       name: "specialized explicit Gateway authentication failure",
       args: ["gateway", "call", "system-presence", "--url", "ws://127.0.0.1:29793", "--json"],
       specializedAuth: true,
@@ -226,6 +253,18 @@ describe("cli json stdout contract", () => {
           [
             'import net from "node:net";',
             `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            ...("configReadFailure" in testCase
+              ? [
+                  'import fs from "node:fs";',
+                  "const originalExistsSync = fs.existsSync;",
+                  "fs.existsSync = function (target, ...args) {",
+                  '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
+                  `    throw new Error(${JSON.stringify(testCase.message)});`,
+                  "  }",
+                  "  return originalExistsSync.call(this, target, ...args);",
+                  "};",
+                ]
+              : []),
             ...("tty" in testCase
               ? [
                   'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
@@ -269,7 +308,11 @@ describe("cli json stdout contract", () => {
             ok: false,
             error: { type: "cli_error", message: testCase.message },
           });
-          expect(result.stderr).not.toContain(testCase.message);
+          if ("configReadFailure" in testCase && !("commander" in testCase)) {
+            expect(result.stderr).toContain(testCase.message);
+          } else {
+            expect(result.stderr).not.toContain(testCase.message);
+          }
         }
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
