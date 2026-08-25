@@ -1,8 +1,11 @@
-import { readCommandConfigSnapshot } from "../cli/command-config-snapshot.js";
 // Config validation helpers shared by commands that need fail-fast config loading.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../cli/config-recovery-hints.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import {
+  type ConfigFileSnapshot,
+  type OpenClawConfig,
+  readConfigFileSnapshot,
+} from "../config/config.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import {
@@ -18,15 +21,20 @@ export async function requireValidConfigFileSnapshot(
     includeCompatibilityAdvisory?: boolean;
     observe?: boolean;
     skipPluginValidation?: boolean;
+    adoptPluginMetadata?: boolean;
   },
 ): Promise<ConfigFileSnapshot | null> {
   const readOptions = {
     ...(opts?.observe === false ? { observe: false } : {}),
     ...(opts?.skipPluginValidation ? { skipPluginValidation: true } : {}),
   };
-  const { snapshot } = await readCommandConfigSnapshot(
-    Object.keys(readOptions).length > 0 ? readOptions : undefined,
-  );
+  const snapshot = opts?.adoptPluginMetadata
+    ? (
+        await (
+          await import("../cli/command-config-snapshot.js")
+        ).readCommandConfigSnapshot(readOptions)
+      ).snapshot
+    : await readConfigFileSnapshot(Object.keys(readOptions).length > 0 ? readOptions : undefined);
   if (snapshot.exists && !snapshot.valid) {
     const issues =
       snapshot.issues.length > 0
@@ -68,6 +76,7 @@ export async function requireValidConfig(
     includeCompatibilityAdvisory?: boolean;
     observe?: boolean;
     skipPluginValidation?: boolean;
+    adoptPluginMetadata?: boolean;
   },
 ): Promise<OpenClawConfig | null> {
   return (await requireValidConfigFileSnapshot(runtime, opts))?.config ?? null;

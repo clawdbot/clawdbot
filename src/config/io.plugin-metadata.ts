@@ -1,7 +1,6 @@
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -70,7 +69,6 @@ export function resolveConfigWidePluginManifestRegistry(
   const firstSnapshot = resolveSnapshot(workspaceDirs[0]);
   const snapshots = [firstSnapshot, ...workspaceDirs.slice(1).map(resolveSnapshot)];
   const manifestRegistry = mergeRegistries(snapshots.map((snapshot) => snapshot.manifestRegistry));
-  const snapshot = rebasePluginMetadataSnapshotManifestRegistry(firstSnapshot, manifestRegistry);
-  params.onSnapshotResolved?.(snapshot);
-  return snapshot.manifestRegistry;
+  params.onSnapshotResolved?.(firstSnapshot);
+  return manifestRegistry;
 }
