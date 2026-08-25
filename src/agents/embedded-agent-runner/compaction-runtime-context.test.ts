@@ -111,7 +111,7 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
   });
 });
 
-describe("buildEmbeddedCompactionRuntimeContext", () => {
+describe.sequential("buildEmbeddedCompactionRuntimeContext", () => {
   beforeEach(() => {
     resetProcessRegistryForTests();
     vi.useRealTimers();
