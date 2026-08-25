@@ -400,6 +400,30 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
+/* Docked in the conversation's right gutter, beside the centered composer.
+   The inline-start edge repeats the composer's own half-width formula
+   (.agent-chat__composer-shell, capped at the transcript width) so the two
+   never overlap at any transcript-width setting; the pane only renders this
+   placement once the measured gutter can hold the card. */
+.session-progress-card--dock {
+  position: absolute;
+  z-index: 3;
+  inset-block-end: var(--chat-composer-bottom-gap);
+  inset-inline-end: var(--chat-thread-gutter);
+  inset-inline-start: calc(
+    50% + min(50% - var(--chat-composer-side-inset) / 2, var(--chat-thread-max-width, 48rem) / 2) +
+      var(--space-3)
+  );
+  max-height: min(46%, 420px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
+  box-shadow: var(--shadow-sm);
+  animation: fade-in 0.2s var(--ease-out);
+}
+
 .session-progress-card--rail {
   flex: 0 0 auto;
   margin: 10px 14px 0;
@@ -614,7 +638,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-progress-card--composer {
+  .session-progress-card--composer,
+  .session-progress-card--dock {
     animation: none;
     transition: none;
   }

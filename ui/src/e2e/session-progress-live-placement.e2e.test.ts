@@ -98,6 +98,34 @@ suite.define(() => {
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
         const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        // Wide enough for the composer gutter to hold the card: it docks beside
+        // the composer instead of stacking inside it.
+        await page.setViewportSize({ height: 900, width: 1600 });
+        const dock = visiblePane.locator('[data-progress-card-placement="dock"]');
+        await expect.poll(() => dock.count()).toBe(1);
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
+          .toBe(0);
+        await expect
+          .poll(async () => {
+            const dockBounds = await dock.boundingBox();
+            const composerBounds = await visiblePane
+              .locator(".agent-chat__composer-shell")
+              .boundingBox();
+            if (!dockBounds || !composerBounds) {
+              return false;
+            }
+            return (
+              dockBounds.x >= composerBounds.x + composerBounds.width &&
+              Math.abs(
+                dockBounds.y + dockBounds.height - (composerBounds.y + composerBounds.height),
+              ) <= 1
+            );
+          })
+          .toBe(true);
+        await captureProof(page, "dock-beside-composer.png");
+
+        await page.setViewportSize({ height: 900, width: 1280 });
         await openChatSidePanelType(page, "Side chat");
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
