@@ -21,6 +21,7 @@ import {
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
+import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
   buildAuthProfileUnusableHint,
@@ -340,12 +341,17 @@ function authProfileCooldownToHealthFinding(params: {
 }
 
 function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]): boolean {
-  if (profile.type === "api_key") {
-    return profile.status === "missing";
-  }
+  // Native Claude owns refresh until Doctor commits removal of its legacy profile.
   return (
-    (profile.type === "oauth" || profile.type === "token") &&
-    (profile.status === "expired" || profile.status === "expiring" || profile.status === "missing")
+    profile.status === "missing" ||
+    ((profile.type === "oauth" || profile.type === "token") &&
+      (profile.status === "expired" ||
+        (profile.status === "expiring" &&
+          !(
+            profile.type === "oauth" &&
+            profile.provider === "claude-cli" &&
+            profile.profileId === CLAUDE_CLI_PROFILE_ID
+          ))))
   );
 }
 
@@ -398,19 +404,12 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
   });
   const issues = summary.profiles.filter(isAuthProfileHealthIssue);
   for (const issue of issues) {
-    const authIssue: AuthIssue = {
-      profileId: issue.profileId,
-      provider: issue.provider,
-      status: issue.status,
-      reasonCode: issue.reasonCode,
-      remainingMs: issue.remainingMs,
-    };
     findings.push(
       authProfileIssueToHealthFinding({
-        issue: authIssue,
+        issue,
         target: params.target,
         labelAgents: params.labelAgents,
-        hint: await resolveAuthIssueHint(authIssue, params.cfg, store),
+        hint: await resolveAuthIssueHint(issue, params.cfg, store),
       }),
     );
   }

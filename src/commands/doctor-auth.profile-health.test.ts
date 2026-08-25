@@ -164,12 +164,20 @@ describe("noteAuthProfileHealth", () => {
       },
     });
 
-    const findings = await collectAuthProfileHealthFindings({
-      cfg: {
-        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
-      } as OpenClawConfig,
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+    } as OpenClawConfig;
+    const findings = await collectAuthProfileHealthFindings({ cfg });
+    const confirmAutoFix = vi.fn(async () => true);
+
+    await noteAuthProfileHealth({
+      cfg,
+      prompter: { confirmAutoFix } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
     });
 
+    expect(confirmAutoFix).not.toHaveBeenCalled();
+    expect(authProfileMocks.resolveApiKeyForProfile).not.toHaveBeenCalled();
     expect(findings).toEqual([]);
   });
 
