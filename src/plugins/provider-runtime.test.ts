@@ -76,6 +76,7 @@ let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProvi
 let resolveProviderTransportTurnStateWithPlugin: typeof import("./provider-runtime.js").resolveProviderTransportTurnStateWithPlugin;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
+let resolveProviderDeprecatedAuthProfileIds: typeof import("./provider-runtime.js").resolveProviderDeprecatedAuthProfileIds;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderSystemPromptContribution: typeof import("./provider-runtime.js").resolveProviderSystemPromptContribution;
 let resolveExternalAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
@@ -322,6 +323,7 @@ describe("provider-runtime", () => {
       resolveProviderTransportTurnStateWithPlugin,
       resolveProviderCacheTtlEligibility,
       resolveProviderModernModelRef,
+      resolveProviderDeprecatedAuthProfileIds,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderSystemPromptContribution,
       resolveExternalAuthProfilesWithPlugins,
@@ -1634,6 +1636,17 @@ describe("provider-runtime", () => {
     ).toBeUndefined();
 
     expect(normalizeConfig).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("reads deprecated profile ids without loading provider runtime", () => {
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      deprecatedProfileIds: ["anthropic:claude-cli"],
+    });
+
+    expect(resolveProviderDeprecatedAuthProfileIds({ provider: "anthropic" })).toEqual([
+      "anthropic:claude-cli",
+    ]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
