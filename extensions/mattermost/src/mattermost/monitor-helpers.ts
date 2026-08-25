@@ -20,6 +20,28 @@ export function resolveThreadSessionKeys(params: {
   });
 }
 
+// Mattermost usernames match ^[a-z0-9.\-_]+$ (server model/user.go), so "." and
+// "-" are username characters, not boundaries. \b or a bare substring check makes
+// "@claw" match inside "@claw.dia"/"@clawdia"/"bob@claw.com" — waking the bot on
+// other users' mentions and stripping fragments out of their handles.
+const MATTERMOST_USERNAME_BOUNDARY_BEFORE = "(?<![a-z0-9._-])";
+const MATTERMOST_USERNAME_BOUNDARY_AFTER = "(?![a-z0-9._-])";
+
+function escapeMentionPattern(mention: string): string {
+  return mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function matchesMattermostBotMention(
+  text: string,
+  botUsername: string | undefined,
+): boolean {
+  if (!botUsername) {
+    return false;
+  }
+  const pattern = `${MATTERMOST_USERNAME_BOUNDARY_BEFORE}@${escapeMentionPattern(botUsername)}${MATTERMOST_USERNAME_BOUNDARY_AFTER}`;
+  return new RegExp(pattern, "i").test(text);
+}
+
 /**
  * Strip bot mention from message text while preserving newlines and
  * block-level Markdown formatting (headings, lists, blockquotes).
@@ -28,20 +50,26 @@ export function normalizeMention(text: string, mention: string | undefined): str
   if (!mention) {
     return text.trim();
   }
-  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const hasMentionRe = new RegExp(`@${escaped}\\b`, "i");
-  const leadingMentionRe = new RegExp(`^([\\t ]*)@${escaped}\\b[\\t ]*`, "i");
-  const trailingMentionRe = new RegExp(`[\\t ]*@${escaped}\\b[\\t ]*$`, "i");
+  const escaped = escapeMentionPattern(mention);
+  const after = MATTERMOST_USERNAME_BOUNDARY_AFTER;
+  const before = MATTERMOST_USERNAME_BOUNDARY_BEFORE;
+  const hasMentionRe = new RegExp(`${before}@${escaped}${after}`, "i");
+  const leadingMentionRe = new RegExp(`^([\\t ]*)@${escaped}${after}[\\t ]*`, "i");
+  const trailingMentionRe = new RegExp(`[\\t ]*${before}@${escaped}${after}[\\t ]*$`, "i");
   const normalizedLines = text.split("\n").map((line) => {
-    const hadMention = hasMentionRe.test(line);
+    // Lines without the mention keep their exact bytes: the whitespace collapse
+    // below would otherwise destroy code-block and table alignment repo-wide.
+    if (!hasMentionRe.test(line)) {
+      return { text: line, mentionOnlyBlank: false };
+    }
     const normalizedLine = line
       .replace(leadingMentionRe, "$1")
       .replace(trailingMentionRe, "")
-      .replace(new RegExp(`@${escaped}\\b`, "gi"), "")
+      .replace(new RegExp(`${before}@${escaped}${after}`, "gi"), "")
       .replace(/(\S)[ \t]{2,}/g, "$1 ");
     return {
       text: normalizedLine,
-      mentionOnlyBlank: hadMention && normalizedLine.trim() === "",
+      mentionOnlyBlank: normalizedLine.trim() === "",
     };
   });
 

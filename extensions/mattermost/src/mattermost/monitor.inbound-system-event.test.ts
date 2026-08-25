@@ -1303,6 +1303,72 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
+  it("does not wake on a mention of a longer username containing the bot name", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const verboseDebug = vi.fn();
+    const config: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          // No chatmode: "onmessage" would force requireMention off (accounts.ts).
+          dmPolicy: "open",
+          groupPolicy: "open",
+          requireMention: true,
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(config, undefined, { verboseDebug });
+
+    const monitor = monitorMattermostProvider({
+      config,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    // "openclawdia" is a different, legal Mattermost username; the bot must stay quiet.
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-other-user-mention",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "@openclawdia hello",
+          create_at: 1_714_000_000_002,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(verboseDebug).toHaveBeenCalledWith(
+        expect.stringContaining("drop group message (missing mention"),
+      );
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
   it("merges Mattermost progress preview updates and clears after message-tool delivery", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
