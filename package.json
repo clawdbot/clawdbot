@@ -370,7 +370,6 @@
     "!docs/releases/**",
     "!docs/**/*.jpg",
     "!docs/**/*.png",
-    "src/agents/templates/",
     "scripts/crabbox-routing-policy.mts",
     "scripts/crabbox-wrapper-providers.mts",
     "scripts/crabbox-wrapper.mjs",

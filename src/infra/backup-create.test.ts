@@ -257,7 +257,7 @@ describe("formatBackupCreateSummary", () => {
       "Included 1 path:",
       "- state: ~/.openclaw",
       "Created /tmp/openclaw-backup.tar.gz",
-      "Skipped 3 volatile files (live sessions, cron logs, queues, sockets, pid/tmp).",
+      "Skipped 3 volatile files (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).",
     ]);
   });
 });
@@ -2198,7 +2198,53 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("rejects absolute symlink targets before publishing the archive", async () => {
+  it.each([
+    {
+      label: "absolute",
+      relative: false,
+      error: /Archive symbolic link target must be relative/iu,
+    },
+    {
+      label: "declared-asset-escaping relative",
+      relative: true,
+      error: /Archive symbolic link is outside the declared backup assets/iu,
+    },
+  ])(
+    "rejects $label symlink targets before publishing the archive",
+    async ({ relative, error }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-absolute-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path("absolute-symlink.tar.gz");
+          const outsideTarget = state.path("outside-target.txt");
+          await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          await fs.symlink(
+            relative ? path.relative(state.stateDir, outsideTarget) : outsideTarget,
+            state.statePath("ordinary-link"),
+          );
+
+          await expect(
+            createBackupArchive({
+              output: outputPath,
+              includeWorkspace: false,
+              nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+            }),
+          ).rejects.toThrow(error);
+          await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
+  it("skips managed absolute runtime symlinks while preserving adjacent state", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -2206,23 +2252,53 @@ describe("createBackupArchive", () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
-        prefix: "openclaw-backup-absolute-symlink-",
+        prefix: "openclaw-backup-managed-runtime-links-",
         scenario: "minimal",
       },
       async (state) => {
-        const outputPath = state.path("absolute-symlink.tar.gz");
-        const outsideTarget = state.path("outside-target.txt");
-        await fs.writeFile(outsideTarget, "outside\n", "utf8");
-        await fs.symlink(outsideTarget, state.statePath("ordinary-link"));
+        const outputDir = state.path("backups");
+        const browserRoot = state.statePath("browser", "openclaw", "user-data");
+        const skillsRoot = state.statePath(
+          "sandbox",
+          "skills-workspaces",
+          "workspace-main",
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+        );
+        const generatedDbPath = path.join(skillsRoot, "generated.sqlite");
+        const durableDbPath = state.statePath("plugins", "dedicated", "durable.sqlite");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(browserRoot, { recursive: true });
+        await fs.mkdir(skillsRoot, { recursive: true });
+        await fs.mkdir(path.dirname(durableDbPath), { recursive: true });
+        await fs.writeFile(path.join(browserRoot, "Preferences"), "browser state\n", "utf8");
+        await state.writeJson("sandbox/registry.json", { active: true });
+        createEmptySqliteDatabase(generatedDbPath);
+        createEmptySqliteDatabase(durableDbPath);
+        await fs.symlink(state.path("chromium-socket"), path.join(browserRoot, "SingletonSocket"));
+        await fs.symlink(state.path("project-skill"), path.join(skillsRoot, "project-skill"));
 
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 7, 17, 12, 0, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+
+        expect(
+          entries.some((entry) => entry.endsWith("/state/browser/openclaw/user-data/Preferences")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/state/sandbox/registry.json"))).toBe(true);
+        expect(
+          entries.some((entry) => entry.endsWith("/state/plugins/dedicated/durable.sqlite")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.includes("/SingletonSocket"))).toBe(false);
+        expect(entries.some((entry) => entry.includes("/sandbox/skills-workspaces/"))).toBe(false);
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(
-          createBackupArchive({
-            output: outputPath,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
-          }),
-        ).rejects.toThrow(/Archive symbolic link target must be relative/iu);
-        await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
       },
     );
   });
@@ -2541,6 +2617,17 @@ describe("createBackupArchive", () => {
       async (state) => {
         const stateDir = state.stateDir;
         const outputDir = state.path("backups");
+        const durablePaths = [
+          "developer",
+          "dev-backup",
+          "temporary",
+          "tmp-data",
+          "agents/main/agent/runtime-home/sessions",
+          "agents/main/agent/runtime-home/tmp-data",
+          "agents/main/agent/runtime-home/.tmp-data",
+          "agents/main/agent/runtime-home/temporary",
+          "agents/main/not-agent/tmp",
+        ];
         await fs.mkdir(path.join(stateDir, "extensions", "demo", "node_modules", "dep"), {
           recursive: true,
         });
@@ -2556,10 +2643,11 @@ describe("createBackupArchive", () => {
           recursive: true,
         });
         await fs.mkdir(path.join(stateDir, "dev", "openclaw", "dist"), { recursive: true });
-        await fs.mkdir(path.join(stateDir, "developer"), { recursive: true });
-        await fs.mkdir(path.join(stateDir, "dev-backup"), { recursive: true });
-        await fs.mkdir(path.join(stateDir, "temporary"), { recursive: true });
-        await fs.mkdir(path.join(stateDir, "tmp-data"), { recursive: true });
+        for (const durablePath of durablePaths) {
+          const durableDir = path.join(stateDir, ...durablePath.split("/"));
+          await fs.mkdir(durableDir, { recursive: true });
+          await fs.writeFile(path.join(durableDir, "keep.txt"), "keep\n", "utf8");
+        }
         for (const managedRoot of ["dev", "git", "npm-runtime", "tmp", "tools"]) {
           await fs.mkdir(path.join(stateDir, managedRoot, "runtime"), { recursive: true });
           await fs.writeFile(
@@ -2623,10 +2711,6 @@ describe("createBackupArchive", () => {
           "reinstallable sqlite-named artifact\n",
           "utf8",
         );
-        await fs.writeFile(path.join(stateDir, "developer", "keep.txt"), "keep\n", "utf8");
-        await fs.writeFile(path.join(stateDir, "dev-backup", "keep.txt"), "keep\n", "utf8");
-        await fs.writeFile(path.join(stateDir, "temporary", "keep.txt"), "keep\n", "utf8");
-        await fs.writeFile(path.join(stateDir, "tmp-data", "keep.txt"), "keep\n", "utf8");
         await fs.mkdir(outputDir, { recursive: true });
 
         const result = await createBackupArchive({
@@ -2650,10 +2734,9 @@ describe("createBackupArchive", () => {
             managedRoot,
           ).toBe(false);
         }
-        expect(entrySuffixes).toContain("/state/developer/keep.txt");
-        expect(entrySuffixes).toContain("/state/dev-backup/keep.txt");
-        expect(entrySuffixes).toContain("/state/temporary/keep.txt");
-        expect(entrySuffixes).toContain("/state/tmp-data/keep.txt");
+        for (const durablePath of durablePaths) {
+          expect(entrySuffixes).toContain(`/state/${durablePath}/keep.txt`);
+        }
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
@@ -2678,6 +2761,15 @@ describe("createBackupArchive", () => {
         const stateDir = state.stateDir;
         const workspaceDir = path.join(stateDir, "dev", "workspace");
         const tmpWorkspaceDir = path.join(stateDir, "tmp", "workspace");
+        const agentTempRoot = path.join(
+          stateDir,
+          "agents",
+          "main",
+          "agent",
+          "runtime-home",
+          ".tmp",
+        );
+        const agentTmpWorkspaceDir = path.join(agentTempRoot, "workspace");
         const externalTmpWorkspaceDir = state.path("tmp");
         const runtimeDir = path.join(stateDir, "dev", "openclaw");
         const configPath = path.join(stateDir, "git", "config", "openclaw.json");
@@ -2690,6 +2782,8 @@ describe("createBackupArchive", () => {
         state.applyEnv();
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(tmpWorkspaceDir, { recursive: true });
+        await fs.mkdir(agentTmpWorkspaceDir, { recursive: true });
+        await fs.mkdir(path.join(agentTempRoot, "scratch"), { recursive: true });
         await fs.mkdir(externalTmpWorkspaceDir, { recursive: true });
         await fs.mkdir(path.join(stateDir, "tmp", "tsx-501"), { recursive: true });
         await fs.mkdir(runtimeDir, { recursive: true });
@@ -2704,6 +2798,7 @@ describe("createBackupArchive", () => {
                 main: { default: true, workspace: workspaceDir },
                 external: { workspace: externalTmpWorkspaceDir },
                 worker: { workspace: tmpWorkspaceDir },
+                nested: { workspace: agentTmpWorkspaceDir },
               },
             },
           })}\n`,
@@ -2717,10 +2812,22 @@ describe("createBackupArchive", () => {
           "utf8",
         );
         await fs.writeFile(
+          path.join(agentTmpWorkspaceDir, "AGENTS.md"),
+          "durable agent tmp workspace\n",
+          "utf8",
+        );
+        await fs.writeFile(path.join(agentTempRoot, "scratch", "cache-entry"), "scratch\n", "utf8");
+        await fs.writeFile(
           path.join(externalTmpWorkspaceDir, "AGENTS.md"),
           "durable external tmp workspace\n",
           "utf8",
         );
+        if (process.platform !== "win32") {
+          await fs.symlink(
+            path.relative(stateDir, path.join(externalTmpWorkspaceDir, "AGENTS.md")),
+            path.join(stateDir, "external-workspace-link"),
+          );
+        }
         await fs.writeFile(
           path.join(stateDir, "tmp", "tsx-501", "cache-entry"),
           "rebuildable compiler cache\n",
@@ -2755,7 +2862,17 @@ describe("createBackupArchive", () => {
         expect(entries.some((entry) => entry.endsWith("/state/tmp/workspace/AGENTS.md"))).toBe(
           true,
         );
+        expect(
+          entries.some((entry) =>
+            entry.endsWith("/state/agents/main/agent/runtime-home/.tmp/workspace/AGENTS.md"),
+          ),
+        ).toBe(true);
         expect(entries.some((entry) => entry.endsWith("/tmp/AGENTS.md"))).toBe(true);
+        if (process.platform !== "win32") {
+          expect(entries.some((entry) => entry.endsWith("/state/external-workspace-link"))).toBe(
+            true,
+          );
+        }
         expect(entries.some((entry) => entry.endsWith("/state/git/config/openclaw.json"))).toBe(
           true,
         );
@@ -2765,6 +2882,14 @@ describe("createBackupArchive", () => {
         expect(entries.some((entry) => entry.includes("/state/dev/openclaw/"))).toBe(false);
         expect(entries.some((entry) => entry.includes("/state/tmp/tsx-501/"))).toBe(false);
         expect(entries.some((entry) => entry.includes("/state/tools/runtime/"))).toBe(false);
+        expect(entries.some((entry) => entry.includes("/runtime-home/.tmp/scratch/"))).toBe(false);
+        expect(result.skipped).toContainEqual(
+          expect.objectContaining({
+            kind: "agent temporary files",
+            sourcePath: agentTempRoot,
+            reason: "regenerable",
+          }),
+        );
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(

@@ -1,13 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
+  resetSharedRunIntegrationHarnessMocks,
+  type TestRunEmbeddedAgent,
   useOpenAIPlatformAuthFixture,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
-
-const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
 
 // The mocked harness only supports the OpenAI route, so these params keep the
 // plugin harness selected. Falling back to the built-in host harness would drag
@@ -20,8 +21,15 @@ const pluginHarnessRunParams = {
 } as const;
 
 describe("embedded run session permissions", () => {
+  let runEmbeddedAgent: TestRunEmbeddedAgent;
+
+  beforeAll(async () => {
+    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+  });
+
   beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
+    resetSharedRunIntegrationHarnessMocks();
     useOpenAIPlatformAuthFixture();
   });
 

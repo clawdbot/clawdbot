@@ -628,7 +628,11 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupV
     normalizedEntrySet,
   );
   for (const link of symbolicLinks) {
-    assertArchiveSymbolicLinkTarget({ ...link, archiveRoot: manifest.archiveRoot });
+    assertArchiveSymbolicLinkTarget({
+      ...link,
+      archiveRoot: manifest.archiveRoot,
+      assetArchivePaths: manifest.assets.map((asset) => asset.archivePath),
+    });
   }
   await verifySqliteSnapshots({ archivePath, entries, manifest });
 

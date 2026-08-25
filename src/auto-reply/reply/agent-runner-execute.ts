@@ -407,9 +407,11 @@ export async function executePreparedReplyAgentRun(
     resolveReplyOperationRunState(opts),
     operationSuperseded
       ? "superseded"
-      : runOutcome.outcome.kind === "settled"
-        ? runOutcome.outcome.status
-        : "failed",
+      : runOutcome.outcome.kind === "rejected"
+        ? "failed"
+        : runOutcome.outcome.kind === "aborted" || runOutcome.outcome.abortReason
+          ? "cancelled"
+          : runOutcome.outcome.status,
     replyOperation,
   );
   activeSessionEntry = getActiveSessionEntry();
