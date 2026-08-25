@@ -1,7 +1,11 @@
 // Covers the per-channel candidate set activation selects from.
 import { describe, expect, it } from "vitest";
-import { collectPluginIdsForConfiguredChannel } from "./channel-activation-candidates.js";
+import {
+  collectAutoEnableConfiguredChannelIds,
+  collectPluginIdsForConfiguredChannel,
+} from "./channel-activation-candidates.js";
 import { makeIsolatedEnv, makeRegistry } from "./plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 describe("collectPluginIdsForConfiguredChannel", () => {
   it("matches a preferOver entry written as the claimant's legacy id", () => {
@@ -50,5 +54,23 @@ describe("collectPluginIdsForConfiguredChannel", () => {
     expect(collectPluginIdsForConfiguredChannel("zzalpha", registry, makeIsolatedEnv())).toEqual([
       "zz-fallback",
     ]);
+  });
+});
+
+// Codex review P2 on #128904: the presence signal was lowercased for ownership, but the configured
+// check behind it reads `channels[<key>]` exactly as authored — `resolveChannelConfigRecord` does
+// no canonicalization. An operator writing `channels.AcmeChat` therefore stopped counting as
+// configured, and a workspace plugin relying on auto-enable stayed off. The signal carries the
+// authored key for that check and the canonical id for ownership.
+describe("collectAutoEnableConfiguredChannelIds", () => {
+  it("still sees a custom channel the operator authored with capitals", () => {
+    const cfg = {
+      channels: { AcmeChat: { accountLabel: "acme" } },
+    } as unknown as OpenClawConfig;
+
+    const configured = collectAutoEnableConfiguredChannelIds(cfg, makeIsolatedEnv());
+
+    // Found through the authored key, and reported under the id ownership compares.
+    expect(configured).toContain("acmechat");
   });
 });

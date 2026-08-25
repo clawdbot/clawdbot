@@ -164,15 +164,21 @@ export function collectAutoEnableConfiguredChannelIds(
   })
     .map((signal) => ({
       source: signal.source,
-      // Same ownership key as the manifest side: a custom channel spelled `AcmeChat` in an env
-      // trigger names the channel a manifest claims as `acmechat`.
+      // Two keys, deliberately. The configured check reads `channels[<key>]` exactly as authored
+      // — `resolveChannelConfigRecord` does no canonicalization — so it keeps the spelling this
+      // signal arrived with, folded only through the built-in alias map as it always was.
+      // Lowercasing it made an authored `channels.AcmeChat` invisible and left a workspace plugin
+      // that relies on auto-enable switched off.
+      configuredChannelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
+      // What ownership compares: a custom channel spelled `AcmeChat` in an env trigger names the
+      // channel a manifest claims as `acmechat`.
       channelId: normalizeOwnedChannelId(signal.channelId),
     }))
-    .filter(({ channelId, source }) =>
+    .filter(({ configuredChannelId, source }) =>
       isAutoEnableConfiguredChannelSignal({
         cfg,
         env,
-        channelId,
+        channelId: configuredChannelId,
         source,
         configuredStateChannelIds,
         discovery,

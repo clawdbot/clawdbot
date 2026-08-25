@@ -107,6 +107,17 @@ function resolveMetadataConfigRedaction(
   config?: OpenClawConfig,
 ): SystemAgentConfigRedactionMetadata {
   const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  // A supplied config is its own authored half unless it IS the config the runtime is serving.
+  // The global authored snapshot describes the running config, and callers here read persisted
+  // state that the runtime may not have adopted — permanently under `gateway.reload.mode="off"`,
+  // transiently during watcher debounce. Pairing the two reads ownership from a different document
+  // than the one being redacted, so a field only the real owner marks sensitive comes back in
+  // plaintext.
+  const resolvedSourceConfig = config
+    ? config === getRuntimeConfigSnapshot()
+      ? (runtimeSourceConfig ?? config)
+      : config
+    : null;
   let configCache: WeakMap<OpenClawConfig, MetadataConfigRedactionCacheEntry> | undefined;
   if (config) {
     configCache = metadataConfigRedactionByConfig.get(snapshot);
@@ -115,7 +126,7 @@ function resolveMetadataConfigRedaction(
       metadataConfigRedactionByConfig.set(snapshot, configCache);
     }
     const cachedForConfig = configCache.get(config);
-    if (cachedForConfig && cachedForConfig.sourceConfig === runtimeSourceConfig) {
+    if (cachedForConfig && cachedForConfig.sourceConfig === resolvedSourceConfig) {
       return cachedForConfig.metadata;
     }
   } else {
@@ -139,7 +150,7 @@ function resolveMetadataConfigRedaction(
           // the source snapshot for the same reason. Before a Gateway publishes one, the caller's
           // config is deliberately both halves: it is the only view in hand and nothing
           // runtime-materialized shadows it.
-          sourceConfig: runtimeSourceConfig ?? config,
+          sourceConfig: resolvedSourceConfig ?? config,
           registry: snapshot.manifestRegistry,
           env: process.env,
         })
@@ -168,7 +179,7 @@ function resolveMetadataConfigRedaction(
     ]),
   };
   if (config && configCache) {
-    configCache.set(config, { metadata, sourceConfig: runtimeSourceConfig });
+    configCache.set(config, { metadata, sourceConfig: resolvedSourceConfig });
   } else {
     metadataConfigRedaction.set(snapshot, metadata);
   }
