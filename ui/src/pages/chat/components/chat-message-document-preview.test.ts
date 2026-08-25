@@ -2,6 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import {
+  parseAttachmentDelimitedPreview,
   parseDelimitedPreview,
   renderAttachmentDocumentPreview,
   resolveDocumentPreviewKind,
@@ -31,6 +32,18 @@ function documentAttachment(label: string, mimeType: string, url?: string): Atta
 }
 
 describe("parseDelimitedPreview", () => {
+  it("keeps commas inside tab-separated cells", () => {
+    const preview = parseAttachmentDelimitedPreview(
+      "name\tdescription\nreport\talpha,beta",
+      documentAttachment("report.tsv", "text/tab-separated-values").attachment,
+    );
+
+    expect(preview.rows).toEqual([
+      ["name", "description"],
+      ["report", "alpha,beta"],
+    ]);
+  });
+
   it("bounds columns and total cells for a wide CSV row", () => {
     const wideRow = Array.from({ length: 8_192 }, () => "x").join(",");
     const preview = parseDelimitedPreview(Array.from({ length: 8 }, () => wideRow).join("\n"));

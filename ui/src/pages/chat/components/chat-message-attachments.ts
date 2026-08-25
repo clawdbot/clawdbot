@@ -19,7 +19,7 @@ import {
 } from "./chat-message-attachment-availability.ts";
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
 import {
-  parseDelimitedPreview,
+  parseAttachmentDelimitedPreview,
   renderAttachmentDocumentPreview,
   resolveDocumentFramePreviewState,
   resolveDocumentPreviewText,
@@ -572,7 +572,7 @@ export function renderAssistantAttachments(
     const tablePreviewFailed =
       previewKind === "table" &&
       previewText !== undefined &&
-      parseDelimitedPreview(previewText ?? "").rows.length === 0;
+      parseAttachmentDelimitedPreview(previewText ?? "", attachment).rows.length === 0;
     const showPreview =
       previewKind !== null && !tablePreviewFailed && framePreviewState !== "failed";
     return keyed(

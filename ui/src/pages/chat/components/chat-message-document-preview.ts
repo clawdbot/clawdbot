@@ -46,8 +46,7 @@ export type DelimitedPreview = {
   truncated: boolean;
 };
 
-export function parseDelimitedPreview(text: string): DelimitedPreview {
-  const delimiter = text.includes("\t") && !text.includes(",") ? "\t" : ",";
+export function parseDelimitedPreview(text: string, delimiter: "," | "\t" = ","): DelimitedPreview {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -109,6 +108,18 @@ export function parseDelimitedPreview(text: string): DelimitedPreview {
     commitRow();
   }
   return { rows, truncated };
+}
+
+export function parseAttachmentDelimitedPreview(
+  text: string,
+  attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
+): DelimitedPreview {
+  const extension = getMediaFileExtension(attachment.label);
+  const mimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return parseDelimitedPreview(
+    text,
+    extension === "tsv" || mimeType === "text/tab-separated-values" ? "\t" : ",",
+  );
 }
 
 async function probeDocumentPreview(source: string, signal: AbortSignal): Promise<boolean> {
@@ -206,7 +217,9 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
       ${t("chat.mediaPlayer.preparing")}
     </div>`;
   }
-  const preview = previewText ? parseDelimitedPreview(previewText) : { rows: [], truncated: false };
+  const preview = previewText
+    ? parseAttachmentDelimitedPreview(previewText, attachment)
+    : { rows: [], truncated: false };
   const { rows } = preview;
   if (rows.length === 0) {
     return html`<div class="chat-assistant-attachment-card__preview-unavailable">
