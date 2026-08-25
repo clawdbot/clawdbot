@@ -48,3 +48,18 @@ export function isGatewayTransportError(value: unknown): value is GatewayTranspo
     value.connectionDetails !== null
   );
 }
+
+/** Only transport loss before an authoritative Gateway response permits caller-owned recovery. */
+export function isGatewayRpcUnavailableError(error: unknown): boolean {
+  if (isGatewayTransportError(error)) {
+    const code = error.code ?? 0;
+    return error.kind === "timeout" || (code !== 1008 && !(code >= 4000 && code <= 4999));
+  }
+  // Pending protocol requests still surface these exact transport failures as plain Errors.
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    (/^gateway closed \((?!1008\)|4\d{3}\))\d+\): [^\r\n]*$/u.test(error.message) ||
+      /^gateway timeout after \d+ms(?:\n[\s\S]*)?$/u.test(error.message))
+  );
+}

@@ -14,6 +14,7 @@ import {
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -110,7 +111,8 @@ function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): Ho
 async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const target = resolveHooksReportTarget(config, agentId);
-  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+  const { callGateway, isGatewayClientRequestError, isImplicitLocalGatewayTarget } =
+    await import("../gateway/call.js");
   try {
     return await callGateway<HookStatusReport>({
       config,
@@ -121,16 +123,16 @@ async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (error) {
+    const isLegacyHookReport =
+      isGatewayClientRequestError(error) &&
+      error.gatewayCode === "INVALID_REQUEST" &&
+      (error.message === "unknown method: hooks.status" ||
+        /^invalid hooks\.status params: (?:unexpected property agentId|at root: unexpected property 'agentId')$/u.test(
+          error.message,
+        ));
     if (
-      !(await isImplicitLocalGatewayTarget({ config })) ||
-      (error instanceof Error &&
-        error.name === "GatewayClientRequestError" &&
-        !(
-          (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-          /^(?:unknown method: hooks\.status|invalid hooks\.status params(?::|$))/iu.test(
-            error.message,
-          )
-        ))
+      !(isGatewayRpcUnavailableError(error) || isLegacyHookReport) ||
+      !(await isImplicitLocalGatewayTarget({ config }))
     ) {
       throw error;
     }

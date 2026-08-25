@@ -69,7 +69,12 @@ type GatewayLockHandle = {
   release: () => Promise<void>;
 };
 
-type GatewayLockRole = "gateway" | "agent-embedded" | "skill-workshop-apply" | "sqlite-maintenance";
+type GatewayLockRole =
+  | "gateway"
+  | "agent-embedded"
+  | "skill-curator-mutation"
+  | "skill-workshop-apply"
+  | "sqlite-maintenance";
 
 export type GatewayLockIdentity = {
   pid: number;

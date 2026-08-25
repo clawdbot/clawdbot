@@ -9,7 +9,6 @@ import {
   parseStrictPositiveInteger,
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
@@ -27,6 +26,7 @@ import {
 } from "../gateway/call.js";
 import { projectGatewayConnectionDetailsForDiagnostics } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
@@ -212,7 +212,10 @@ async function fetchLogs(
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
   // Fallback reads local files only for implicit loopback Gateway RPC failures.
-  if (!isLocalGatewayRpcUnavailableError(error)) {
+  if (
+    !isGatewayRpcUnavailableError(error) &&
+    !readConnectPairingRequiredMessage(normalizeErrorMessage(error))
+  ) {
     return false;
   }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
@@ -253,26 +256,6 @@ function isImplicitLoopbackGatewayConnection(connection: GatewayConnectionDetail
   } catch {
     return false;
   }
-}
-
-function isLocalGatewayRpcUnavailableError(error: unknown): boolean {
-  if (isGatewayTransportError(error)) {
-    return error.kind === "closed" || error.kind === "timeout";
-  }
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (readConnectPairingRequiredMessage(message)) {
-    return true;
-  }
-  // GatewayClient pending request failures are still plain Error instances.
-  return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
-}
-
-function isPlainGatewayRequestCloseError(message: string): boolean {
-  return message.startsWith("gateway closed (");
-}
-
-function isPlainGatewayRequestTimeoutError(message: string): boolean {
-  return /^gateway timeout after \d+ms\b/u.test(message);
 }
 
 async function readSystemdJournalFallback(params: {
@@ -372,25 +355,6 @@ function resolveLogsSystemdUnitName(runtime: LogsCliRuntimeModule, env: NodeJS.P
 const MAX_FOLLOW_RETRIES = 8;
 
 const FOLLOW_BACKOFF_POLICY = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.2 };
-
-// Returns true only for transport-level disconnects that are worth retrying.
-// Auth errors (4xxx), policy violations (1008), and pairing-required messages are
-// non-recoverable without user action and must not loop.
-function isTransientFollowError(error: unknown): boolean {
-  if (isGatewayTransportError(error)) {
-    if (error.kind === "timeout") {
-      return true;
-    }
-    const code = error.code ?? 0;
-    // 1008 = policy violation (pairing required); 4xxx = app-defined (auth, rate-limit)
-    return code !== 1008 && !(code >= 4000 && code <= 4999);
-  }
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (readConnectPairingRequiredMessage(message)) {
-    return false;
-  }
-  return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
-}
 
 export function formatLogTimestamp(
   value?: string,
@@ -660,7 +624,11 @@ export function registerLogsCli(program: Command) {
           );
         }
       } catch (err) {
-        if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
+        if (
+          opts.follow &&
+          followRetryAttempt < MAX_FOLLOW_RETRIES &&
+          isGatewayRpcUnavailableError(err)
+        ) {
           followRetryAttempt += 1;
           const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
           const message = `[logs] gateway disconnected, reconnecting in ${Math.round(backoffMs / 1_000)}s...`;

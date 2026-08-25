@@ -16,6 +16,7 @@ import {
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
+import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
@@ -187,7 +188,8 @@ async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
   const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
-  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+  const { callGateway, isGatewayClientRequestError, isImplicitLocalGatewayTarget } =
+    await import("../gateway/call.js");
   try {
     return await callGateway<SkillStatusReport>({
       config: resolved.config,
@@ -198,7 +200,17 @@ async function loadSkillsStatusReport(
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (error) {
-    if (!(await isImplicitLocalGatewayTarget({ config: resolved.config }))) {
+    const isLegacySkillReport =
+      isGatewayClientRequestError(error) &&
+      error.gatewayCode === "INVALID_REQUEST" &&
+      (error.message === "unknown method: skills.status" ||
+        /^invalid skills\.status params: (?:unexpected property agentId|at root: unexpected property 'agentId')$/u.test(
+          error.message,
+        ));
+    if (
+      !(isGatewayRpcUnavailableError(error) || isLegacySkillReport) ||
+      !(await isImplicitLocalGatewayTarget({ config: resolved.config }))
+    ) {
       throw error;
     }
     const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
@@ -400,13 +412,43 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   return `${lines.join("\n")}\n`;
 }
 
+async function withOfflineGatewayLock<T>(
+  config: ReturnType<typeof getRuntimeConfig>,
+  gatewayError: unknown,
+  role: "skill-curator-mutation" | "skill-workshop-apply",
+  action: () => T | Promise<T>,
+): Promise<T> {
+  const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
+  try {
+    lock = await acquireGatewayLock({
+      allowInTests: true,
+      port: resolveGatewayPort(config, process.env),
+      role,
+      timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
+    });
+  } catch {
+    throw gatewayError;
+  }
+  if (!lock) {
+    throw gatewayError;
+  }
+  // Transport loss cannot prove the Gateway stopped; hold ownership throughout the mutation.
+  try {
+    return await action();
+  } finally {
+    await lock.release();
+  }
+}
+
 async function callSkillCurator<T>(
   method: "status" | "pin" | "restore" | "unpin",
   params: { skill?: string },
   loadLocal: () => T,
 ): Promise<T> {
   const config = getRuntimeConfig();
-  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+  const { callGateway, isGatewayClientRequestError, isImplicitLocalGatewayTarget } =
+    await import("../gateway/call.js");
   try {
     return await callGateway<T>({
       config,
@@ -417,10 +459,20 @@ async function callSkillCurator<T>(
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (error) {
-    if (!(await isImplicitLocalGatewayTarget({ config }))) {
+    const isLegacyCuratorStatus =
+      method === "status" &&
+      isGatewayClientRequestError(error) &&
+      error.gatewayCode === "INVALID_REQUEST" &&
+      error.message === `unknown method: skills.curator.${method}`;
+    if (
+      !(isGatewayRpcUnavailableError(error) || isLegacyCuratorStatus) ||
+      !(await isImplicitLocalGatewayTarget({ config }))
+    ) {
       throw error;
     }
-    return loadLocal();
+    return method === "status"
+      ? loadLocal()
+      : await withOfflineGatewayLock(config, error, "skill-curator-mutation", loadLocal);
   }
 }
 
@@ -444,12 +496,7 @@ async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
-  const {
-    callGateway,
-    isGatewayCredentialsRequiredError,
-    isGatewayTransportError,
-    isImplicitLocalGatewayTarget,
-  } = await import("../gateway/call.js");
+  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
   let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
@@ -464,32 +511,14 @@ async function runSkillProposalApply(
       requiredMethods: ["skills.proposals.apply"],
     });
   } catch (err) {
-    const isOfflineCandidate =
-      isGatewayCredentialsRequiredError(err) ||
-      (isGatewayTransportError(err) && err.kind === "closed" && err.code === 1006);
-    if (!isOfflineCandidate || !(await isImplicitLocalGatewayTarget({ config: resolved.config }))) {
+    if (
+      !isGatewayRpcUnavailableError(err) ||
+      !(await isImplicitLocalGatewayTarget({ config: resolved.config }))
+    ) {
       throw err;
     }
 
-    // Hold the canonical Gateway ownership locks across local mutation. This
-    // makes offline apply atomic with Gateway startup, so a new process cannot
-    // inherit a stale process-local skill snapshot.
-    const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
-    let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-    try {
-      lock = await acquireGatewayLock({
-        allowInTests: true,
-        port: resolveGatewayPort(resolved.config, process.env),
-        role: "skill-workshop-apply",
-        timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
-      });
-    } catch {
-      throw err;
-    }
-    if (!lock) {
-      throw err;
-    }
-    try {
+    return await withOfflineGatewayLock(resolved.config, err, "skill-workshop-apply", async () => {
       const reviewedProposal = await inspectSkillProposal(proposalId, {
         agentId: resolved.agentId,
         workspaceDir: resolved.workspaceDir,
@@ -505,9 +534,7 @@ async function runSkillProposalApply(
         proposalId,
         expectedRevisionHash: reviewedProposal.revisionHash,
       });
-    } finally {
-      await lock.release();
-    }
+    });
   }
 
   return await callGateway<SkillProposalApplyResult>({

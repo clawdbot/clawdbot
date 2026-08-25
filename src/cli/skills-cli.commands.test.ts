@@ -1,11 +1,13 @@
 // Skills CLI command tests cover skill command registration and subcommand behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import {
   AgentSelectionRequiredError,
   resolveConfiguredAgentId,
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -262,6 +264,8 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
+  isGatewayClientRequestError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayClientRequestError",
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
@@ -372,7 +376,19 @@ describe("skills cli commands", () => {
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
 
-    callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+    callGatewayMock.mockRejectedValue(
+      new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        message: "gateway closed (1006): abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+      }),
+    );
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
@@ -1661,6 +1677,115 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toEqual([target.message]);
     expect(runtimeStdout).toEqual([]);
     expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "missing credentials",
+      outcome: "root",
+      error: Object.assign(new Error("gateway requires credentials"), {
+        name: "GatewayCredentialsRequiredError",
+        method: "skills.status",
+        configPath: "/tmp/openclaw.json",
+      }),
+    },
+    {
+      label: "request validation",
+      outcome: "command",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: 'invalid skills.status params: unknown agent id "retired"',
+      }),
+    },
+    {
+      label: "internal server failure",
+      outcome: "command",
+      error: new GatewayClientRequestError({
+        code: "INTERNAL_ERROR",
+        message: "inventory crashed",
+      }),
+    },
+    {
+      label: "authentication close",
+      outcome: "root",
+      error: new GatewayTransportError({
+        kind: "closed",
+        code: 1008,
+        reason: "pairing required",
+        message: "gateway closed (1008): pairing required",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+      }),
+    },
+    {
+      label: "plain pairing close",
+      outcome: "command",
+      error: new Error("gateway closed (1008): pairing required"),
+    },
+    { label: "unknown failure", outcome: "command", error: new Error("gateway unavailable") },
+  ])("does not substitute implicit-local skills after $label", async ({ error, outcome }) => {
+    callGatewayMock.mockRejectedValue(error);
+
+    // Root-owned credential/transport errors propagate; ordinary command errors log and exit.
+    const command = runCommand(["skills", "list", "--json"]);
+    if (outcome === "root") {
+      await expect(command).rejects.toBe(error);
+      expect(runtimeErrors).toEqual([]);
+    } else {
+      await expect(command).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors).toEqual([error.message]);
+    }
+    expect(runtimeStdout).toEqual([]);
+    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "typed timeout",
+      error: new GatewayTransportError({
+        kind: "timeout",
+        timeoutMs: 1_500,
+        message: "gateway timeout after 1500ms",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+      }),
+    },
+    { label: "pending-request close", error: new Error("gateway closed (1006): abnormal closure") },
+    { label: "pending-request timeout", error: new Error("gateway timeout after 1500ms") },
+    {
+      label: "older unknown method",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: skills.status",
+      }),
+    },
+    {
+      label: "older unsupported agent selector",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "invalid skills.status params: unexpected property agentId",
+      }),
+    },
+    {
+      label: "older standard agent-selector validation",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "invalid skills.status params: at root: unexpected property 'agentId'",
+      }),
+    },
+  ])("retains implicit-local skills recovery after $label", async ({ error }) => {
+    callGatewayMock.mockRejectedValue(error);
+
+    await runCommand(["skills", "list", "--json"]);
+
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledOnce();
+    expect(runtimeErrors).toEqual([]);
   });
 
   it.each([
