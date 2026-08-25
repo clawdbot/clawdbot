@@ -1,10 +1,21 @@
 // Webhooks TaskFlow E2E covers route-bound child cancellation on a real Gateway listener.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import acpxPlugin from "../../../../extensions/acpx/index.js";
 import webhooksPlugin from "../../../../extensions/webhooks/index.js";
-import { getAcpSessionManager } from "../../../../src/acp/control-plane/manager.js";
+import {
+  getAcpSessionManager,
+  testing as acpManagerTesting,
+} from "../../../../src/acp/control-plane/manager.js";
+import { createTestAdmittedRunContext } from "../../../../src/agents/admitted-run-context.test-support.js";
 import { cancelBackgroundExecSession } from "../../../../src/agents/bash-process-control.js";
 import { killSubagentRunAdmin } from "../../../../src/agents/subagents/registry/subagent-control.js";
 import { testing as subagentControlTesting } from "../../../../src/agents/subagents/registry/subagent-control.test-support.js";
@@ -35,6 +46,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
+import { createDeferred } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const TOKEN = "webhooks-taskflow-e2e-token";
@@ -74,9 +86,11 @@ beforeEach(() => {
 afterEach(() => {
   clearConfigCache();
   clearRuntimeConfigSnapshot();
+  acpManagerTesting.resetAcpSessionManagerForTests();
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
+  resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
   subagentControlTesting.setDepsForTest();
   subagentRegistryTesting.setDepsForTest();
@@ -147,11 +161,12 @@ async function projectChild(params: {
   flowId: string;
   childSessionKey: string;
   runId: string;
+  runtime?: "acp" | "subagent";
 }) {
   const response = await postWebhook(params.origin, {
     action: "run_task",
     flowId: params.flowId,
-    runtime: "subagent",
+    runtime: params.runtime ?? "subagent",
     childSessionKey: params.childSessionKey,
     runId: params.runId,
     task: `Managed projection ${params.runId}`,
@@ -163,6 +178,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
   it("allows the owner and rejects foreign or replaced backing runs before termination", async () => {
     const root = tempDirs.make("openclaw-webhooks-taskflow-authz-");
     const stateDir = path.join(root, "state");
+    const acpxStateDir = path.join(root, "acpx-state");
+    const acpxTracePath = path.join(root, "acpx-process-trace.jsonl");
     const configPath = path.join(root, "openclaw.json");
     await fs.mkdir(stateDir, { recursive: true });
 
@@ -172,6 +189,12 @@ describe("webhooks TaskFlow child cancellation authority", () => {
         bind: "loopback",
         auth: { mode: "token", token: TOKEN },
       },
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        dispatch: { enabled: true },
+        allowedAgents: ["codex"],
+      },
     };
     await fs.writeFile(configPath, `${JSON.stringify(config)}\n`, "utf8");
 
@@ -179,6 +202,9 @@ describe("webhooks TaskFlow child cancellation authority", () => {
       {
         ...snapshotGatewayStartupEnv(),
         HOME: root,
+        CODEX_PATH: path.resolve("extensions/acpx/test/fixtures/codex-app-server.mjs"),
+        OPENCLAW_ACPX_PROCESS_FIXTURE_TRACE: acpxTracePath,
+        OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE: "0",
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_HOME: root,
@@ -187,6 +213,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_SKIP_ACPX_RUNTIME: undefined,
+        OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
         OPENCLAW_STATE_DIR: stateDir,
       },
       async () => {
@@ -211,6 +239,46 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           killSubagentRunAdmin,
         });
         const routeCleanups: Array<() => void> = [];
+        const acpxServices: OpenClawPluginService[] = [];
+        const acpxRuntime = createPluginRuntimeMock({
+          state: {
+            openKeyedStore: (options) => createPluginStateKeyedStoreForTests("acpx", options),
+          },
+        });
+        acpxPlugin.register(
+          createTestPluginApi({
+            id: "acpx",
+            name: "ACPX Runtime",
+            config,
+            pluginConfig: {
+              cwd: root,
+              stateDir: acpxStateDir,
+              permissionMode: "deny-all",
+              timeoutSeconds: 15,
+              agents: {
+                codex: {
+                  command: process.execPath,
+                  args: [path.resolve("node_modules/@agentclientprotocol/codex-acp/dist/index.js")],
+                },
+              },
+            },
+            runtime: acpxRuntime,
+            registerService: (service) => {
+              acpxServices.push(service);
+            },
+          }),
+        );
+        const acpxService = acpxServices.at(0);
+        if (!acpxService) {
+          throw new Error("ACPX plugin did not register its runtime service");
+        }
+        const acpxServiceContext = {
+          config,
+          workspaceDir: root,
+          stateDir,
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+        };
+        await acpxService.start(acpxServiceContext);
         webhooksPlugin.register(
           createTestPluginApi({
             id: "webhooks",
@@ -332,6 +400,80 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           });
           expect(getSubagentRunByRunId(replacementRunId)?.execution.endedAt).toBeUndefined();
 
+          const acpChild = "agent:main:acp:webhook-replacement";
+          const staleAcpRunId = "run-webhook-acp-stale";
+          const currentAcpRunId = "run-webhook-acp-current";
+          const acpManager = getAcpSessionManager();
+          await acpManager.initializeSession({
+            cfg: config,
+            sessionKey: acpChild,
+            agent: "codex",
+            mode: "persistent",
+            backendId: "acpx",
+          });
+          const elicitationEntered = createDeferred<void>();
+          const releaseElicitation = createDeferred<void>();
+          const activeAcpTurn = acpManager.runTurn({
+            admittedRunContext: createTestAdmittedRunContext(currentAcpRunId),
+            cfg: config,
+            sessionKey: acpChild,
+            provenance: "system",
+            text: "Keep this replacement turn active for cancellation fencing proof.",
+            mode: "prompt",
+            requestId: currentAcpRunId,
+            onElicitation: async () => {
+              elicitationEntered.resolve();
+              await releaseElicitation.promise;
+              return { action: "accept", content: { question: "complete normally" } };
+            },
+          });
+          let acpReplacement: WebhookResponse | undefined;
+          let acpxMethodsBeforeRelease: string[] = [];
+          try {
+            await elicitationEntered.promise;
+            const staleCanonicalTask = createRunningTaskRunCore({
+              runtime: "acp",
+              ownerKey: ROUTE_OWNER,
+              scopeKind: "session",
+              childSessionKey: acpChild,
+              runId: staleAcpRunId,
+              task: "Stale ACP child projection",
+              startedAt: Date.now(),
+              deliveryStatus: "pending",
+            });
+            if (!staleCanonicalTask) {
+              throw new Error("failed to create stale ACP canonical task");
+            }
+            const acpReplacementFlowId = await createFlow(origin, "Reject replaced ACP child");
+            await projectChild({
+              origin,
+              flowId: acpReplacementFlowId,
+              runtime: "acp",
+              childSessionKey: acpChild,
+              runId: staleAcpRunId,
+            });
+            acpReplacement = await postWebhook(origin, {
+              action: "cancel_flow",
+              flowId: acpReplacementFlowId,
+            });
+            expect(acpReplacement).toMatchObject({
+              status: 202,
+              body: { ok: true, code: "cancel_pending" },
+            });
+            acpxMethodsBeforeRelease = (await fs.readFile(acpxTracePath, "utf8"))
+              .trim()
+              .split("\n")
+              .map((line) => (JSON.parse(line) as { method: string }).method);
+            expect(acpxMethodsBeforeRelease).toContain("turn/start");
+            expect(acpxMethodsBeforeRelease).not.toContain("turn/interrupt");
+          } finally {
+            releaseElicitation.resolve();
+            await activeAcpTurn;
+          }
+          if (!acpReplacement) {
+            throw new Error("missing ACP replacement cancellation response");
+          }
+
           console.info(
             "webhooks-taskflow-authority-proof",
             JSON.stringify({
@@ -351,12 +493,22 @@ describe("webhooks TaskFlow child cancellation authority", () => {
                 code: replaced.body.code,
                 replacementStatus: getSubagentRunByRunId(replacementRunId)?.execution.status,
               },
+              acpReplacement: {
+                transport: "process",
+                httpStatus: acpReplacement.status,
+                code: acpReplacement.body.code,
+                interruptRequests: acpxMethodsBeforeRelease.filter(
+                  (method) => method === "turn/interrupt",
+                ).length,
+                replacementStatus: "completed",
+              },
             }),
           );
         } finally {
           for (const cleanup of routeCleanups.toReversed()) {
             cleanup();
           }
+          await acpxService.stop?.(acpxServiceContext);
           await server.close();
         }
       },
