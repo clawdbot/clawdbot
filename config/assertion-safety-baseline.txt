@@ -2263,7 +2263,6 @@ src/auto-reply/usage-bar/translator.ts	4
 src/boards/board-store.ts	1
 src/boards/sqlite-board-codec.ts	7
 src/boards/sqlite-board-store.ts	3
-src/bootstrap/node-extra-ca-certs.ts	2
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	2
 src/canvas/serve.runtime.ts	1
