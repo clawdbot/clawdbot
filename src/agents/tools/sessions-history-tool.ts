@@ -341,7 +341,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
   // Respect Gateway replay cursors and this tool's own byte cap while always advancing.
   const seq = params.messages
     .map((message) => readHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
+    .find((value): value is number => typeof value === "number");
   const gatewayOffset = result?.nextOffset;
   const nextOffset =
     seq === undefined
