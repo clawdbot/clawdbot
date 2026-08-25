@@ -112,10 +112,6 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
 });
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
-  afterEach(() => {
-    resetProcessRegistryForTests();
-  });
-
   it("preserves sender and current message routing for compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
@@ -283,45 +279,54 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
         },
       ]);
     } finally {
+      resetProcessRegistryForTests();
       vi.useRealTimers();
     }
   });
 
   it("keeps same-timestamp process references newest-first in compaction context", () => {
-    for (const id of ["z-oldest", "a-middle", "m-newest"]) {
-      const session = createProcessSessionFixture({ id, startedAt: 1_000, backgrounded: true });
-      session.scopeKey = "agent:main:thread:1";
-      addSession(session);
+    try {
+      for (const id of ["z-oldest", "a-middle", "m-newest"]) {
+        const session = createProcessSessionFixture({ id, startedAt: 1_000, backgrounded: true });
+        session.scopeKey = "agent:main:thread:1";
+        addSession(session);
+      }
+
+      const result = buildEmbeddedCompactionRuntimeContext({
+        sessionKey: "agent:main:thread:1",
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expect(result.activeProcessSessions?.map(({ sessionId }) => sessionId)).toEqual([
+        "m-newest",
+        "a-middle",
+        "z-oldest",
+      ]);
+    } finally {
+      resetProcessRegistryForTests();
     }
-
-    const result = buildEmbeddedCompactionRuntimeContext({
-      sessionKey: "agent:main:thread:1",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(result.activeProcessSessions?.map(({ sessionId }) => sessionId)).toEqual([
-      "m-newest",
-      "a-middle",
-      "z-oldest",
-    ]);
   });
 
   it("omits active process session references when no safe scope is available", () => {
-    const active = createProcessSessionFixture({
-      id: "sess-active",
-      command: "sleep 600",
-      backgrounded: true,
-    });
-    active.scopeKey = "agent:main:thread:1";
-    addSession(active);
+    try {
+      const active = createProcessSessionFixture({
+        id: "sess-active",
+        command: "sleep 600",
+        backgrounded: true,
+      });
+      active.scopeKey = "agent:main:thread:1";
+      addSession(active);
 
-    const result = buildEmbeddedCompactionRuntimeContext({
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      config: {} as unknown as OpenClawConfig,
-    });
+      const result = buildEmbeddedCompactionRuntimeContext({
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        config: {} as unknown as OpenClawConfig,
+      });
 
-    expect(result.activeProcessSessions).toBeUndefined();
+      expect(result.activeProcessSessions).toBeUndefined();
+    } finally {
+      resetProcessRegistryForTests();
+    }
   });
 
   it("applies runtime defaults when resolving the effective compaction target", () => {
