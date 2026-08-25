@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireFileLock,
@@ -23,6 +24,7 @@ describe("acquireFileLock", () => {
   });
 
   afterEach(async () => {
+    __setFsSafeTestHooksForTest();
     await drainFileLockStateForTest();
     vi.restoreAllMocks();
     if (tempDir) {
@@ -86,6 +88,42 @@ describe("acquireFileLock", () => {
       stale: 60_000,
     });
     await next.release();
+  });
+
+  it("retains fs-safe's Windows transient-denial retries for signal-aware waits", async () => {
+    const filePath = path.join(tempDir, "windows-transient-denial");
+    const held = await acquireFileLock(filePath, {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    });
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    let snapshotOpenAttempts = 0;
+    __setFsSafeTestHooksForTest({
+      beforeSidecarLockSnapshotOpen: (lockPath) => {
+        snapshotOpenAttempts += 1;
+        if (snapshotOpenAttempts === 1) {
+          throw Object.assign(new Error("transient Windows lock teardown"), {
+            code: "EPERM",
+            path: lockPath,
+          });
+        }
+      },
+    });
+
+    try {
+      await expect(
+        acquireFileLock(filePath, {
+          retries: { retries: 1, factor: 1, minTimeout: 1, maxTimeout: 1 },
+          signal: new AbortController().signal,
+          stale: 60_000,
+        }),
+      ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+      expect(snapshotOpenAttempts).toBe(2);
+    } finally {
+      __setFsSafeTestHooksForTest();
+      platform.mockRestore();
+      await held.release();
+    }
   });
 
   it("does not create a lock when acquisition is already aborted", async () => {

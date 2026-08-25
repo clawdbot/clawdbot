@@ -1,7 +1,6 @@
 // File lock helpers serialize plugin writes that share a filesystem-backed state file.
 import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
-import { setTimeout as waitForTimeout } from "node:timers/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,
   drainFileLockManagerForTest,
@@ -142,15 +141,6 @@ function normalizeLockError(err: unknown): never {
   throw err;
 }
 
-function computeFileLockRetryDelayMs(retry: FileLockOptions["retries"], attempt: number): number {
-  const base = Math.min(
-    retry.maxTimeout,
-    Math.max(retry.minTimeout, retry.minTimeout * retry.factor ** attempt),
-  );
-  const jitter = retry.randomize ? 1 + Math.random() : 1;
-  return Math.min(retry.maxTimeout, Math.round(base * jitter));
-}
-
 function createAbortedFileLockReleaseError(
   abortReason: unknown,
   releaseError: unknown,
@@ -192,14 +182,21 @@ export async function acquireFileLock(
 ): Promise<FileLockHandle> {
   const staleRecovery = options.staleRecovery ?? "remove-if-unchanged";
   const signal = options.signal;
-  const acquireWithRetry = async (retry: FileLockOptions["retries"]) =>
-    await acquireFsSafeFileLock(filePath, {
+  try {
+    signal?.throwIfAborted();
+    const lock = await acquireFsSafeFileLock(filePath, {
       managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
-      retry,
+      retry: options.retries,
       staleRecovery,
       reentrantOwner: options.reentrantOwner,
-      payload: createCurrentProcessLockPayload,
+      // fs-safe owns retry timing and platform-specific contention policy. Its
+      // payload callback runs before every ordinary acquire attempt, so it is
+      // also the cancellation checkpoint without replacing that retry loop.
+      payload: () => {
+        signal?.throwIfAborted();
+        return createCurrentProcessLockPayload();
+      },
       shouldReclaim: (params) =>
         staleRecovery === "fail-closed"
           ? isLockOwnerDefinitelyStale({ payload: asLockPayload(params.payload) })
@@ -218,39 +215,13 @@ export async function acquireFileLock(
           }
         : {}),
     });
-  if (!signal) {
-    try {
-      const lock = await acquireWithRetry(options.retries);
-      return { lockPath: lock.lockPath, release: lock.release };
-    } catch (err) {
-      return normalizeLockError(err);
+    if (signal?.aborted) {
+      return await releaseFileLockAfterAbort(lock, signal);
     }
-  }
-  let attempt = 0;
-  while (true) {
-    signal.throwIfAborted();
-    try {
-      const lock = await acquireWithRetry({ ...options.retries, retries: 0 });
-      if (signal.aborted) {
-        return await releaseFileLockAfterAbort(lock, signal);
-      }
-      return { lockPath: lock.lockPath, release: lock.release };
-    } catch (err) {
-      if (
-        (err as { code?: unknown }).code !== FILE_LOCK_TIMEOUT_ERROR_CODE ||
-        attempt >= options.retries.retries
-      ) {
-        return normalizeLockError(err);
-      }
-    }
-    const delayMs = computeFileLockRetryDelayMs(options.retries, attempt);
-    attempt += 1;
-    try {
-      await waitForTimeout(delayMs, undefined, { signal });
-    } catch (error) {
-      signal.throwIfAborted();
-      throw error;
-    }
+    return { lockPath: lock.lockPath, release: lock.release };
+  } catch (err) {
+    signal?.throwIfAborted();
+    return normalizeLockError(err);
   }
 }
 
