@@ -5,6 +5,9 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentDir } from "./agent-scope-config.js";
+import { resolveExplicitAuthOrderSelection } from "./auth-profiles/order.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import {
   isCliRuntimeModelBackendForProvider,
   listCliRuntimeModelBackendBindings,
@@ -12,6 +15,7 @@ import {
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
   resolveProviderIdForAuth,
@@ -218,6 +222,7 @@ function resolveCliRuntimeFromAuthProfile(
   params: RuntimeAuthAliasParams & {
     provider: string;
     authProfileId?: string;
+    agentId?: string;
   },
 ): string | undefined {
   if (!params.cfg?.auth?.profiles) {
@@ -233,10 +238,21 @@ function resolveCliRuntimeFromAuthProfile(
 
   const provider = normalizeProviderId(params.provider);
   const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
-  const orderedProfileIds = [
-    ...(params.cfg.auth.order?.[providerAuthKey] ?? []),
-    ...(providerAuthKey === provider ? [] : (params.cfg.auth.order?.[provider] ?? [])),
-  ];
+  // The persisted auth store owns the effective profile order once an operator sets
+  // one (`models auth order set`). Read it from the lifecycle-published snapshot and
+  // resolve precedence through the same helper resolveAuthProfileOrderWithMetadata
+  // uses, so alias routing and profile selection cannot disagree.
+  const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
+    params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+    resolveLegacyInheritedAuthDir(params.cfg),
+  );
+  const selection = resolveExplicitAuthOrderSelection({
+    storeOrder: store?.order,
+    configuredOrder: params.cfg.auth.order,
+    providerKey: provider,
+    providerAuthKey,
+  });
+  const orderedProfileIds = selection.directExplicitOrder ?? selection.aliasExplicitOrder ?? [];
   for (const profileId of orderedProfileIds) {
     const profile = params.cfg.auth.profiles[profileId];
     if (!profile?.provider) {
@@ -251,6 +267,11 @@ function resolveCliRuntimeFromAuthProfile(
       provider,
       profileId,
     });
+  }
+
+  if (selection.explicitOrderFromStore) {
+    // An authored stored order owns selection, including an explicitly empty one.
+    return undefined;
   }
 
   const compatibleProfileIds = Object.entries(params.cfg.auth.profiles)

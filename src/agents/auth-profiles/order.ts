@@ -280,6 +280,55 @@ export type AuthProfileOrderResolution = {
   hasExplicitOrder: boolean;
 };
 
+/**
+ * Resolves which explicit auth order owns selection for a provider.
+ *
+ * The persisted store outranks config, and each source is matched across the
+ * provider auth key and the raw provider key. Shared with CLI runtime alias
+ * routing so profile selection and alias routing cannot disagree on precedence.
+ */
+export function resolveExplicitAuthOrderSelection(params: {
+  storeOrder: AuthProfileStore["order"] | undefined;
+  configuredOrder: Record<string, string[]> | undefined;
+  providerKey: string;
+  providerAuthKey: string;
+}): {
+  openAIOrderAliasProvider: string | undefined;
+  directExplicitOrder: string[] | undefined;
+  aliasExplicitOrder: string[] | undefined;
+  explicitOrderFromStore: boolean;
+} {
+  const { storeOrder, configuredOrder, providerKey, providerAuthKey } = params;
+  const openAIOrderAliasProvider =
+    providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
+      ? OPENAI_PROVIDER_ID
+      : undefined;
+  const directStoredOrder =
+    resolveAuthOrder(storeOrder, providerAuthKey) ?? resolveAuthOrder(storeOrder, providerKey);
+  const aliasStoredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(storeOrder, openAIOrderAliasProvider)
+    : undefined;
+  const directConfiguredOrder =
+    resolveAuthOrder(configuredOrder, providerAuthKey) ??
+    resolveAuthOrder(configuredOrder, providerKey);
+  const aliasConfiguredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(configuredOrder, openAIOrderAliasProvider)
+    : undefined;
+  const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
+  const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
+  // Stored order repairs are allowed to fall back to live store profiles when
+  // old setup flows persisted profile ids that no longer exist.
+  const explicitOrderFromStore =
+    directStoredOrder !== undefined ||
+    (directExplicitOrder === undefined && aliasStoredOrder !== undefined);
+  return {
+    openAIOrderAliasProvider,
+    directExplicitOrder,
+    aliasExplicitOrder,
+    explicitOrderFromStore,
+  };
+}
+
 /** Resolves ordered usable auth profiles plus whether an explicit order owns selection. */
 export function resolveAuthProfileOrderWithMetadata(
   params: ResolveAuthProfileOrderParams,
@@ -296,28 +345,17 @@ export function resolveAuthProfileOrderWithMetadata(
   // get a fresh error count and are not immediately re-penalized on the
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
-  const openAIOrderAliasProvider =
-    providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
-      ? OPENAI_PROVIDER_ID
-      : undefined;
-  const directStoredOrder =
-    resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
-  const aliasStoredOrder = openAIOrderAliasProvider
-    ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
-    : undefined;
-  const directConfiguredOrder =
-    resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
-    resolveAuthOrder(cfg?.auth?.order, providerKey);
-  const aliasConfiguredOrder = openAIOrderAliasProvider
-    ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
-    : undefined;
-  const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
-  const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
-  // Stored order repairs are allowed to fall back to live store profiles when
-  // old setup flows persisted profile ids that no longer exist.
-  const explicitOrderFromStore =
-    directStoredOrder !== undefined ||
-    (directExplicitOrder === undefined && aliasStoredOrder !== undefined);
+  const {
+    openAIOrderAliasProvider,
+    directExplicitOrder,
+    aliasExplicitOrder,
+    explicitOrderFromStore,
+  } = resolveExplicitAuthOrderSelection({
+    storeOrder: store.order,
+    configuredOrder: cfg?.auth?.order,
+    providerKey,
+    providerAuthKey,
+  });
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(([profileId, profile]) =>
