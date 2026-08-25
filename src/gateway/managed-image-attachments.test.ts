@@ -1338,6 +1338,35 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it.each([
+    { providedName: "friendly-cover.png", expectedName: "friendly-cover.png" },
+    { providedName: "../album\\cover\r\n.png", expectedName: "cover.png" },
+  ])(
+    "preserves safe generated image filenames in the record and HTTP response",
+    async ({ providedName, expectedName }) => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+        attachments: [{ type: "image", name: providedName }],
+        stateDir,
+        messageId: "msg-1",
+      });
+      const block = requireBlock(blocks);
+      const attachmentId = requireAttachmentIdFromUrl(block.url);
+
+      expect(readManagedImageRecord(attachmentId, stateDir)?.original.filename).toBe(expectedName);
+
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: block.url,
+        authResponse: { authMethod: "token" },
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
+    },
+  );
+
+  it.each([
     { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
     { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
   ])(
@@ -1763,6 +1792,23 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     expect(blocks).toHaveLength(2);
     expect(blocks[0]?.type).toBe("image");
+    expect(requireBlock(blocks, 1).type).toBe("text");
+  });
+
+  it("updates generated image filenames to the actual format after resizing", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [await createPngDataUrl(200, 120)],
+      attachments: [{ type: "image", name: "generated-poster.webp" }],
+      stateDir,
+      limits: { maxWidth: 64, maxHeight: 64, maxPixels: 4096 },
+    });
+    const block = requireBlock(blocks);
+    const record = readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir);
+
+    expect(record?.original.contentType).toBe("image/jpeg");
+    expect(record?.original.filename).toBe("generated-poster.jpg");
+    expect(record?.original.mediaId).toMatch(/\.jpg$/);
     expect(requireBlock(blocks, 1).type).toBe("text");
   });
 

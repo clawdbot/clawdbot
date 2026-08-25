@@ -22,6 +22,7 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.js";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
@@ -861,9 +862,13 @@ function buildManagedImageResizeWarningBlock(params: {
   };
 }
 
-function toRecordFilename(filePath: string) {
-  const name = path.basename(filePath).trim();
-  return name || null;
+function toRecordFilename(filePath: string, attachmentName?: string) {
+  const fallback = path.basename(filePath).trim();
+  if (!attachmentName) {
+    return fallback || null;
+  }
+  const safeName = sanitizeUntrustedFileName(attachmentName, fallback);
+  return `${path.parse(safeName).name}${path.extname(filePath)}`;
 }
 
 function asArray(value: string[] | undefined | null) {
@@ -1546,7 +1551,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
           sizeBytes: originalStats.sizeBytes,
           filename:
             mediaKind === "image"
-              ? toRecordFilename(savedOriginal.path)
+              ? toRecordFilename(savedOriginal.path, attachmentMetadata?.name)
               : attachmentMetadata?.name?.trim() || label,
         },
       };
