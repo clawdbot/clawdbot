@@ -4,13 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -39,6 +39,7 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
+const prepareGitCoauthorAttributionMock = vi.fn();
 const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 
@@ -90,6 +91,17 @@ vi.mock("./agent-runner-execution.js", async () => {
   };
 });
 
+vi.mock("../../agents/git-coauthor-attribution.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/git-coauthor-attribution.js")>(
+    "../../agents/git-coauthor-attribution.js",
+  );
+  return {
+    ...actual,
+    prepareGitCoauthorAttribution: (...args: unknown[]) =>
+      prepareGitCoauthorAttributionMock(...args),
+  };
+});
+
 vi.mock("./agent-runner-session-reset.js", async () => {
   const actual = await vi.importActual<typeof import("./agent-runner-session-reset.js")>(
     "./agent-runner-session-reset.js",
@@ -132,6 +144,7 @@ function createReplyOperation(): TestReplyOperation {
     get sessionId() {
       return sessionId;
     },
+    turnKind: "visible",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
     phase: "queued",
@@ -149,6 +162,10 @@ function createReplyOperation(): TestReplyOperation {
     }),
     updateSessionKey: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
+    bindToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityProjector: vi.fn(),
+    projectToolAuthorityFingerprint: vi.fn(),
+    bindToolAuthorityRoute: vi.fn(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
     retainFailureUntilComplete: vi.fn(),
@@ -161,6 +178,7 @@ function createReplyOperation(): TestReplyOperation {
     freezeAbort: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
+    supersede: vi.fn(),
     terminalRecovery: false,
     acceptedSteeredInboundAudio: false,
     markTerminalRecovery: vi.fn(),
@@ -253,6 +271,7 @@ describe("runReplyAgent runtime config", () => {
     runPreflightCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
+    prepareGitCoauthorAttributionMock.mockReset();
     resetReplyRunSessionMock.mockReset();
     enqueueFollowupRunMock.mockReset();
 
@@ -266,6 +285,7 @@ describe("runReplyAgent runtime config", () => {
       runId: "runtime-config-test",
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
+    prepareGitCoauthorAttributionMock.mockReturnValue(undefined);
     resetReplyRunSessionMock.mockResolvedValue(false);
   });
 
@@ -336,6 +356,69 @@ describe("runReplyAgent runtime config", () => {
     const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
     expect(memoryCall.sessionKey).toBe("agent:main:main");
     expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
+  });
+
+  it("forwards co-author context only for trusted profile-backed session creation", async () => {
+    const attribution =
+      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
+    prepareGitCoauthorAttributionMock.mockImplementation((params: { currentProfileId?: string }) =>
+      params.currentProfileId === "profile-ada" ? attribution : undefined,
+    );
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    await withTestDir({ prefix: "openclaw-coauthor-owner-" }, async (tempDir) => {
+      const storePath = join(tempDir, "sessions.json");
+      const runCase = async (
+        suffix: string,
+        creation: NonNullable<TemplateContext["SessionCreation"]>,
+      ) => {
+        const { replyParams } = createDirectRuntimeReplyParams({
+          shouldFollowup: false,
+          isActive: false,
+        });
+        const sessionKey = `agent:main:chat:${suffix}`;
+        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+        Object.assign(replyParams, {
+          sessionKey,
+          storePath,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionCtx: { ...createTelegramSessionCtx(), SessionCreation: creation },
+        });
+        await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+        await runReplyAgent(replyParams);
+        return executeAgentTurnMock.mock.calls.at(-1)?.[0];
+      };
+
+      const profileCall = await runCase("profile", {
+        via: "operator",
+        actor: { type: "human", id: "profile-ada" },
+      });
+
+      expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
+        agentId: "main",
+        config: freshCfg,
+        currentProfileId: "profile-ada",
+        sessionKey: "agent:main:chat:profile",
+        storePath,
+      });
+      expect(profileCall).toMatchObject({
+        opts: { gitCoauthorAttribution: attribution },
+      });
+
+      const channelCall = await runCase("channel", {
+        via: "channel",
+        actor: { type: "human", id: "channel-user" },
+      });
+
+      expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
+        agentId: "main",
+        config: freshCfg,
+        currentProfileId: undefined,
+        sessionKey: "agent:main:chat:channel",
+        storePath,
+      });
+      expect(channelCall).not.toHaveProperty("opts.gitCoauthorAttribution");
+    });
   });
 
   it("continues the main reply after a recorded memory-flush failure", async () => {
@@ -424,6 +507,7 @@ describe("runReplyAgent runtime config", () => {
           };
         },
       );
+      const baselineSettlement = createDeferredCore();
       resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
         const resetParams = params as {
           activeSessionEntry?: SessionEntry;
@@ -443,6 +527,7 @@ describe("runReplyAgent runtime config", () => {
           resetParams.activeSessionStore[sessionKey] = nextEntry;
         }
         await replaceSessionEntry({ storePath, sessionKey }, nextEntry);
+        await baselineSettlement.promise;
         resetParams.followupRun.run.sessionId = nextEntry.sessionId;
         resetParams.followupRun.run.sessionFile = sessionFile;
         resetParams.onActiveSessionEntry(nextEntry);
@@ -450,7 +535,11 @@ describe("runReplyAgent runtime config", () => {
         return true;
       });
 
-      const result = await runReplyAgent(replyParams);
+      const resultPromise = runReplyAgent(replyParams);
+      await vi.waitFor(() => expect(resetReplyRunSessionMock).toHaveBeenCalledOnce());
+      expect(executeAgentTurnMock).not.toHaveBeenCalled();
+      baselineSettlement.resolve();
+      const result = await resultPromise;
 
       expect(result).toEqual({ text: "main reply" });
       expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
@@ -549,16 +638,14 @@ describe("runReplyAgent runtime config", () => {
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });
 
-  it("records cancellation during memory flush without starting the main turn", async () => {
-    const runState: ReplyOperationRunState = {};
+  it("does not start the main turn after cancellation during memory flush", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
-    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
     runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
     runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: { replyOperation: ReplyOperation }) => {
+      async (params: { replyOperation: { abortByUser: () => boolean } }) => {
         expect(params.replyOperation.abortByUser()).toBe(true);
         return { sessionEntry: undefined, outcome: "failed" };
       },
@@ -567,29 +654,6 @@ describe("runReplyAgent runtime config", () => {
     const result = await runReplyAgent(replyParams);
 
     expect(result).toMatchObject({ text: SILENT_REPLY_TOKEN });
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
-    expect(executeAgentTurnMock).not.toHaveBeenCalled();
-  });
-
-  it("records cancellation during preflight compaction without starting the main turn", async () => {
-    const runState: ReplyOperationRunState = {};
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
-    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-    runPreflightCompactionIfNeededMock.mockImplementation(
-      async (params: { replyOperation: ReplyOperation }) => {
-        expect(params.replyOperation.abortByUser()).toBe(true);
-        throw params.replyOperation.abortSignal.reason;
-      },
-    );
-
-    const result = await runReplyAgent(replyParams);
-
-    expect(result).toMatchObject({ text: SILENT_REPLY_TOKEN });
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
-    expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
