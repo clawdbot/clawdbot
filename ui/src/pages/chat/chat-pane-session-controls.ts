@@ -164,11 +164,14 @@ export function renderChatPaneComposerControls(params: {
           Boolean(selectedSession && isSessionRunActive(selectedSession));
         try {
           state.chatError = null;
-          await state.sessions.patch(
+          const patched = await state.sessions.patch(
             state.sessionKey,
             { permissionMode },
             scopedAgentParamsForSession(state, state.sessionKey),
           );
+          if (!patched) {
+            throw new Error(state.sessions.state.error ?? t("chat.composer.menu.offlineBlocked"));
+          }
           if (runWasActive) {
             const topbarHeight = toastAnchor
               .querySelector(".chat-pane__header")

@@ -183,18 +183,76 @@ describe("chat pane composer controls", () => {
   });
 
   it.each([
-    { label: "running", chatRunId: null, hasActiveRun: true, status: "running", toastCount: 1 },
+    {
+      label: "running",
+      chatRunId: null,
+      hasActiveRun: true,
+      status: "running",
+      outcome: "success",
+      sessionError: null,
+      toastCount: 1,
+      expectedError: null,
+    },
     {
       label: "locally running with a stale idle session row",
       chatRunId: "run-active",
       hasActiveRun: false,
       status: "done",
+      outcome: "success",
+      sessionError: null,
       toastCount: 1,
+      expectedError: null,
     },
-    { label: "idle", chatRunId: null, hasActiveRun: false, status: "done", toastCount: 0 },
-  ] as const)("shows the next-run notice only for a $label session", async (sessionCase) => {
+    {
+      label: "idle",
+      chatRunId: null,
+      hasActiveRun: false,
+      status: "done",
+      outcome: "success",
+      sessionError: null,
+      toastCount: 0,
+      expectedError: null,
+    },
+    {
+      label: "running with an unavailable permission update",
+      chatRunId: "run-active",
+      hasActiveRun: true,
+      status: "running",
+      outcome: "unavailable",
+      sessionError: "The previous gateway connection closed.",
+      toastCount: 0,
+      expectedError: "Failed to update permissions: Error: The previous gateway connection closed.",
+    },
+    {
+      label: "idle with an unavailable permission update",
+      chatRunId: null,
+      hasActiveRun: false,
+      status: "done",
+      outcome: "unavailable",
+      sessionError: null,
+      toastCount: 0,
+      expectedError:
+        "Failed to update permissions: Error: Connect to the gateway to change session capabilities.",
+    },
+    {
+      label: "running with a rejected permission update",
+      chatRunId: "run-active",
+      hasActiveRun: true,
+      status: "running",
+      outcome: "rejected",
+      sessionError: null,
+      toastCount: 0,
+      expectedError: "Failed to update permissions: Error: Gateway rejected the update.",
+    },
+  ] as const)("reports the permission update outcome for a $label session", async (sessionCase) => {
     showToastMock.mockClear();
-    const patch = vi.fn(async () => ({}));
+    const patch = vi.fn(async () => {
+      if (sessionCase.outcome === "rejected") {
+        throw new Error("Gateway rejected the update.");
+      }
+      return sessionCase.outcome === "success" ? {} : null;
+    });
+    const requestUpdate = vi.fn();
     const toastAnchor = document.createElement("div");
     const state = {
       chatRunId: sessionCase.chatRunId,
@@ -202,13 +260,15 @@ describe("chat pane composer controls", () => {
       client: {},
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, patch },
+      sessions: { state: { modelOverrides: {}, error: sessionCase.sessionError }, patch },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:permission-notice",
       chatModelsLoading: false,
       chatSending: false,
       sessionsResult: null,
       chatStream: null,
+      chatError: null,
+      requestUpdate,
     } as unknown as ChatPageHost;
     const controls = renderChatPaneComposerControls({
       state,
@@ -228,9 +288,19 @@ describe("chat pane composer controls", () => {
       onModelSetup: vi.fn(),
     });
 
-    await controls.permissionPicker.onSelect("guarded");
+    const container = document.createElement("div");
+    render(renderChatPermissionPicker(controls.permissionPicker), container);
+    const dropdown = container.querySelector<HTMLElement>(".chat-controls__permission-picker");
+    expect(dropdown).not.toBeNull();
+    dropdown?.setAttribute("open", "");
+    dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
+    await vi.waitFor(() => {
+      expect(patch).toHaveBeenCalledOnce();
+      expect(state.chatError).toBe(sessionCase.expectedError);
+      expect(showToastMock).toHaveBeenCalledTimes(sessionCase.toastCount);
+    });
 
-    expect(showToastMock).toHaveBeenCalledTimes(sessionCase.toastCount);
+    expect(requestUpdate).toHaveBeenCalledTimes(sessionCase.expectedError ? 1 : 0);
     if (sessionCase.toastCount === 1) {
       expect(showToastMock).toHaveBeenCalledWith(
         expect.objectContaining({
