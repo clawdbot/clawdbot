@@ -169,6 +169,24 @@ describe("buildReplyPayloads media filter integration", () => {
     );
   });
 
+  it("redacts copied inbound context before XML and metadata mutate its exact bytes", async () => {
+    const conversationContext = [
+      "[Chat messages since your last reply - for context]",
+      "[Telegram] Alice: private history",
+      "",
+      "[Current message - respond to this]",
+      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
+      "private inbound paragraph",
+    ].join("\n");
+
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [{ text: `${conversationContext}\n\nVisible answer.` }],
+      conversationContext,
+    });
+
+    expect(replyPayloads).toEqual([expect.objectContaining({ text: "Visible answer." })]);
+  });
+
   it.each<{
     name: string;
     payload: ReplyPayload;
@@ -356,6 +374,33 @@ describe("buildReplyPayloads media filter integration", () => {
       getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
         ?.sourceReplyTranscriptMirror?.text,
     ).toBe("Visible\n\nDone");
+  });
+
+  it("redacts copied inbound context from the visible reply and its transcript mirror", async () => {
+    const conversationContext = [
+      "[Chat messages since your last reply - for context]",
+      "Alice: private history",
+      "",
+      "[Current message - respond to this]",
+      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
+      "private inbound paragraph",
+    ].join("\n");
+    const text = `${conversationContext}\n\nVisible answer.`;
+    const payload = setReplyPayloadMetadata(
+      { text },
+      { sourceReplyTranscriptMirror: { sessionKey: "agent:main", text } },
+    );
+
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [payload],
+      conversationContext,
+    });
+
+    expect(replyPayloads[0]?.text).toBe("Visible answer.");
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "expected prepared reply payload"))
+        ?.sourceReplyTranscriptMirror?.text,
+    ).toBe("Visible answer.");
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {

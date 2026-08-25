@@ -118,36 +118,41 @@ function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
 function sanitizeFinalReplyText(
   payload: ReplyPayload,
   text: string | undefined,
+  conversationContext?: string,
 ): string | undefined {
   if (!text) {
     return text;
   }
   return payload.isError
-    ? renderUserFacingText(text, { errorContext: true })
-    : sanitizeUserFacingText(text);
+    ? renderUserFacingText(text, { errorContext: true, conversationContext })
+    : sanitizeUserFacingText(text, { conversationContext });
 }
 
-function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
+function sanitizeHeartbeatPayload(
+  payload: ReplyPayload,
+  conversationContext?: string,
+): ReplyPayload {
   const text = payload.text;
   if (!text) {
     return payload;
   }
   const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
-  const cleaned = sanitizeFinalReplyText(payload, withoutLegacyBlocks);
+  const cleaned = sanitizeFinalReplyText(payload, withoutLegacyBlocks, conversationContext);
   if (cleaned === text) {
     return payload;
   }
   if (withoutLegacyBlocks !== text) {
     logVerbose("Stripped legacy tool-call block from heartbeat reply");
   }
-  return copyPayloadWithSanitizedText(payload, cleaned);
+  return copyPayloadWithSanitizedText(payload, cleaned, conversationContext);
 }
 
 function copyPayloadWithSanitizedText(
   payload: ReplyPayload,
   text: string | undefined,
+  conversationContext?: string,
 ): ReplyPayload {
-  const sanitizedText = sanitizeFinalReplyText(payload, text);
+  const sanitizedText = sanitizeFinalReplyText(payload, text, conversationContext);
   const next = copyReplyPayloadMetadata(payload, {
     ...payload,
     text: sanitizedText,
@@ -159,7 +164,7 @@ function copyPayloadWithSanitizedText(
   setReplyPayloadMetadata(next, {
     sourceReplyTranscriptMirror: {
       ...mirror,
-      text: sanitizeFinalReplyText(payload, mirror.text) || undefined,
+      text: sanitizeFinalReplyText(payload, mirror.text, conversationContext) || undefined,
     },
   });
   return next;
@@ -169,6 +174,8 @@ function copyPayloadWithSanitizedText(
 export async function buildReplyPayloads(params: {
   config?: OpenClawConfig;
   payloads: ReplyPayload[];
+  /** Exact prompt bytes from this turn's finalized inbound owner. */
+  conversationContext?: string;
   isHeartbeat: boolean;
   didLogHeartbeatStrip: boolean;
   silentExpected?: boolean;
@@ -199,7 +206,7 @@ export async function buildReplyPayloads(params: {
   const sanitizedPayloads: ReplyPayload[] = [];
   if (params.isHeartbeat) {
     for (const payload of params.payloads) {
-      sanitizedPayloads.push(sanitizeHeartbeatPayload(payload));
+      sanitizedPayloads.push(sanitizeHeartbeatPayload(payload, params.conversationContext));
     }
   } else {
     for (const payload of params.payloads) {
@@ -210,7 +217,9 @@ export async function buildReplyPayloads(params: {
       }
 
       if (!text || !text.includes("HEARTBEAT_OK")) {
-        sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text));
+        sanitizedPayloads.push(
+          copyPayloadWithSanitizedText(payload, text, params.conversationContext),
+        );
         continue;
       }
       const stripped = stripHeartbeatToken(text, { mode: "message" });
@@ -222,7 +231,9 @@ export async function buildReplyPayloads(params: {
       if (stripped.shouldSkip && !hasMedia) {
         continue;
       }
-      sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, stripped.text));
+      sanitizedPayloads.push(
+        copyPayloadWithSanitizedText(payload, stripped.text, params.conversationContext),
+      );
     }
   }
 

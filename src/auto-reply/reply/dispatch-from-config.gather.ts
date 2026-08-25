@@ -49,6 +49,7 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
 import { hasInboundAudio } from "./inbound-media.js";
+import { bindReplyDispatcherConversationContext } from "./reply-dispatcher.js";
 import {
   resolveReplyOperationRunState,
   type ReplyOperationRunState,
@@ -94,6 +95,7 @@ export async function gatherDispatchRequest(
     turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,
   };
   const { cfg, dispatcher } = normalizedParams;
+  bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {

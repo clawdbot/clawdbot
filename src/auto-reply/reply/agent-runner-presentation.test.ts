@@ -49,10 +49,13 @@ function normalizeStreamingTextReference(
   return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
 }
 
-function createPresentation(options: { isHeartbeat?: boolean; silentExpected?: boolean } = {}) {
+function createPresentation(
+  options: { isHeartbeat?: boolean; silentExpected?: boolean; conversationContext?: string } = {},
+) {
   const turn = {
     followupRun: { run: { silentExpected: options.silentExpected === true } },
     isHeartbeat: options.isHeartbeat === true,
+    sessionCtx: { agentText: options.conversationContext },
     opts: undefined,
   } as unknown as AgentTurnParams;
   return createAgentTurnPresentation({
@@ -77,6 +80,91 @@ function cumulativePrefixes(text: string, seed: number): string[] {
 }
 
 describe("agent runner streaming presentation", () => {
+  it("redacts copied inbound prompts before streamed XML cleanup", () => {
+    const conversationContext = [
+      "[Chat messages since your last reply - for context]",
+      "Alice: private history",
+      "",
+      "[Current message - respond to this]",
+      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
+      "private inbound paragraph",
+    ].join("\n");
+    const presentation = createPresentation({ conversationContext });
+
+    expect(
+      presentation.normalizeStreamingText({
+        text: `${conversationContext}\n\nVisible streamed answer.`,
+      }),
+    ).toEqual({ text: "Visible streamed answer.", skip: false });
+  });
+
+  it("withholds cumulative copied-prompt prefixes before any private stream text is visible", () => {
+    const conversationContext = [
+      "[Chat messages since your last reply - for context]",
+      "Alice: private history",
+      "",
+      "[Current message - respond to this]",
+      "private inbound paragraph",
+    ].join("\n");
+    const presentation = createPresentation({ conversationContext });
+
+    for (const length of [1, 9, 50, 74, conversationContext.length - 1]) {
+      expect(
+        presentation.normalizeStreamingText({ text: conversationContext.slice(0, length) }),
+      ).toEqual({
+        skip: true,
+      });
+    }
+
+    expect(
+      presentation.normalizeStreamingText({
+        text: `${conversationContext}\n\nVisible streamed answer.`,
+      }),
+    ).toEqual({ text: "Visible streamed answer.", skip: false });
+  });
+
+  it("withholds a trailing copied-prompt prefix without hiding safe preceding streamed text", () => {
+    const conversationContext = [
+      "[Current message - respond to this]",
+      "private inbound paragraph",
+    ].join("\n");
+    const presentation = createPresentation({ conversationContext });
+
+    expect(
+      presentation.normalizeStreamingText({
+        text: `Safe introductory answer.\n${conversationContext.slice(0, 12)}`,
+      }),
+    ).toEqual({ text: "Safe introductory answer.\n", skip: false });
+
+    expect(
+      presentation.normalizeStreamingText({
+        text: `Safe introductory answer: ${conversationContext.slice(0, 12)}`,
+      }),
+    ).toEqual({ text: "Safe introductory answer: ", skip: false });
+
+    expect(
+      presentation.normalizeStreamingText({
+        text: `\`\`\`text\n${conversationContext.slice(0, 12)}`,
+      }),
+    ).toEqual({ text: "```text\n", skip: false });
+  });
+
+  it("keeps long newline-heavy answers visible without copying every remaining line suffix", () => {
+    const conversationContext = [
+      "[Current message - respond to this]",
+      "private inbound paragraph",
+    ].join("\n");
+    const visibleAnswer = Array.from({ length: 2_000 }, (_, index) => `Visible line ${index}`).join(
+      "\n",
+    );
+    const presentation = createPresentation({ conversationContext });
+
+    expect(presentation.normalizeStreamingText({ text: visibleAnswer })).toEqual({
+      text: visibleAnswer,
+      skip: false,
+    });
+  });
+
   it("keeps split classification and sanitization equivalent to the eager path", () => {
     const presentation = createPresentation();
     const randomSequences = Array.from({ length: 16 }, (_, index) =>
