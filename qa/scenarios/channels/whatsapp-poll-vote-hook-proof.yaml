@@ -1,0 +1,19 @@
+title: WhatsApp Gateway poll vote emits a redacted plugin hook proof
+scenario:
+  id: whatsapp-poll-vote-hook-proof
+  surface: channels
+  coverage:
+    primary:
+      - channels.provider-specific-channeldata
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 300000
+    retryCount: 1
+    suiteIsolation: isolated
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaPollVoteHookProofScenario }

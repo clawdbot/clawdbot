@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
   classifyAttachedCiRun,
+  filterIgnoredRollupChecks,
   classifyRollup,
   classifyRunAttachment,
   collectRollupContexts,
@@ -23,6 +24,7 @@ describe("watch-pr-ci", () => {
       timeout: 3600,
       interval: 120,
       completion: "rollup",
+      ignoreChecks: [],
     });
     expect(
       parseArgs([
@@ -40,6 +42,8 @@ describe("watch-pr-ci", () => {
         "5",
         "--completion",
         "ci-run",
+        "--ignore-check",
+        "clownfish/exact-merge",
       ]),
     ).toMatchObject({
       repo: "fork/project",
@@ -48,6 +52,7 @@ describe("watch-pr-ci", () => {
       timeout: 90,
       interval: 5,
       completion: "ci-run",
+      ignoreChecks: ["clownfish/exact-merge"],
     });
     expect(parseArgs(["1", sha.toUpperCase()]).headSha).toBe(sha);
   });
@@ -117,6 +122,50 @@ describe("watch-pr-ci", () => {
         },
       }).failingNames,
     ).toEqual(["deploy?prod", "unit?owned?"]);
+  });
+
+  it("allows the named exact-merge check without hiding unknown contexts", () => {
+    const ignored = filterIgnoredRollupChecks(
+      {
+        statusCheckRollup: {
+          state: "FAILURE",
+          contexts: {
+            totalCount: 1,
+            nodes: [
+              {
+                kind: "CheckRun",
+                name: "clownfish/exact-merge",
+                status: "COMPLETED",
+                conclusion: "FAILURE",
+              },
+            ],
+          },
+        },
+      },
+      ["clownfish/exact-merge"],
+    );
+    expect(classifyRollup(ignored.statusCheckRollup).verdict).toBe("GREEN");
+
+    const incomplete = filterIgnoredRollupChecks(
+      {
+        statusCheckRollup: {
+          state: "FAILURE",
+          contexts: {
+            totalCount: 2,
+            nodes: [
+              {
+                kind: "CheckRun",
+                name: "clownfish/exact-merge",
+                status: "COMPLETED",
+                conclusion: "FAILURE",
+              },
+            ],
+          },
+        },
+      },
+      ["clownfish/exact-merge"],
+    );
+    expect(classifyRollup(incomplete.statusCheckRollup).verdict).toBe("FAILING");
   });
 
   it("polls once more after the deadline-clamped final wait", async () => {

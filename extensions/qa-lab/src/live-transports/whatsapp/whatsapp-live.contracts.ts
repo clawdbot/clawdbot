@@ -58,6 +58,8 @@ export type WhatsAppQaMessageScenarioContext = {
   gateway: WhatsAppQaGatewayRuntime;
   gatewayTarget: string;
   gatewayWorkspaceDir: string;
+  proofOutputDir?: string;
+  repoRoot?: string;
   recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
   requestStartedAt: Date;
   scenarioId: string;
@@ -174,6 +176,9 @@ export type WhatsAppQaConfigOverrides = {
   groupHistoryLimit?: number;
   groupPolicy?: "allowlist" | "disabled" | "open";
   inboundDebounceMs?: number;
+  pollVoteHookProof?: {
+    fixturePath: string;
+  };
   replyToMode?: "all" | "batched" | "first" | "off";
   statusReactions?: boolean;
 };

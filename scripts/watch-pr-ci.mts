@@ -6,7 +6,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhJson, workflowRunsApiArgs } from "./lib/plain-gh.mjs";
 
 const USAGE =
-  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
+  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run] [--ignore-check name]";
 
 const optional = <T,>(schema: z.ZodType<T>) => schema.optional().catch(undefined);
 const optionalNullable = <T,>(schema: z.ZodType<T>) => optional(schema.nullable());
@@ -128,6 +128,7 @@ export function parseArgs(argv: string[]) {
         timeout: { type: "string", default: "3600" },
         interval: { type: "string", default: "120" },
         completion: { type: "string", default: "rollup" },
+        "ignore-check": { type: "string", multiple: true },
       },
     });
   } catch {
@@ -152,6 +153,7 @@ export function parseArgs(argv: string[]) {
     timeout: positiveInteger(parsed.values.timeout, "--timeout"),
     interval: positiveInteger(parsed.values.interval, "--interval"),
     completion,
+    ignoreChecks: (parsed.values["ignore-check"] ?? []).map((name) => name.trim()).filter(Boolean),
   };
   if (!/^[0-9a-f]{40}$/u.test(args.headSha)) {
     throw new Error("head-sha must be a full 40-character commit SHA");
@@ -166,11 +168,44 @@ const checkName = (check: RollupCheck) =>
   check.kind === "StatusContext" ? check.context : check.name;
 export const sanitizeCheckName = (name: string) =>
   name.replaceAll(ANSI_ESCAPE_SEQUENCE, "\u0000").replaceAll(UNSAFE_CHECK_NAME_RUN, "?");
+const normalizedCheckName = (name: string) => name.trim().toLowerCase();
 const isAutoResponse = (check: RollupCheck) =>
   checkName(check)
     ?.toLowerCase()
     .replaceAll(/[^a-z0-9]+/gu, " ")
     .trim() === "auto response";
+
+export function filterIgnoredRollupChecks(
+  rollup: RollupPage,
+  ignoredChecks: readonly string[],
+): RollupPage {
+  const ignoredNames = new Set(ignoredChecks.map(normalizedCheckName));
+  const contexts = rollup.statusCheckRollup?.contexts;
+  if (ignoredNames.size === 0 || !contexts) {
+    return rollup;
+  }
+  const nodes = contexts.nodes ?? [];
+  const retainedNodes = nodes.filter((check) => {
+    const name = checkName(check);
+    return !name || !ignoredNames.has(normalizedCheckName(name));
+  });
+  if (retainedNodes.length === nodes.length) {
+    return rollup;
+  }
+  // Do not pretend unseen contexts were ignored. The count shrinks only when
+  // every context was visible, keeping an incomplete rollup conservatively failing.
+  const totalCount =
+    contexts.totalCount === undefined || contexts.totalCount === nodes.length
+      ? retainedNodes.length
+      : contexts.totalCount;
+  return {
+    ...rollup,
+    statusCheckRollup: {
+      ...rollup.statusCheckRollup,
+      contexts: { ...contexts, nodes: retainedNodes, totalCount },
+    },
+  };
+}
 
 // Run identity for supersession; undefined when any id is missing so ambiguous
 // nodes are never dropped (fails toward FAILING, never toward false GREEN).
@@ -549,7 +584,7 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
-        const pr = readRollup(args.pr, args.repo);
+        const pr = filterIgnoredRollupChecks(readRollup(args.pr, args.repo), args.ignoreChecks);
         const blocked = precheck(pr, args.headSha, true);
         if (blocked !== null) {
           return blocked;

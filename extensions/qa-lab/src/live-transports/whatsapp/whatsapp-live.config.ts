@@ -1,4 +1,5 @@
 // QA Lab WhatsApp credential, config, and channel setup.
+import path from "node:path";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -164,11 +165,20 @@ export function buildWhatsAppQaConfig(
     dmPolicy: "allowlist" | "disabled" | "open" | "pairing";
     groupJid?: string;
     ownerAllowFrom: string[];
+    proofOutputDir?: string;
     overrides?: WhatsAppQaConfigOverrides;
     sutAccountId: string;
   },
 ): OpenClawConfig {
-  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "whatsapp"]);
+  const pollVoteHookProof = params.overrides?.pollVoteHookProof;
+  if (pollVoteHookProof && !params.proofOutputDir) {
+    throw new Error("WhatsApp poll-vote proof requires an output directory.");
+  }
+  const pluginAllow = uniqueStrings([
+    ...(baseCfg.plugins?.allow ?? []),
+    "whatsapp",
+    ...(pollVoteHookProof ? ["qa-whatsapp-poll-vote-proof"] : []),
+  ]);
   const approvalOverrides = params.overrides?.approvals;
   const groupPolicy = params.overrides?.groupPolicy ?? "open";
   const groupAllowFrom = params.overrides?.blockGroupSender
@@ -294,9 +304,30 @@ export function buildWhatsAppQaConfig(
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
+      ...(pollVoteHookProof
+        ? {
+            load: {
+              ...baseCfg.plugins?.load,
+              paths: uniqueStrings([
+                ...(baseCfg.plugins?.load?.paths ?? []),
+                pollVoteHookProof.fixturePath,
+              ]),
+            },
+          }
+        : {}),
       entries: {
         ...baseCfg.plugins?.entries,
         whatsapp: { enabled: true },
+        ...(pollVoteHookProof
+          ? {
+              "qa-whatsapp-poll-vote-proof": {
+                enabled: true,
+                config: {
+                  outputPath: path.join(params.proofOutputDir!, "hook-events.jsonl"),
+                },
+              },
+            }
+          : {}),
       },
     },
     messages: messagesConfig,
@@ -306,6 +337,14 @@ export function buildWhatsAppQaConfig(
         ...baseWhatsAppConfig,
         enabled: true,
         defaultAccount: params.sutAccountId,
+        ...(pollVoteHookProof
+          ? {
+              pluginHooks: {
+                ...baseWhatsAppConfig?.pluginHooks,
+                pollVoteReceived: true,
+              },
+            }
+          : {}),
         ...whatsappHistoryLimit,
         ...(statusReactionsEnabled
           ? {
