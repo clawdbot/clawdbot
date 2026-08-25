@@ -340,7 +340,6 @@ export function startHeartbeatRunner(opts: {
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
-    let ran = false;
 
     // Run each agent's wake concurrently. Heartbeat work is per-agent —
     // separate session stores, lanes, and delivery targets — so awaiting
@@ -548,15 +547,9 @@ export function startHeartbeatRunner(opts: {
         runOneAgent(agent, authoritativeScheduledTick),
       ),
     );
-    let firstRetryableSkip: HeartbeatRunResult | undefined;
-    for (const outcome of agentOutcomes) {
-      if (outcome.ran) {
-        ran = true;
-      }
-      if (outcome.retryableSkip && !firstRetryableSkip) {
-        firstRetryableSkip = outcome.retryableSkip;
-      }
-    }
+    const firstRetryableSkip = agentOutcomes.find(
+      (outcome) => outcome.retryableSkip,
+    )?.retryableSkip;
     if (firstRetryableSkip) {
       // At least one agent's runtime was busy. The wake layer schedules a
       // retry; on retry, agents that already advanced their schedule will
@@ -564,7 +557,13 @@ export function startHeartbeatRunner(opts: {
       return firstRetryableSkip;
     }
 
-    if (ran) {
+    const firstFailure = agentOutcomes.find(
+      (outcome) => outcome.result?.status === "failed",
+    )?.result;
+    if (firstFailure) {
+      return firstFailure;
+    }
+    if (agentOutcomes.some((outcome) => outcome.ran)) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
     return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
