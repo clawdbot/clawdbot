@@ -35,7 +35,7 @@ import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { loadDocumentFramePreview } from "./chat-message-document-preview.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import "./session-diff-panel.ts";
 
@@ -44,8 +44,9 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
   onRequestUpdate: () => void,
+  runtime: AttachmentSidebarRuntime,
 ) {
-  const liveSource = content.resolveSource?.(onRequestUpdate);
+  const liveSource = content.resolveSource?.(onRequestUpdate, runtime);
   const source = content.resolveSource ? liveSource : content;
   const src = safeAttachmentHref(source?.src ?? "");
   const authToken = content.resolveSource
@@ -186,6 +187,7 @@ type MarkdownSidebarProps = {
   allowExternalEmbedUrls?: boolean;
   embedded?: boolean;
   onAttachmentUpdate: () => void;
+  attachmentRuntime: AttachmentSidebarRuntime;
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
@@ -335,7 +337,11 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       `
                     : content.kind === "attachment"
                       ? html`<div class="sidebar-attachment-preview">
-                          ${renderSidebarAttachment(content, props.onAttachmentUpdate)}
+                          ${renderSidebarAttachment(
+                            content,
+                            props.onAttachmentUpdate,
+                            props.attachmentRuntime,
+                          )}
                         </div>`
                       : html`
                           <section class="sidebar-markdown-shell">

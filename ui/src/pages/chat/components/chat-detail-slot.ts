@@ -57,6 +57,12 @@ export function renderChatDetailSlot(params: {
       class="chat-sidebar"
       .content=${content}
       .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
+      .attachmentRuntime=${{
+        authToken: params.chat.assistantAttachmentAuthToken,
+        localMediaPreviewRoots: params.chat.localMediaPreviewRoots ?? [],
+        resourceBasePath: params.chat.resourceBasePath,
+        resolveArtifactDownload: params.chat.resolveArtifactDownload,
+      }}
       .basePath=${params.chat.basePath ?? ""}
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}

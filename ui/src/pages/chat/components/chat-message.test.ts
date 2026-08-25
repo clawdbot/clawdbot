@@ -5100,9 +5100,14 @@ describe("grouped chat rendering", () => {
 
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
+      attachmentRuntime: unknown;
       updateComplete: Promise<unknown>;
     };
     panel.content = sidebarContent;
+    panel.attachmentRuntime = {
+      localMediaPreviewRoots: [],
+      resolveArtifactDownload,
+    };
     document.body.append(panel);
     await panel.updateComplete;
     expect(panel.querySelector("video")?.getAttribute("src")).toBe(firstTicket);

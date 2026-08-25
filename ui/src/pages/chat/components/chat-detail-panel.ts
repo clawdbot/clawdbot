@@ -12,7 +12,7 @@ import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   buildRawContent,
   handleSidebarClick,
@@ -34,6 +34,9 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
   @property({ attribute: false }) execNode: string | null = null;
+  @property({ attribute: false }) attachmentRuntime: AttachmentSidebarRuntime = {
+    localMediaPreviewRoots: [],
+  };
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -643,6 +646,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       onClick: this.handlePanelClick,
       onKeydown: this.handlePanelKeyDown,
       onAttachmentUpdate: this.requestAttachmentUpdate,
+      attachmentRuntime: this.attachmentRuntime,
     });
   }
 }

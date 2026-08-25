@@ -435,12 +435,12 @@ export function renderAssistantAttachments(
             voiceNote: attachment.isVoiceNote === true,
             ...(hasLiveSidebarSource
               ? {
-                  resolveSource: (sidebarUpdate: () => void) => {
+                  resolveSource: (sidebarUpdate, runtime) => {
                     const nextAssistantAvailability = resolveAssistantAttachmentAvailability(
                       attachment.url,
-                      localMediaPreviewRoots,
-                      resourceBasePath,
-                      authToken,
+                      runtime.localMediaPreviewRoots,
+                      runtime.resourceBasePath,
+                      runtime.authToken,
                       sidebarUpdate,
                     );
                     if (nextAssistantAvailability.status !== "available") {
@@ -448,7 +448,7 @@ export function renderAssistantAttachments(
                     }
                     const nextManagedAvailability = resolveManagedAttachmentAvailability(
                       attachment,
-                      resolveArtifactDownload,
+                      runtime.resolveArtifactDownload,
                       sidebarUpdate,
                     );
                     if (nextManagedAvailability.status !== "available") {
@@ -458,14 +458,14 @@ export function renderAssistantAttachments(
                       src: isLocalAssistantAttachmentSource(attachment.url)
                         ? buildAssistantAttachmentUrl(
                             attachment.url,
-                            resourceBasePath,
+                            runtime.resourceBasePath,
                             nextAssistantAvailability.mediaTicket,
                           )
                         : nextManagedAvailability.url,
                       playback:
                         nextAssistantAvailability.playback ?? attachment.playback ?? "native",
                       authToken: isLocalAssistantAttachmentSource(attachment.url)
-                        ? (authToken ?? null)
+                        ? (runtime.authToken ?? null)
                         : null,
                       sizeBytes: nextAssistantAvailability.sizeBytes ?? attachment.sizeBytes,
                       durationMs: nextAssistantAvailability.durationMs ?? attachment.durationMs,

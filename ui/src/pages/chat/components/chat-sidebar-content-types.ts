@@ -1,4 +1,5 @@
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
@@ -51,6 +52,13 @@ export type AttachmentSidebarSource = {
   durationMs?: number;
 };
 
+export type AttachmentSidebarRuntime = {
+  authToken?: string | null;
+  localMediaPreviewRoots: readonly string[];
+  resourceBasePath?: string;
+  resolveArtifactDownload?: ArtifactDownloadResolver;
+};
+
 type AttachmentSidebarContent = {
   kind: "attachment";
   attachmentKind?: "audio" | "video" | "document" | "image";
@@ -64,7 +72,10 @@ type AttachmentSidebarContent = {
   sizeBytes?: number;
   durationMs?: number;
   voiceNote?: boolean;
-  resolveSource?: (onRequestUpdate: () => void) => AttachmentSidebarSource | null;
+  resolveSource?: (
+    onRequestUpdate: () => void,
+    runtime: AttachmentSidebarRuntime,
+  ) => AttachmentSidebarSource | null;
   rawText?: string | null;
 };
 
