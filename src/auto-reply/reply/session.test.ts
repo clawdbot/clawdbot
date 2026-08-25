@@ -1496,6 +1496,7 @@ describe("initSessionState RawBody", () => {
           ).toEqual([
             {
               actor: { type: "human", id: "profile-ada" },
+              contributionCount: 1,
               firstPromptedAt: expect.any(Number),
               lastPromptedAt: expect.any(Number),
               source: "profile",
@@ -1568,6 +1569,7 @@ describe("initSessionState RawBody", () => {
       expect(participants.get("agent:main:channel-participant")).toEqual([
         {
           actor: { type: "human", id: "channel-sender" },
+          contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
           source: "channel",
@@ -1577,6 +1579,7 @@ describe("initSessionState RawBody", () => {
       expect(participants.get("agent:main:channel-created-participant")).toEqual([
         {
           actor: { type: "human", id: "channel-created-sender" },
+          contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
           source: "channel",
@@ -1586,6 +1589,7 @@ describe("initSessionState RawBody", () => {
       expect(participants.get("agent:main:delegated-agent-participant")).toEqual([
         {
           actor: { type: "agent", id: "research" },
+          contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
           source: "agent",

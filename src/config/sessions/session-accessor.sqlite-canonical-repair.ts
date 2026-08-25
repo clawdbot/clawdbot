@@ -489,6 +489,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     params.destination,
     params.preferredSessionKey ? [params.preferredSessionKey] : sourceKeys,
     params.canonicalKey,
+    { includeParticipants: false },
   );
 }
 

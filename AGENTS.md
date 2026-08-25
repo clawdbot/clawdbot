@@ -205,6 +205,7 @@ Review invariants; full doctrine: `docs/gateway/audit.md`.
 
 ## GitHub / PRs
 
+- Team-session commits and PRs visibly credit only consented, verified profile-backed humans in authoritative contribution order; preserve exact co-author trailers and end PRs with the canonical team-session backlink when available.
 - Fresh GitHub items: read `CONTRIBUTING.md`, the issue chooser/form, PR template, and `.github/CODEOWNERS`; blank issues are disabled; preserve templates and evidence requirements.
 - Issue first for bugs, user-facing features, architecture/product decisions, or work needing durable discussion. Bounded maintainer-requested refactor may go direct; agent decides whether an issue adds value. PRs use the template, link context, and keep durable problem/impact/evidence sections.
 - Route support to Discord and security through `SECURITY.md`. Use listed maintainer areas/`CODEOWNERS`; never guess mentions.
