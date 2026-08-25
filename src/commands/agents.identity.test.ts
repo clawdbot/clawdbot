@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ExpectedCliError } from "../cli/failure-output.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
@@ -506,14 +506,14 @@ describe("agents set-identity command", () => {
       config: { agents: { entries: { worker: { workspace: storedWorkspace } } } },
     });
 
-    const { runtime, logs } = createCapturingTestRuntime();
+    const { runtime: capturingRuntime, logs } = createCapturingTestRuntime();
     await agentsSetIdentityCommand(
       {
         agent: "worker",
         workspace: identitySource,
         name: "Worker",
       },
-      runtime,
+      capturingRuntime,
     );
 
     expect(logs).toContain(

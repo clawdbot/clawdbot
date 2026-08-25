@@ -10,8 +10,8 @@ import {
 } from "../agents/agent-scope.js";
 import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
