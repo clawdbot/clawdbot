@@ -7130,20 +7130,21 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
-    "attachment" -> {
-      val attachment = obj["attachment"].asObjectOrNull() ?: return null
+    "attachment", "file" -> {
+      val attachment = obj["attachment"].asObjectOrNull() ?: obj
       val mimeType = attachment["mimeType"].asStringOrNull()
       val type =
         when {
           attachment["kind"].asStringOrNull() == "audio" || mimeType?.startsWith("audio/") == true -> "audio"
           attachment["kind"].asStringOrNull() == "video" || mimeType?.startsWith("video/") == true -> "video"
+          attachment["kind"].asStringOrNull() == "document" || !attachment.containsKey("kind") -> "file"
           else -> return null
         }
       val url = attachment["url"].asStringOrNull()
       ChatMessageContent(
         type = type,
         mimeType = mimeType,
-        fileName = attachment["fileName"].asStringOrNull() ?: attachment["label"].asStringOrNull(),
+        fileName = attachment["fileName"].asStringOrNull() ?: (attachment["label"] ?: attachment["name"]).asStringOrNull(),
         artifactId = attachment["artifactId"].asStringOrNull() ?: managedMediaArtifactId(url),
         url = url,
         openUrl = attachment["openUrl"].asStringOrNull(),
