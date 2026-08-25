@@ -4,6 +4,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { bindAgentRunContextTaskRunId } from "../../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -322,6 +323,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       });
       this.options.persist(...changedRunIds);
     }
+    bindAgentRunContextTaskRunId(nextRunId, next.execution.lifecycleGeneration, next.taskRunId);
     if (previousRunId !== nextRunId) {
       this.options.clearPendingLifecycleError(previousRunId);
       this.options.resumedRuns.delete(previousRunId);

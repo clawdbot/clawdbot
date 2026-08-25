@@ -62,6 +62,8 @@ export type AgentEventPayload = {
   data: Record<string, unknown>;
   /** Internal, non-enumerable gateway lifecycle generation that owns this run. */
   lifecycleGeneration?: string;
+  /** Internal, non-enumerable detached task owner for this operational run. */
+  taskRunId?: string;
   sessionKey?: string;
   /**
    * sessionId the run was bound to when it started. Lifecycle persistence uses
@@ -270,6 +272,7 @@ function enrichAgentEvent(
     event.stream === "lifecycle"
       ? (ownedLifecycleGeneration ?? currentLifecycleGeneration)
       : ownedLifecycleGeneration;
+  const taskRunId = event.stream === "lifecycle" ? context?.taskRunId : undefined;
   const agentId = event.agentId ?? context?.agentId;
   const enriched: AgentEventRuntimePayload = {
     ...event,
@@ -287,6 +290,14 @@ function enrichAgentEvent(
       value: lifecycleGeneration,
       enumerable: false,
     });
+  }
+  if (taskRunId) {
+    Object.defineProperty(enriched, "taskRunId", {
+      value: taskRunId,
+      enumerable: false,
+    });
+  } else {
+    delete enriched.taskRunId;
   }
   if (context?.isControlUiVisible !== undefined) {
     Object.defineProperty(enriched, "controlUiVisible", {

@@ -4,6 +4,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { bindAgentRunContextTaskRunId } from "../../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -270,6 +271,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         }
       }
     }
+    bindAgentRunContextTaskRunId(runId, entry.execution.lifecycleGeneration, entry.taskRunId);
     // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.
     activateRegistrationLifecycle();
   };
@@ -399,6 +401,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       throw error;
     }
     bindGatewayContextResolver(entry, gatewayContextResolver);
+    bindAgentRunContextTaskRunId(nextRunId, entry.execution.lifecycleGeneration, entry.taskRunId);
     const cfg = this.options.getRuntimeConfig();
     void this.waitForSubagentCompletion(
       nextRunId,

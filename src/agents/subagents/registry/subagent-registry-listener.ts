@@ -17,7 +17,10 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   persist: (...runIds: string[]) => void;
-  refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
+  refreshFrozenResultForTask: (
+    taskRunId: string,
+    terminalReply?: SubagentCompletionRequest["terminalReply"],
+  ) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
     source: string,
@@ -29,7 +32,7 @@ export function createSubagentRegistryListener(config: {
     pendingLifecycle,
     onAgentEvent,
     persist,
-    refreshFrozenResultFromSession,
+    refreshFrozenResultForTask,
     completeSubagentRunWithRecovery,
     warn,
   } = config;
@@ -49,12 +52,14 @@ export function createSubagentRegistryListener(config: {
         const phase = evt.data?.phase;
         const entry = runs.get(evt.runId);
         if (!entry) {
-          if (phase === "end" && typeof evt.sessionKey === "string") {
-            const sessionKey = evt.sessionKey;
+          if (phase === "end" && typeof evt.taskRunId === "string") {
+            const taskRunId = evt.taskRunId;
+            const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
             // A replacement generation can finish after its predecessor row is
-            // terminal. Keep capture + persistence inside the suspension fence.
+            // terminal. Exact task ownership prevents a later same-session task
+            // from rewriting the predecessor's pending completion.
             await runWithGatewayIndependentRootWorkAdmission(async () => {
-              await refreshFrozenResultFromSession(sessionKey);
+              await refreshFrozenResultForTask(taskRunId, terminalReply);
             });
           }
           return;

@@ -160,7 +160,7 @@ const {
   completeCleanupBookkeeping,
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
-  refreshFrozenResultFromSession,
+  refreshFrozenResultForTask,
   resumeRequesterSettleWake,
   settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
@@ -421,7 +421,7 @@ const subagentListener = createSubagentRegistryListener({
   pendingLifecycle,
   onAgentEvent: (listener) => subagentRegistryDeps.onAgentEvent(listener),
   persist: persistSubagentRuns,
-  refreshFrozenResultFromSession,
+  refreshFrozenResultForTask,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   warn: (message, meta) => log.warn(message, meta),
 });

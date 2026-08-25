@@ -78,6 +78,26 @@ describe("agent-events sequencing", () => {
     expect(getAgentRunContext("run-1")).toBeUndefined();
   });
 
+  test("stamps lifecycle task ownership without serializing it", () => {
+    registerAgentRunContext("run-task-owner", {
+      sessionKey: "agent:main:subagent:worker",
+      taskRunId: "detached-owner-secret",
+    });
+    const events: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((event) => events.push(event));
+
+    emitAgentEvent({
+      runId: "run-task-owner",
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 1_000 },
+    });
+    unsubscribe();
+
+    expect(events[0]?.taskRunId).toBe("detached-owner-secret");
+    expect(Object.keys(events[0] ?? {})).not.toContain("taskRunId");
+    expect(JSON.stringify(events[0])).not.toContain("detached-owner-secret");
+  });
+
   test("versions active-run projection ownership transitions", () => {
     let version = readAgentRunIndexVersion();
     registerAgentRunContext("projected-run", {

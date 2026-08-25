@@ -30,6 +30,7 @@ type LifecycleData = {
 type LifecycleEvent = {
   stream?: string;
   runId: string;
+  taskRunId?: string;
   sessionKey?: string;
   data?: LifecycleData;
 };
@@ -333,14 +334,21 @@ describe("subagent registry lifecycle error grace", () => {
   function emitLifecycleEvent(
     runId: string,
     data: LifecycleData,
-    options?: { sessionKey?: string },
+    options?: { sessionKey?: string; taskRunId?: string },
   ) {
-    lifecycleHandler?.({
+    const event: LifecycleEvent = {
       stream: "lifecycle",
       runId,
       sessionKey: options?.sessionKey,
       data,
-    });
+    };
+    if (options?.taskRunId) {
+      Object.defineProperty(event, "taskRunId", {
+        value: options.taskRunId,
+        enumerable: false,
+      });
+    }
+    lifecycleHandler?.(event);
   }
 
   function readFirstAnnounceOutcome() {
@@ -833,14 +841,21 @@ describe("subagent registry lifecycle error grace", () => {
       .find((candidate) => candidate.runId === "run-refresh");
     const firstCapturedAt = runBeforeRefresh?.completion?.capturedAt ?? 0;
 
-    setAssistantOutput(
-      "agent:main:subagent:refresh",
-      "All 3 subagents complete. Here's the final summary.",
-    );
+    setAssistantOutput("agent:main:subagent:refresh", "stale transcript placeholder");
     emitLifecycleEvent(
       "run-refresh-followup-turn",
-      { phase: "end", endedAt: endedAt + 200 },
-      { sessionKey: "agent:main:subagent:refresh" },
+      {
+        phase: "end",
+        endedAt: endedAt + 200,
+        terminalReply: {
+          disposition: "visible",
+          text: "All 3 subagents complete. Here's the final summary.",
+        },
+      },
+      {
+        sessionKey: "agent:main:subagent:refresh",
+        taskRunId: "run-refresh",
+      },
     );
     const runAfterRefresh = await waitForFrozenResultText(
       "run-refresh",
@@ -850,6 +865,10 @@ describe("subagent registry lifecycle error grace", () => {
       "All 3 subagents complete. Here's the final summary.",
     );
     expect((runAfterRefresh?.completion?.capturedAt ?? 0) >= firstCapturedAt).toBe(true);
+    expect(runAfterRefresh?.delivery?.payload?.terminalReply).toEqual({
+      disposition: "visible",
+      text: "All 3 subagents complete. Here's the final summary.",
+    });
 
     emitLifecycleEvent("run-refresh", {
       phase: "end",
@@ -866,6 +885,56 @@ describe("subagent registry lifecycle error grace", () => {
       "Both spawned. Waiting for completion events...",
       "All 3 subagents complete. Here's the final summary.",
     ]);
+  });
+
+  it("requires exact task ownership before transcript fallback can refresh a completion", async () => {
+    registerCompletionRun("run-owned-refresh", "owned-refresh", "owned refresh test");
+    setAssistantOutput("agent:main:subagent:owned-refresh", "initial result");
+    agentCallPlan = ["throw", "ok"];
+
+    const endedAt = Date.now();
+    emitLifecycleEvent("run-owned-refresh", {
+      phase: "end",
+      endedAt,
+      terminalReply: { disposition: "visible", text: "initial result" },
+    });
+    await waitForCleanupHandledFalse("run-owned-refresh");
+
+    setAssistantOutput("agent:main:subagent:owned-refresh", "new transcript result");
+    emitLifecycleEvent(
+      "run-owned-refresh-followup-missing-owner",
+      { phase: "end", endedAt: endedAt + 100 },
+      { sessionKey: "agent:main:subagent:owned-refresh" },
+    );
+    emitLifecycleEvent(
+      "run-other-task",
+      { phase: "end", endedAt: endedAt + 200 },
+      {
+        sessionKey: "agent:main:subagent:owned-refresh",
+        taskRunId: "run-other-task",
+      },
+    );
+    await flushAsync();
+
+    const beforeOwnedRefresh = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-owned-refresh");
+    expect(beforeOwnedRefresh?.completion?.resultText).toBe("initial result");
+
+    emitLifecycleEvent(
+      "run-owned-refresh-followup",
+      { phase: "end", endedAt: endedAt + 300 },
+      {
+        sessionKey: "agent:main:subagent:owned-refresh",
+        taskRunId: "run-owned-refresh",
+      },
+    );
+    const afterOwnedRefresh = await waitForFrozenResultText(
+      "run-owned-refresh",
+      "new transcript result",
+    );
+    expect(afterOwnedRefresh?.completion?.terminalReply).toBeUndefined();
+    expect(afterOwnedRefresh?.delivery?.payload?.terminalReply).toBeUndefined();
   });
 
   it("ignores silent follow-up turns when refreshing frozen completion output", async () => {
@@ -889,8 +958,15 @@ describe("subagent registry lifecycle error grace", () => {
     setAssistantOutput("agent:main:subagent:refresh-silent", "NO_REPLY");
     emitLifecycleEvent(
       "run-refresh-silent-followup-turn",
-      { phase: "end", endedAt: endedAt + 200 },
-      { sessionKey: "agent:main:subagent:refresh-silent" },
+      {
+        phase: "end",
+        endedAt: endedAt + 200,
+        terminalReply: { disposition: "silent" },
+      },
+      {
+        sessionKey: "agent:main:subagent:refresh-silent",
+        taskRunId: "run-refresh-silent",
+      },
     );
     await flushAsync();
 

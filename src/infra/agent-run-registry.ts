@@ -8,6 +8,8 @@ import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 type AgentRunContext = {
   sessionKey?: string;
+  /** Detached task owner for lifecycle events emitted by this operational run. */
+  taskRunId?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
   /** Owning run's sessionId; stamped onto lifecycle events. */
@@ -305,6 +307,24 @@ export function claimAgentRunContext(
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string): AgentRunContext | undefined {
   return getAgentRunRegistryState().contexts.get(runId);
+}
+
+export function bindAgentRunContextTaskRunId(
+  runId: string,
+  lifecycleGeneration: string | undefined,
+  taskRunId: string | undefined,
+): boolean {
+  const context = getAgentRunRegistryState().contexts.get(runId);
+  if (
+    !context ||
+    !lifecycleGeneration ||
+    context.lifecycleGeneration !== lifecycleGeneration ||
+    lifecycleGeneration !== getAgentRunLifecycleGeneration()
+  ) {
+    return false;
+  }
+  context.taskRunId = taskRunId?.trim() || undefined;
+  return true;
 }
 
 export function bindAgentRunTaskRunId(runId: string, claimId: string, taskRunId: string): boolean {

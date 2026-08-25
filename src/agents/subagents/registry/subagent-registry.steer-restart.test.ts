@@ -10,6 +10,9 @@ import { setDetachedTaskLifecycleRuntime } from "../../../tasks/task-runtime.tes
 import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 
 const noop = () => {};
+const agentRunRegistryMocks = vi.hoisted(() => ({
+  bindAgentRunContextTaskRunId: vi.fn(() => true),
+}));
 let lifecycleHandler:
   | ((evt: {
       stream?: string;
@@ -62,6 +65,11 @@ vi.mock("../../../infra/agent-events.js", () => ({
     lifecycleHandler = handler;
     return noop;
   }),
+}));
+
+vi.mock("../../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/agent-run-registry.js")>()),
+  bindAgentRunContextTaskRunId: agentRunRegistryMocks.bindAgentRunContextTaskRunId,
 }));
 
 vi.mock("../../../config/config.js", () => ({
@@ -201,6 +209,7 @@ describe("subagent registry steer restarts", () => {
     });
     announceSpy.mockReset();
     announceSpy.mockResolvedValue("delivered");
+    agentRunRegistryMocks.bindAgentRunContextTaskRunId.mockClear();
     runSubagentEndedHookMock.mockReset();
     runSubagentEndedHookMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
@@ -624,6 +633,11 @@ describe("subagent registry steer restarts", () => {
     expect(run.task).toBe("new steer instruction from user");
     expect(run.taskRunId).toBe("run-steer-task-old");
     expect(run.generation).toBe(2);
+    expect(agentRunRegistryMocks.bindAgentRunContextTaskRunId).toHaveBeenCalledWith(
+      "run-steer-task-new",
+      "test-generation",
+      "run-steer-task-old",
+    );
   });
 
   it("advances the generation from a fallback outside the live registry", () => {
@@ -704,6 +718,11 @@ describe("subagent registry steer restarts", () => {
     );
     expect(second.taskRunId).toBeUndefined();
     expect(second.generation).toBe(3);
+    expect(agentRunRegistryMocks.bindAgentRunContextTaskRunId).toHaveBeenCalledWith(
+      "run-legacy-owner-next",
+      "test-generation",
+      undefined,
+    );
   });
 
   it("preserves cumulative session timing across steer replacement runs", () => {

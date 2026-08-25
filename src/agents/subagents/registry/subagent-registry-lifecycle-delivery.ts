@@ -17,6 +17,7 @@ import {
 } from "../../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
 import type { TaskDeliveryStatus } from "../../../tasks/task-registry.types.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -38,7 +39,6 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
@@ -393,17 +393,17 @@ export const freezeRunResultAtCompletion = async (
   return true;
 };
 
-const listPendingCompletionRunsForSession = (
+const listPendingCompletionRunsForTask = (
   params: SubagentLifecycleOptions,
-  sessionKey: string,
+  taskRunId: string,
 ): SubagentRunRecord[] => {
-  const key = sessionKey.trim();
+  const key = taskRunId.trim();
   if (!key) {
     return [];
   }
   const out: SubagentRunRecord[] = [];
   for (const entry of params.runs.values()) {
-    if (entry.childSessionKey !== key) {
+    if (entry.taskRunId?.trim() !== key) {
       continue;
     }
     if (entry.expectsCompletionMessage !== true) {
@@ -427,47 +427,67 @@ const listPendingCompletionRunsForSession = (
   return out;
 };
 
-export const refreshFrozenResultFromSession = async (
+export const refreshFrozenResultForTask = async (
   context: SubagentLifecycleCommonContext,
-  sessionKey: string,
+  taskRunId: string,
+  terminalReply?: AgentRunTerminalReplySnapshot,
 ): Promise<boolean> => {
   const params = context.options;
-  const candidates = listPendingCompletionRunsForSession(params, sessionKey).filter(
+  const candidates = listPendingCompletionRunsForTask(params, taskRunId).filter(
     (entry) => entry.execution.outcome?.status !== "error",
   );
-  const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
+  if (candidates.length !== 1) {
+    return false;
+  }
+  const entry = candidates[0];
   if (!entry || context.newerGenerationOwnsSession(entry)) {
     return false;
   }
   const generation = entry.generation;
 
-  let captured: string | undefined;
-  try {
-    captured = await params.captureSubagentCompletionReply(sessionKey);
-  } catch {
-    return false;
+  let nextTerminalReply: AgentRunTerminalReplySnapshot | undefined;
+  let nextResultText: string;
+  if (terminalReply) {
+    if (terminalReply.disposition !== "visible") {
+      return false;
+    }
+    nextTerminalReply = terminalReply;
+    nextResultText = capFrozenResultText(terminalReply.text);
+  } else {
+    let captured: string | undefined;
+    try {
+      captured = await params.captureSubagentCompletionReply(entry.childSessionKey);
+    } catch {
+      return false;
+    }
+    const trimmed = captured?.trim();
+    if (!trimmed || isSilentAgentReplyText(trimmed)) {
+      return false;
+    }
+    nextResultText = capFrozenResultText(trimmed);
   }
-  const trimmed = captured?.trim();
-  if (!trimmed || isSilentAgentReplyText(trimmed)) {
-    return false;
-  }
-  // Reply capture yields while registration can transfer session ownership.
-  // Only the exact row and generation that started capture may commit its text.
+  // Transcript capture yields while registration can transfer task ownership.
+  // Only the exact row, task, and generation that started capture may commit.
   if (
     params.runs.get(entry.runId) !== entry ||
+    entry.taskRunId?.trim() !== taskRunId.trim() ||
     entry.generation !== generation ||
     context.newerGenerationOwnsSession(entry)
   ) {
     return false;
   }
 
-  const nextFrozen = capFrozenResultText(trimmed);
   const completion = ensureCompletionState(entry);
-  if (completion.resultText === nextFrozen) {
+  if (
+    completion.resultText === nextResultText &&
+    JSON.stringify(completion.terminalReply) === JSON.stringify(nextTerminalReply)
+  ) {
     return false;
   }
-  completion.resultText = nextFrozen;
+  completion.resultText = nextResultText;
   completion.capturedAt = Date.now();
+  completion.terminalReply = nextTerminalReply;
+  refreshPendingFinalDeliveryPayload(entry);
   params.persist(entry.runId);
   return true;
 };

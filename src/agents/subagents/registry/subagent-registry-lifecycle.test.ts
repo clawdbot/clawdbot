@@ -201,8 +201,10 @@ type RunModeCleanupEntryOverrides = Omit<RunEntryOverrides, "execution"> & {
 
 function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRecord {
   const { startedAt = 2_000, endedAt, outcome, execution, ...recordOverrides } = overrides;
+  const runId = recordOverrides.runId ?? "run-1";
   return {
-    runId: "run-1",
+    runId,
+    taskRunId: recordOverrides.taskRunId ?? runId,
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
@@ -1619,7 +1621,7 @@ describe("subagent registry lifecycle hardening", () => {
     const captureSubagentCompletionReply = vi.fn(async () => "text from the next turn");
     const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
 
-    expect(await controller.refreshFrozenResultFromSession(entry.childSessionKey)).toBe(false);
+    expect(await controller.refreshFrozenResultForTask(entry.taskRunId ?? "")).toBe(false);
 
     // The yield cleared this row's result on purpose. Whatever the session holds
     // now belongs to the turn that runs next, so refreezing it would announce a
@@ -1628,10 +1630,11 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.completion?.resultText).toBeUndefined();
   });
 
-  it("refreshes only the newest pending completion generation for a shared session", async () => {
+  it("does not refresh when multiple pending rows claim the same task owner", async () => {
     const childSessionKey = "agent:main:subagent:shared-refresh";
     const older = createRunEntry({
       runId: "run-shared-refresh-old",
+      taskRunId: "task-shared-refresh",
       childSessionKey,
       generation: 1,
       createdAt: 1_000,
@@ -1646,6 +1649,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const newer = createRunEntry({
       runId: "run-shared-refresh-new",
+      taskRunId: "task-shared-refresh",
       childSessionKey,
       generation: 2,
       createdAt: 2_000,
@@ -1670,15 +1674,11 @@ describe("subagent registry lifecycle hardening", () => {
       captureSubagentCompletionReply: vi.fn(async () => "latest session reply"),
     });
 
-    expect(await controller.refreshFrozenResultFromSession(childSessionKey)).toBe(true);
+    expect(await controller.refreshFrozenResultForTask("task-shared-refresh")).toBe(false);
 
     expect(older).toEqual(olderBefore);
-    expect(newer.completion).toMatchObject({
-      resultText: "latest session reply",
-      capturedAt: expect.any(Number),
-    });
-    expect(persist).toHaveBeenCalledOnce();
-    expect(persist).toHaveBeenCalledWith(newer.runId);
+    expect(newer.completion?.resultText).toBe("newer generation placeholder");
+    expect(persist).not.toHaveBeenCalled();
   });
 
   it("rejects a frozen-result refresh when a newer generation registers during capture", async () => {
@@ -1707,7 +1707,7 @@ describe("subagent registry lifecycle hardening", () => {
       captureSubagentCompletionReply,
     });
 
-    const refresh = controller.refreshFrozenResultFromSession(childSessionKey);
+    const refresh = controller.refreshFrozenResultForTask(entry.taskRunId ?? "");
     await waitForLifecycleState(() =>
       expect(captureSubagentCompletionReply).toHaveBeenCalledOnce(),
     );
