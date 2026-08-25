@@ -1378,6 +1378,44 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(prompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
   });
 
+  it("keeps one created_at across all response lifecycle resources", async () => {
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["hello"],
+          text: "hello",
+        })) as never);
+
+      const response = await postResponses(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(response.status).toBe(200);
+      const createdAt = parseSseEvents(await response.text())
+        .filter((event) =>
+          ["response.created", "response.in_progress", "response.completed"].includes(
+            event.event ?? "",
+          ),
+        )
+        .map(
+          (event) =>
+            (parseSseData(event) as { response?: { created_at?: number } }).response?.created_at,
+        );
+
+      expect(createdAt).toHaveLength(3);
+      expect(createdAt.every((value) => typeof value === "number")).toBe(true);
+      expect(new Set(createdAt)).toEqual(new Set([createdAt[0]]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("streams OpenResponses SSE events", async () => {
     const port = enabledPort;
     try {
