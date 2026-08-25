@@ -201,8 +201,12 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function runEmbeddedAttempt(cfg: OpenClawConfig) {
+  async function runEmbeddedAttempt(
+    cfg: OpenClawConfig,
+    options: { durableSessionStore?: boolean } = {},
+  ) {
     setRuntimeConfigSnapshot(cfg);
+    const durableSessionStore = options.durableSessionStore !== false;
     return await runAgentAttempt({
       preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
       pluginGeneration: undefined,
@@ -231,8 +235,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "anthropic",
-      sessionStore,
-      storePath,
+      ...(durableSessionStore ? { sessionStore, storePath } : {}),
       sessionHasHistory: false,
     });
   }
@@ -355,6 +358,26 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
     expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
     expect(sessionStore[sessionKey]?.continuationChainCount).toBeUndefined();
+  });
+
+  it("does not create durable spawn-init work without a durable session store", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "restart recovery without store", delaySeconds: 30 });
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig(), { durableSessionStore: false });
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+    expect(sessionEntry.continuationChainCount).toBeUndefined();
   });
 
   it("merges a concurrent spawn-init chain advance before scheduling", async () => {

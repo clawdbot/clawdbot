@@ -72,6 +72,12 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
     );
     return;
   }
+  if (!params.storePath) {
+    log.info(
+      `[continuation] Ignoring spawn-init continue_work election(s) without a durable session store for session ${sanitizeForLog(params.sessionKey)}`,
+    );
+    return;
+  }
 
   const tailUsage = params.runResult.meta?.agentMeta?.usage;
   const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
@@ -86,21 +92,12 @@ export async function scheduleSpawnInitContinueWorkWake(params: {
       continuationChainTokens: state.tokens,
       continuationChainId: state.chainId,
     };
-    let updated: SessionEntry | undefined;
-    if (params.storePath) {
-      updated =
-        (await patchSessionEntryCore(
-          { storePath: params.storePath, sessionKey: params.sessionKey },
-          (entry) => (state.update ? state.update(entry, proposed) : proposed),
-          { preserveActivity: true, requireWriteSuccess: true },
-        )) ?? undefined;
-    } else if (activeSessionEntry) {
-      const patch = state.update ? state.update(activeSessionEntry, proposed) : proposed;
-      if (patch) {
-        Object.assign(activeSessionEntry, patch);
-      }
-      updated = activeSessionEntry;
-    }
+    const updated =
+      (await patchSessionEntryCore(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        (entry) => (state.update ? state.update(entry, proposed) : proposed),
+        { preserveActivity: true, requireWriteSuccess: true },
+      )) ?? undefined;
     if (!updated) {
       throw new Error(`session entry was not found: ${params.sessionKey}`);
     }
