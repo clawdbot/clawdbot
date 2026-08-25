@@ -7,12 +7,7 @@ import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env"
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
-import {
-  advanceBuzzRecoveryWatermark,
-  createBuzzRecoveryFrontier,
-  openBuzzRecoveryWatermarkStore,
-  resolveBuzzColdStartSince,
-} from "./recovery-watermark.js";
+import { openBuzzRecoveryWatermarkStore, resolveBuzzColdStartSince } from "./recovery-watermark.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
 import {
@@ -83,25 +78,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const configuredChannelIds = new Set(channelIds);
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });
 
-  const watermarkStore = openBuzzRecoveryWatermarkStore({
-    accountId: account.accountId,
-    onError: (error) => {
-      ctx.log?.warn?.(
-        `[${account.accountId}] Buzz recovery watermark unavailable: ${error.message}`,
-      );
-    },
-  });
-  const reportWatermarkError = (error: Error) => {
-    ctx.log?.warn?.(`[${account.accountId}] Buzz recovery watermark failed: ${error.message}`);
-  };
-  const commitRecoveryCheckpoint = (channelId: string, seconds: number) => {
-    void advanceBuzzRecoveryWatermark({
-      store: watermarkStore,
-      channelId,
-      seconds,
-      onError: reportWatermarkError,
-    });
-  };
+  const watermarkStore = openBuzzRecoveryWatermarkStore({ accountId: account.accountId });
 
   let hasAttemptedSession = false;
   let reconnectAttempt = 0;
@@ -123,15 +100,10 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
             channelIds,
             nowSeconds,
             lookbackSeconds: RECONNECT_LOOKBACK_SECONDS,
-            onError: reportWatermarkError,
           });
       hasAttemptedSession = true;
       const sinceFor = (channelId: string) =>
         coldStartSince ? (coldStartSince.get(channelId) ?? nowSeconds) : reconnectSince;
-      const recoveryFrontier = createBuzzRecoveryFrontier({
-        sinceFor,
-        onCheckpoint: commitRecoveryCheckpoint,
-      });
       bus = await startBuzzBus({
         accountId: account.accountId,
         relayUrl: account.relayUrl,
@@ -140,7 +112,6 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         profileName,
         channelIds,
         since: sinceFor,
-        recoveryFrontier,
         signal: ctx.abortSignal,
         onMessage: async (message, sessionBus, signal) => {
           // Subscription filters reduce traffic, but relay events remain untrusted.

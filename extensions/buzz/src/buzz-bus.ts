@@ -15,7 +15,6 @@ import {
   type BuzzInboundMessage,
 } from "./message-event.js";
 import { syncBuzzProfile } from "./profile.js";
-import type { BuzzRecoveryFrontier } from "./recovery-watermark.js";
 import {
   connectAuthenticatedBuzzRelay,
   connectAuthenticatedBuzzRelaySession,
@@ -223,7 +222,6 @@ export async function startBuzzBus(options: {
   authTag?: string;
   channelIds: string[];
   since?: (channelId: string) => number;
-  recoveryFrontier?: BuzzRecoveryFrontier;
   onMessage: (message: BuzzInboundMessage, bus: BuzzBus, signal: AbortSignal) => Promise<void>;
   onMessageError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
@@ -386,31 +384,13 @@ export async function startBuzzBus(options: {
               }
               // Admit only room members to bounded workers; claim replay dedupe inside
               // each worker so queued history cannot create unbounded in-flight state.
-              const token = options.recoveryFrontier?.admit({
-                channelId: message.channelId,
-                createdAt: event.created_at,
-                observedSeconds: Math.floor(Date.now() / 1000),
-              });
               const admission = (reservation ?? dispatchQueue).enqueue(async () => {
-                try {
-                  await replayGuard.processGuarded(event, async () => {
-                    await options.onMessage(message, bus, signal);
-                  });
-                } catch (error) {
-                  if (token) {
-                    options.recoveryFrontier?.abandon(token);
-                  }
-                  throw error;
-                }
-                if (token) {
-                  options.recoveryFrontier?.settle(token);
-                }
+                await replayGuard.processGuarded(event, async () => {
+                  await options.onMessage(message, bus, signal);
+                });
               });
               if (admission !== "overflow") {
                 return;
-              }
-              if (token) {
-                options.recoveryFrontier?.abandon(token);
               }
               if (reservation) {
                 options.onHistoryError?.(
@@ -449,11 +429,7 @@ export async function startBuzzBus(options: {
         : undefined;
     directory.replaceMemberships(membershipTracker?.memberships() ?? new Map());
     directoryRelay.replaceProfilePublicKeys(directory.profilePublicKeys());
-    void Promise.resolve(membershipTracker?.catchUpHistory()).then((outcome) => {
-      if (!membershipTracker || outcome === "drained") {
-        options.recoveryFrontier?.markBacklogDrained();
-      }
-    });
+    void membershipTracker?.catchUpHistory();
     stopPresenceHeartbeat = startBuzzPresenceHeartbeat({
       relay,
       secretKey,

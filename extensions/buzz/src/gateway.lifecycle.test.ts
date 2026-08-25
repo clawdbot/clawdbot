@@ -20,6 +20,7 @@ const gatewayMocks = vi.hoisted(() => ({
   onRoomDirectoryChanged: undefined as (() => void) | undefined,
   resolveAgentIdentity: vi.fn(),
   resolveAgentRoute: vi.fn(),
+  recoveryLookup: vi.fn(),
   startBuzzBus: vi.fn(),
 }));
 
@@ -140,6 +141,8 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
     gatewayMocks.resolveAgentIdentity.mockReset().mockReturnValue(undefined);
     gatewayMocks.resolveAgentRoute.mockReset().mockReturnValue({ agentId: "main" });
+    const recoveryRooms = new Map<string, { seconds: number }>();
+    gatewayMocks.recoveryLookup.mockImplementation(async (key: string) => recoveryRooms.get(key));
     setBuzzRuntime({
       agent: {
         resolveAgentIdentity: gatewayMocks.resolveAgentIdentity,
@@ -152,6 +155,16 @@ describe("Buzz gateway lifecycle", () => {
           resolveMarkdownTableMode: () => "preserve",
           convertMarkdownTables: (text: string) => text,
         },
+      },
+      state: {
+        openKeyedStore: () => ({
+          lookup: gatewayMocks.recoveryLookup,
+          register: async (key: string, value: { seconds: number }) => {
+            recoveryRooms.set(key, value);
+          },
+          entries: async () => Array.from(recoveryRooms, ([key, value]) => ({ key, value })),
+          delete: async (key: string) => recoveryRooms.delete(key),
+        }),
       },
     } as never);
     gatewayMocks.startBuzzBus.mockImplementation(
@@ -190,6 +203,25 @@ describe("Buzz gateway lifecycle", () => {
     expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
     gatewayMocks.onRoomDirectoryChanged?.();
     expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
+  });
+
+  it("reports unreadable recovery state without connecting or skipping room history", async () => {
+    gatewayMocks.recoveryLookup.mockRejectedValueOnce(new Error("room activation unreadable"));
+    const setStatus = vi.fn();
+    const { abortController, lifecycle } = startTestGateway({ setStatus });
+
+    await vi.waitFor(() =>
+      expect(setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: false,
+        lifecycle: "recovering",
+        lastError: "room activation unreadable",
+      }),
+    );
+    expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
 
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();

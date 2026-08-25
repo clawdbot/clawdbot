@@ -120,11 +120,7 @@ vi.mock("./inbound.js", () => ({
 }));
 
 import { startBuzzGatewayAccount } from "./gateway.js";
-import {
-  advanceBuzzRecoveryWatermark,
-  openBuzzRecoveryWatermarkStore,
-  resolveBuzzColdStartSince,
-} from "./recovery-watermark.js";
+import { openBuzzRecoveryWatermarkStore, resolveBuzzColdStartSince } from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 import { resolveBuzzAccount } from "./types.js";
@@ -250,12 +246,15 @@ async function runGatewayProcess(
 ): Promise<void> {
   const channelIds = params.channelIds ?? [CHANNEL_ID];
   const gatewayProcess = startGatewayProcess(channelIds);
-  await waitForSettled(() => relayMocks.messageFilters.length >= channelIds.length);
-  if (params.until) {
-    await waitForSettled(params.until);
+  try {
+    await waitForSettled(() => relayMocks.messageFilters.length >= channelIds.length);
+    if (params.until) {
+      await waitForSettled(params.until);
+    }
+  } finally {
+    gatewayProcess.abort.abort();
+    await gatewayProcess.lifecycle;
   }
-  gatewayProcess.abort.abort();
-  await gatewayProcess.lifecycle;
 }
 
 function roomSubscriptionSince(channelId = CHANNEL_ID): number {
@@ -268,7 +267,7 @@ function roomSubscriptionSince(channelId = CHANNEL_ID): number {
 
 async function readWatermark(channelId = CHANNEL_ID): Promise<number | undefined> {
   const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
-  return (await store?.lookup(`room:${channelId}`))?.seconds;
+  return (await store.lookup(`room:${channelId}`))?.seconds;
 }
 
 function openProcessBoundary(): void {
@@ -342,23 +341,22 @@ afterEach(() => {
 });
 
 describe("Buzz gateway cold-start recovery", () => {
-  it("resumes from the persisted watermark after a process restart", async () => {
+  it("recovers downtime messages from the persisted room activation floor", async () => {
     await runGatewayProcess();
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
 
     openProcessBoundary();
     postRoomMessage("live-msg", START_SECONDS + 10);
     advanceSeconds(600);
-    await runGatewayProcess({
-      until: async () => (await readWatermark()) === START_SECONDS + 10,
-    });
+    await runGatewayProcess({ until: () => handled.includes("live-msg") });
 
     openProcessBoundary();
     postRoomMessage("outage-msg", START_SECONDS + 3_610);
     advanceSeconds(7_200);
     await runGatewayProcess({ until: () => handled.includes("outage-msg") });
-    expect(roomSubscriptionSince()).toBe(START_SECONDS + 10);
+    expect(roomSubscriptionSince()).toBe(START_SECONDS);
     expect(handled).toContain("outage-msg");
+    expect(handled).not.toContain("live-msg");
   });
 
   it("keeps an account with no cursor at the current time on its first start", async () => {
@@ -369,31 +367,89 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(await readWatermark()).toBe(START_SECONDS);
   });
 
-  it("registers a cursor for every supported room", async () => {
+  it("keeps recovery capacity available when configured rooms change", async () => {
     const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
     const channelIds = Array.from(
       { length: BUZZ_MAX_CONFIGURED_ROOMS },
       (_value, index) => `room-${index}`,
     );
-    const errors: Error[] = [];
     const sinceByRoom = await resolveBuzzColdStartSince({
       store,
       channelIds,
       nowSeconds: START_SECONDS,
       lookbackSeconds: LOOKBACK_SECONDS,
-      onError: (error) => errors.push(error),
     });
 
-    expect(errors).toEqual([]);
     expect(sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
     const lastChannelId = channelIds.at(-1) as string;
-    expect(await store?.lookup(`room:${lastChannelId}`)).toEqual({
+    expect(await store.lookup(`room:${lastChannelId}`)).toEqual({
       seconds: START_SECONDS,
+    });
+
+    const removedChannelId = channelIds[0] as string;
+    const retainedChannelId = channelIds[1] as string;
+    const replacementChannelId = "replacement-room";
+    const rotatedRooms = [...channelIds.slice(1), replacementChannelId];
+    const rotatedSinceByRoom = await resolveBuzzColdStartSince({
+      store,
+      channelIds: rotatedRooms,
+      nowSeconds: START_SECONDS + 60,
+      lookbackSeconds: LOOKBACK_SECONDS,
+    });
+
+    expect(await store.lookup(`room:${removedChannelId}`)).toBeUndefined();
+    expect(rotatedSinceByRoom.get(retainedChannelId)).toBe(START_SECONDS);
+    expect(await store.lookup(`room:${replacementChannelId}`)).toEqual({
+      seconds: START_SECONDS + 60,
     });
   });
 
+  it("rejects recovery when an existing room cursor cannot be read", async () => {
+    const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
+    await store.register(`room:${SECOND_CHANNEL_ID}`, { seconds: START_SECONDS - 60 });
+    vi.spyOn(store, "lookup").mockRejectedValueOnce(new Error("first room cursor unavailable"));
+    await expect(
+      resolveBuzzColdStartSince({
+        store,
+        channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID],
+        nowSeconds: START_SECONDS,
+        lookbackSeconds: LOOKBACK_SECONDS,
+      }),
+    ).rejects.toThrow("first room cursor unavailable");
+  });
+
+  it("rejects recovery when a persisted room activation floor is invalid", async () => {
+    const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
+    await store.register(`room:${CHANNEL_ID}`, { seconds: "corrupt" } as never);
+
+    await expect(
+      resolveBuzzColdStartSince({
+        store,
+        channelIds: [CHANNEL_ID],
+        nowSeconds: START_SECONDS,
+        lookbackSeconds: LOOKBACK_SECONDS,
+      }),
+    ).rejects.toThrow(`Invalid Buzz recovery watermark for room ${CHANNEL_ID}`);
+  });
+
+  it("recovers a later-arriving room message with an older sender timestamp", async () => {
+    await runGatewayProcess();
+
+    openProcessBoundary();
+    postRoomMessage("newer-msg", START_SECONDS + 200);
+    advanceSeconds(600);
+    await runGatewayProcess({ until: () => handled.includes("newer-msg") });
+
+    openProcessBoundary();
+    postRoomMessage("older-late-msg", START_SECONDS + 100);
+    advanceSeconds(600);
+    await runGatewayProcess({ until: () => handled.includes("older-late-msg") });
+
+    expect(handled).toContain("older-late-msg");
+    expect(roomSubscriptionSince()).toBeLessThanOrEqual(START_SECONDS + 100);
+  });
+
   it("keeps every supported room for a second account after the first one saturates", async () => {
-    const errors: Error[] = [];
     const saturate = async (accountId: string) => {
       const channelIds = Array.from(
         { length: BUZZ_MAX_CONFIGURED_ROOMS },
@@ -405,7 +461,6 @@ describe("Buzz gateway cold-start recovery", () => {
         channelIds,
         nowSeconds: START_SECONDS,
         lookbackSeconds: LOOKBACK_SECONDS,
-        onError: (error) => errors.push(error),
       });
       return { store, sinceByRoom, lastChannelId: channelIds.at(-1) as string };
     };
@@ -413,33 +468,34 @@ describe("Buzz gateway cold-start recovery", () => {
     const first = await saturate(ACCOUNT_ID);
     const second = await saturate(SECOND_ACCOUNT_ID);
 
-    expect(errors).toEqual([]);
     expect(first.sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
     expect(second.sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
-    expect(await first.store?.lookup(`room:${first.lastChannelId}`)).toEqual({
+    expect(await first.store.lookup(`room:${first.lastChannelId}`)).toEqual({
       seconds: START_SECONDS,
     });
-    expect(await second.store?.lookup(`room:${second.lastChannelId}`)).toEqual({
+    expect(await second.store.lookup(`room:${second.lastChannelId}`)).toEqual({
       seconds: START_SECONDS,
     });
   });
 
-  it("keeps a second account cursor advance out of the first account rooms", async () => {
+  it("keeps room activation floors scoped to their account", async () => {
     const firstStore = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
     const secondStore = openBuzzRecoveryWatermarkStore({ accountId: SECOND_ACCOUNT_ID });
-    await advanceBuzzRecoveryWatermark({
+    await resolveBuzzColdStartSince({
       store: firstStore,
-      channelId: CHANNEL_ID,
-      seconds: START_SECONDS,
+      channelIds: [CHANNEL_ID],
+      nowSeconds: START_SECONDS,
+      lookbackSeconds: LOOKBACK_SECONDS,
     });
-    await advanceBuzzRecoveryWatermark({
+    await resolveBuzzColdStartSince({
       store: secondStore,
-      channelId: CHANNEL_ID,
-      seconds: START_SECONDS + 500,
+      channelIds: [CHANNEL_ID],
+      nowSeconds: START_SECONDS + 500,
+      lookbackSeconds: LOOKBACK_SECONDS,
     });
 
-    expect(await firstStore?.lookup(`room:${CHANNEL_ID}`)).toEqual({ seconds: START_SECONDS });
-    expect(await secondStore?.lookup(`room:${CHANNEL_ID}`)).toEqual({
+    expect(await firstStore.lookup(`room:${CHANNEL_ID}`)).toEqual({ seconds: START_SECONDS });
+    expect(await secondStore.lookup(`room:${CHANNEL_ID}`)).toEqual({
       seconds: START_SECONDS + 500,
     });
   });
@@ -476,10 +532,9 @@ describe("Buzz gateway cold-start recovery", () => {
     for (const settler of settlers) {
       settler.settle();
     }
-    await waitForSettled(async () => (await readWatermark()) !== undefined);
-    expect(await readWatermark()).toBeLessThanOrEqual(START_SECONDS + 100);
     gatewayProcess.abort.abort();
     await gatewayProcess.lifecycle;
+    expect(await readWatermark()).toBe(START_SECONDS);
 
     openProcessBoundary();
     advanceSeconds(600);
@@ -487,15 +542,13 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(handled).toContain(queuedText);
   });
 
-  it("clamps a stale watermark to the retention floor", async () => {
+  it("clamps a stale room activation floor to the existing recovery lookback", async () => {
     await runGatewayProcess();
 
     openProcessBoundary();
     postRoomMessage("live-msg", START_SECONDS + 10);
     advanceSeconds(600);
-    await runGatewayProcess({
-      until: async () => (await readWatermark()) === START_SECONDS + 10,
-    });
+    await runGatewayProcess({ until: () => handled.includes("live-msg") });
 
     openProcessBoundary();
     advanceSeconds(72 * 60 * 60);
@@ -512,30 +565,7 @@ describe("Buzz gateway cold-start recovery", () => {
     await process.lifecycle;
   });
 
-  it("holds the watermark behind an unfinished older message", async () => {
-    await runGatewayProcess();
-
-    openProcessBoundary();
-    postRoomMessage("older-msg", START_SECONDS + 100);
-    postRoomMessage("newer-msg", START_SECONDS + 200);
-    const older = gateHandler("older-msg");
-    advanceSeconds(600);
-    const gatewayProcess = startGatewayProcess();
-    await waitForSettled(() => handled.includes("older-msg") && handled.includes("newer-msg"));
-    await waitForSettled(async () => (await readWatermark()) === START_SECONDS + 100);
-
-    older.settle();
-    await waitForSettled(async () => (await readWatermark()) === START_SECONDS + 200);
-    gatewayProcess.abort.abort();
-    await gatewayProcess.lifecycle;
-
-    openProcessBoundary();
-    advanceSeconds(600);
-    await runGatewayProcess();
-    expect(roomSubscriptionSince()).toBe(START_SECONDS + 200);
-  });
-
-  it("never advances the watermark past locally observed time", async () => {
+  it("recovers downtime messages after a sender supplies a future timestamp", async () => {
     await runGatewayProcess();
 
     openProcessBoundary();
@@ -543,10 +573,10 @@ describe("Buzz gateway cold-start recovery", () => {
     postRoomMessage("future-msg", START_SECONDS + 3_600);
     advanceSeconds(600);
     await runGatewayProcess({
-      until: async () => (await readWatermark()) === START_SECONDS + 600,
+      until: () => handled.includes("backlog-msg") && handled.includes("future-msg"),
     });
     expect(handled).toEqual(expect.arrayContaining(["backlog-msg", "future-msg"]));
-    expect(await readWatermark()).toBeLessThanOrEqual(nowSeconds());
+    expect(await readWatermark()).toBe(START_SECONDS);
 
     openProcessBoundary();
     postRoomMessage("outage-msg", START_SECONDS + 900);
@@ -555,7 +585,7 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(handled).toContain("outage-msg");
   });
 
-  it("holds the watermark behind a message whose handling failed", async () => {
+  it("retries a previously failed room message after a process restart", async () => {
     await runGatewayProcess();
 
     openProcessBoundary();
@@ -568,14 +598,13 @@ describe("Buzz gateway cold-start recovery", () => {
     await waitForSettled(() => handled.includes("fail-msg") && handled.includes("ok-msg"));
     failing.fail(new Error("agent dispatch failed"));
     succeeding.settle();
-    await waitForSettled(async () => (await readWatermark()) === START_SECONDS + 100);
     gatewayProcess.abort.abort();
     await gatewayProcess.lifecycle;
 
     openProcessBoundary();
     advanceSeconds(600);
     await runGatewayProcess({ until: () => handled.includes("fail-msg") });
-    expect(roomSubscriptionSince()).toBe(START_SECONDS + 100);
+    expect(roomSubscriptionSince()).toBe(START_SECONDS);
     expect(handled).toContain("fail-msg");
   });
 });

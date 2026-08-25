@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, Relay, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -124,7 +124,6 @@ vi.mock("nostr-tools", async (importOriginal) => {
 });
 
 import { startBuzzBus } from "./buzz-bus.js";
-import { createBuzzRoomMembershipTracker } from "./room-membership-tracker.js";
 
 const BUZZ_NORMAL_MESSAGE_KIND = 9;
 const BUZZ_ROOM_MEMBERSHIP_KIND = 39_002;
@@ -444,22 +443,5 @@ describe("Buzz reconnect history catch-up", () => {
     expect(received.length).toBeLessThan(250);
     expect(fatalErrors).toEqual([]);
     expect(historyErrors).toEqual([]);
-  });
-
-  it("reports history catch-up incomplete when a page cannot be dispatched", async () => {
-    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
-    const tracker = await createBuzzRoomMembershipTracker({
-      relay: new Relay("wss://buzz.example.com"),
-      relayPublicKey: RELAY_PUBLIC_KEY,
-      channelIds: [CHANNEL_ID],
-      botPublicKey: BOT_PUBLIC_KEY,
-      since: BASE_TIMESTAMP - 60,
-      messageSince: () => BASE_TIMESTAMP - 60,
-      messageLimit: HISTORY_LIMIT,
-      reserveDispatchCapacity: async () => undefined,
-      onMessageEvent: () => {},
-    });
-
-    expect(await tracker.catchUpHistory()).toBe("incomplete");
   });
 });
