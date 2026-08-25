@@ -14,6 +14,7 @@ class FakeWatcher extends EventEmitter {
 
 type WatchRegistration = {
   watchedPath: string;
+  recursive: boolean;
   listener: (eventType: string, filename: string | Buffer | null) => void;
   watcher: FakeWatcher;
 };
@@ -31,11 +32,11 @@ function createHarness(initialFingerprint: string) {
     {
       platform: "darwin",
       readFingerprint,
-      resolveWatchPaths: () => ["/Applications", "/Applications/ChatGPT.app/Contents/Resources"],
+      resolveWatchPaths: () => ["/Applications", "/Applications/ChatGPT.app"],
       pathExists: () => true,
-      watchPath: (watchedPath, listener) => {
+      watchPath: (watchedPath, options, listener) => {
         const watcher = new FakeWatcher();
-        registrations.push({ watchedPath, listener, watcher });
+        registrations.push({ watchedPath, recursive: options.recursive, listener, watcher });
         return watcher as FSWatcher;
       },
     },
@@ -90,6 +91,12 @@ describe("Codex desktop generation service", () => {
     } as never);
 
     expect(harness.registrations).toHaveLength(2);
+    expect(
+      harness.registrations.map(({ watchedPath, recursive }) => [watchedPath, recursive]),
+    ).toEqual([
+      ["/Applications", false],
+      ["/Applications/ChatGPT.app", true],
+    ]);
     expect(harness.clearFailure).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(harness.clearFailure).toHaveBeenCalledOnce());
@@ -153,9 +160,15 @@ describe("Codex desktop generation service", () => {
     const clearFailure = vi.fn();
     const reportFailure = vi.fn();
     const warn = vi.fn();
-    const watchPath = vi.fn((): FSWatcher => {
-      throw new Error("watch unavailable");
-    });
+    const watchPath = vi.fn(
+      (
+        _watchedPath: string,
+        _options: { recursive: boolean },
+        _listener: (eventType: string, filename: string | Buffer | null) => void,
+      ): FSWatcher => {
+        throw new Error("watch unavailable");
+      },
+    );
     service = createCodexDesktopGenerationService(
       { onGenerationChange },
       {

@@ -8,6 +8,8 @@ import {
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
 
+const MAX_COMPUTER_USE_PLUGIN_TREE_ENTRIES = 4_096;
+
 /** Fingerprints every desktop candidate that can own a managed fallback artifact. */
 export async function readMacOSDesktopGenerationFingerprint(
   candidates: readonly MacOSDesktopCodexAppPathCandidate[] = resolveMacOSDesktopCodexAppPathCandidates(
@@ -21,6 +23,8 @@ export async function readMacOSDesktopGenerationFingerprint(
     for (const artifactPath of resolveMacOSDesktopGenerationPaths(candidate)) {
       entries.push(`${artifactPath}\0${await statFingerprint(artifactPath)}`);
     }
+    const pluginRoot = resolveComputerUsePluginRoot(candidate);
+    entries.push(`${pluginRoot}\0${await directoryTreeFingerprint(pluginRoot)}`);
   }
   return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
@@ -31,13 +35,6 @@ function resolveMacOSDesktopGenerationPaths(
   return [
     candidate.appBundlePath,
     path.join(candidate.bundledMarketplacePath, ".agents", "plugins", "marketplace.json"),
-    path.join(
-      candidate.bundledMarketplacePath,
-      "plugins",
-      "computer-use",
-      ".codex-plugin",
-      "plugin.json",
-    ),
     ...candidate.computerUseServiceAppPaths.flatMap((servicePath) => [
       servicePath,
       path.join(servicePath, "Contents", "Info.plist"),
@@ -54,7 +51,11 @@ function resolveMacOSDesktopGenerationPaths(
   ];
 }
 
-/** Stable directories whose immediate children cover every fingerprinted artifact. */
+function resolveComputerUsePluginRoot(candidate: MacOSDesktopCodexAppPathCandidate): string {
+  return path.join(candidate.bundledMarketplacePath, "plugins", "computer-use");
+}
+
+/** Stable roots that cover bundle replacement and recursive artifact updates. */
 export function resolveMacOSDesktopGenerationWatchPaths(
   candidates: readonly MacOSDesktopCodexAppPathCandidate[] = resolveMacOSDesktopCodexAppPathCandidates(
     "darwin",
@@ -63,24 +64,53 @@ export function resolveMacOSDesktopGenerationWatchPaths(
   const watched = new Set<string>(["/Applications"]);
   for (const candidate of candidates) {
     watched.add(candidate.appBundlePath);
-    const directoryArtifacts = new Set([
-      candidate.appBundlePath,
-      ...candidate.computerUseServiceAppPaths,
-    ]);
-    for (const artifactPath of [
-      candidate.appServerCommandPath,
-      ...resolveMacOSDesktopGenerationPaths(candidate),
-    ]) {
-      let directory = directoryArtifacts.has(artifactPath)
-        ? artifactPath
-        : path.dirname(artifactPath);
-      while (directory.startsWith(`${candidate.appBundlePath}${path.sep}`)) {
-        watched.add(directory);
-        directory = path.dirname(directory);
-      }
-    }
   }
   return [...watched];
+}
+
+async function directoryTreeFingerprint(root: string): Promise<string> {
+  let rootStat: BigIntStats;
+  try {
+    rootStat = await fs.lstat(root, { bigint: true });
+  } catch (error) {
+    if (isNodeError(error, "ENOENT") || isNodeError(error, "ENOTDIR")) {
+      return "missing";
+    }
+    throw error;
+  }
+  if (!rootStat.isDirectory()) {
+    return statFingerprint(root);
+  }
+
+  let entryCount = 0;
+  const hash = createHash("sha256");
+  hash.update("openclaw-codex-computer-use-plugin-tree-v1\0");
+  const visit = async (directory: string, relativeDirectory: string, before: BigIntStats) => {
+    hash.update(`directory\0${relativeDirectory}\0${statTuple(before)}\0`);
+    const entries = (await fs.readdir(directory, { withFileTypes: true })).toSorted(
+      (left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
+    );
+    for (const entry of entries) {
+      entryCount += 1;
+      if (entryCount > MAX_COMPUTER_USE_PLUGIN_TREE_ENTRIES) {
+        throw new Error("Codex Computer Use plugin exceeds the bounded tree size");
+      }
+      const entryPath = path.join(directory, entry.name);
+      const relativePath = path.join(relativeDirectory, entry.name);
+      const entryStat = await fs.lstat(entryPath, { bigint: true });
+      if (entryStat.isDirectory()) {
+        await visit(entryPath, relativePath, entryStat);
+      } else {
+        hash.update(`entry\0${relativePath}\0${await statFingerprint(entryPath)}\0`);
+      }
+    }
+    const after = await fs.lstat(directory, { bigint: true });
+    if (!sameStat(before, after)) {
+      throw new Error(`Codex desktop artifact changed while fingerprinting: ${directory}`);
+    }
+  };
+  await visit(root, ".", rootStat);
+  return hash.digest("hex");
 }
 
 async function statFingerprint(filePath: string): Promise<string> {

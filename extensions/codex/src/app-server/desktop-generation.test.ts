@@ -111,32 +111,49 @@ describe("Codex desktop generation owner", () => {
     });
   });
 
-  it("watches the stable parent chain for every fingerprinted artifact", () => {
-    const fixture = candidate("/Applications", "ChatGPT.app");
-    const servicePath = path.join(fixture.appBundlePath, "service", "Computer Use.app");
-    const watchPaths = resolveMacOSDesktopGenerationWatchPaths([
-      { ...fixture, computerUseServiceAppPaths: [servicePath] },
-    ]);
+  it("settles same-version Computer Use plugin content changes as a new generation", async () => {
+    await withTempDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
+      const chatGpt = candidate(root, "ChatGPT.app");
+      const pluginRoot = path.join(chatGpt.bundledMarketplacePath, "plugins", "computer-use");
+      await Promise.all([
+        writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
+        fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true }),
+      ]);
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "computer-use", version: "1.0.0" }),
+      );
+      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-x");
+      const initialFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
 
-    expect(watchPaths).toEqual(
-      expect.arrayContaining([
-        "/Applications",
-        fixture.appBundlePath,
-        path.dirname(fixture.appServerCommandPath),
-        path.join(fixture.bundledMarketplacePath, ".agents", "plugins"),
-        path.join(fixture.bundledMarketplacePath, "plugins", "computer-use", ".codex-plugin"),
-        servicePath,
-        path.join(servicePath, "Contents"),
-        path.join(
-          servicePath,
-          "Contents",
-          "SharedSupport",
-          "SkyComputerUseClient.app",
-          "Contents",
-          "MacOS",
-        ),
-      ]),
-    );
+      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-y");
+      const updatedFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
+      expect(updatedFingerprint).not.toBe(initialFingerprint);
+
+      vi.useFakeTimers();
+      let fingerprint = initialFingerprint;
+      const owner = createCodexDesktopGenerationOwner({
+        readFingerprint: async () => fingerprint,
+      });
+      const initial = owner.refresh();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(initial).resolves.toMatchObject({ epoch: 1 });
+
+      fingerprint = updatedFingerprint;
+      owner.markDirty();
+      const updated = owner.wait();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(updated).resolves.toMatchObject({ epoch: 2 });
+    });
+  });
+
+  it("watches stable application roots for recursive artifact updates", () => {
+    const fixture = candidate("/Applications", "ChatGPT.app");
+    expect(resolveMacOSDesktopGenerationWatchPaths([fixture])).toEqual([
+      "/Applications",
+      fixture.appBundlePath,
+    ]);
   });
 });
 

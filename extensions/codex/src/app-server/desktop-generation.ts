@@ -23,6 +23,7 @@ const DESKTOP_GENERATION_STATE = Symbol.for("openclaw.codexDesktopGenerationStat
 type GenerationOwner = ReturnType<typeof createCodexDesktopGenerationOwner>;
 type WatchFactory = (
   watchedPath: string,
+  options: { recursive: boolean },
   listener: (eventType: string, filename: string | Buffer | null) => void,
 ) => FSWatcher;
 type DesktopGenerationRuntime = {
@@ -74,7 +75,7 @@ export function createCodexDesktopGenerationService(
     readFingerprint: readMacOSDesktopGenerationFingerprint,
     resolveWatchPaths: resolveMacOSDesktopGenerationWatchPaths,
     pathExists: existsSync,
-    watchPath: (watchedPath, listener) => watch(watchedPath, listener),
+    watchPath: (watchedPath, options, listener) => watch(watchedPath, options, listener),
   },
 ): OpenClawPluginService {
   return {
@@ -137,20 +138,26 @@ function armWatchers(current: DesktopGenerationState): boolean {
       continue;
     }
     try {
-      const watcher = current.watchPath?.(watchedPath, (_eventType, filename) => {
-        if (!isCurrentArm(current, owner, watchers, armEpoch)) {
-          return;
-        }
-        if (
-          watchedPath === APPLICATIONS_PATH &&
-          filename &&
-          !candidateNames.has(filename.toString().split(path.sep)[0] ?? "")
-        ) {
-          return;
-        }
-        owner.markDirty();
-        scheduleRearm(current, owner);
-      });
+      // Bundle roots need recursive invalidation: nested plugin bytes can change without
+      // updating the app directory metadata that the settled fingerprint observes first.
+      const watcher = current.watchPath?.(
+        watchedPath,
+        { recursive: watchedPath !== APPLICATIONS_PATH },
+        (_eventType, filename) => {
+          if (!isCurrentArm(current, owner, watchers, armEpoch)) {
+            return;
+          }
+          if (
+            watchedPath === APPLICATIONS_PATH &&
+            filename &&
+            !candidateNames.has(filename.toString().split(path.sep)[0] ?? "")
+          ) {
+            return;
+          }
+          owner.markDirty();
+          scheduleRearm(current, owner);
+        },
+      );
       if (!watcher) {
         complete = false;
         reportWatcherFailure(current, owner, new Error(`Could not watch ${watchedPath}`));
