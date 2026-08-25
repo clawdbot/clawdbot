@@ -185,7 +185,12 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
     family: "json",
     accent: "#F2A93B",
     extensions: ["json", "jsonl", "geojson"],
-    mimeTypes: ["application/json", "application/ld+json", "application/x-ndjson", "application/geo+json"],
+    mimeTypes: [
+      "application/json",
+      "application/ld+json",
+      "application/x-ndjson",
+      "application/geo+json",
+    ],
     compact: "json",
   },
   {

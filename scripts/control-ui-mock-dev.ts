@@ -30,6 +30,10 @@ import {
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
+import {
+  buildChatAttachmentHistory,
+  createChatAttachmentFixturePlugin,
+} from "./control-ui-mock-attachments.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
 import {
   buildChannelsPairingMock,
@@ -39,10 +43,6 @@ import {
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
-import {
-  buildChatAttachmentHistory,
-  createChatAttachmentFixturePlugin,
-} from "./control-ui-mock-attachments.ts";
 
 type CliOptions = {
   allowedHosts: string[];

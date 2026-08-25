@@ -40,7 +40,8 @@ export function renderAssistantAttachmentStatusCard(params: {
               title=${params.label}
               >${params.label}</span
             >
-            <span class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
+            <span
+              class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
               >${params.badge}${params.reason ? ` · ${params.reason}` : ""}</span
             >
           </span>
