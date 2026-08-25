@@ -16,6 +16,7 @@ export async function statusAllCommand(
 ): Promise<void> {
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
     const overview = await collectStatusScanOverview({
+      env: process.env,
       commandName: "status --all",
       opts: {
         timeoutMs: opts?.timeoutMs,

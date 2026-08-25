@@ -9,6 +9,7 @@ import { captureNodePairingGeneration } from "../../infra/device-pairing-node-st
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
+  isPrivateNodeInvokeCommand,
 } from "../../infra/node-commands.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
@@ -80,11 +81,25 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
     const sessionKey = normalizeOptionalString(p.sessionKey);
+    const nodeInvokeStream =
+      client?.internal?.syntheticClient === true && client.internal.pluginRuntimeOwnerId
+        ? client.internal.nodeInvokeStream
+        : undefined;
     if (!nodeId || !command) {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "nodeId and command required"),
+      );
+      return;
+    }
+    if (isPrivateNodeInvokeCommand(command)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node.invoke does not allow private node controls", {
+          details: { command },
+        }),
       );
       return;
     }
@@ -425,6 +440,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               nodeSession,
               command,
               params: forwardedParams.params,
+              ...(sessionKey ? { sessionKey } : {}),
               turnSource: {
                 channel: p.turnSourceChannel,
                 to: p.turnSourceTo,
@@ -443,6 +459,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               isInvocationCurrent: () =>
                 isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
               isApprovalAuthorityActive: isForwardedApprovalAuthorityActive,
+              ...(nodeInvokeStream ? { nodeInvokeStream } : {}),
             }),
           invokeDeadlineAtMs,
         );
@@ -508,16 +525,17 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const resolveDispatchAuthorization = (dispatchCfg: typeof cfg) =>
+          isNodeCommandAllowed({
+            command,
+            declaredCommands: dispatchSession.commands,
+            allowlist: resolveNodeCommandAllowlist(dispatchCfg, {
+              ...dispatchSession,
+              approvedCommands: dispatchSession.commands,
+            }),
+          });
         const dispatchCfg = context.getRuntimeConfig();
-        const dispatchAllowlist = resolveNodeCommandAllowlist(dispatchCfg, {
-          ...dispatchSession,
-          approvedCommands: dispatchSession.commands,
-        });
-        const dispatchAllowed = isNodeCommandAllowed({
-          command,
-          declaredCommands: dispatchSession.commands,
-          allowlist: dispatchAllowlist,
-        });
+        const dispatchAllowed = resolveDispatchAuthorization(dispatchCfg);
         if (!dispatchAllowed.ok) {
           respond(
             false,
@@ -567,14 +585,21 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           signal: invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
           ...(sessionKey ? { sessionKey } : {}),
+          ...(nodeInvokeStream && {
+            onProgress: nodeInvokeStream.onProgress,
+            idleTimeoutMs: nodeInvokeStream.idleTimeoutMs,
+          }),
           isDispatchAuthorized: () =>
+            (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
             resolveNodeInvokeRuntimeAuthorityError({
               context,
               client,
               approvalAuthority: forwardedParams.approvalAuthority,
-            }) === undefined,
-          onDispatchReady: () => {
+            }) === undefined &&
+            resolveDispatchAuthorization(context.getRuntimeConfig()).ok,
+          onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
+            nodeInvokeStream?.onDispatchReady(invokeId);
           },
         });
         if (!(await continuePairingWork())) {

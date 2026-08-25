@@ -1,3 +1,4 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 /**
  * Bridges attempt bootstrap/history data to context-engine prompt-cache helpers.
  */
@@ -12,12 +13,6 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-export {
-  assembleHarnessContextEngine as assembleAttemptContextEngine,
-  bootstrapHarnessContextEngine as runAttemptContextEngineBootstrap,
-  finalizeHarnessContextEngineTurn as finalizeAttemptContextEngineTurn,
-} from "../../harness/context-engine-lifecycle.js";
-
 export type AttemptContextEngine = ContextEngine;
 
 type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
@@ -223,4 +218,3 @@ export function buildLoopPromptCacheInfo(params: {
     }),
   });
 }
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

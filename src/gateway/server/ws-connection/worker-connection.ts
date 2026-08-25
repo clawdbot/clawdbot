@@ -5,9 +5,9 @@ import {
   PROTOCOL_VERSION,
   type RequestFrame,
   type WorkerConnectParams,
+  type WorkerGitHubPublishParams,
   type WorkerErrorShape,
   type WorkerHeartbeatResult,
-  type WorkerHelloOk,
   type WorkerLiveEventErrorDetails,
   type WorkerLiveEventErrorShape,
   type WorkerLiveEventParams,
@@ -20,8 +20,8 @@ import {
   type WorkerTranscriptCommitErrorShape,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
-  WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_METHOD_LENGTH,
@@ -32,6 +32,7 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
+  validateWorkerGitHubPublishParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
@@ -47,7 +48,6 @@ import {
   type WorkerInferenceTerminalFrame,
   WORKER_INFERENCE_METHODS,
   WORKER_INFERENCE_PROTOCOL_FEATURE,
-  WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   validateWorkerInferenceCancelParams,
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
@@ -57,9 +57,20 @@ import {
   runWithGatewayIndependentRootWorkContinuation,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
+import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
+import {
+  buildWorkerHello,
+  workerInferenceError,
+  workerLiveEventError,
+  workerMaxPayload,
+  workerProtocolError,
+  workerTranscriptCommitError,
+} from "./worker-connection-frames.js";
 
 type WorkerServiceResult<TResult, TFailure> =
   | { ok: true; result: TResult }
@@ -89,8 +100,8 @@ export type WorkerConnectionService = {
   ) => WorkerProtocolCloseReason | null;
   executeSessionTool?: (
     identity: WorkerConnectionIdentity,
-    toolName: "sessions_spawn" | "sessions_send",
-    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+    toolName: "sessions_spawn" | "sessions_send" | "github_publish",
+    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams,
     signal?: AbortSignal,
   ) => Promise<WorkerServiceResult<WorkerSessionToolResult, { reason: WorkerProtocolCloseReason }>>;
 };
@@ -145,47 +156,8 @@ type WorkerWsMessageHandlerParams = {
   setLastFrameMeta(meta: { type?: string; method?: string }): void;
   logGateway: WorkerLogger;
   logWsControl: WorkerLogger;
+  publicAdmission?: PublicWorkerIngressContext;
 };
-
-function workerProtocolError(
-  reason: WorkerProtocolCloseReason,
-  options: {
-    code?: WorkerErrorShape["code"];
-    message?: string;
-    retryable?: boolean;
-    retryAfterMs?: number;
-  } = {},
-): WorkerErrorShape {
-  return {
-    code: options.code ?? ErrorCodes.INVALID_REQUEST,
-    message: options.message ?? "worker protocol request rejected",
-    details: { reason },
-    ...(options.retryable === undefined ? {} : { retryable: options.retryable }),
-    ...(options.retryAfterMs === undefined ? {} : { retryAfterMs: options.retryAfterMs }),
-  };
-}
-
-function workerMaxPayload(identity: WorkerConnectionIdentity): number {
-  return identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE)
-    ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
-    : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
-}
-
-function buildWorkerHello(identity: WorkerConnectionIdentity): WorkerHelloOk {
-  return {
-    type: "worker-hello-ok",
-    environmentId: identity.environmentId,
-    sessionId: identity.sessionId,
-    ownerEpoch: identity.ownerEpoch,
-    rpcSetVersion: identity.rpcSetVersion,
-    protocolFeatures: [...identity.protocolFeatures],
-    credentialExpiresAtMs: identity.credentialExpiresAtMs,
-    policy: {
-      heartbeatIntervalMs: WORKER_HEARTBEAT_INTERVAL_MS,
-      maxPayload: workerMaxPayload(identity),
-    },
-  };
-}
 
 function rejectWorkerRequest(params: {
   reason: WorkerProtocolCloseReason;
@@ -196,32 +168,6 @@ function rejectWorkerRequest(params: {
   params.warn(`worker protocol request rejected reason=${params.reason}`);
   params.respond(false, undefined, workerProtocolError(params.reason));
   queueMicrotask(() => params.close(1008, params.reason));
-}
-
-function workerTranscriptCommitError(
-  reason: WorkerTranscriptCommitErrorReason,
-): WorkerTranscriptCommitErrorShape {
-  return {
-    code: ErrorCodes.INVALID_REQUEST,
-    message: "worker transcript commit rejected",
-    details: { reason },
-  };
-}
-
-function workerLiveEventError(details: WorkerLiveEventErrorDetails): WorkerLiveEventErrorShape {
-  return {
-    code: ErrorCodes.INVALID_REQUEST,
-    message: "worker live event rejected",
-    details,
-  };
-}
-
-function workerInferenceError(reason: WorkerInferenceErrorReason): WorkerInferenceErrorShape {
-  return {
-    code: reason === "provider-error" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-    message: "worker inference request rejected",
-    details: { reason },
-  };
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
@@ -352,9 +298,14 @@ async function dispatchWorkerRequest(params: {
   }
   if (
     params.request.method === WORKER_PROTOCOL_METHODS[3] ||
-    params.request.method === WORKER_PROTOCOL_METHODS[4]
+    params.request.method === WORKER_PROTOCOL_METHODS[4] ||
+    params.request.method === WORKER_PROTOCOL_METHODS[5]
   ) {
-    if (!params.identity.protocolFeatures.includes(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE)) {
+    const isGitHubPublish = params.request.method === WORKER_PROTOCOL_METHODS[5];
+    const requiredFeature = isGitHubPublish
+      ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
+      : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+    if (!params.identity.protocolFeatures.includes(requiredFeature)) {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
@@ -365,15 +316,20 @@ async function dispatchWorkerRequest(params: {
     const isSpawn = params.request.method === WORKER_PROTOCOL_METHODS[3];
     const requestValid = isSpawn
       ? validateWorkerSessionsSpawnParams(params.request.params)
-      : validateWorkerSessionsSendParams(params.request.params);
+      : isGitHubPublish
+        ? validateWorkerGitHubPublishParams(params.request.params)
+        : validateWorkerSessionsSendParams(params.request.params);
     if (!requestValid) {
       params.respond(false, undefined, workerProtocolError("invalid-frame"));
       return;
     }
     const outcome = await service.executeSessionTool(
       params.identity,
-      isSpawn ? "sessions_spawn" : "sessions_send",
-      params.request.params as WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+      isSpawn ? "sessions_spawn" : isGitHubPublish ? "github_publish" : "sessions_send",
+      params.request.params as
+        | WorkerSessionsSpawnParams
+        | WorkerSessionsSendParams
+        | WorkerGitHubPublishParams,
       params.signal,
     );
     if (outcome.ok) {
@@ -422,6 +378,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     params.close(code, reason);
   };
   const failHandshake = (code: number, reason: WorkerProtocolCloseReason) => {
+    params.publicAdmission?.rateLimiter?.recordFailure(
+      params.publicAdmission.clientIp,
+      AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+    );
     params.setHandshakeState("failed");
     params.setCloseCause(reason);
     params.logWsControl.warn(`worker admission rejected reason=${reason}`);
@@ -441,16 +401,25 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     params.send({ type: "res", id, ok: false, error });
     queueMicrotask(() => closeWorker(code, reason));
   };
-  const rejectAdmission = (
-    id: string,
-    reason: WorkerProtocolCloseReason,
-    error = workerProtocolError(reason, { message: "worker admission rejected" }),
-    code = 1008,
-  ) => {
+  const rejectAdmission = (rejection: {
+    id: string;
+    reason: WorkerProtocolCloseReason | "rate-limited";
+    internalReason?: string;
+    error?: WorkerErrorShape;
+    code?: number;
+    opaqueOnPublicIngress?: boolean;
+  }) => {
+    const internalReason = rejection.internalReason ?? rejection.reason;
+    const wireReason: WorkerProtocolCloseReason =
+      rejection.opaqueOnPublicIngress || rejection.reason === "rate-limited"
+        ? "invalid-handshake"
+        : rejection.reason;
+    const wireError =
+      rejection.error ?? workerProtocolError(wireReason, { message: "worker admission rejected" });
     params.setHandshakeState("failed");
-    params.setCloseCause(reason);
-    params.logWsControl.warn(`worker admission rejected reason=${reason}`);
-    sendError(id, reason, error, code);
+    params.setCloseCause(internalReason);
+    params.logWsControl.warn(`worker admission rejected reason=${internalReason}`);
+    sendError(rejection.id, wireReason, wireError, rejection.code ?? 1008);
   };
 
   const handleConnect = async (
@@ -459,53 +428,64 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     admissionOpen: boolean,
   ) => {
     if (!admissionOpen || params.isStartupPending?.()) {
-      rejectAdmission(
+      rejectAdmission({
         id,
-        "gateway-unavailable",
-        workerProtocolError("gateway-unavailable", {
+        reason: "gateway-unavailable",
+        error: workerProtocolError("gateway-unavailable", {
           code: ErrorCodes.UNAVAILABLE,
           message: "worker gateway unavailable",
           retryable: true,
           retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
         }),
-        1013,
-      );
+        code: 1013,
+      });
+      return;
+    }
+    if (!params.publicAdmission) {
+      rejectAdmission({
+        id,
+        reason: "invalid-handshake",
+        internalReason: "public-ingress-context-missing",
+      });
       return;
     }
     if (connect.minProtocol > PROTOCOL_VERSION || connect.maxProtocol < PROTOCOL_VERSION) {
-      rejectAdmission(id, "protocol-mismatch");
+      rejectAdmission({ id, reason: "protocol-mismatch" });
       return;
     }
-    const admission =
-      (await params.service?.admitWorker(connect.admission)) ??
-      ({ ok: false, reason: "environment-unavailable" } as const);
-    if (!admission.ok) {
-      rejectAdmission(id, admission.reason);
-      return;
-    }
-    const ownershipFailure = params.service?.validateWorkerConnection(admission.identity);
-    if (ownershipFailure) {
-      rejectAdmission(id, ownershipFailure);
-      return;
-    }
-    const client: GatewayWsClient = {
-      socket: params.socket,
-      connect: {
-        minProtocol: connect.minProtocol,
-        maxProtocol: connect.maxProtocol,
-        client: connect.client,
-        role: "worker",
-        scopes: [],
+    const admission = await runWorkerAdmissionBoundary({
+      service: params.service,
+      admission: connect.admission,
+      publicAdmission: params.publicAdmission,
+      claim: (identity) => {
+        const client: GatewayWsClient = {
+          socket: params.socket,
+          connect: {
+            minProtocol: connect.minProtocol,
+            maxProtocol: connect.maxProtocol,
+            client: connect.client,
+            role: "worker",
+            scopes: [],
+          },
+          connId: params.connId,
+          connectionKind: "worker",
+          worker: identity,
+          usesSharedGatewayAuth: false,
+        };
+        params.clearHandshakeTimer();
+        params.advanceHandshakePhase("auth_validated");
+        if (!params.setClient(client)) {
+          params.setHandshakeState("failed");
+          return false;
+        }
+        return true;
       },
-      connId: params.connId,
-      connectionKind: "worker",
-      worker: admission.identity,
-      usesSharedGatewayAuth: false,
-    };
-    params.clearHandshakeTimer();
-    params.advanceHandshakePhase("auth_validated");
-    if (!params.setClient(client)) {
-      params.setHandshakeState("failed");
+    });
+    if (!admission.ok) {
+      if (admission.reason === "claim-rejected") {
+        return;
+      }
+      rejectAdmission({ id, reason: admission.reason, opaqueOnPublicIngress: true });
       return;
     }
     params.setHandshakeState("connected");
@@ -513,6 +493,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     setSocketMaxPayload(params.socket, workerMaxPayload(admission.identity));
     params.advanceHandshakePhase("hello_payload_prepared");
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
+    if (disposed || params.isClosed()) {
+      return;
+    }
     params.advanceHandshakePhase("ready");
     expiryTimer = setTimeout(
       () => {
@@ -595,6 +578,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[2] ||
       parsed.method === WORKER_PROTOCOL_METHODS[3] ||
       parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5] ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
     ) {
@@ -627,7 +611,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         ...(signal ? { signal } : {}),
       });
     const isLongSessionOperation =
-      parsed.method === WORKER_PROTOCOL_METHODS[3] || parsed.method === WORKER_PROTOCOL_METHODS[4];
+      parsed.method === WORKER_PROTOCOL_METHODS[3] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[4] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[5];
     if (isLongSessionOperation) {
       if (sessionOperations.has(parsed.id)) {
         failFrame(1008, "invalid-frame");

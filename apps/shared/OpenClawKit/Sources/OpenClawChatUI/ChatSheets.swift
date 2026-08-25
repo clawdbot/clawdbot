@@ -269,7 +269,7 @@ public struct ChatSessionsSheet: View {
                 // first and only switches on success so the composer never
                 // points at a still-archived session.
                 Task {
-                    guard await self.viewModel.restoreSession(key: session.key) else { return }
+                    guard await self.viewModel.restoreSession(session) else { return }
                     self.viewModel.switchSession(to: session.key)
                     self.dismiss()
                 }
@@ -292,12 +292,12 @@ public struct ChatSessionsSheet: View {
                 }
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if session.isArchived || ChatSessionSidebarModel.canArchiveSession(
+                if ChatSessionSidebarModel.canArchiveSession(
                     session,
                     mainSessionKey: self.viewModel.resolvedMainSessionKey)
                 {
                     Button {
-                        self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                        self.viewModel.setSessionArchived(session, archived: !session.isArchived)
                         self.refreshScopedSessionsSoon()
                     } label: {
                         self.actionLabel(
@@ -330,12 +330,12 @@ public struct ChatSessionsSheet: View {
                             systemImage: session.isPinned ? "pin.slash" : "pin")
                     }
                 }
-                if session.isArchived || ChatSessionSidebarModel.canArchiveSession(
+                if ChatSessionSidebarModel.canArchiveSession(
                     session,
                     mainSessionKey: self.viewModel.resolvedMainSessionKey)
                 {
                     Button {
-                        self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                        self.viewModel.setSessionArchived(session, archived: !session.isArchived)
                         self.refreshScopedSessionsSoon()
                     } label: {
                         self.actionLabel(
@@ -344,10 +344,17 @@ public struct ChatSessionsSheet: View {
                     }
                 }
                 Button {
-                    Task { await self.viewModel.forkSession(key: session.key) }
+                    Task {
+                        await self.viewModel.forkSession(
+                            key: session.key,
+                            fromLastCompleted: session.hasActiveRun == true)
+                    }
                 } label: {
                     self.actionLabel(
-                        LocalizedStringKey(String(localized: "Fork")),
+                        LocalizedStringKey(
+                            session.hasActiveRun == true
+                                ? String(localized: "Fork from last completed message")
+                                : String(localized: "Fork")),
                         systemImage: "arrow.triangle.branch")
                 }
                 Button {

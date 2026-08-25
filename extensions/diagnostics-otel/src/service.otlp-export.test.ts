@@ -33,10 +33,8 @@ import {
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import {
-  runModelCallAndCaptureTraceparent,
-  startLocalOtlpReceiver,
-} from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import { runModelCallAndCaptureTraceparent } from "../../../test/e2e/qa-lab/runtime/otel-model-call.test-support.js";
+import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   createOtelContext,

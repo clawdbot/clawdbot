@@ -21,7 +21,7 @@ export const stubTool = (name: string): StubTool => ({
 });
 
 vi.mock("../tools/image-tool.js", () => ({
-  createImageTool: () => stubTool("image"),
+  createImageTool: () => stubTool("view_image"),
 }));
 
 vi.mock("../tools/image-generate-tool.js", () => ({

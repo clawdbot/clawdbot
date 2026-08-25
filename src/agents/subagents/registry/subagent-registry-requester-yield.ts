@@ -5,6 +5,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 /** Persists explicit yield intent before the requester run is aborted. */
 export function markRequesterTurnYieldedInRuns(params: {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
   persistOrThrow(...runIds: string[]): void;
@@ -17,6 +18,7 @@ export function markRequesterTurnYieldedInRuns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
+      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId) &&
       entry.requesterTurnRunId === requesterTurnRunId &&
       entry.expectsCompletionMessage === true,
   );
@@ -40,6 +42,7 @@ export function markRequesterTurnYieldedInRuns(params: {
 
 export function settleRequesterTurnAfterSessionSpawns(params: {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterTurnRunId: string;
   requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
@@ -61,6 +64,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
+      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId) &&
       entry.requesterTurnRunId === requesterTurnRunId &&
       entry.expectsCompletionMessage === true,
   );
@@ -87,8 +91,25 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     requesterTurnYielded: entry.requesterTurnYielded,
     retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
   }));
+  const requesterAlreadyDeliveredFinal =
+    params.requesterYielded &&
+    entries.every(
+      (entry) =>
+        entry.execution.status === "terminal" &&
+        typeof entry.execution.endedAt === "number" &&
+        entry.delivery?.status === "delivered" &&
+        typeof entry.cleanupCompletedAt === "number",
+    ) &&
+    entries.some((entry) => {
+      const receipt = entry.delivery?.requesterVisibleFinal;
+      return (
+        receipt?.requesterTurnRunId === requesterTurnRunId &&
+        receipt.batchRunIds.length === batchRunIds.length &&
+        receipt.batchRunIds.every((runId, index) => runId === batchRunIds[index])
+      );
+    });
   let rearmGeneration: number | undefined;
-  if (params.requesterYielded) {
+  if (params.requesterYielded && !requesterAlreadyDeliveredFinal) {
     rearmGeneration =
       Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
     for (const entry of entries) {
@@ -122,6 +143,9 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     }
   } else {
     for (const entry of entries) {
+      if (entry.delivery) {
+        delete entry.delivery.requesterVisibleFinal;
+      }
       entry.requesterTurnRunId = undefined;
       entry.requesterTurnYielded = undefined;
       if (entry.retireAfterRequesterTurn === true) {

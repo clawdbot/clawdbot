@@ -55,6 +55,8 @@ export const desktopPanelLauncherStyles = css`
   .desktop-connecting {
     position: absolute;
     inset: 0;
+    /* Status overlay only; clicks must reach the take-control surface below. */
+    pointer-events: none;
     display: flex;
     align-items: center;
     justify-content: center;

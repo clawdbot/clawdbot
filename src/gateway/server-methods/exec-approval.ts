@@ -17,6 +17,7 @@ import {
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import { normalizeExecAsk, normalizeExecSecurity } from "../../infra/exec-approvals-core.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   normalizeExecApprovalUnavailableDecisions,
@@ -98,7 +99,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.get": async ({ params, respond, client }) => {
+    "exec.approval.get": async ({ params, respond, client, context }) => {
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
@@ -107,6 +108,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: p.id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         exposeAmbiguousPrefixError: true,
       });
       if (!resolved.ok) {
@@ -131,8 +133,17 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
-    "exec.approval.list": async ({ respond, client }) => {
-      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
+    "exec.approval.list": async ({ respond, client, context }) => {
+      respond(
+        true,
+        listVisiblePendingApprovalRequests({
+          manager,
+          client,
+          approvalKind: "exec",
+          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        }),
+        undefined,
+      );
     },
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (
@@ -324,11 +335,21 @@ export function createExecApprovalHandlers(
         envKeys: envBinding.envKeys.length > 0 ? envBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
-        cwd: effectiveCwd ?? null,
+        // cwd/resolvedPath are display-only in the stored record (execution
+        // binds effectiveCwd via systemRunBinding above); sanitize like the
+        // command so bidi/invisible chars cannot spoof reviewer surfaces.
+        cwd: effectiveCwd ? sanitizeExecApprovalDisplayText(effectiveCwd) : null,
+        // nodeId/agentId/sessionKey stay raw: they are matched against the
+        // node registry and session routing, so escaping would break real
+        // lookups without display gain (hostile values match nothing).
         nodeId: host === "node" ? nodeId : null,
-        host: host || null,
-        security: p.security ?? null,
-        ask: p.ask ?? null,
+        // host is enum-gated ("node" checks); escape is identity for valid
+        // values and defuses invisible-char spoofing in reviewer meta rows.
+        host: host ? sanitizeExecApprovalDisplayText(host) : null,
+        // Closed enums: arbitrary strings become null instead of reaching
+        // reviewer surfaces; decision resolution already treats them as null.
+        security: normalizeExecSecurity(p.security) ?? null,
+        ask: normalizeExecAsk(p.ask) ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
         commandAnalysis,
         commandSpans,
@@ -338,7 +359,7 @@ export function createExecApprovalHandlers(
           unavailableDecisions,
         }),
         agentId: effectiveAgentId ?? null,
-        resolvedPath: p.resolvedPath ?? null,
+        resolvedPath: p.resolvedPath ? sanitizeExecApprovalDisplayText(p.resolvedPath) : null,
         sessionKey: effectiveSessionKey ?? null,
         sessionId: trustedAgentRuntime ? null : (normalizeOptionalString(p.sessionId) ?? null),
         runId: requestRunId ?? null,
@@ -412,7 +433,7 @@ export function createExecApprovalHandlers(
       if (!decisionPromise) {
         return;
       }
-      const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record);
+      const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record, "exec");
       const forwardRequest = opts?.forwarder?.handleRequested.bind(opts.forwarder);
       const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
       await handlePendingApprovalRequest({
@@ -455,6 +476,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: (params as { id?: string }).id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);

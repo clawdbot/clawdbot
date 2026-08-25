@@ -73,10 +73,10 @@ function isAnySchema(schema: JsonSchema): boolean {
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
   const filtered = values.filter((value) => value != null);
   const nullable = filtered.length !== values.length;
-  return { enumValues: uniqueValues(filtered), nullable };
+  return { enumValues: uniqueSchemaValues(filtered), nullable };
 }
 
-function uniqueValues(values: unknown[]): unknown[] {
+function uniqueSchemaValues(values: unknown[]): unknown[] {
   const unique: unknown[] = [];
   for (const value of values) {
     if (!unique.some((existing) => Object.is(existing, value))) {
@@ -146,7 +146,18 @@ function hasOnlySupportedConstraintKeywords(schema: JsonSchema): boolean {
 }
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
-  return Object.keys(schema).every((key) => SUPPORTED_FORM_SCHEMA_KEYS.has(key));
+  return Object.keys(schema).every(
+    (key) =>
+      SUPPORTED_FORM_SCHEMA_KEYS.has(key) ||
+      // JSON object keys are already strings; constrained names must remain fail-closed.
+      (key === "propertyNames" &&
+        typeof schema.propertyNames === "object" &&
+        schema.propertyNames !== null &&
+        !Array.isArray(schema.propertyNames) &&
+        Object.keys(schema.propertyNames).length === 1 &&
+        Object.hasOwn(schema.propertyNames, "type") &&
+        schema.propertyNames.type === "string"),
+  );
 }
 
 function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boolean {
@@ -591,7 +602,7 @@ function normalizeUnion(
     return {
       schema: {
         ...schema,
-        enum: uniqueValues(literals),
+        enum: uniqueSchemaValues(literals),
         nullable,
         enumIncludesNull: nullable,
         anyOf: undefined,

@@ -364,7 +364,7 @@ describe("gateway sessions patch", () => {
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ pinnedAt: 10 }),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy,
       }),
     );
@@ -375,7 +375,7 @@ describe("gateway sessions patch", () => {
     const idempotent = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       }),
     );
@@ -385,18 +385,47 @@ describe("gateway sessions patch", () => {
     const restored = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
-        patch: { key: MAIN_SESSION_KEY, archived: false },
+        patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
     expect(restored.archivedBy).toBeUndefined();
   });
 
+  test.each([
+    { action: "archive", archived: true, sessionId: undefined },
+    { action: "archive", archived: true, sessionId: "" },
+    { action: "restore", archived: false, sessionId: undefined },
+    { action: "restore", archived: false, sessionId: "" },
+  ])("rejects $action for a provisional session identity", async ({ archived, sessionId }) => {
+    const entry = { sessionId, updatedAt: 1 } as SessionEntry;
+    const store = { [MAIN_SESSION_KEY]: entry };
+
+    expectPatchError(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, archived },
+      }),
+      `session not found: ${MAIN_SESSION_KEY}`,
+    );
+    expect(store[MAIN_SESSION_KEY]).toBe(entry);
+  });
+
+  test("requires the caller-observed durable identity for lifecycle patches", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+      "expectedSessionId required for session lifecycle patch",
+    );
+  });
+
   test("does not fabricate archive attribution without an actor", async () => {
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({}),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
       }),
     );
 
@@ -1201,6 +1230,79 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
+  test("validates context-window selections against the effective model catalog", async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "claude-cli/claude-fable-5" } } },
+    } as OpenClawConfig;
+    const loadGatewayModelCatalog = async () => [
+      {
+        provider: "claude-cli",
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+    ];
+
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg,
+        patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
+        loadGatewayModelCatalog,
+      }),
+    );
+    expect(entry.contextWindow).toBe("200k");
+    expect(entry.liveModelSwitchPending).toBe(true);
+
+    const invalid = await runPatch({
+      cfg,
+      patch: { key: MAIN_SESSION_KEY, contextWindow: "2m" },
+      loadGatewayModelCatalog,
+    });
+    expectPatchError(invalid, 'contextWindow "2m" is not supported');
+  });
+
+  test("rejects thinking levels forbidden by the concrete runtime policy", async () => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "claude-cli"
+        ? { levels: [{ id: "off" }], defaultLevel: "off" }
+        : {
+            levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+            defaultLevel: "adaptive",
+            preserveWhenCatalogReasoningFalse: true,
+          },
+    );
+
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-mythos-5" },
+          },
+        },
+      } as OpenClawConfig,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        thinkingLevel: "medium",
+      },
+      loadGatewayModelCatalog: async () => [
+        {
+          provider: "anthropic",
+          id: "claude-mythos-5",
+          name: "Claude Mythos 5",
+          reasoning: false,
+          thinkingPolicyProvider: "claude-cli",
+        },
+      ],
+    });
+
+    expectPatchError(result, 'thinkingLevel "medium" is not supported');
+  });
+
   test("accepts xhigh thinking patches from configured catalog compat", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -1372,6 +1474,7 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, 'thinkingLevel "ultra" is not supported');
     expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
+      agentId: "main",
       entry: expect.objectContaining({ sessionId: "sess" }),
     });
   });
@@ -1532,6 +1635,26 @@ describe("gateway sessions patch", () => {
     expect(entry.groupActivation).toBe("always");
   });
 
+  test("stores and clears the session permission mode", async () => {
+    const stored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ sessionRoot: "/workspace/project" }),
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBe("/workspace/project");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: { [MAIN_SESSION_KEY]: stored },
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBe("/workspace/project");
+  });
+
   test("clears a node cwd when changing or clearing the node binding", async () => {
     const store = mainStoreEntry({
       execHost: "node",
@@ -1543,6 +1666,7 @@ describe("gateway sessions patch", () => {
     );
     expect(changed.execNode).toBe("worker-2");
     expect(changed.execCwd).toBeUndefined();
+    expect(changed.execHost).toBe("node");
 
     const cleared = expectPatchOk(
       await runPatch({
@@ -1556,7 +1680,28 @@ describe("gateway sessions patch", () => {
     );
     expect(cleared.execNode).toBeUndefined();
     expect(cleared.execCwd).toBeUndefined();
+    expect(cleared.execHost).toBeUndefined();
   });
+
+  test.each(["auto", "gateway", "sandbox"] as const)(
+    "preserves explicit %s exec hosting when clearing a stale node binding",
+    async (execHost) => {
+      const cleared = expectPatchOk(
+        await runPatch({
+          store: mainStoreEntry({
+            execHost,
+            execNode: "worker-1",
+            execCwd: "/workspace/on-worker-1",
+          }),
+          patch: { key: MAIN_SESSION_KEY, execNode: null },
+        }),
+      );
+
+      expect(cleared.execHost).toBe(execHost);
+      expect(cleared.execNode).toBeUndefined();
+      expect(cleared.execCwd).toBeUndefined();
+    },
+  );
 
   test("rejects invalid execHost values", async () => {
     const result = await runPatch({

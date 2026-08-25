@@ -1,5 +1,3 @@
-export { stripOpenAIResponsesCompactionReplayCheckpoint } from "./openai-responses-compaction-replay.js";
-
 /** Resolves the assistant message id that can be replayed to OpenAI Responses. */
 export function resolveReplayableResponsesMessageId(params: {
   replayResponsesItemIds: boolean;

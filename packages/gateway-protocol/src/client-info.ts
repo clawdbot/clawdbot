@@ -63,12 +63,16 @@ export type GatewayClientInfo = {
   displayName?: string;
   /** Client app or package version reported by the connecting process. */
   version: string;
+  /** Exact immutable artifact identity when the client can report one. */
+  buildId?: string;
   /** Runtime platform string, such as `darwin`, `ios`, `android`, or `web`. */
   platform: string;
   /** Optional device family used by native clients for display and routing hints. */
   deviceFamily?: string;
   /** Native hardware/model identifier when available. */
   modelIdentifier?: string;
+  /** Self-reported IANA time zone, such as `Europe/Vienna`, for presence display. */
+  timeZone?: string;
   /** Coarse category from `GATEWAY_CLIENT_MODES` for policy and diagnostics. */
   mode: GatewayClientMode;
   /** Per-installation or per-process id used to distinguish same-product clients. */
@@ -82,7 +86,6 @@ export const GATEWAY_CLIENT_CAPS = {
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
   RUN_TOOL_BINDINGS: "run-tool-bindings",
-  SESSION_COMPANION_PROGRESS: "session-companion-progress",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
   PLUGIN_APPROVALS: "plugin-approvals",
   TASK_SUGGESTIONS: "task-suggestions",

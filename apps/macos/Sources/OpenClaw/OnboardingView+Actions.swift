@@ -123,9 +123,10 @@ extension OnboardingView {
         OnboardingController.markComplete()
         OnboardingController.shared.close()
         guard state.connectionMode != .unconfigured else { return true }
-        // Inference works; the dashboard's custodian onboarding owns the rest
-        // (memory import, channels, permissions guidance, hatch).
-        dashboardOnboardingOpener()
+        // Fresh activation hands off to the dashboard's custodian onboarding, which
+        // owns the remaining first-run steps (memory import, channels, permissions,
+        // hatch). A live-verified pre-existing setup reopens the normal dashboard.
+        dashboardHandoffOpener(aiSetup.verifiedExistingInference ? .dashboard : .custodianOnboarding)
         return true
     }
 }

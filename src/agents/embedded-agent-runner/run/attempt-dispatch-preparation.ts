@@ -54,10 +54,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const params = runInput.runParams;
+  const params = input.terminalRetryState.forceCodeModeReconciliationTools
+    ? { ...runInput.runParams, forceCodeModeReconciliationTools: true }
+    : runInput.runParams;
   const {
     workspaceResolution,
     workspaceDir,
+    bootstrapWorkspaceDir,
     isCanonicalWorkspace,
     agentDir,
     resolvedSessionKey,
@@ -206,16 +209,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       ? { kind: "caller-owned", sessionManager: params.sessionManager }
       : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },
     runtime: {
+      contextEngineAgentId: runInput.contextEngineAgentId,
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
       sessionKey: resolvedSessionKey,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
+      bootstrapWorkspaceDir,
       isCanonicalWorkspace,
       agentDir,
       preparedModelRuntime: runInput.preparedModelRuntime,
       contextEngine: nativeModelOwned ? undefined : contextEngine,
       contextTokenBudget: runtime.contextTokenBudget,
+      authoredContextTokenCap: runtime.authoredContextTokenCap,
       contextWindowInfo: runtime.contextWindowInfo,
       prompt,
       provider,
@@ -229,7 +235,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       model: effectiveModel,
       resolvedApiKey: resolvedAttemptApiKey,
       authProfileId: runtime.lastProfileId,
-      authProfileIdSource: lockedProfileId ? "user" : "auto",
+      authProfileIdSource:
+        runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto",
       initialReplayState: input.replayState,
       authStorage,
       authProfileStore: resolveRunAttemptAuthProfileStore(),

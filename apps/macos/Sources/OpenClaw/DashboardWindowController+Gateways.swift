@@ -69,10 +69,7 @@ extension DashboardWindowController {
     }
 
     static func isExpectedTLSAuthority(host: String, port: Int, dashboardURL: URL) -> Bool {
-        let expectedHost = dashboardURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let challengedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let expectedPort = dashboardURL.port ?? (dashboardURL.scheme?.lowercased() == "https" ? 443 : 80)
-        return expectedHost?.isEmpty == false && challengedHost == expectedHost && port == expectedPort
+        GatewayTLSAuthority(url: dashboardURL)?.matches(host: host, port: port) == true
     }
 
     static func gatewaysRequest(from body: Any) -> DashboardGatewaysRequest? {
@@ -149,6 +146,16 @@ extension DashboardWindowController {
             "This changes the Mac app's primary Gateway and resets Talk Mode, canvas, and chat connections."
         alert.addButton(withTitle: "Set as Primary")
         alert.addButton(withTitle: "Cancel")
+        return alert
+    }
+
+    static func makeGatewaySetupAlert(title: String, message: String) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "Change Gateway")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
         return alert
     }
 }

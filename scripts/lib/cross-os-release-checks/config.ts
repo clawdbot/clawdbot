@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
+import { parsePermissiveBooleanToken } from "../arg-utils.mts";
 import { trimForSummary } from "./shared.ts";
 
 type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
@@ -314,11 +315,9 @@ function parseBooleanEnv(name: string, fallback: boolean, env = process.env): bo
   if (!raw) {
     return fallback;
   }
-  if (/^(1|true|yes|on)$/iu.test(raw)) {
-    return true;
-  }
-  if (/^(0|false|no|off)$/iu.test(raw)) {
-    return false;
+  const parsed = parsePermissiveBooleanToken(raw);
+  if (parsed !== undefined) {
+    return parsed;
   }
   throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
 }
@@ -526,22 +525,6 @@ export function shouldUseManagedGatewayService(platform = process.platform) {
   return platform === "win32";
 }
 
-export function shouldUseManagedGatewayForInstallerRuntime(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform) && platform !== "win32";
-}
-
-export function shouldExerciseManagedGatewayLifecycleAfterInstall(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldStopManagedGatewayBeforeManualFallback(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldRunBundledPluginPostinstall(_options?: { lane?: LaneState }) {
-  return true;
-}
-
 export function looksLikeCommitSha(ref: string) {
   return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
 }
@@ -563,10 +546,6 @@ export function shouldRunMainChannelDevUpdate(ref: string) {
     return false;
   }
   return resolveExpectedDevUpdateRef(ref) === "main";
-}
-
-export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {
-  return platform === "win32";
 }
 
 export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {

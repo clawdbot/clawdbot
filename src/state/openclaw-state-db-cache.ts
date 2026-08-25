@@ -11,6 +11,29 @@ import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-maintenance.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+type OpenClawStateDatabaseLifecycleEvent =
+  | { kind: "opened"; database: OpenClawStateDatabase }
+  | { kind: "closed"; path: string }
+  | { kind: "open-error"; path: string; error: unknown };
+const databaseLifecycleListeners = new Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>();
+
+function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecycleEvent): void {
+  for (const listener of databaseLifecycleListeners) {
+    listener(event);
+  }
+}
+
+export function registerOpenClawStateDatabaseLifecycleListener(
+  listener: (event: OpenClawStateDatabaseLifecycleEvent) => void,
+): () => void {
+  databaseLifecycleListeners.add(listener);
+  for (const database of cachedDatabases.values()) {
+    if (database.db.isOpen) {
+      listener({ kind: "opened", database });
+    }
+  }
+  return () => databaseLifecycleListeners.delete(listener);
+}
 
 type OpenClawStateDatabaseCloseResult = {
   caught: boolean;
@@ -20,11 +43,12 @@ type OpenClawStateDatabaseCloseResult = {
 /** Close both physical-handle owners while retaining every cleanup failure. */
 function closeOpenClawStateDatabaseHandle(
   database: OpenClawStateDatabase,
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): OpenClawStateDatabaseCloseResult {
   let caught = false;
   const errors: unknown[] = [];
   try {
-    database.walMaintenance.close();
+    database.walMaintenance.close(options);
   } catch (error) {
     caught = true;
     errors.push(error);
@@ -48,8 +72,10 @@ function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): bool
   // Remove ownership before cleanup. A poisoned native handle can reject close,
   // but it must never remain discoverable as the process-wide shared handle.
   cachedDatabases.delete(database.path);
-  // Eviction is best-effort; the triggering database error remains authoritative.
-  closeOpenClawStateDatabaseHandle(database);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
+  // A poisoned cache owner is not the database lifecycle owner. PASSIVE avoids
+  // waiting on readers or resetting recovery frames another connection needs.
+  closeOpenClawStateDatabaseHandle(database, { checkpointMode: "PASSIVE" });
   return true;
 }
 
@@ -74,6 +100,7 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
 function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
   const { db, path: pathname } = database;
   cachedDatabases.set(pathname, database);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "opened", database });
   registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
     // Write transactions own rollback and evict at their outer boundary.
     if (!db.isTransaction && isSqliteCorruptionError(error)) {
@@ -101,6 +128,7 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
   database.walMaintenance.close();
   clearNodeSqliteKyselyCacheForDatabase(database.db);
   cachedDatabases.delete(database.path);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
 }
 
 /** Latch background verification damage so later opens fail without rescanning. */
@@ -123,6 +151,10 @@ function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
   if (terminalFailure) {
     throw terminalFailure;
   }
+}
+
+function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: unknown): void {
+  notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: path.resolve(pathname), error });
 }
 
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
@@ -162,16 +194,20 @@ function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
     database.db.close();
   }
   cachedDatabases.delete(resolvedPath);
+  notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: resolvedPath });
   return true;
 }
 
 /** Close all cached shared state database handles. */
-function closeOpenClawStateDatabase(): void {
+function closeOpenClawStateDatabase(
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+): void {
   for (const database of cachedDatabases.values()) {
-    database.walMaintenance.close();
+    database.walMaintenance.close(options);
     if (database.db.isOpen) {
       database.db.close();
     }
+    notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
   }
   cachedDatabases.clear();
 }
@@ -204,4 +240,5 @@ export const openClawStateDatabaseCache = {
   isOpenClawStateDatabaseOpen,
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
+  recordOpenClawStateDatabaseLifecycleOpenError,
 };

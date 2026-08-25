@@ -21,7 +21,6 @@ type QuestionPanelViewModel = {
   collapsed: boolean;
   disabled: boolean;
   submitting?: boolean;
-  countdown?: string;
   answersById?: Record<string, string[]>;
   error?: string | null;
   requestPosition?: { current: number; total: number };
@@ -39,7 +38,6 @@ type QuestionPanelProps = {
 };
 
 type GatewayQuestionPanelOptions = {
-  nowMs: number;
   onChange?: () => void;
   onSubmit?: (answers: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
@@ -49,12 +47,6 @@ type GatewayQuestionPanelOptions = {
   onPreviousRequest?: () => void;
   onNextRequest?: () => void;
 };
-
-function formatRemaining(expiresAtMs: number, nowMs: number): string {
-  const seconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
-}
 
 function promptDraftAnswers(prompt: QuestionPrompt): Record<string, string[]> {
   return Object.fromEntries(
@@ -91,10 +83,6 @@ export function createGatewayQuestionPanelProps(
       collapsed: options.collapsed ?? false,
       disabled: prompt.status !== "pending" || prompt.submitting,
       submitting: prompt.submitting,
-      countdown:
-        prompt.status === "pending"
-          ? formatRemaining(prompt.expiresAtMs, options.nowMs)
-          : undefined,
       answersById: promptDraftAnswers(prompt),
       error: prompt.error,
       requestPosition: options.requestPosition,
@@ -527,13 +515,6 @@ class ChatQuestionPanel extends LitElement {
                   ${icons.chevronRight}
                 </button>
               </div>`
-            : nothing}
-          ${model.countdown
-            ? html`<span
-                class="chat-question-panel__countdown"
-                title=${t("chat.questions.timeRemaining")}
-                >${model.countdown}</span
-              >`
             : nothing}
           <button
             class="chat-question-panel__collapse"

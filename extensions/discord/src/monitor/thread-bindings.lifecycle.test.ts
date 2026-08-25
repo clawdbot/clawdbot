@@ -19,6 +19,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 
@@ -67,7 +68,7 @@ vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
 }));
 
-const { testing, createThreadBindingManager } = await import("./thread-bindings.manager.js");
+const { createThreadBindingManager } = await import("./thread-bindings.manager.js");
 const {
   autoBindSpawnedDiscordSubagent,
   reconcileAcpThreadBindingsOnStartup,
@@ -77,7 +78,6 @@ const {
 } = await import("./thread-bindings.lifecycle.js");
 const { resolveThreadBindingInactivityExpiresAt, resolveThreadBindingMaxAgeExpiresAt } =
   await import("./thread-bindings.state.js");
-const { resolveThreadBindingIntroText } = await import("./thread-bindings.messages.js");
 const discordClientModule = await import("../client.js");
 const discordThreadBindingApi = await import("./thread-bindings.discord-api.js");
 const acpRuntime = await import("openclaw/plugin-sdk/acp-runtime");
@@ -128,7 +128,7 @@ function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: 
 describe("thread binding lifecycle", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
-    testing.resetThreadBindingsForTests();
+    resetThreadBindingsForTests();
     setDiscordRuntime({
       state: {
         openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
@@ -264,7 +264,7 @@ describe("thread binding lifecycle", () => {
     createTestThreadBindingManager({
       accountId: "default",
       persist: false,
-      enableSweeper: false,
+      enableSweeper: true,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
     });
@@ -294,27 +294,6 @@ describe("thread binding lifecycle", () => {
     return binding;
   };
 
-  it("includes idle and max-age details in intro text", () => {
-    const intro = resolveThreadBindingIntroText({
-      agentId: "main",
-      label: "worker",
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 48 * 60 * 60 * 1000,
-    });
-    expect(intro).toContain("idle auto-unfocus after 24h inactivity");
-    expect(intro).toContain("max age 48h");
-  });
-
-  it("includes cwd near the top of intro text", () => {
-    const intro = resolveThreadBindingIntroText({
-      agentId: "codex",
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      sessionCwd: "/home/bob/clawd",
-      sessionDetails: ["session ids: pending (available after the first reply)"],
-    });
-    expect(intro).toContain("\ncwd: /home/bob/clawd\nsession ids: pending");
-  });
-
   it.each([
     {
       name: "auto-unfocuses idle-expired bindings and sends inactivity message",
@@ -338,7 +317,7 @@ describe("thread binding lifecycle", () => {
         accountId: "default",
         cfg: EMPTY_DISCORD_TEST_CONFIG,
         persist: false,
-        enableSweeper: false,
+        enableSweeper: true,
         idleTimeoutMs,
         maxAgeMs,
       });
@@ -361,7 +340,6 @@ describe("thread binding lifecycle", () => {
       hoisted.sendWebhookMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await testing.runThreadBindingSweepForAccount("default");
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
       if (expectNoProbe) {
@@ -402,7 +380,6 @@ describe("thread binding lifecycle", () => {
       hoisted.restGet.mockRejectedValueOnce(probeError);
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await testing.runThreadBindingSweepForAccount("default");
 
       if (keepsBinding) {
         expectFields(requireBinding(manager, "thread-1"), "thread binding", {
@@ -570,7 +547,7 @@ describe("thread binding lifecycle", () => {
       const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
-        enableSweeper: false,
+        enableSweeper: true,
         idleTimeoutMs: 60_000,
         maxAgeMs: 0,
       });
@@ -594,7 +571,6 @@ describe("thread binding lifecycle", () => {
       expect(updated[0]?.idleTimeoutMs).toBe(0);
 
       await vi.advanceTimersByTimeAsync(240_000);
-      await testing.runThreadBindingSweepForAccount("default");
 
       expectFields(requireBinding(manager, "thread-1"), "thread binding", {
         threadId: "thread-1",
@@ -612,7 +588,7 @@ describe("thread binding lifecycle", () => {
       const manager = createTestThreadBindingManager({
         accountId: "default",
         persist: false,
-        enableSweeper: false,
+        enableSweeper: true,
         idleTimeoutMs: 60_000,
         maxAgeMs: 0,
       });
@@ -658,7 +634,6 @@ describe("thread binding lifecycle", () => {
       hoisted.sendMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
-      await testing.runThreadBindingSweepForAccount("default");
 
       expectFields(requireBinding(manager, "thread-2"), "thread binding", {
         threadId: "thread-2",
@@ -716,7 +691,7 @@ describe("thread binding lifecycle", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
       const manager = createTestThreadBindingManager({
         accountId: "default",
@@ -740,7 +715,7 @@ describe("thread binding lifecycle", () => {
       vi.setSystemTime(touchedAt);
       manager.touchThread({ threadId: "thread-1" });
 
-      testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       const reloaded = createTestThreadBindingManager({
         accountId: "default",
         persist: true,
@@ -758,7 +733,7 @@ describe("thread binding lifecycle", () => {
         }),
       ).toBe(new Date("2026-02-20T00:01:30.000Z").getTime());
     } finally {
-      testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -1162,6 +1137,9 @@ describe("thread binding lifecycle", () => {
   it("preserves prefixed current channel conversation ids as binding keys", async () => {
     createTestThreadBindingManager({
       accountId: "default",
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "codex" }] },
+      },
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
@@ -1181,9 +1159,6 @@ describe("thread binding lifecycle", () => {
         conversationId: "channel:1491611525914558667",
       },
       placement: "current",
-      metadata: {
-        agentId: "codex",
-      },
     });
 
     const boundConversation = requireRecord(
@@ -1194,6 +1169,9 @@ describe("thread binding lifecycle", () => {
       channel: "discord",
       accountId: "default",
       conversationId: "channel:1491611525914558667",
+    });
+    expectFields(requireRecord(bound, "bound session").metadata, "bound metadata", {
+      agentId: "codex",
     });
     expectFields(
       service.resolveByConversation({
@@ -1853,7 +1831,7 @@ describe("thread binding lifecycle", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       const now = Date.now();
       const store = createPluginStateSyncKeyedStoreForTests("discord", {
         namespace: "thread-bindings",
@@ -1879,7 +1857,7 @@ describe("thread binding lifecycle", () => {
       expect(removed).toHaveLength(1);
       expect(store.entries()).toStrictEqual([]);
     } finally {
-      testing.resetThreadBindingsForTests();
+      resetThreadBindingsForTests();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {

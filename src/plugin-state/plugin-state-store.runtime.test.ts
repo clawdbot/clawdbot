@@ -40,7 +40,6 @@ function createPluginRecord(
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

@@ -1,15 +1,17 @@
 // Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
-import { resolveMainSessionKey } from "../../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolveGatewayAgentSelectionState } from "../agent-list.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
 import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
@@ -46,21 +48,25 @@ const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
   },
 };
 
-export function buildGatewaySnapshot(opts?: {
+export function buildGatewaySnapshot(opts: {
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
+  revisionProjector: GatewayConfigRevisionProjector;
 }): Snapshot {
   const cfg = getRuntimeConfig();
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const selection = resolveGatewayAgentSelectionState(cfg);
+  const defaultAgentId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  const mainSessionKey = resolveMainSessionKey(cfg);
   const scope = cfg.session?.scope ?? "per-sender";
+  const mainSessionKey =
+    scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
   const includeUpdateDetails = opts?.includeUpdateDetails === true;
   const updateAvailable =
     projectUpdateAvailable(getUpdateAvailable(), includeUpdateDetails) ?? undefined;
   const updateSchedule = includeUpdateDetails ? (getUpdateSchedule() ?? undefined) : undefined;
+  const appliedConfigHash = getRuntimeConfigAppliedHash();
   // Health is async; the caller replaces this with the collected snapshot.
   const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
@@ -68,9 +74,14 @@ export function buildGatewaySnapshot(opts?: {
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
-    appliedConfigHash: getRuntimeConfigAppliedHash(),
+    appliedConfigHash: appliedConfigHash
+      ? opts.revisionProjector.projectResolvedHash(appliedConfigHash)
+      : null,
     sessionDefaults: {
       defaultAgentId,
+      modelConfigured: Boolean(resolveAgentEffectiveModelPrimary(cfg, defaultAgentId)),
+      ownership: selection.ownership,
+      selectionRequired: selection.selectionRequired,
       mainKey,
       mainSessionKey,
       scope,

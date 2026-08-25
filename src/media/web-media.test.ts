@@ -13,7 +13,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resizeToJpeg } from "./media-services.js";
+import { createImageProcessor, resizeToJpeg } from "./media-services.js";
 import { encodePngRgba, fillPixel } from "./png-encode.js";
 
 let effectiveImageBytesCap: typeof import("./web-media.js").effectiveImageBytesCap;
@@ -485,6 +485,35 @@ describe("loadWebMedia", () => {
       expect(result.fileName).toBe("portrait.jpg");
       expect(result.buffer.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
       expect(readJpegDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
+    }
+  });
+
+  it("renames transparent WebP images converted to PNG across direct and local image owners", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    const sourcePng = createLargeTransparentColorBlockPng(64);
+    const sourceWebp = (await createImageProcessor().encode(sourcePng, { format: "webp" })).data;
+    const imageCompression = { models: [{ maxSidePx: 32, preferredSidePx: 32 }] };
+
+    const direct = await optimizeImageBufferForWebMedia({
+      buffer: sourceWebp,
+      contentType: "image/webp",
+      fileName: "portrait.WebP",
+      maxBytes: 1024 * 1024,
+      imageCompression,
+    });
+    const convertedPath = path.join(fixtureRoot, "portrait.WebP");
+    await fs.writeFile(convertedPath, sourceWebp);
+    const loaded = await loadWebMedia(convertedPath, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      imageCompression,
+    });
+
+    for (const result of [direct, loaded]) {
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/png");
+      expect(result.fileName).toBe("portrait.png");
+      expect(readPngDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
     }
   });
 
@@ -1504,6 +1533,54 @@ describe("loadWebMedia", () => {
     } finally {
       await fs.rm(filePath, { force: true });
     }
+  });
+
+  it("bounds explicit-cap image fetches at the optimize headroom, not the document cap", async () => {
+    // 30MB declared original: over the 24MB image-optimize headroom but well
+    // under the old 100MB document bound. The Content-Length precheck must
+    // reject before any body bytes are read.
+    const declaredBytes = 30 * 1024 * 1024;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(new ReadableStream<Uint8Array>(), {
+          status: 200,
+          headers: {
+            "content-type": "image/png",
+            "content-length": String(declaredBytes),
+          },
+        }),
+    );
+
+    await expect(
+      loadWebMedia("https://example.test/huge.png", {
+        maxBytes: 5 * 1024 * 1024,
+        fetchImpl,
+        ssrfPolicy: { allowedHostnames: ["example.test"] },
+      }),
+    ).rejects.toThrow(/exceeds maxBytes/);
+  });
+
+  it("keeps compression headroom above an explicit cap for oversized originals", async () => {
+    // A 10MB-declared image is over the caller's 5MB cap but inside the
+    // optimize headroom: the fetch must proceed so compression can shrink it
+    // under the delivery cap.
+    const original = createSolidPngBuffer(64, 64, { r: 12, g: 34, b: 56 });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Buffer.from(original), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+
+    const result = await loadWebMedia("https://example.test/photo.png", {
+      maxBytes: 5 * 1024 * 1024,
+      fetchImpl,
+      ssrfPolicy: { allowedHostnames: ["example.test"] },
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeLessThanOrEqual(5 * 1024 * 1024);
   });
 
   it("applies the shared remote read idle timeout for raw web media loads", async () => {

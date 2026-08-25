@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
+import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import {
   listConfiguredSessionStoreAgentIds,
@@ -242,7 +243,8 @@ export function normalizeSessionEntry(
   entry: SessionEntryLike,
   sessionKey?: string,
 ): SessionEntry | null {
-  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
+  const { room, ...entryWithoutRoom } = entry;
+  const shaped = normalizePersistedSessionEntryShape(entryWithoutRoom, { sessionKey });
   if (!shaped) {
     return null;
   }
@@ -253,11 +255,9 @@ export function normalizeSessionEntry(
         ? normalized.updatedAt
         : Date.now();
   }
-  const rec = normalized as unknown as Record<string, unknown>;
-  if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
-    rec.groupChannel = rec.room;
+  if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
+    normalized.groupChannel = room;
   }
-  delete rec.room;
   return normalized;
 }
 
@@ -599,21 +599,28 @@ export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
-  legacySessionSurfaces: PreparedLegacySessionSurfaces;
+  legacySessionSurfaces: PreparedLegacySessionSurfaces | (() => PreparedLegacySessionSurfaces);
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
-  if (params.legacySessionSurfaces.failures.length > 0) {
-    return {
-      changes,
-      warnings: [...params.legacySessionSurfaces.failures],
-    };
-  }
+  let preparedLegacySessionSurfaces: PreparedLegacySessionSurfaces | undefined;
+  const resolveLegacySessionSurfaces = () =>
+    (preparedLegacySessionSurfaces ??=
+      typeof params.legacySessionSurfaces === "function"
+        ? params.legacySessionSurfaces()
+        : params.legacySessionSurfaces);
   const stateDir = resolveStateDir(env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
+  const persistedStoreAgentId =
+    persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined;
+  const persistedStorePath =
+    persistedStoreAgentId && storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, persistedStoreAgentId, env)
+      : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
     listPluginDoctorSessionStoreAgentIds({
@@ -629,6 +636,12 @@ export async function migrateOrphanedSessionKeys(params: {
   const storeMap = new Map<string, Set<string>>();
   const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
+    // A fixed-store owner is durable migration provenance. Keep other configured
+    // agents from making that store's unscoped rows look ambiguous.
+    const ownerId =
+      persistedStoreAgentId && persistedStorePath && sessionStorePathsMatch(p, persistedStorePath)
+        ? persistedStoreAgentId
+        : id;
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
@@ -638,9 +651,9 @@ export async function migrateOrphanedSessionKeys(params: {
     storeAliasCandidates.set(storePath, aliasCandidates);
     const existing = storeMap.get(storePath);
     if (existing) {
-      existing.add(id);
+      existing.add(ownerId);
     } else {
-      storeMap.set(storePath, new Set([id]));
+      storeMap.set(storePath, new Set([ownerId]));
     }
   };
   // Configured ownership includes normal agents plus ACP runtime/default hints.
@@ -708,6 +721,10 @@ export async function migrateOrphanedSessionKeys(params: {
     ) {
       continue;
     }
+    const legacySessionSurfaces = resolveLegacySessionSurfaces();
+    if (legacySessionSurfaces.failures.length > 0) {
+      return { changes, warnings: [...warnings, ...legacySessionSurfaces.failures] };
+    }
     // A physical store can have several owners. Canonicalize valid scoped rows
     // within their declared owner on every pass so iteration order cannot move
     // one agent's history into another namespace.
@@ -755,7 +772,7 @@ export async function migrateOrphanedSessionKeys(params: {
         preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
-        legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
+        legacySessionSurfaces: legacySessionSurfaces.surfaces,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so

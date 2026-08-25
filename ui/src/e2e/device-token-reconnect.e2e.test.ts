@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -34,12 +35,7 @@ const ROSITA_DEVICE_TOKEN = "rosita-device-token";
 const WILFRED_DEVICE_TOKEN = "wilfred-device-token";
 const WILFRED_ROTATED_TOKEN = "wilfred-rotated-device-token";
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function readConnectAuth(request: { params?: unknown }): Record<string, unknown> | undefined {
   const auth = requireRecord(request.params).auth;
@@ -237,6 +233,8 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
           role: "operator",
           scopes: OPERATOR_SCOPES,
           token: WILFRED_ROTATED_TOKEN,
+          rotatedAtMs: Date.now(),
+          tokenDelivery: "in-band",
         },
         "node.list": { nodes: [] },
       },

@@ -29,6 +29,7 @@ import {
   renderMarkdownRichListSource,
   type MarkdownRichListSource,
 } from "./rich-blocks-list.js";
+import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 
@@ -104,11 +105,10 @@ function resolveTelegramLinkAction(
     return null;
   }
   const label = source.slice(link.start, link.end);
-  if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
-    // Bare file refs (README.md, openclaw.json) must render as code, not links:
-    // Telegram's server-side entity detection would otherwise re-linkify them
-    // and show spurious domain previews for TLD-like extensions.
-    return { kind: "code" };
+  if (context.origin === "linkify") {
+    // File refs need code to suppress false links. Other bare links stay plain
+    // because Telegram typed URLs escape query separators (observed 2026-08).
+    return isAutoLinkedFileRef(href, label) ? { kind: "code" } : null;
   }
   if (href.startsWith("#")) {
     // In-message fragments are RichTextAnchorLink, not RichTextUrl.
@@ -412,18 +412,9 @@ function emitGapBlocks(ir: MarkdownIR, start: number, end: number): InputRichBlo
 }
 
 function renderAsciiTableGrid(table: MarkdownTableMeta): string {
-  const rows = [table.headers, ...table.rows];
-  const columnCount = Math.max(...rows.map((row) => row.length), 0);
-  const widths = Array.from({ length: columnCount }, () => 3);
-  for (const row of rows) {
-    for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
-    }
-  }
-  const renderRow = (row: readonly string[]) =>
-    `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`;
-  const divider = `| ${widths.map((width) => "-".repeat(width)).join(" | ")} |`;
-  return [renderRow(table.headers), divider, ...table.rows.map(renderRow)].join("\n");
+  return renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+    headerSeparator: true,
+  });
 }
 
 function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {

@@ -16,7 +16,7 @@ const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/operator-approvals-client.ts",
   "src/gateway/probe.ts",
-  "src/node-host/runner.ts",
+  "src/node-host/gateway-candidate-connection.ts",
   "src/tui/gateway-chat.ts",
 ]);
 

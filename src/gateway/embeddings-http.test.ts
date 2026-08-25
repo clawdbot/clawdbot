@@ -17,6 +17,7 @@ import type {
   MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCallOptions,
 } from "../plugins/memory-embedding-providers.js";
+import { adaptMemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
@@ -57,11 +58,10 @@ let embedBatchMock: ReturnType<
   >
 >;
 let closeEmbeddingProviderMock: ReturnType<typeof vi.fn<() => Promise<void> | void>>;
-let clearMemoryEmbeddingProviders: typeof import("../plugins/memory-embedding-providers.js").clearMemoryEmbeddingProviders;
-let registerMemoryEmbeddingProvider: typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider;
 let openAiAdapter: MemoryEmbeddingProviderAdapter;
 let drainRetainedOpenAiEmbeddingProviders: typeof import("./embeddings-http.js").drainRetainedOpenAiEmbeddingProviders;
 let clearEmbeddingProviders: typeof import("../plugins/embedding-providers.js").clearEmbeddingProviders;
+let registerEmbeddingProvider: typeof import("../plugins/embedding-providers.js").registerEmbeddingProvider;
 let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
 let genericEmbeddingServer: { baseUrl: string; close: () => Promise<void> };
 let enabledPort: number;
@@ -132,9 +132,8 @@ async function startGenericEmbeddingServer(): Promise<{
 
 beforeAll(async () => {
   ({ drainRetainedOpenAiEmbeddingProviders } = await import("./embeddings-http.js"));
-  ({ clearMemoryEmbeddingProviders, registerMemoryEmbeddingProvider } =
-    await import("../plugins/memory-embedding-providers.js"));
-  ({ clearEmbeddingProviders } = await import("../plugins/embedding-providers.js"));
+  ({ clearEmbeddingProviders, registerEmbeddingProvider } =
+    await import("../plugins/embedding-providers.js"));
   embedBatchMock = vi.fn(async (texts: string[]) =>
     texts.map((_text, index) => [index + 0.1, index + 0.2]),
   );
@@ -193,11 +192,10 @@ beforeEach(() => {
     activateGlobalSideEffects: true,
   });
   setTestPluginRegistry(builder.registry);
-  registerMemoryEmbeddingProvider(openAiAdapter);
+  registerEmbeddingProvider(adaptMemoryEmbeddingProviderAdapter(openAiAdapter));
 });
 
 afterEach(() => {
-  clearMemoryEmbeddingProviders();
   clearEmbeddingProviders();
   resetTestPluginRegistry();
 });
@@ -409,8 +407,16 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("rejects explicit unknown agent ids", async () => {
     try {
-      testState.agentsConfig = { entries: { main: {}, beta: {} } };
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
+
+      const missing = await postEmbeddings({ model: "openclaw", input: "hello" });
+      expect(missing.status).toBe(400);
+      const missingJson = (await missing.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(missingJson.error?.type).toBe("invalid_request_error");
+      expect(missingJson.error?.message).toContain("has no explicit owner");
 
       const header = await postEmbeddings(
         { model: "openclaw/default", input: "hello" },

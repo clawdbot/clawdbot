@@ -104,7 +104,8 @@ export function createImageGenerateListActionResult(params: {
 
 const imageGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
   inactiveText: "No active image generation task is currently running for this session.",
-  findActiveTask: (sessionKey) => findActiveImageGenerationTaskForSession(sessionKey) ?? undefined,
+  findActiveTask: (sessionKey, agentId) =>
+    findActiveImageGenerationTaskForSession(sessionKey, { agentId }) ?? undefined,
   buildStatusText: buildImageGenerationTaskStatusText,
   buildStatusDetails: buildImageGenerationTaskStatusDetails,
 });
@@ -112,8 +113,9 @@ const imageGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
 /** Builds status output for active image-generation tasks in the current session. */
 export function createImageGenerateStatusActionResult(
   sessionKey?: string,
+  agentId?: string,
 ): ImageGenerateActionResult {
-  const activeTasks = listActiveImageGenerationTasksForSession(sessionKey);
+  const activeTasks = listActiveImageGenerationTasksForSession(sessionKey, agentId);
   if (activeTasks.length > 1) {
     return {
       content: [{ type: "text", text: buildImageGenerationTaskStatusListText(activeTasks) }],
@@ -123,18 +125,19 @@ export function createImageGenerateStatusActionResult(
       },
     };
   }
-  return imageGenerateTaskStatusActions.createStatusActionResult(sessionKey);
+  return imageGenerateTaskStatusActions.createStatusActionResult(sessionKey, agentId);
 }
 
 /** Returns duplicate-guard status output when a matching image task is already active. */
 export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
-  params?: { prompt?: string; requestKey?: string },
+  params?: { prompt?: string; requestKey?: string; agentId?: string },
 ): ImageGenerateActionResult | undefined {
   return createMediaGenerateDuplicateGuardResult({
     sessionKey,
     prompt: params?.prompt,
     requestKey: params?.requestKey,
+    agentId: params?.agentId,
     findDuplicateTask: findDuplicateGuardImageGenerationTaskForSession,
     buildStatusText: buildImageGenerationTaskStatusText,
     buildStatusDetails: buildImageGenerationTaskStatusDetails,

@@ -12,10 +12,24 @@ import {
   isolateRtlRenderedLine,
   isTerminalSafeAutocompleteValue,
   isCommandMarkedMessage,
+  resolveFinalAssistantText,
   sanitizeMarkdownSource,
   sanitizeRenderableLine,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
+
+describe("resolveFinalAssistantText", () => {
+  it("hides complete HTML error pages after an HTTP reason phrase", () => {
+    const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
+
+    const rendered = resolveFinalAssistantText({ errorMessage: raw });
+
+    expect(rendered).toBe(
+      "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
+    );
+    expect(rendered).not.toContain("<html>");
+  });
+});
 
 describe("formatTuiFooter", () => {
   it("shows session modes and the process delivery mode in one compact summary", () => {

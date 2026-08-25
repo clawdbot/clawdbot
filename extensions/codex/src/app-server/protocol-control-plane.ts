@@ -9,6 +9,7 @@ export type CodexPluginSummary = {
   installed: boolean;
   enabled: boolean;
   installPolicy?: string;
+  mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
   interface?: JsonValue;
@@ -158,6 +159,7 @@ type CodexConnectorMetadata = {
 
 export type CodexAppsReadParams = {
   appIds: string[];
+  threadId?: string | null;
   includeTools?: boolean;
 };
 
@@ -213,6 +215,11 @@ export type CodexConfigReadResponse = {
   layers?: JsonValue[] | null;
 };
 
+export type CodexConfigReadParams = {
+  includeLayers?: boolean;
+  cwd?: string | null;
+};
+
 type CodexConfigMergeStrategy = "replace" | "upsert";
 
 export type CodexConfigEdit = {
@@ -234,6 +241,7 @@ export type CodexConfigBatchWriteParams = {
 };
 
 type CodexConfigLayerSource =
+  | { type: "packagedDefaults"; file: string }
   | { type: "mdm"; domain: string; key: string }
   | { type: "system"; file: string }
   | { type: "enterpriseManaged"; id: string; name: string }

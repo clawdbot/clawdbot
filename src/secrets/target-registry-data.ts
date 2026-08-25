@@ -1,4 +1,5 @@
 /** Builds the static and plugin-derived registry of secret migration targets. */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
@@ -92,10 +93,6 @@ function listChannelSecretTargetRegistryEntries(
   const entries: SecretTargetRegistryEntry[] = [];
 
   for (const record of channelPlugins) {
-    const channelIds = record.channels;
-    if (channelIds.length === 0) {
-      continue;
-    }
     try {
       const contractApi = loadChannelSecretContractApiForRecord(record);
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
@@ -110,7 +107,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "auth-profiles.api_key.key",
     targetType: "auth-profiles.api_key.key",
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     pathPattern: "profiles.*.key",
     refPathPattern: "profiles.*.keyRef",
     secretShape: SIBLING_REF_SHAPE,
@@ -123,7 +120,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "auth-profiles.token.token",
     targetType: "auth-profiles.token.token",
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     pathPattern: "profiles.*.token",
     refPathPattern: "profiles.*.tokenRef",
     secretShape: SIBLING_REF_SHAPE,
@@ -445,15 +442,30 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 
 function loadSecretTargetRegistryFromPluginMetadata(params: {
+  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
+    ...(params.config !== undefined ? { config: params.config } : {}),
     env: params.env,
     allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  const channelPlugins = plugins.filter((record) => record.channels.length > 0);
+  return buildSecretTargetRegistryFromPlugins(plugins);
+}
+
+/** Builds secret targets from one exact manifest-registry plugin set. */
+export function buildSecretTargetRegistryFromPlugins(
+  plugins: readonly PluginManifestRecord[],
+): SecretTargetRegistryEntry[] {
+  const channelPlugins = plugins.filter(
+    (record) =>
+      record.channels.length > 0 ||
+      Object.keys(record.channelConfigs ?? {}).length > 0 ||
+      Boolean(record.channelCatalogMeta?.id) ||
+      Boolean(record.packageChannel?.id),
+  );
   // Installed/workspace plugins own secret targets exactly like bundled ones
   // (#104320: the Exa split moved web providers out of bundled origin and their
   // targets vanished from the gateway's known-target registry). Entries stay
@@ -487,6 +499,8 @@ export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
 /** Returns the process-cached registry including bundled plugin/channel metadata. */
 /** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
 export function getSecretTargetRegistry(params?: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   sourceTree?: boolean;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
@@ -497,6 +511,14 @@ export function getSecretTargetRegistry(params?: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
       },
       preferPersisted: false,
+    });
+  }
+  if (params?.config) {
+    // Config-scoped plugin roots and policy are not process-stable. Compile these registries per
+    // request so one config cannot poison discovery for a later config in the same process.
+    return loadSecretTargetRegistryFromPluginMetadata({
+      config: params.config,
+      env: params.env ?? process.env,
     });
   }
   if (cachedSecretTargetRegistry) {

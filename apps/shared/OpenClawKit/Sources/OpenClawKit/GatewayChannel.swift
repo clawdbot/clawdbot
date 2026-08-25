@@ -490,15 +490,7 @@ public actor GatewayChannelActor {
             "role": ProtoAnyCodable(role),
             "scopes": ProtoAnyCodable(scopes),
         ]
-        if !options.commands.isEmpty {
-            params["commands"] = ProtoAnyCodable(options.commands)
-        }
-        if let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines), !pathEnv.isEmpty {
-            params["pathEnv"] = ProtoAnyCodable(pathEnv)
-        }
-        if !options.permissions.isEmpty {
-            params["permissions"] = ProtoAnyCodable(options.permissions)
-        }
+        options.applyOptionalConnectParams(to: &params)
         self.applyConnectAuth(
             selectedAuth,
             deviceId: identity?.deviceId,

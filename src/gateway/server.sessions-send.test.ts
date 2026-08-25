@@ -3,7 +3,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
@@ -19,6 +30,7 @@ import {
   agentCommandMock,
   getGatewayTestPort,
   installGatewayTestHooks,
+  prepareGatewayReplyRuntimeForTest,
   startTestGatewayServer,
   setTestPluginRegistry,
   testState,
@@ -33,6 +45,7 @@ let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
@@ -119,7 +132,8 @@ async function emitLifecycleAssistantReply(params: {
 beforeAll(async () => {
   envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
   gatewayPort = await getGatewayTestPort();
-  const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
   const identity = loadOrCreateDeviceIdentity();
@@ -141,10 +155,11 @@ beforeAll(async () => {
   server = await startTestGatewayServer(gatewayPort);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  await prepareGatewayReplyRuntimeForTest();
 });
 
 afterAll(async () => {
@@ -153,6 +168,48 @@ afterAll(async () => {
 });
 
 describe("sessions_send gateway loopback", () => {
+  it("rejects a missing explicit key without creating or running a session", async () => {
+    const dir = tempDirs.make("openclaw-sessions-send-missing-");
+    const missingKey = "agent:main:missing";
+    const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      spy.mockClear();
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        config: { tools: { sessions: { visibility: "all" } } },
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("call-missing-key", {
+        sessionKey: missingKey,
+        message: "ping",
+        timeoutSeconds: 0,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: `No session found: ${missingKey}`,
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({ sessionKey: missingKey, storePath: testState.sessionStorePath }),
+      ).toBe(undefined);
+    } finally {
+      testState.sessionStorePath = undefined;
+    }
+  });
+
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
     spy.mockImplementation(async (opts: unknown) =>
@@ -609,6 +666,7 @@ describe("sessions_send agent targeting", () => {
             },
           },
         });
+        await prepareGatewayReplyRuntimeForTest({ force: true });
 
         const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockImplementation(async (opts: unknown) =>
@@ -748,6 +806,7 @@ describe("sessions_send direct-message requester routing", () => {
             [targetSessionKey]: { sessionId: "dm-scope-orion", updatedAt: Date.now() },
           },
         });
+        await prepareGatewayReplyRuntimeForTest({ force: true });
 
         const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockReset();

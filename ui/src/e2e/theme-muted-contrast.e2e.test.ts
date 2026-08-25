@@ -31,7 +31,9 @@ const textTokens = [
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function themeConfigResponse(family: "claw" | "knot" | "dash", mode: "dark" | "light") {
-  const config = { ui: { prefs: { theme: family, themeMode: mode } } };
+  const config = {
+    ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode } },
+  };
   const hash = `theme-contrast-${family}-${mode}`;
   return {
     appliedConfigHash: hash,
@@ -176,7 +178,9 @@ suite.define(() => {
         const patch = await gateway.waitForRequest("config.patch");
         const raw = (patch.params as { raw?: unknown } | undefined)?.raw;
         expect(typeof raw).toBe("string");
-        expect(JSON.parse(String(raw))).toMatchObject({ ui: { prefs: { theme: family } } });
+        expect(JSON.parse(String(raw))).toMatchObject({
+          ui: { prefs: { theme: family === "claw" ? null : family } },
+        });
 
         // Theme clicks apply immediately; the eventual Gateway acknowledgement must not revert them.
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);

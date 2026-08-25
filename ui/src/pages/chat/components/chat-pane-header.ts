@@ -14,16 +14,31 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
+import {
+  personActivityLink,
+  renderStandalonePersonLink,
+  type PersonActivityRouting,
+} from "../../../components/person-activity-link.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
-import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+} from "../../../lib/sessions/session-key.ts";
+import { renderChatPanePlacement } from "./chat-pane-placement.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
+
+type ChatPaneParentSession = {
+  key: string;
+  title: string;
+};
 
 type ChatPaneHeaderProps = {
   paneId: string;
@@ -33,6 +48,8 @@ type ChatPaneHeaderProps = {
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
+  ownerViewing?: boolean;
+  personActivity?: PersonActivityRouting;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -40,6 +57,7 @@ type ChatPaneHeaderProps = {
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
   workspaceIcon: { routeUrl: string; authTokens: readonly string[]; authReady: boolean } | null;
+  parentSession: ChatPaneParentSession | null;
   branch: string | null;
   branches: SessionBranch[];
   branchSwitchDisabledReason: string | null;
@@ -57,6 +75,9 @@ type ChatPaneHeaderProps = {
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
+  placementMoving?: boolean;
+  placementMoveDisabledReason?: string;
+  placementReclaimDisabledReason?: string;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -66,6 +87,9 @@ type ChatPaneHeaderProps = {
   onCancelRename: () => void;
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
+  onOpenParentSession: (sessionKey: string) => void;
+  onPlacementMove?: () => void;
+  onPlacementReclaim?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;
@@ -124,11 +148,23 @@ export function resolveChatPaneWorkspace(params: {
   return { root, label };
 }
 
+export function resolveChatPaneParentSession(
+  session: GatewaySessionRow | undefined,
+  sessions: readonly GatewaySessionRow[],
+): ChatPaneParentSession | null {
+  const parentKey = resolveUiSessionNavigationParentKey(session);
+  if (!parentKey || (session && areUiSessionKeysEquivalent(parentKey, session.key))) {
+    return null;
+  }
+  const parent = sessions.find((row) => areUiSessionKeysEquivalent(row.key, parentKey));
+  return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
+}
+
 /**
  * Header identity trail: which project, then which session inside it. Segments
  * and separators are rendered from one list so a further segment — the parent
- * session of a nested thread (#121700), yielding project / parent / child —
- * slots in without moving the project chip or the title.
+ * session of a nested thread, yielding project / parent / child — slots in
+ * without moving the project chip or the title.
  */
 function renderIdentityCrumbs(
   props: ChatPaneHeaderProps,
@@ -138,6 +174,10 @@ function renderIdentityCrumbs(
 ) {
   const projectCrumb = renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel);
   const segments: TemplateResult[] = projectCrumb ? [projectCrumb] : [];
+  const parentCrumb = renderParentSessionCrumb(props);
+  if (parentCrumb) {
+    segments.push(parentCrumb);
+  }
   segments.push(renderSessionCrumb(props));
   return html`
     <div class="chat-pane__crumbs">
@@ -149,6 +189,23 @@ function renderIdentityCrumbs(
       )}
     </div>
   `;
+}
+
+function renderParentSessionCrumb(props: ChatPaneHeaderProps): TemplateResult | null {
+  const parent = props.parentSession;
+  if (!parent) {
+    return null;
+  }
+  const label = t("chat.sessionHeader.openParent", { title: parent.title });
+  return html`<button
+    class="chat-pane__parent-session"
+    type="button"
+    title=${label}
+    aria-label=${label}
+    @click=${() => props.onOpenParentSession(parent.key)}
+  >
+    <span class="chat-pane__parent-session-text">${parent.title}</span>
+  </button>`;
 }
 
 function renderSessionCrumb(props: ChatPaneHeaderProps) {
@@ -351,9 +408,6 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
 }
 
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
-  const placementState = props.session?.placement?.state;
-  const cloud = isCloudWorkerPlacementState(placementState);
-  const cloudLabel = cloud ? t("sessionsView.cloudWorkerPlacement", { state: placementState }) : "";
   const copyPathLabel =
     props.copiedAction === "copy-path"
       ? t("chat.sessionHeader.copied")
@@ -387,15 +441,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </button>
           </openclaw-tooltip>`
         : nothing}
-      ${cloud
-        ? html`<span
-            class="chat-pane__cloud"
-            role="img"
-            aria-label=${cloudLabel}
-            title=${cloudLabel}
-            >${icons.globe}</span
-          >`
-        : nothing}
       ${props.session?.incognito
         ? html`<span
             class="chat-pane__incognito"
@@ -406,12 +451,32 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           >`
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-      ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.createdActor : undefined,
-        "header",
-        "created",
+      ${renderStandalonePersonLink(
+        renderSessionOwnerChip(
+          props.showOwnerChip ? props.session?.owner?.actor : undefined,
+          "header",
+          props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+          props.ownerViewing,
+        ),
+        props.showOwnerChip
+          ? personActivityLink(props.session?.owner?.actor.id, props.personActivity)
+          : null,
       )}
-      ${props.presence ?? nothing} ${props.faceControl ?? nothing}
+      ${props.showOwnerChip && props.session?.participants?.length
+        ? html`<openclaw-viewer-facepile
+            class="chat-pane__participants"
+            .staticUsers=${props.session.participants.map((participant) => ({
+              id: participant.id ?? "",
+              name: participant.label,
+              avatarUrl: participant.avatarUrl,
+              watchedSessions: [],
+            }))}
+            .maxVisible=${4}
+            .personActivity=${props.personActivity}
+            variant="session"
+          ></openclaw-viewer-facepile>`
+        : nothing}
+      ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
       ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
@@ -483,12 +548,13 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${compactSessionActions ? nothing : html`${props.panelActions} ${props.discussionAction}`}
+        ${compactSessionActions ? nothing : props.panelActions}
+        ${compactSessionActions ? nothing : props.discussionAction}
         ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
             ${props.sessionRailAction}`}
-        ${props.onOpenSplitView
+        ${props.onOpenSplitView && !compactSessionActions
           ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
               <button
                 class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
@@ -536,7 +602,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>`
           : nothing}
-        ${props.mergedChrome
+        ${props.mergedChrome && !compactSessionActions
           ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
               <button
                 class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"

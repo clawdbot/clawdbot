@@ -5,13 +5,14 @@ import {
   isChannelPartialDeliveryError,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  createChannelMessageReplyPipeline,
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { toStringifiedError as toFeishuError } from "openclaw/plugin-sdk/error-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -75,10 +76,6 @@ function mergeStreamingFinalText(
     return previousText;
   }
   return `${previousText}\n\n${nextText}`;
-}
-
-function toFeishuError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
@@ -766,18 +763,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         acceptedChunks.push(chunk);
         markVisibleReplySent();
       } catch (error: unknown) {
-        if (isChannelPartialDeliveryError(error)) {
+        const acceptedChunk = isChannelPartialDeliveryError(error)
+          ? error.deliveryResult
+          : undefined;
+        if (acceptedChunk) {
+          acceptedChunks.push(acceptedChunk.content ?? chunk);
           markVisibleReplySent();
         }
-        throw createFeishuPartialReplyDeliveryError(
-          error,
-          createFeishuReplyDeliveryResult({
+        throw createFeishuPartialReplyDeliveryError(error, {
+          ...acceptedChunk,
+          ...createFeishuReplyDeliveryResult({
             results,
-            visibleReplySent: results.length > 0,
+            visibleReplySent: results.length > 0 || acceptedChunk !== undefined,
             content: acceptedChunks.join(""),
             kind: paramsLocal.useCard ? "card" : "text",
           }),
-        );
+        });
       }
     }
     if (paramsLocal.infoKind === "final") {
@@ -1495,10 +1496,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (hasMedia) {
         await collectMediaDelivery(
           payload,
-          hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
+          !ttsTextAlreadyVisible && hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
         );
       }
-      const result = mergeFeishuReplyDeliveryResults(deliveredResults, text);
+      const deliveredContent = hasVoiceMedia ? (deliveredResults.at(-1)?.content ?? text) : text;
+      const result = mergeFeishuReplyDeliveryResults(deliveredResults, deliveredContent);
       if (priorClosedStreamingSettlement?.error !== undefined) {
         throw createFeishuPartialReplyDeliveryError(
           isChannelPartialDeliveryError(priorClosedStreamingSettlement.error) &&

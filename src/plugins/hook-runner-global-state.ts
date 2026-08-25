@@ -9,6 +9,7 @@ import type {
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
@@ -121,6 +122,10 @@ function overlayHookRegistries(
 }
 
 function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    return generationRegistry;
+  }
   return overlayHookRegistries(
     resolveRootHookRegistry(state),
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null,

@@ -12,6 +12,7 @@ import {
   parseTestLiveArgs,
   resolveTestLiveHeartbeatMs,
 } from "../../scripts/test-live.mts";
+import { waitForPidFile } from "../helpers/process-wait.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -108,10 +109,8 @@ describe("scripts/test-live", () => {
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fileExists(childPidPath), 5_000);
-      await waitFor(() => fileExists(descendantPidPath), 5_000);
-      childPid = Number(readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+      childPid = await waitForPidFile(childPidPath, 5_000);
+      descendantPid = await waitForPidFile(descendantPidPath, 5_000);
       expect(Number.isInteger(childPid)).toBe(true);
       expect(Number.isInteger(descendantPid)).toBe(true);
 
@@ -166,10 +165,8 @@ describe("scripts/test-live", () => {
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fileExists(childPidPath), 5_000);
-      await waitFor(() => fileExists(descendantPidPath), 5_000);
-      childPid = Number(readFileSync(childPidPath, "utf8"));
-      descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+      childPid = await waitForPidFile(childPidPath, 5_000);
+      descendantPid = await waitForPidFile(descendantPidPath, 5_000);
 
       expect(await waitForClose(runner)).toEqual({ code: 1, signal: null });
       expect(Buffer.concat(stderr).toString("utf8")).toContain(

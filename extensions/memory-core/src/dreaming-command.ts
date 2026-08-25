@@ -95,7 +95,7 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
     .split(/\s+/)
     .filter(Boolean)
     .map((token) => normalizeLowercaseStringOrEmpty(token));
-  const currentConfig = api.runtime.config.current() as OpenClawConfig;
+  const currentConfig = ctx.config;
 
   if (!firstToken || firstToken === "help" || firstToken === "options" || firstToken === "phases") {
     return { text: formatUsage(formatStatus(currentConfig)) };

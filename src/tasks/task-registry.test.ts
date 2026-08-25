@@ -11,8 +11,15 @@ import {
   setHeartbeatWakeHandler,
   type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+  sweepExpiredPluginStateEntries,
+} from "../plugin-state/plugin-state-store.js";
+import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
@@ -21,6 +28,8 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
@@ -555,6 +564,56 @@ describe("task-registry", () => {
     hoisted.killSubagentRunAdminMock.mockReset();
   });
 
+  it("sweeps one expired plugin-state batch per maintenance pass after restart", async () => {
+    await withTaskRegistryTempDir(async () => {
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const store = createPluginStateKeyedStore<{ value: string }>("fixture-plugin", {
+          namespace: "maintenance-restart",
+          maxEntries: 10,
+        });
+        await store.register("expired", { value: "stale" }, { ttlMs: 100 });
+        seedPluginStateEntriesForTests(
+          Array.from({ length: 2_049 }, (_, index) => ({
+            pluginId: "fixture-plugin",
+            namespace: "maintenance-restart",
+            key: `expired-${index}`,
+            value: { index },
+            expiresAt: 1_100,
+          })),
+        );
+
+        // Close plugin-state's process-local handle while preserving the shared SQLite file.
+        resetPluginStateStoreForTests();
+        vi.setSystemTime(1_200);
+        const countExpiredRows = () => {
+          const database = openOpenClawStateDatabase();
+          const row = executeSqliteQueryTakeFirstSync(
+            database.db,
+            getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">>(
+              database.db,
+            )
+              .selectFrom("plugin_state_entries")
+              .select((expression) => expression.fn.countAll<number>().as("count"))
+              .where("expires_at", "is not", null)
+              .where("expires_at", "<=", Date.now()),
+          );
+          return row?.count;
+        };
+        await runTaskRegistryMaintenance();
+        expect(countExpiredRows()).toBe(1_026);
+        await runTaskRegistryMaintenance();
+        expect(countExpiredRows()).toBe(2);
+
+        expect(sweepExpiredPluginStateEntries()).toBe(2);
+        expect(sweepExpiredPluginStateEntries()).toBe(0);
+      } finally {
+        resetPluginStateStoreForTests();
+      }
+    });
+  });
+
   it("updates task status from lifecycle events", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -655,6 +714,48 @@ describe("task-registry", () => {
         data: { phase: "end", endedAt: 200 },
       });
       expect(upsert).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("fills terminal lastEventAt from endedAt when a finalize omits the progress timestamp", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:terminal-timestamp",
+        runId: "run-terminal-timestamp",
+        task: "Finalize without a progress timestamp",
+        lastEventAt: 1_000,
+      });
+      finalizeSubagentTask(requireTaskByRunId("run-terminal-timestamp"), {
+        status: "succeeded",
+        endedAt: 2_000,
+      });
+      expectRecordFields(requireTaskByRunId("run-terminal-timestamp"), {
+        status: "succeeded",
+        endedAt: 2_000,
+        lastEventAt: 2_000,
+      });
+    });
+  });
+
+  it("keeps a newer terminal progress timestamp when endedAt trails it", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:monotonic-timestamp",
+        runId: "run-monotonic-timestamp",
+        task: "Preserve the newest activity timestamp",
+        lastEventAt: 3_000,
+      });
+      finalizeSubagentTask(requireTaskByRunId("run-monotonic-timestamp"), {
+        status: "failed",
+        endedAt: 2_000,
+      });
+      expectRecordFields(requireTaskByRunId("run-monotonic-timestamp"), {
+        status: "failed",
+        endedAt: 2_000,
+        lastEventAt: 3_000,
+      });
     });
   });
 
@@ -2266,6 +2367,41 @@ describe("task-registry", () => {
         expect(events).toHaveLength(1);
         expect(events[0]).toContain("Background task failed: ACP background task");
       });
+    });
+  });
+
+  it.each([
+    {
+      name: "intentional suppression queues the session fallback",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedFallbackCount: 1,
+    },
+    {
+      name: "adapter ambiguity avoids a duplicate session fallback",
+      suppressionReason: "adapter_returned_no_identity",
+      expectedFallbackCount: 0,
+    },
+  ] as const)("records terminal non-delivery when $name", async (testCase) => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+        deliveryStatus: "suppressed",
+        suppressionReason: testCase.suppressionReason,
+      });
+      const task = createTaskFixture("acp", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        runId: `run-terminal-${testCase.suppressionReason}`,
+        task: "Investigate suppressed delivery",
+        deliveryStatus: "pending",
+      });
+      markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 250 });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+      expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "failed" });
+      expect(peekSystemEvents("agent:main:main")).toHaveLength(testCase.expectedFallbackCount);
     });
   });
 
@@ -3965,6 +4101,43 @@ describe("task-registry", () => {
     });
   });
 
+  it.each([
+    {
+      name: "retries intentional suppression",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedSendCount: 2,
+    },
+    {
+      name: "does not retry adapter ambiguity",
+      suppressionReason: "adapter_returned_no_identity",
+      expectedSendCount: 1,
+    },
+  ] as const)("$name for the same state-change event", async (testCase) => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: "guildchat:123",
+        via: "direct",
+        deliveryStatus: "suppressed",
+        suppressionReason: testCase.suppressionReason,
+      });
+      const task = createTaskFixture("acp", {
+        deliveryStatus: undefined,
+        requesterOrigin: GUILDCHAT_ORIGIN,
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-state-change-suppressed",
+        task: "Investigate suppressed state change",
+        notifyPolicy: "state_changes",
+      });
+      const event = { at: 250, kind: "progress" as const, summary: "Still working." };
+
+      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(testCase.expectedSendCount);
+    });
+  });
+
   it("keeps background ACP progress off the foreground lane and only sends a terminal notify", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -4023,6 +4196,7 @@ describe("task-registry", () => {
         "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
       ]);
       relay.dispose();
+      await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     });
   });

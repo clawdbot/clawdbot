@@ -1,7 +1,9 @@
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -72,6 +74,7 @@ const runtime = {
 };
 const view = {
   viewId: "mcp-app-view",
+  agentId: "main",
   sessionId: runtime.sessionId,
   runtime,
   serverName: "demo",
@@ -80,6 +83,7 @@ const view = {
   html: "<!doctype html><p>private fixture</p>",
   csp: { connectDomains: ["https://api.example.com"] },
   allowedAppToolNames: new Set(["shared", "app-only"]),
+  authorizeAppInteraction: undefined as (() => boolean | Promise<boolean>) | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "sunny" }] },
   requestTimeoutMs: 60_000,
@@ -127,6 +131,7 @@ describe("MCP App standalone host", () => {
     mocks.completeRetirement.mockResolvedValue(undefined);
     Object.assign(view, {
       allowedAppToolNames: new Set(["shared", "app-only"]),
+      authorizeAppInteraction: undefined,
       readOnly: undefined,
       requestTimeoutMs: 60_000,
       requestWindowStartedAtMs: nowMs,
@@ -216,6 +221,84 @@ describe("MCP App standalone host", () => {
       expect.stringMatching(/script-src 'sha256-[^']+';.*connect-src 'self'/u),
     );
   });
+
+  it.each([
+    { label: "public shell", path: "/__openclaw__/mcp-app", expectedStatus: 200 },
+    {
+      label: "authenticated multibyte view",
+      path: "/__openclaw__/mcp-app/view",
+      expectedStatus: 200,
+      authorized: true,
+    },
+    {
+      label: "unauthorized view",
+      path: "/__openclaw__/mcp-app/view",
+      expectedStatus: 401,
+    },
+    {
+      label: "saturated view",
+      path: "/__openclaw__/mcp-app/view",
+      expectedStatus: 429,
+      authorized: true,
+      saturated: true,
+    },
+  ])(
+    "keeps GET and HEAD metadata aligned over HTTP for $label",
+    async ({ path, expectedStatus, authorized, saturated }) => {
+      const originalHtml = view.html;
+      view.html = "<!doctype html><p>caf\u00e9 \ud83e\udd9e</p>";
+      const ticket = authorized
+        ? issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket
+        : undefined;
+      view.activeRequests = saturated ? 4 : 0;
+      const server = createServer((req, res) => {
+        void handleMcpAppStandaloneHttpRequest(req, res, {
+          sandboxPort: 18_790,
+          nowMs,
+          ticketSecret: secret,
+        }).catch((error: unknown) => {
+          res.statusCode = 500;
+          res.end(String(error));
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+
+      try {
+        const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+        const headers = ticket ? { Authorization: `MCP-App ${ticket}` } : undefined;
+        const get = await fetch(`${origin}${path}`, { headers });
+        const body = Buffer.from(await get.arrayBuffer());
+        const head = await fetch(`${origin}${path}`, { method: "HEAD", headers });
+
+        expect(get.status).toBe(expectedStatus);
+        expect(head.status).toBe(expectedStatus);
+        expect(get.headers.get("content-length")).toBe(String(body.byteLength));
+        expect(head.headers.get("content-length")).toBe(String(body.byteLength));
+        expect((await head.arrayBuffer()).byteLength).toBe(0);
+        expect(head.headers.get("cache-control")).toBe("no-store");
+
+        if (path.endsWith("/view")) {
+          expect(head.headers.get("vary")).toBe("Authorization");
+        }
+        if (expectedStatus === 401) {
+          expect(head.headers.get("www-authenticate")).toBe("MCP-App");
+        }
+        if (authorized && !saturated) {
+          expect(body.toString()).toContain("caf\u00e9 \ud83e\udd9e");
+          expect(JSON.parse(body.toString())).toMatchObject({ operationTimeoutMs: 65_000 });
+        }
+      } finally {
+        view.html = originalHtml;
+        view.activeRequests = 0;
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("executes serialized fetch deadlines with visible outcomes", async () => {
     const shell = await request({ url: "/__openclaw__/mcp-app" });
@@ -401,6 +484,36 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).toHaveBeenCalledTimes(1);
     expect(releaseRuntimeLease).toHaveBeenCalled();
     expect(mocks.completeRetirement).toHaveBeenCalledWith(runtime);
+  });
+
+  it("inherits post-catalog grant revalidation from the shared operation boundary", async () => {
+    const catalogStarted = createDeferred();
+    const releaseCatalog = createDeferred<Awaited<ReturnType<typeof runtime.getCatalog>>>();
+    runtime.getCatalog.mockImplementationOnce(async () => {
+      catalogStarted.resolve();
+      return await releaseCatalog.promise;
+    });
+    let grantActive = true;
+    view.authorizeAppInteraction = vi.fn(async () => grantActive);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+
+    const pending = request({
+      url: "/__openclaw__/mcp-app/view",
+      method: "POST",
+      authorization: `MCP-App ${issued.ticket}`,
+      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
+    });
+    await catalogStarted.promise;
+    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
+    grantActive = false;
+    releaseCatalog.resolve({
+      tools: [{ serverName: "demo", toolName: "app-only", uiVisibility: ["app"] }],
+    });
+
+    const denied = await pending;
+    expect(denied.res.statusCode).toBe(403);
+    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
+    expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
   it("keeps reconstructed views read-only while preserving resource reads", async () => {

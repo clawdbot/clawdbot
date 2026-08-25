@@ -934,10 +934,11 @@ describe("monitorTelegramProvider (grammY)", () => {
     });
 
     const webhookCall = latestMockCall(startTelegramWebhookSpy, "startTelegramWebhook") as [
-      { host?: string; setStatus?: unknown },
+      { host?: string; ownerAgentId?: string; setStatus?: unknown },
     ];
     const webhookOptions = webhookCall[0];
     expect(webhookOptions?.host).toBe("0.0.0.0");
+    expect(webhookOptions?.ownerAgentId).toBe("main");
     expect(webhookOptions?.setStatus).toBe(setStatus);
     expect(runSpy).not.toHaveBeenCalled();
   });

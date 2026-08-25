@@ -1,5 +1,5 @@
 // Discord tests cover message handler.preflight plugin behavior.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
@@ -57,7 +57,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
 let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
-let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 
 beforeAll(async () => {
@@ -66,8 +65,7 @@ beforeAll(async () => {
     resolvePreflightMentionRequirement,
     shouldIgnoreBoundThreadWebhookMessage,
   } = await import("./message-handler.preflight.js"));
-  ({ testing: threadBindingTesting, createThreadBindingManager } =
-    await import("./thread-bindings.js"));
+  ({ createThreadBindingManager } = await import("./thread-bindings.js"));
 });
 
 beforeEach(() => {
@@ -373,6 +371,35 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
 
+  it("admits embed-only messages when their text appears after a textless first embed", async () => {
+    const channelId = "dm-channel-multiple-embeds";
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-multiple-embeds",
+        channelId,
+        content: "",
+        author: { id: "user-1", bot: false, username: "alice" },
+      }),
+      {
+        embeds: [
+          { image: { url: "https://cdn.discordapp.com/image.png" } },
+          { title: "Alert", description: "Details" },
+          { description: "Follow-up" },
+        ],
+      },
+    );
+
+    const result = await runDmPreflight({
+      channelId,
+      message,
+      discordConfig: { dmPolicy: "open" } as DiscordConfig,
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("Alert\nDetails\nFollow-up");
+    expect(preflight.messageText).toBe("Alert\nDetails\nFollow-up");
+  });
+
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
@@ -618,6 +645,7 @@ describe("preflightDiscordMessage", () => {
       {
         path: "/tmp/openclaw-discord-test/photo.png",
         contentType: "image/png",
+        fileName: "photo.png",
       },
     ]);
   });
@@ -899,6 +927,44 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(expectPreflightResult(result).boundSessionKey).toBe(threadBinding.targetSessionKey);
+  });
+
+  it("looks up thread bindings once for an accepted ordinary guild message", async () => {
+    const channelId = "channel-binding-lookup-once";
+    const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    onTestFinished(() => manager.stop());
+    const getByThreadId = vi.spyOn(manager, "getByThreadId");
+    const message = createDiscordMessage({
+      id: "m-binding-lookup-once",
+      channelId,
+      content: "ordinary human message <@openclaw-bot>",
+      author: { id: "user-1", bot: false, username: "alice" },
+      mentionedUsers: [{ id: "openclaw-bot" }],
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      threadBindings: manager,
+    });
+
+    expect(expectPreflightResult(result).message.id).toBe(message.id);
+    expect(getByThreadId).toHaveBeenCalledTimes(1);
+    expect(getByThreadId).toHaveBeenCalledWith(channelId);
   });
 
   it("drops hydrated bound-thread webhook copies after fetching an empty payload", async () => {
@@ -2476,7 +2542,6 @@ describe("preflightDiscordMessage", () => {
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    threadBindingTesting.resetThreadBindingsForTests();
   });
 
   afterEach(() => {
@@ -2534,6 +2599,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       persist: false,
       enableSweeper: false,
     });
+    onTestFinished(() => manager.stop());
     const binding = await manager.bindTarget({
       threadId: "thread-1",
       channelId: "parent-1",

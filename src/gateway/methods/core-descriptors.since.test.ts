@@ -81,17 +81,46 @@ const TRAIN_2026_7_METHODS = [
 ] as const;
 
 const CURRENT_TRAIN_METHODS = [
+  "diagnostics.lanes",
+  "device.pair.setupStatus",
   "sessions.patchMany",
+  "sessions.groups.update",
+  "sessions.groups.defaults",
+  "sessions.recover",
   "update.hold",
   "sessions.catalog.startTerminal",
+  "sessions.github.publish",
   "worker.desktop.observe",
   "projects.list",
   "projects.register",
   "projects.remove",
+  "projects.add",
+  "projects.searchRemote",
   "worker.desktop.launch",
   "secrets.store.list",
   "secrets.store.set",
   "secrets.store.delete",
+  "users.prefs.get",
+  "users.prefs.set",
+  "users.setRole",
+  "desktop.observe",
+  "desktop.launch",
+  "device.scopes.requestUpgrade",
+  "device.scopes.waitUpgrade",
+  "node.runnerInventory.update",
+  "portal.list",
+  "portal.open",
+  "portal.close",
+  "sessions.move",
+  "sessions.assignOwner",
+  "controlUi.sessionPreview",
+  "progressCard.get",
+  "progressCard.put",
+  "tools.github.status",
+  "tools.github.configure",
+  "tools.github.authorize.start",
+  "tools.github.authorize.poll",
+  "tools.github.authorize.cancel",
 ] as const;
 
 describe("core gateway method release trains", () => {
@@ -121,7 +150,13 @@ describe("core gateway method release trains", () => {
     expect(methods.find((method) => method.name === "worker.desktop.observe")?.since).toBe(
       "2026.8",
     );
-    for (const method of ["projects.list", "projects.register", "projects.remove"]) {
+    for (const method of [
+      "projects.list",
+      "projects.register",
+      "projects.remove",
+      "projects.add",
+      "projects.searchRemote",
+    ]) {
       expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.8");
     }
     expect(methods.find((method) => method.name === "worker.desktop.launch")?.since).toBe("2026.8");

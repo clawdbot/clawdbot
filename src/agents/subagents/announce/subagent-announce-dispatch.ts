@@ -20,6 +20,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "message_tool_delivery_missing"
   | "requester_abandoned"
   | "source_owner_changed"
+  | "steer_dropped"
   | "visible_reply_missing";
 
 type SubagentAnnounceSteerOutcome =
@@ -32,6 +33,8 @@ export type SubagentAnnounceDeliveryResult = {
   path: SubagentDeliveryPath;
   deliveredAt?: number;
   enqueuedAt?: number;
+  /** Direct completion that already sent the yielded requester's visible final. */
+  requesterVisibleFinalDelivered?: true;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   // Stops fallback delivery when ownership changed or another terminal result
@@ -79,6 +82,7 @@ function mapSteerOutcomeToDeliveryResult(
   return {
     delivered: false,
     path: "none",
+    ...(outcome.status === "dropped" ? { reason: "steer_dropped" } : {}),
   };
 }
 
@@ -172,5 +176,6 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(fallbackSteer);
   }
 
+  // Keep the direct failure authoritative; dropped fallback remains in its phase.
   return withPhases(primaryDirect);
 }

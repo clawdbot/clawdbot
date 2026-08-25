@@ -203,6 +203,8 @@ Notes:
 - Inbound attachments (first attachment per message) are downloaded through the Chat API into the media pipeline, capped by `mediaMaxMb` (default 20).
 - Bot-authored messages are ignored by default. With `allowBots: true`, accepted bot messages use shared [bot loop protection](/channels/bot-loop-protection): configure `channels.defaults.botLoopProtection`, then override with `channels.googlechat.botLoopProtection` or `channels.googlechat.groups.<space>.botLoopProtection`.
 
+Custom emoji listing is unavailable because Google Chat's `customEmojis.list` endpoint requires user authentication with the `chat.customemojis` or `chat.customemojis.readonly` scope. This plugin authenticates exclusively as a service account with the `chat.bot` scope, which cannot access that endpoint.
+
 Secrets reference details: [Secrets Management](/gateway/secrets).
 
 ## Troubleshooting

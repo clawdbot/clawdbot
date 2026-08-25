@@ -1,4 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
@@ -24,10 +26,10 @@ function normalizeOptionalBoolean(value: unknown): boolean | undefined {
 }
 
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
@@ -49,13 +51,10 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
 }
 
 export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
-  if (entry.skillWorkshopRevision !== undefined) {
-    return null;
-  }
+  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt =
@@ -78,8 +77,15 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (sender) {
     item.sender = sender;
   }
-  if (entry.kind === "queued" || entry.kind === "steered") {
-    item.kind = entry.kind;
+  const legacySteer =
+    entry.kind === "steered" ||
+    normalizeOptionalString(entry.steerTargetRunId) !== undefined ||
+    entry.sendState === "steering";
+  const queueMode = legacySteer
+    ? "steer"
+    : normalizeQueueMode(typeof entry.queueMode === "string" ? entry.queueMode : undefined);
+  if (queueMode) {
+    item.queueMode = queueMode;
   }
   if (attachments.length) {
     item.attachments = attachments;
@@ -92,7 +98,9 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (
+  if (entry.sendState === "steering") {
+    item.sendState = "unconfirmed";
+  } else if (
     entry.sendState === "failed" ||
     entry.sendState === "unconfirmed" ||
     entry.sendState === "waiting-idle" ||
@@ -110,10 +118,6 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   const sendRunId = normalizeOptionalString(entry.sendRunId);
   if (sendRunId) {
     item.sendRunId = sendRunId;
-  }
-  const steerTargetRunId = normalizeOptionalString(entry.steerTargetRunId);
-  if (steerTargetRunId) {
-    item.steerTargetRunId = steerTargetRunId;
   }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
@@ -138,10 +142,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
 }
 
 export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue

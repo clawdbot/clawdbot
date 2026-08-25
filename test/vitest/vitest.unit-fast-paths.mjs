@@ -8,6 +8,7 @@ import {
   commandsLightTestFiles,
 } from "./vitest.commands-light-paths.mjs";
 import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
+import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
@@ -86,7 +87,6 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.session-snapshot.test.ts",
   "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
-  "extensions/canvas/src/host/server.test.ts",
   "src/system-agent/audit.test.ts",
   "src/system-agent/assistant.configured.test.ts",
   "src/system-agent/system-agent.test.ts",
@@ -96,7 +96,6 @@ export const forcedUnitFastTestFiles = [
   "src/flows/channel-setup.status.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
-  "extensions/canvas/src/host/server.state-dir.test.ts",
   "src/entry.compile-cache.test.ts",
   "src/entry.respawn.test.ts",
   "src/entry.version-fast-path.test.ts",
@@ -254,7 +253,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|message-action-runner\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {
@@ -484,27 +483,37 @@ function analyzeUnitFastTestFile(cwd, file) {
   }
 
   let analysis;
-  try {
-    const source = fs.readFileSync(path.join(cwd, file), "utf8");
-    const reasons = classifyUnitFastTestFileContent(source);
-    if (importsStatefulTestHelper(cwd, file, source)) {
-      // The helper executes in the importing file's module scope, so its mocks and
-      // singleton mutations need the same isolation as stateful code in the test itself.
-      reasons.push("stateful-test-helper");
-    }
-    const forced = forcedUnitFastTestFileSet.has(file);
-    analysis = {
-      file,
-      unitFast: forced || reasons.every((reason) => reason === "stateful-test-helper"),
-      forced,
-      reasons,
-    };
-  } catch {
+  if (isToolingIsolatedTestFile(file)) {
+    // Explicit project ownership wins over inferred eligibility so full-suite
+    // configs cannot run the same stateful tooling test in two worker pools.
     analysis = {
       file,
       unitFast: false,
-      reasons: ["missing-file"],
+      reasons: ["tooling-isolated-owner"],
     };
+  } else {
+    try {
+      const source = fs.readFileSync(path.join(cwd, file), "utf8");
+      const reasons = classifyUnitFastTestFileContent(source);
+      if (importsStatefulTestHelper(cwd, file, source)) {
+        // The helper executes in the importing file's module scope, so its mocks and
+        // singleton mutations need the same isolation as stateful code in the test itself.
+        reasons.push("stateful-test-helper");
+      }
+      const forced = forcedUnitFastTestFileSet.has(file);
+      analysis = {
+        file,
+        unitFast: forced || reasons.every((reason) => reason === "stateful-test-helper"),
+        forced,
+        reasons,
+      };
+    } catch {
+      analysis = {
+        file,
+        unitFast: false,
+        reasons: ["missing-file"],
+      };
+    }
   }
 
   // Discovery is a process-start snapshot; default and broad audits overlap heavily.

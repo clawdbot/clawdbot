@@ -8,6 +8,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
+import {
+  installPackageDir,
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
 import { withInstallWorkspace } from "../infra/install-source-utils.js";
 import { replaceDirectoryAtomic } from "../infra/replace-file.js";
 import {
@@ -22,6 +27,11 @@ import {
   type InstallSafetyOverrides,
   type InstallSecurityScanResult,
 } from "./install-security-scan.js";
+import {
+  attachPluginInstallTransaction,
+  isPluginInstallCommitDeferred,
+  type PluginInstallTransaction,
+} from "./install-transaction.js";
 import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -282,8 +292,24 @@ async function withGitStagingDir<T>(
 async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
   persistentRepoDir: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  deferCommit?: boolean;
+}): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
   try {
+    if (params.deferCommit) {
+      const result = await installPackageDir(
+        requestDeferredPackageDirInstall({
+          sourceDir: params.stagedRepoDir,
+          targetDir: params.persistentRepoDir,
+          mode: (await pathExists(params.persistentRepoDir)) ? "update" : "install",
+          timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+          copyErrorPrefix: "failed to replace managed git plugin repository",
+          hasDeps: false,
+          depsLogMessage: "",
+        }),
+      );
+      const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
+      return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
+    }
     await replaceDirectoryAtomic({
       stagedDir: params.stagedRepoDir,
       targetDir: params.persistentRepoDir,
@@ -428,6 +454,8 @@ export async function installPluginFromGitSpec(
     };
     const preflight = await preflightPluginGitInstallPolicy({
       config: params.config,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       logger: params.logger ?? {},
       mode: effectiveMode,
       pluginId: params.expectedPluginId ?? parsed.label,
@@ -482,6 +510,7 @@ export async function installPluginFromGitSpec(
 
     const result = await installPluginFromInstalledPackageDir({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       config: params.config,
       packageDir: repoDir,
       dryRun: params.dryRun,
@@ -494,14 +523,17 @@ export async function installPluginFromGitSpec(
     if (!result.ok) {
       return result;
     }
+    let transaction: PluginInstallTransaction | undefined;
     if (!params.dryRun) {
       const replaceResult = await replaceManagedGitRepo({
         stagedRepoDir: repoDir,
         persistentRepoDir,
+        deferCommit: isPluginInstallCommitDeferred(params),
       });
       if (!replaceResult.ok) {
         return replaceResult;
       }
+      transaction = replaceResult.transaction;
       emitPluginInstallSecurityEvent({
         pluginId: result.pluginId,
         mode: effectiveMode,
@@ -512,7 +544,7 @@ export async function installPluginFromGitSpec(
       });
     }
 
-    return {
+    const installed = {
       ...result,
       targetDir: params.dryRun ? result.targetDir : persistentRepoDir,
       git: {
@@ -522,5 +554,6 @@ export async function installPluginFromGitSpec(
         resolvedAt: new Date().toISOString(),
       },
     };
+    return transaction ? attachPluginInstallTransaction(installed, transaction) : installed;
   });
 }

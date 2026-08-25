@@ -753,6 +753,7 @@ describe("runSystemAgentTurn", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-global" },
+          systemAgent: { agentId: "ops" },
           models: {
             "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
           },
@@ -907,6 +908,38 @@ describe("runSystemAgentTurn", () => {
     {
       name: "empty model output",
       runEmbeddedAgent: async () => ({ payloads: [] }),
+    },
+    {
+      name: "hidden reasoning",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Considering the answer", isReasoning: true }],
+      }),
+    },
+    {
+      name: "hidden commentary",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Checking the gateway", isCommentary: true }],
+      }),
+    },
+    {
+      name: "explicitly hidden output",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Private model output", visible: false }],
+      }),
+    },
+    {
+      name: "status notice",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Still working", isStatusNotice: true }],
+      }),
+    },
+    {
+      name: "silent reply",
+      runEmbeddedAgent: async () => ({ payloads: [{ text: "NO_REPLY" }] }),
+    },
+    {
+      name: "raw-only hidden metadata",
+      runEmbeddedAgent: async () => ({ meta: { finalAssistantRawText: "Hidden draft" } }),
     },
   ])("clears partial session state after $name", async ({ runEmbeddedAgent }) => {
     useTempStateDir();

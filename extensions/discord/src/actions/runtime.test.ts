@@ -1,11 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
-import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  ChannelType,
+  PermissionFlagsBits,
+  type RESTGetAPIGuildEmojisResult,
+} from "discord-api-types/v10";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig, DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayPlugin } from "../internal/gateway.js";
+import { createInternalTestClient } from "../internal/test-builders.test-support.js";
+import { registerGateway, unregisterGateway } from "../monitor/gateway-registry.js";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
+import { handleDiscordMessageAction } from "./handle-action.js";
 import { discordGuildActionRuntime, discordModerationActionRuntime } from "./runtime-deps.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
@@ -67,7 +75,7 @@ const discordSendMocks = {
   fetchVoiceStatusDiscord: vi.fn(async () => ({})),
   kickMemberDiscord: vi.fn(async () => ({})),
   listGuildChannelsDiscord: vi.fn(async (): Promise<DiscordChannelInfoTest[]> => []),
-  listGuildEmojisDiscord: vi.fn(async () => []),
+  listGuildEmojisDiscord: vi.fn(async (): Promise<RESTGetAPIGuildEmojisResult> => []),
   listPinsDiscord: vi.fn(async () => ({})),
   listScheduledEventsDiscord: vi.fn(async () => []),
   listThreadsDiscord: vi.fn(async () => ({})),
@@ -82,7 +90,6 @@ const discordSendMocks = {
   searchMessagesDiscord: vi.fn(async () => ({})),
   sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
-  sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
   sendVoiceMessageDiscord: vi.fn(async () => ({})),
   setChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
@@ -124,7 +131,6 @@ const {
   searchMessagesDiscord,
   sendDiscordComponentMessage,
   sendMessageDiscord,
-  sendPollDiscord,
   sendVoiceMessageDiscord,
   setChannelPermissionDiscord,
   timeoutMemberDiscord,
@@ -181,6 +187,7 @@ function handleMessagingAction(
   isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
   options?: {
+    reply?: ChannelMessageActionContext["reply"];
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -1193,31 +1200,6 @@ describe("handleDiscordMessagingAction", () => {
     ).rejects.toThrow(/Discord reactions are disabled/);
   });
 
-  it("parses string booleans for poll options", async () => {
-    await handleMessagingAction(
-      "poll",
-      {
-        to: "channel:123",
-        question: "Lunch?",
-        answers: ["Pizza", "Sushi"],
-        allowMultiselect: "true",
-        durationHours: "24",
-      },
-      enableAllActions,
-    );
-
-    expect(sendPollDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      {
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 2,
-        durationHours: 24,
-      },
-      { cfg: DISCORD_TEST_CFG, content: undefined },
-    );
-  });
-
   it("rejects Discord permission reads for non-allowlisted target channels", async () => {
     const cfg = {
       channels: {
@@ -2218,6 +2200,18 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
+  it("allows embed-only message sends", async () => {
+    const embeds = [{ title: "Release notes", description: "Version available" }];
+
+    await handleMessagingAction("sendMessage", { to: "channel:123", embeds }, enableAllActions);
+
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "",
+      expect.objectContaining({ embeds }),
+    );
+  });
+
   it("ignores empty components objects for regular media sends", async () => {
     sendMessageDiscord.mockClear();
     sendDiscordComponentMessage.mockClear();
@@ -2245,6 +2239,49 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
+
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+      replyToId: "source-1",
+      expected: { messageId: "source-1", scope: "first" },
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+      replyToId: "explicit-1",
+      expected: { messageId: "explicit-1", scope: "all" },
+    },
+    {
+      label: "raw custom plugin reply",
+      reply: undefined,
+      replyToId: "custom-1",
+      expected: { messageId: "custom-1", scope: "all" },
+    },
+  ])(
+    "preserves the host-owned or custom $label for component sends",
+    async ({ reply, replyToId, expected }) => {
+      sendDiscordComponentMessage.mockClear();
+
+      await handleMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          content: "hello",
+          components: { blocks: [{ type: "text", text: "Pick one" }] },
+          replyTo: replyToId,
+        },
+        enableAllActions,
+        DISCORD_TEST_CFG,
+        reply ? { reply } : undefined,
+      );
+
+      expect(
+        mockObjectArg(sendDiscordComponentMessage, "sendDiscordComponentMessage", 0, 2),
+      ).toMatchObject({ reply: expected });
+    },
+  );
 
   it("forwards the optional filename into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
@@ -2324,6 +2361,55 @@ describe("handleDiscordMessagingAction", () => {
         channelId: "T1",
         name: "new-thread",
       },
+    });
+  });
+
+  it.each([
+    { label: "forum message", parentType: ChannelType.GuildForum, components: false },
+    { label: "media message", parentType: ChannelType.GuildMedia, components: false },
+    { label: "forum component media", parentType: ChannelType.GuildForum, components: true },
+    { label: "media component media", parentType: ChannelType.GuildMedia, components: true },
+  ])("renames the newly created $label thread", async ({ parentType, components }) => {
+    const sender = components ? sendDiscordComponentMessage : sendMessageDiscord;
+    sender.mockResolvedValueOnce({
+      messageId: "M1",
+      channelId: "T1",
+      receipt: { threadId: "T1" },
+    });
+    fetchChannelInfoDiscord.mockImplementation(async (channelId) => ({
+      id: channelId,
+      type: channelId === "P1" ? parentType : ChannelType.PublicThread,
+    }));
+    editChannelDiscord.mockResolvedValueOnce({
+      id: "T1",
+      name: "chosen-thread",
+    });
+
+    const result = await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:P1",
+        content: "A generated thread title",
+        threadName: "chosen-thread",
+        ...(components
+          ? {
+              components: { blocks: [{ type: "text", text: "A generated thread title" }] },
+              mediaUrl: "/tmp/image.png",
+            }
+          : {}),
+      },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("T1", { cfg: DISCORD_TEST_CFG });
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      { channelId: "T1", name: "chosen-thread" },
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(result.details).toMatchObject({
+      ok: true,
+      result: { channelId: "T1", receipt: { threadId: "T1" } },
+      threadRename: { ok: true, channelId: "T1", name: "chosen-thread" },
     });
   });
 
@@ -2527,6 +2613,95 @@ describe("handleDiscordMessagingAction", () => {
       initialMessageError: "missing access",
     });
   });
+
+  it("returns delivery progress when Discord only delivers part of the initial content", async () => {
+    const thread = { id: "T1", name: "thread", type: 11 };
+    createThreadDiscord.mockRejectedValueOnce(
+      new DiscordThreadInitialMessageError(
+        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
+        new Error("missing access"),
+        {
+          starterMessageDelivered: true,
+          deliveredChunkCount: 1,
+          deliveredMessageIds: ["starter1"],
+          failedChunkDelivery: "unknown",
+          failedChunkIndex: 1,
+          totalChunkCount: 2,
+        },
+      ),
+    );
+
+    const result = await handleMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "thread",
+        content: "Initial post",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      partial: true,
+      thread,
+      warning:
+        "Discord thread was created, but delivery of the remaining initial content could not be confirmed.",
+      initialMessageError: "missing access",
+      initialMessageDelivery: {
+        starterMessageDelivered: true,
+        deliveredChunkCount: 1,
+        deliveredMessageIds: ["starter1"],
+        failedChunkDelivery: "unknown",
+        failedChunkIndex: 1,
+        totalChunkCount: 2,
+      },
+    });
+  });
+
+  it("reports unconfirmed delivery when the first initial content chunk is ambiguous", async () => {
+    const thread = { id: "T1", name: "thread", type: 11 };
+    createThreadDiscord.mockRejectedValueOnce(
+      new DiscordThreadInitialMessageError(
+        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
+        new Error("response lost"),
+        {
+          starterMessageDelivered: false,
+          deliveredChunkCount: 0,
+          deliveredMessageIds: [],
+          failedChunkDelivery: "unknown",
+          failedChunkIndex: 0,
+          totalChunkCount: 1,
+        },
+      ),
+    );
+
+    const result = await handleMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "thread",
+        content: "Initial post",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      partial: true,
+      thread,
+      warning: "Discord thread was created, but initial message delivery could not be confirmed.",
+      initialMessageError: "response lost",
+      initialMessageDelivery: {
+        starterMessageDelivered: false,
+        deliveredChunkCount: 0,
+        deliveredMessageIds: [],
+        failedChunkDelivery: "unknown",
+        failedChunkIndex: 0,
+        totalChunkCount: 1,
+      },
+    });
+  });
 });
 
 describe("handleDiscordGuildAction", () => {
@@ -2571,6 +2746,120 @@ describe("handleDiscordGuildAction", () => {
     expect(details.ok).toBe(true);
     expect(details.status).toBe("online");
     expect(details.activities).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "resolves the guild from the current channel",
+      params: {},
+      expectedGuildId: "current-guild",
+      resolvesChannel: true,
+    },
+    {
+      label: "prefers an explicit guild over the current channel",
+      params: { guildId: "explicit-guild" },
+      expectedGuildId: "explicit-guild",
+      resolvesChannel: false,
+    },
+  ])("$label for emoji-list", async ({ params, expectedGuildId, resolvesChannel }) => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "123",
+      type: ChannelType.GuildText,
+      guild_id: "current-guild",
+    });
+
+    const result = await handleDiscordMessageAction({
+      action: "emoji-list",
+      params,
+      cfg: DISCORD_TEST_CFG,
+      toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+    });
+
+    expect(result.details).toEqual({ ok: true, emojis: [] });
+    expect(listGuildEmojisDiscord).toHaveBeenCalledWith(expectedGuildId, { cfg: DISCORD_TEST_CFG });
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(resolvesChannel ? 1 : 0);
+  });
+
+  it("returns sorted, limited reaction-ready custom emoji without REST metadata", async () => {
+    listGuildEmojisDiscord.mockResolvedValueOnce([
+      { id: "3", name: "zeta", animated: false, roles: ["role-1"] },
+      { id: "1", name: "alpha", animated: true, managed: true },
+      { id: "2", name: "beta", available: true },
+      { id: null, name: "missing-id" },
+      { id: "4", name: null },
+    ]);
+
+    const result = await handleGuildAction(
+      "emojiList",
+      { guildId: "G1", limit: 2 },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      emojis: [
+        { name: "alpha", identifier: "alpha:1", animated: true },
+        { name: "beta", identifier: "beta:2" },
+      ],
+    });
+  });
+
+  it("reuses the gateway-owned normalized emoji list across requests with different limits", async () => {
+    const client = createInternalTestClient();
+    registerGateway("default", {
+      fetchGuildEmojis: client.fetchGuildEmojis.bind(client),
+    } as GatewayPlugin);
+    listGuildEmojisDiscord.mockResolvedValueOnce([
+      { id: "2", name: "beta" },
+      { id: "1", name: "alpha" },
+    ]);
+
+    try {
+      const first = await handleGuildAction(
+        "emojiList",
+        { guildId: "G1", limit: 1 },
+        enableAllActions,
+      );
+      const second = await handleGuildAction(
+        "emojiList",
+        { guildId: "G1", limit: 2 },
+        enableAllActions,
+      );
+
+      expect(first.details).toEqual({
+        ok: true,
+        emojis: [{ name: "alpha", identifier: "alpha:1" }],
+      });
+      expect(second.details).toEqual({
+        ok: true,
+        emojis: [
+          { name: "alpha", identifier: "alpha:1" },
+          { name: "beta", identifier: "beta:2" },
+        ],
+      });
+      expect(listGuildEmojisDiscord).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterGateway("default");
+    }
+  });
+
+  it("bounds emoji-list output even when a larger limit is requested", async () => {
+    listGuildEmojisDiscord.mockResolvedValueOnce(
+      Array.from({ length: 101 }, (_, index) => ({
+        id: String(index + 1),
+        name: `emoji-${String(index).padStart(3, "0")}`,
+      })),
+    );
+
+    const result = await handleGuildAction(
+      "emojiList",
+      { guildId: "G1", limit: 500 },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({ ok: true, emojis: expect.any(Array) });
+    const details = result.details as { emojis: unknown[] };
+    expect(details.emojis).toHaveLength(100);
   });
 
   it.each([

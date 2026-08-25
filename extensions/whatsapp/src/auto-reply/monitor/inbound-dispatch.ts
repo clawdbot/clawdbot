@@ -1,21 +1,28 @@
 // Whatsapp plugin module implements inbound dispatch behavior.
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  buildChannelInboundEventContext,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   readAgentRunTerminalOutcome,
   type ChannelInboundTurnPlan,
   toInboundMediaFactsWithMetadata,
+  hasVisibleInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
   listMessageReceiptPlatformIds,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  requireWhatsAppInboundAdmission,
+  resolveWhatsAppAdmissionChannelIngress,
+} from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
@@ -29,7 +36,6 @@ import type {
 } from "../deliver-reply.js";
 import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
-import type { EchoTracker } from "./echo.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
@@ -147,7 +153,7 @@ function isWhatsAppVisibleDeliveryError(error: unknown): boolean {
 }
 
 function readTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function markWhatsAppReplyDeliveryErrorVisibleAfterFlush(
@@ -398,6 +404,7 @@ export async function prepareWhatsAppInboundContext(params: {
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
   suppressMessageReceivedHooks?: boolean;
+  buildContext?: typeof buildChannelInboundEventContext;
 }): Promise<{
   inbound: PreparedChannelInbound;
   control: Parameters<typeof projectPreparedChannelInbound>[0]["control"];
@@ -407,6 +414,14 @@ export async function prepareWhatsAppInboundContext(params: {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
+  const eventId = params.msg.event.id ?? `${conversationId}:${newConnectionId()}`;
+  const channelIngress =
+    (await resolveWhatsAppAdmissionChannelIngress(admission, {
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      messageId: eventId,
+      inboundEventKind: "user_request",
+    })) ?? admission.channelIngress;
   const wasMentioned = params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned;
   const inboundHistory =
     conversationKind === "group"
@@ -439,6 +454,7 @@ export async function prepareWhatsAppInboundContext(params: {
     messageReceivedHooks: params.suppressMessageReceivedHooks ? "channel" : "core",
   } as const;
   const inbound: PreparedChannelInbound = {
+    channelIngress,
     channel: "whatsapp",
     supplemental: {
       quote: params.visibleReplyTo
@@ -453,7 +469,7 @@ export async function prepareWhatsAppInboundContext(params: {
     },
     media,
     event: {
-      id: params.msg.event.id ?? `${conversationId}:${newConnectionId()}`,
+      id: eventId,
       timestamp: params.msg.event.timestamp,
     },
     from: conversationId,
@@ -512,7 +528,11 @@ export async function prepareWhatsAppInboundContext(params: {
       location: params.msg.payload.location,
     },
   };
-  const projected = projectPreparedChannelInbound({ inbound, control });
+  const projected = projectPreparedChannelInbound({
+    inbound,
+    control,
+    buildContext: params.buildContext ?? buildChannelInboundEventContext,
+  });
   return {
     inbound,
     control,
@@ -620,7 +640,6 @@ export function createWhatsAppReplyPlan(params: {
   maxMediaTextChunkLimit?: number;
   inbound: PreparedChannelInbound;
   onModelSelected?: ChannelReplyOnModelSelected;
-  rememberSentText: EchoTracker["rememberText"];
   replyLogger: ReturnType<typeof getChildLogger>;
   replyPipeline: WhatsAppDispatchPipeline;
   replyResolver: typeof getReplyFromConfig;
@@ -654,13 +673,6 @@ export function createWhatsAppReplyPlan(params: {
     payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>,
   ): void => {
     didSendReply = true;
-    const shouldLog = payload.text ? true : undefined;
-    params.rememberSentText(payload.text, {
-      combinedBody: params.context.Body as string | undefined,
-      combinedBodySessionKey: params.route.sessionKey,
-      conversationId,
-      logVerboseMessage: shouldLog,
-    });
     if (shouldLogVerbose()) {
       const reply = resolveSendableOutboundReplyParts(payload);
       const preview = payload.text != null ? reply.text : "<media>";
@@ -721,14 +733,7 @@ export function createWhatsAppReplyPlan(params: {
       return result;
     }
     if (options?.recordDelivery !== false) {
-      try {
-        recordDeliveredPayload(normalizedDeliveryPayload);
-      } catch (error: unknown) {
-        throw createChannelPartialDeliveryError(error, {
-          ...result,
-          visibleReplySent: true,
-        });
-      }
+      recordDeliveredPayload(normalizedDeliveryPayload);
     }
     return result;
   };

@@ -1,7 +1,13 @@
 // Gateway RPC helpers for node CLI commands, including lazy runtime loading and option parsing.
 import { randomUUID } from "node:crypto";
+import {
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -9,11 +15,6 @@ import {
 import { readConnectErrorDetailCode } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import {
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "../../infra/parse-finite-number.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -73,12 +74,17 @@ function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
   return readMissingScopeError(value)?.missingScope === "operator.read";
 }
 
-function isUnknownGatewayMethodError(value: unknown, method: string): value is Error {
+function isUnknownGatewayMethodError(
+  value: unknown,
+  method: string,
+): value is GatewayClientRequestError {
   return (
-    value instanceof Error &&
-    value.name === "GatewayClientRequestError" &&
-    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    value.message.includes(`unknown method: ${method}`)
+    value instanceof GatewayClientRequestError &&
+    value.gatewayCode === "INVALID_REQUEST" &&
+    !value.retryable &&
+    value.message === `unknown method: ${method}` &&
+    (value.retryAfterMs === undefined ||
+      (Number.isInteger(value.retryAfterMs) && value.retryAfterMs >= 0))
   );
 }
 
@@ -122,6 +128,7 @@ export const callNodesGatewayCli = async (
       ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
       : GATEWAY_CLIENT_NAMES.CLI,
     mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    sharedStateMode: "read-only",
   });
 };
 
@@ -170,6 +177,7 @@ export const callNodePairApprovalGatewayCli = async (
     scopes: callOpts.scopes,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
+    sharedStateMode: "read-only",
   });
 };
 
@@ -294,7 +302,10 @@ export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise
   try {
     const res = await callNodesGatewayCli("node.list", opts, {});
     nodes = parseNodeList(res);
-  } catch {
+  } catch (error) {
+    if (!isUnknownGatewayMethodError(error, "node.list")) {
+      throw error;
+    }
     const res = await callNodesGatewayCli("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({

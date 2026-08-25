@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -15,11 +16,7 @@ import { doctorCommand } from "../../commands/doctor.js";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  GATEWAY_SERVICE_KIND,
-  GATEWAY_SERVICE_MARKER,
-  GATEWAY_SERVICE_RUNTIME_PID_ENV,
-} from "../../daemon/constants.js";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
@@ -27,10 +24,12 @@ import {
   suspendScheduledTaskAutoStartForUpdate,
 } from "../../daemon/schtasks.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import {
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -485,14 +484,15 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 
   // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
   // need the handoff marker to distinguish that transition from operator-stopped state.
+  const serviceLoaded = serviceState.loadState.status === "loaded";
   const launchAgentMayRespawn =
     process.platform === "darwin" &&
-    serviceState.loaded &&
+    serviceLoaded &&
     (await service.isEnabled?.({ env: serviceState.env })) === true;
   const handoffSupervisorMayRespawn =
     process.platform !== "darwin" && process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1";
   const supervisorMayRespawn =
-    serviceState.loaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
+    serviceLoaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
   if (!serviceState.running && !supervisorMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,
@@ -568,7 +568,8 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     running: serviceState.running,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
-    serviceDefinitionEnv: serviceState.command?.environment,
+    serviceDefinitionEnv:
+      resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
 }
@@ -601,11 +602,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
 function isRunningInsideGatewayService(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
-    return false;
-  }
-  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
-  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+  return isGatewayServiceEnv(env);
 }
 
 export function shouldBlockMutableUpdateFromGatewayServiceEnv(params: {
@@ -804,8 +801,7 @@ async function refreshGatewayServiceEnv(params: {
       {
         cwd: params.result.root,
         env: resolveUpdatedInstallCommandEnv({
-          processEnv: process.env,
-          serviceEnv: params.env,
+          processEnv: params.env ?? process.env,
           invocationCwd: params.invocationCwd,
         }),
         timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
@@ -1059,6 +1055,7 @@ export async function maybeRestartService(params: {
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
   serviceEnv?: NodeJS.ProcessEnv;
+  serviceInstallEnv?: NodeJS.ProcessEnv | null;
   gatewayPort: number;
   restartScriptPath?: string | null;
   invocationCwd?: string;
@@ -1081,12 +1078,13 @@ export async function maybeRestartService(params: {
     }
     return false;
   }
+  const canRestartUpdatedInstall = params.refreshServiceEnv || params.serviceInstallEnv === null;
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     opts: { requireRunningService?: boolean } = {},
   ) => {
     const restartAfterStaleCleanup = async () => {
-      if (params.refreshServiceEnv && isPackageManagerUpdateMode(params.result.mode)) {
+      if (canRestartUpdatedInstall && isPackageManagerUpdateMode(params.result.mode)) {
         await runUpdatedInstallGatewayRestart({
           result: params.result,
           jsonMode: Boolean(params.opts.json),
@@ -1222,13 +1220,13 @@ export async function maybeRestartService(params: {
       let refreshedGatewayAlreadyHealthy = false;
       let updatedInstallRestartNeedsServiceRootProof = false;
       let restartScriptPath = params.restartScriptPath;
-      if (params.refreshServiceEnv) {
+      if (params.refreshServiceEnv && params.serviceInstallEnv !== null) {
         try {
           await refreshGatewayServiceEnv({
             result: params.result,
             jsonMode: Boolean(params.opts.json),
             invocationCwd: params.invocationCwd,
-            env: params.serviceEnv,
+            env: params.serviceInstallEnv,
             nodeRunner: params.nodeRunner,
           });
           if (isPackageUpdate && expectedGatewayVersion) {
@@ -1272,7 +1270,7 @@ export async function maybeRestartService(params: {
         await createUpdateConfigSnapshot();
         await runRestartScript(restartScriptPath);
         restartInitiated = true;
-      } else if (!refreshedGatewayAlreadyHealthy && params.refreshServiceEnv && isPackageUpdate) {
+      } else if (!refreshedGatewayAlreadyHealthy && canRestartUpdatedInstall && isPackageUpdate) {
         await createUpdateConfigSnapshot();
         restarted = await runUpdatedInstallGatewayRestart({
           result: params.result,

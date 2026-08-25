@@ -45,4 +45,45 @@ describe("hook status", () => {
       blockedReason: "no events defined",
     });
   });
+
+  it("keeps OS incompatibility visible for always-on hooks", () => {
+    const mismatchedOs = process.platform === "darwin" ? "linux" : "darwin";
+    const entry = createHookEntry({
+      source: "openclaw-workspace",
+      events: ["command:new"],
+    });
+    entry.metadata = {
+      ...entry.metadata,
+      events: ["command:new"],
+      always: true,
+      os: [mismatchedOs],
+      requires: { env: ["MISSING_HOOK_ENV"] },
+    };
+
+    const report = buildWorkspaceHookStatus("/tmp/workspace", {
+      entries: [entry],
+      config: {
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: { "session-memory": { enabled: true } },
+          },
+        },
+      },
+    });
+
+    expect(report.hooks[0]).toMatchObject({
+      always: true,
+      requirementsSatisfied: false,
+      loadable: false,
+      blockedReason: "missing requirements",
+      missing: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [mismatchedOs],
+      },
+    });
+  });
 });

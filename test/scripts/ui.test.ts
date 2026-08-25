@@ -6,10 +6,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isDirectScriptExecution,
+  resolveUiBuildEnvironment,
   resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
 } from "../../scripts/ui.mts";
+import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
 function readNonEmpty(file: string): string | null {
@@ -54,6 +56,78 @@ async function waitForExit(
 }
 
 describe("scripts/ui windows spawn behavior", () => {
+  it("reuses the runtime identity for the documented standalone UI rebuild", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const firstBuild = normalizeControlUiBuildInfo({
+      version: "2026.8.1",
+      commit,
+      builtAt: "2026-08-14T23:00:00.000Z",
+    });
+
+    const env = resolveUiBuildEnvironment({
+      env: {},
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => firstBuild,
+      readGitCommit: () => commit,
+      readPackageVersion: () => "2026.8.1",
+    });
+    const rebuiltUi = normalizeControlUiBuildInfo({
+      version: "2026.8.1",
+      commit: env.GIT_COMMIT,
+      builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
+      buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
+    });
+
+    expect(rebuiltUi).toMatchObject({
+      builtAt: firstBuild.builtAt,
+      buildId: firstBuild.buildId,
+      commit: firstBuild.commit,
+      version: firstBuild.version,
+    });
+  });
+
+  it("does not reuse build info from a different source revision", () => {
+    const env = resolveUiBuildEnvironment({
+      env: {},
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => ({
+        version: "2026.8.1",
+        commit: "a".repeat(40),
+        builtAt: "2026-08-14T23:00:00.000Z",
+      }),
+      readGitCommit: () => "b".repeat(40),
+      readPackageVersion: () => "2026.8.1",
+    });
+
+    expect(env).toMatchObject({
+      GIT_COMMIT: "b".repeat(40),
+      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
+    });
+    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+  });
+
+  it("does not reuse non-release build info for a release UI build", () => {
+    const commit = "a".repeat(40);
+    const env = resolveUiBuildEnvironment({
+      env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1" },
+      now: () => new Date("2026-08-14T23:05:00.000Z"),
+      readBuildInfo: () => ({
+        version: "2026.8.1",
+        commit,
+        builtAt: "2026-08-14T23:00:00.000Z",
+        release: false,
+      }),
+      readGitCommit: () => commit,
+      readPackageVersion: () => "2026.8.1",
+    });
+
+    expect(env).toMatchObject({
+      GIT_COMMIT: commit,
+      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
+    });
+    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+  });
+
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
     expect(
       shouldUseCmdExeForCommand("C:\\Users\\dev\\AppData\\Local\\pnpm\\pnpm.CMD", "win32"),

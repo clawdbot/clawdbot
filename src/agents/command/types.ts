@@ -145,6 +145,8 @@ export type AgentCommandOpts = {
   /** Called once when the selected runtime actually admits the prompt for execution. */
   onExecutionStarted?: () => void;
   extraSystemPrompt?: string;
+  /** Frozen profile-backed human Git attribution prepared by trusted ingress. */
+  gitCoauthorAttribution?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for bootstrap context behavior. */
@@ -207,6 +209,10 @@ export type AgentCommandOpts = {
   onAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
   ) => void | Promise<void>;
+  /** Private owner binding hook invoked only after exact admission has resolved. */
+  onPostAdmittedRunContext?: (
+    context: import("../admitted-run-context.js").AdmittedRunContext,
+  ) => void;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -239,6 +245,7 @@ export type AgentCommandIngressOpts = Omit<
   | "operationalRunInstance"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
+  | "onPostAdmittedRunContext"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;
@@ -257,4 +264,5 @@ export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
     | "operationalRunInstance"
     | "cronCreatorAuthorityCapability"
     | "onAdmittedRunContext"
+    | "onPostAdmittedRunContext"
   >;

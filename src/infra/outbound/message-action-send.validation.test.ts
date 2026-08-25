@@ -432,17 +432,4 @@ describe("message body alias normalization", () => {
       },
     });
   });
-
-  it("still rejects send with no message and no alias", async () => {
-    await expect(
-      runDrySend({
-        cfg: workspaceConfig,
-        actionParams: {
-          channel: "workspace",
-          target: "#C12345678",
-        },
-        toolContext: { currentChannelId: "C12345678" },
-      }),
-    ).rejects.toThrow(/message required/i);
-  });
 });

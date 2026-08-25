@@ -1,10 +1,10 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -91,7 +91,7 @@ export function extractThinkingCached(message: unknown): string | null {
   return value;
 }
 
-export function extractRawText(message: unknown): string | null {
+function extractRawText(message: unknown): string | null {
   if (message == null) {
     return null;
   }

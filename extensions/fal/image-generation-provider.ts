@@ -154,18 +154,6 @@ type FalNetworkPolicy = {
   trustedDownloadPolicy?: SsrFPolicy;
 };
 
-let falFetchGuard = fetchWithSsrFGuard;
-
-function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  falFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-if (process.env.VITEST === "true") {
-  const key = Symbol.for("openclaw.falTestApi");
-  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
-  Reflect.set(globalThis, key, { ...api, setImageFetchGuard: setFalFetchGuardForTesting });
-}
-
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
   const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
   const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
@@ -609,7 +597,7 @@ async function fetchImageBuffer(
       return undefined;
     }
   })();
-  const { response, release } = await falFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url,
     timeoutMs: resolveProviderOperationTimeoutMs({
       deadline,
@@ -782,7 +770,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           inputImages: req.inputImages ?? [],
         });
       }
-      const { response, release } = await falFetchGuard({
+      const { response, release } = await fetchWithSsrFGuard({
         url: `${baseUrl}/${model}`,
         init: {
           method: "POST",

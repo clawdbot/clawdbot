@@ -28,6 +28,7 @@ describe("legacy media persistence Doctor migration from historical v14", () => 
     expect(createHash("sha256").update(historicalSchema).digest("hex")).toBe(
       "955889668707fbccab70b80b5058af5a1587fd35ae32a80f8605179a68fb5117",
     );
+    expect(historicalSchema).not.toContain("  project_id TEXT,\n");
 
     const stateDir = makeTempDir(tempDirs, "media-persistence-historical-v14-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

@@ -245,7 +245,7 @@ describe("standing intents", () => {
     expect(anywhereResult.message).toContain("Intent is armed everywhere.");
   });
 
-  it("keeps identity-free operations available while enforcing selected create scopes", async () => {
+  it("refuses senderless creation instead of exposing it to unrelated channel users", async () => {
     const tool = createStandingIntentTool({ agentId: "main" });
 
     expect(parseToolJson(await tool.execute("list-empty", { action: "list" }))).toEqual({
@@ -254,19 +254,21 @@ describe("standing intents", () => {
     await expect(
       tool.execute("create-default", {
         action: "create",
-        description: "Missing identity reminder.",
-        triggerKeywords: ["missing identity"],
-      }),
-    ).rejects.toThrow("channel identity is unavailable for this creating turn");
-    await expect(
-      tool.execute("create-anywhere", {
-        action: "create",
         description: "Identity-free reminder.",
         triggerKeywords: ["identity free"],
-        scope: "anywhere",
-        senderScope: "anyone",
       }),
-    ).rejects.toThrow("creating sender is unavailable for this turn");
+    ).rejects.toThrow("authenticated channel and sender identity is unavailable");
+
+    expect(listStandingIntents({ agentId: "main" })).toEqual([]);
+    expect(
+      matchStandingIntents({
+        agentId: "main",
+        prompt: "identity free",
+        provider: "qa-channel",
+        channel: "unrelated-room",
+        senderId: "unrelated-user",
+      }),
+    ).toEqual([]);
   });
 
   it("applies scope, cooldown, fire-budget, and expiry transitions", () => {

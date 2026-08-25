@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
+import { attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 function message(value: unknown): AgentMessage {
   return value as AgentMessage;
@@ -194,6 +195,53 @@ describe("projectSettledCodexMessages", () => {
       role: "user",
       content: [{ type: "input_text", text: "Send the Aurora notice to Erin." }],
     });
+  });
+
+  it("preserves upstream user text above the ordinary message limit", () => {
+    const upstreamUserText = "x".repeat(64 * 1024 + 1);
+
+    expect(
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({ role: "user", content: "[Telegram metadata] decorated prompt" }),
+          upstreamUserText,
+        ),
+        toolCall(),
+        toolResult(),
+      ])[0],
+    ).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: upstreamUserText }],
+    });
+  });
+
+  it("rejects upstream user text above the projection limit", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({ role: "user", content: "[Telegram metadata] decorated prompt" }),
+          "x".repeat(512 * 1024 + 1),
+        ),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrow("oversized upstream user text");
+  });
+
+  it("charges upstream user text against the aggregate byte limit", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({ role: "user", content: "decorated" }),
+          "x".repeat(400 * 1024),
+        ),
+        message({ role: "user", content: "x".repeat(60 * 1024) }),
+        message({ role: "user", content: "x".repeat(60 * 1024) }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrow("exceeds the byte limit");
   });
 
   it("does not let provenance hide non-text user content", () => {

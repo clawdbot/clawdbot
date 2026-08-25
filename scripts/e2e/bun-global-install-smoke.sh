@@ -147,8 +147,8 @@ main() {
   export NO_COLOR=1
   mkdir -p "$HOME" "$BUN_INSTALL/bin" "$BUN_INSTALL/install/global" "$XDG_CACHE_HOME"
   export PATH="$BUN_INSTALL/bin:$(dirname "$(command -v node)"):$PATH"
-  # Release publishes @openclaw/ai first. Bun 1.3.14 ignores bundled deps in
-  # local tarballs, so resolve that one package from the exact candidate bytes.
+  # Release publishes @openclaw/ai first. Pin the local tarball install to
+  # exact candidate bytes instead of allowing public-registry resolution.
   node --input-type=module - \
     "$BUN_INSTALL/install/global/package.json" \
     "$AI_PACKAGE_TGZ" <<'NODE'

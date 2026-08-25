@@ -17,7 +17,7 @@ vi.mock("../auto-reply/reply/commands-status.js", () => ({
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
-  loadSessionEntryReadOnly: loadSessionEntry,
+  loadGatewaySessionEntryReadOnly: loadSessionEntry,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({

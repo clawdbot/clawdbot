@@ -6,8 +6,8 @@ import {
   createSlackWriteClient,
   resolveSlackWebClientOptions,
 } from "@openclaw/slack/api.js";
-import type { FetchFunction } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { acquireDebugProxyCaptureStore } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
@@ -21,7 +21,11 @@ import {
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
 } from "./slack-live.config.js";
-import type { SlackMessage, SlackQaRuntimeEnv } from "./slack-live.contracts.js";
+import type {
+  SlackMessage,
+  SlackQaFetchFunction,
+  SlackQaRuntimeEnv,
+} from "./slack-live.contracts.js";
 import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
 import {
   getSlackIdentity,
@@ -32,6 +36,7 @@ import {
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
+type FetchFunction = SlackQaFetchFunction;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const SLACK_POLL_INTERVAL_MS = 500;
@@ -222,7 +227,7 @@ export async function createSlackQaTransportAdapter(
       }
     })().catch((error: unknown) => {
       if (!stopped) {
-        pollingError = error instanceof Error ? error : new Error(String(error));
+        pollingError = toStringifiedError(error);
       }
     });
   };

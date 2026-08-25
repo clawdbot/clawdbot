@@ -21,7 +21,7 @@ import { createCopilotTestHostCapabilities } from "./src/host-capability.test-su
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
 type AgentHarnessIsolatedCompletionParams = Parameters<
-  NonNullable<AgentHarness["runIsolatedCompletion"]>
+  NonNullable<AgentHarness["runIsolatedCompletionV2"]>
 >[0];
 
 type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
@@ -121,25 +121,28 @@ const TEST_SESSION_CONFIG = {
 const ISOLATED_COMPLETION_PARAMS = {
   provider: "github-copilot",
   modelId: "gpt-4.1",
-  model: {
-    id: "gpt-4.1",
-    name: "GPT-4.1",
-    api: "openai-responses",
-    provider: "github-copilot",
-    baseUrl: "https://api.githubcopilot.com",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
+  authorization: {
+    owner: "host",
+    model: {
+      id: "gpt-4.1",
+      name: "GPT-4.1",
+      api: "openai-responses",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+    },
+    auth: {
+      apiKey: "prepared-github-token",
+      profileId: "github:work",
+      source: "profile",
+      mode: "oauth",
+    },
+    sourceAuthFingerprint: "prepared-owner-fingerprint",
   },
-  auth: {
-    apiKey: "prepared-github-token",
-    profileId: "github:work",
-    source: "profile",
-    mode: "oauth",
-  },
-  sourceAuthFingerprint: "prepared-owner-fingerprint",
   config: {},
   agentId: "test",
   agentDir: "/tmp/agent",
@@ -546,7 +549,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({
+      harness.runIsolatedCompletionV2?.({
         ...ISOLATED_COMPLETION_PARAMS,
         streamParams: { maxTokens: 800, temperature: 0.2 },
       }),
@@ -621,6 +624,26 @@ describe("createCopilotAgentHarness", () => {
     expect(pool.release).toHaveBeenCalledWith(expect.objectContaining({ client }));
   });
 
+  it("rejects harness-owned authorization before acquiring a client", async () => {
+    const pool = makePoolMock();
+    const harness = createCopilotAgentHarness({ pool });
+
+    await expect(
+      harness.runIsolatedCompletionV2?.({
+        ...ISOLATED_COMPLETION_PARAMS,
+        authorization: {
+          owner: "harness",
+          plan: {
+            providerForAuth: "github-copilot",
+            authProfileProviderForAuth: "github-copilot",
+          },
+          authProfileStore: { version: 1, profiles: {} },
+        },
+      }),
+    ).rejects.toThrow("requires host-prepared authorization");
+    expect(pool.acquire).not.toHaveBeenCalled();
+  });
+
   it("returns tool-shaped output for core to reject with its stable code", async () => {
     const session = {
       abort: vi.fn().mockResolvedValue(undefined),
@@ -645,7 +668,7 @@ describe("createCopilotAgentHarness", () => {
     pool.acquire.mockResolvedValue({ client, key: TEST_POOL_KEY });
     const harness = createCopilotAgentHarness({ pool });
 
-    await expect(harness.runIsolatedCompletion?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
+    await expect(harness.runIsolatedCompletionV2?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
       assistant: expect.objectContaining({
         content: [{ type: "toolCall", id: "call-1", name: "shell", arguments: {} }],
         stopReason: "toolUse",
@@ -662,7 +685,7 @@ describe("createCopilotAgentHarness", () => {
       const harness = createCopilotAgentHarness({ pool });
 
       await expect(
-        harness.runIsolatedCompletion?.({ ...ISOLATED_COMPLETION_PARAMS, thinkLevel }),
+        harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, thinkLevel }),
       ).rejects.toThrow(`does not support thinking level ${thinkLevel}`);
       expect(pool.acquire).not.toHaveBeenCalled();
     },
@@ -686,7 +709,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({
+      harness.runIsolatedCompletionV2?.({
         ...ISOLATED_COMPLETION_PARAMS,
         abortSignal: controller.signal,
       }),
@@ -723,7 +746,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({
+      harness.runIsolatedCompletionV2?.({
         ...ISOLATED_COMPLETION_PARAMS,
         abortSignal: controller.signal,
       }),
@@ -744,7 +767,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
+      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
     ).rejects.toThrow("timed out after 5ms");
     deferred.resolve(lateHandle);
     await flushAsyncWork();
@@ -767,7 +790,7 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
 
     await expect(
-      harness.runIsolatedCompletion?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
+      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
     ).rejects.toThrow("timed out after 5ms");
     deferred.resolve(lateSession);
     await flushAsyncWork();
@@ -797,7 +820,7 @@ describe("createCopilotAgentHarness", () => {
     pool.acquire.mockResolvedValue({ client, key: TEST_POOL_KEY });
     const harness = createCopilotAgentHarness({ pool });
 
-    await expect(harness.runIsolatedCompletion?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
+    await expect(harness.runIsolatedCompletionV2?.(ISOLATED_COMPLETION_PARAMS)).resolves.toEqual({
       assistant: expect.objectContaining({ content: [{ type: "text", text: "Done." }] }),
     });
     expect(disconnect).toHaveBeenCalledOnce();
@@ -825,24 +848,28 @@ describe("createCopilotAgentHarness", () => {
       ...ISOLATED_COMPLETION_PARAMS,
       provider: "custom-openai",
       modelId: "prepared-model",
-      model: {
-        ...ISOLATED_COMPLETION_PARAMS.model,
-        id: "prepared-model",
-        name: "Prepared model",
-        provider: "custom-openai",
-        baseUrl: "https://inference.example/v1",
-        headers: { "x-tenant": "tenant-a" },
-      },
-      auth: {
-        apiKey: "prepared-byok-key",
-        profileId: "custom:work",
-        source: "profile",
-        mode: "api-key" as const,
+      authorization: {
+        owner: "host",
+        model: {
+          ...ISOLATED_COMPLETION_PARAMS.authorization.model,
+          id: "prepared-model",
+          name: "Prepared model",
+          provider: "custom-openai",
+          baseUrl: "https://inference.example/v1",
+          headers: { "x-tenant": "tenant-a" },
+        },
+        auth: {
+          apiKey: "prepared-byok-key",
+          profileId: "custom:work",
+          source: "profile",
+          mode: "api-key" as const,
+        },
+        sourceAuthFingerprint: "prepared-owner-fingerprint",
       },
       streamParams: { maxTokens: 321 },
     } satisfies AgentHarnessIsolatedCompletionParams;
 
-    await expect(harness.runIsolatedCompletion?.(params)).resolves.toEqual({
+    await expect(harness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
       assistant: expect.objectContaining({
         content: [{ type: "text", text: "Done." }],
         model: "prepared-model",

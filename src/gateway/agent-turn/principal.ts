@@ -2,6 +2,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { GatewayClient, GatewayRequestContext } from "../server-methods/shared-types.js";
 import type { AgentTurnPrincipal } from "./types.js";
 
@@ -10,7 +11,7 @@ export function captureAgentTurnPrincipal(client: GatewayClient | null): AgentTu
   if (!client) {
     return null;
   }
-  return {
+  const principal: AgentTurnPrincipal = {
     authenticatedUserId: client.authenticatedUserId,
     authenticatedUserProfile: client.authenticatedUserProfile,
     connId: client.connId,
@@ -18,6 +19,8 @@ export function captureAgentTurnPrincipal(client: GatewayClient | null): AgentTu
     internal: client.internal,
     isDeviceTokenAuth: client.isDeviceTokenAuth,
   };
+  transferGatewayLocalUserIngress(client, principal);
+  return principal;
 }
 
 /** Preserve capability-gated tool-event observation across agent turn entry paths. */

@@ -1,14 +1,9 @@
 // Resolves bundled source overlays used by plugin packaging.
 import fs from "node:fs";
 import path from "node:path";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
-
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
 
 /** Parses Linux mountinfo content into absolute mount points. */
 function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {

@@ -223,6 +223,45 @@ describe("firecrawl tools", () => {
     expect((failure as Error).message.length).toBeLessThan(5_000);
   });
 
+  it("does not cache failed target statuses and observes recovery", async () => {
+    const targetStatuses = [404, 404, 200];
+    const fetchMock = vi.fn(async () => {
+      const statusCode = targetStatuses.shift();
+      return Response.json({
+        success: true,
+        data: {
+          markdown: `target status ${statusCode}`,
+          metadata: {
+            sourceURL: "https://example.com/firecrawl-target-recovery",
+            statusCode,
+          },
+        },
+      });
+    });
+    global.fetch = fetchMock as typeof fetch;
+    const params = {
+      cfg: {
+        plugins: {
+          entries: { firecrawl: { config: { webFetch: { apiKey: "firecrawl-owner-test" } } } },
+        },
+      } as OpenClawConfig,
+      url: "https://example.com/firecrawl-target-recovery",
+      extractMode: "markdown" as const,
+    };
+
+    await expect(runActualFirecrawlScrape(params)).rejects.toThrow(
+      "Firecrawl fetch failed (404): target returned an unsuccessful HTTP status.",
+    );
+    await expect(runActualFirecrawlScrape(params)).rejects.toThrow(
+      "Firecrawl fetch failed (404): target returned an unsuccessful HTTP status.",
+    );
+    const recovered = await runActualFirecrawlScrape(params);
+
+    expect(recovered.status).toBe(200);
+    expect(recovered.cached).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it.each(["search", "scrape"] as const)(
     "propagates exact %s cancellation into the actual guarded fetch signal",
     async (operation) => {
@@ -270,6 +309,76 @@ describe("firecrawl tools", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(transportSignal?.aborted).toBe(true);
       expect(transportSignal?.reason).toBe(reason);
+    },
+  );
+
+  it.each(["search", "scrape"] as const)(
+    "rejects late successful %s responses after cancellation and permits a fresh retry",
+    async (operation) => {
+      const controller = new AbortController();
+      const reason = new Error(`${operation} cancelled after dispatch`);
+      let transportSignal: AbortSignal | undefined;
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const cancelledRequest = fetchMock.mock.calls.length === 1;
+        if (cancelledRequest) {
+          transportSignal = init?.signal ?? undefined;
+          controller.abort(reason);
+        }
+        const resultLabel = cancelledRequest ? "cancelled" : "fresh";
+        return Response.json({
+          success: true,
+          data:
+            operation === "search"
+              ? [{ url: `https://${resultLabel}.example/result`, title: resultLabel }]
+              : {
+                  markdown: `${resultLabel} scrape result`,
+                  metadata: {
+                    sourceURL: "https://example.com/firecrawl-cancelled-scrape",
+                    statusCode: 200,
+                  },
+                },
+        });
+      });
+      global.fetch = fetchMock as typeof fetch;
+      const cfg = {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webSearch: { apiKey: "firecrawl-late-cancel-test" },
+                webFetch: { apiKey: "firecrawl-late-cancel-test" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const searchParams = { cfg, query: "Firecrawl cancelled search must not populate cache" };
+      const scrapeParams = {
+        cfg,
+        url: "https://example.com/firecrawl-cancelled-scrape",
+        extractMode: "markdown" as const,
+      };
+      const request =
+        operation === "search"
+          ? runActualFirecrawlSearch({ ...searchParams, signal: controller.signal })
+          : runActualFirecrawlScrape({ ...scrapeParams, signal: controller.signal });
+
+      await expect(request).rejects.toBe(reason);
+      expect(transportSignal?.aborted).toBe(true);
+      expect(transportSignal?.reason).toBe(reason);
+
+      const retry =
+        operation === "search"
+          ? await runActualFirecrawlSearch(searchParams)
+          : await runActualFirecrawlScrape(scrapeParams);
+      if (operation === "search") {
+        expect(retry).toMatchObject({ results: [{ url: "https://fresh.example/result" }] });
+        expect(retry.cached).toBeUndefined();
+      } else {
+        expect(retry).toMatchObject({ status: 200 });
+        expect(retry.text).toContain("fresh scrape result");
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -1439,12 +1548,13 @@ describe("firecrawl tools", () => {
       headers: { "content-type": "application/json" },
     });
     const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+    global.fetch = vi.fn(async () => streamed.response) as typeof fetch;
 
     await expect(
-      firecrawlClientTesting.readFirecrawlJsonResponse(
-        streamed.response,
-        "Firecrawl Search API error",
-      ),
+      runActualFirecrawlSearch({
+        query: "openclaw bounded search response",
+        access: "keyless",
+      }),
     ).rejects.toThrow("Firecrawl Search API error: JSON response exceeds 16777216 bytes");
 
     expect(streamed.getReadCount()).toBeLessThan(32);

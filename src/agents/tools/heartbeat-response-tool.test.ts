@@ -41,7 +41,7 @@ describe("createHeartbeatResponseTool", () => {
     expect(priority).not.toHaveProperty("anyOf");
   });
 
-  it("records a quiet heartbeat outcome", async () => {
+  it("accepts a quiet no-change outcome without claiming persistence", async () => {
     const tool = createHeartbeatResponseTool();
 
     const result = await tool.execute("call-1", {
@@ -52,10 +52,13 @@ describe("createHeartbeatResponseTool", () => {
 
     expect(tool.name).toBe(HEARTBEAT_RESPONSE_TOOL_NAME);
     const details = result.details as HeartbeatResponseDetails;
-    expect(details.status).toBe("recorded");
+    expect(details.status).toBe("accepted");
     expect(details.outcome).toBe("no_change");
     expect(details.notify).toBe(false);
     expect(details.summary).toBe("Nothing needs attention.");
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining('"status": "accepted"') }),
+    ]);
   });
 
   it("rejects repeated heartbeat responses from the same tool instance", async () => {
@@ -75,7 +78,7 @@ describe("createHeartbeatResponseTool", () => {
         notify: false,
         summary: "Nothing needs attention.",
       }),
-    ).rejects.toThrow("heartbeat_respond already recorded");
+    ).rejects.toThrow("heartbeat_respond already accepted");
   });
 
   it("captures scratch without echoing future prompt content to the model", async () => {
@@ -98,7 +101,7 @@ describe("createHeartbeatResponseTool", () => {
     ]);
   });
 
-  it("accepts notification text and optional scheduling metadata", async () => {
+  it("accepts an urgent notification without claiming persistence", async () => {
     const tool = createHeartbeatResponseTool();
 
     const result = await tool.execute("call-1", {
@@ -111,13 +114,16 @@ describe("createHeartbeatResponseTool", () => {
     });
 
     const details = result.details as HeartbeatResponseDetails;
-    expect(details.status).toBe("recorded");
+    expect(details.status).toBe("accepted");
     expect(details.outcome).toBe("needs_attention");
     expect(details.notify).toBe(true);
     expect(details.summary).toBe("Build is blocked.");
     expect(details.notificationText).toBe("Build is blocked on missing credentials.");
     expect(details.priority).toBe("high");
     expect(details.nextCheck).toBe("2026-05-01T17:00:00Z");
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining('"status": "accepted"') }),
+    ]);
   });
 
   it("rejects missing notify because quiet vs visible delivery must be explicit", async () => {

@@ -18,7 +18,8 @@ import {
 } from "../../process/command-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   upstreamFork: vi.fn(),
@@ -42,7 +43,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
-import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:rewind-handler";
@@ -162,6 +162,7 @@ async function invoke(
   entryId?: string,
   client: GatewayClient | null = null,
   active = false,
+  runtimeConfig?: GatewayRequestContext["getRuntimeConfig"],
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -178,7 +179,9 @@ async function invoke(
           : { entryId }),
     },
     respond: respond as unknown as RespondFn,
-    context: context(active),
+    context: runtimeConfig
+      ? { ...context(active), getRuntimeConfig: runtimeConfig }
+      : context(active),
     client,
     isWebchatConnect: () => false,
   });
@@ -279,6 +282,49 @@ function installUpstreamForkHarness(): void {
 }
 
 describe("session message-cut methods", () => {
+  it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
+    const profile = ensureProfileForEmail("restricted-fork-creator@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["guest-only"],
+              scopes: ["operator.read", "operator.write"],
+            },
+          },
+        },
+      },
+    });
+
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
+    expect(fork).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.FORBIDDEN,
+        message: expect.stringContaining('agent "main"'),
+      }),
+    );
+    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+
+    const rewind = await invoke("sessions.rewind", "user-entry", client, false, runtimeConfig);
+    expect(rewind).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+  });
+
   it("returns an empty branch list for a not-yet-materialized session", async () => {
     const respond = vi.fn() as unknown as RespondFn;
     await expectDefined(
@@ -454,21 +500,21 @@ describe("session message-cut methods", () => {
     );
   });
 
-  it("rejects externally owned conversations", async () => {
+  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
     linkToUpstreamConversation();
     const respond = await invoke("sessions.branches.switch", "off-path-entry");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("external agent harness"),
+      }),
+    );
+    // Listing is read-only: "no local branches" is the truthful steady state,
+    // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
-
-    for (const response of [respond, listed]) {
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("external agent harness"),
-        }),
-      );
-    }
+    expect(listed).toHaveBeenCalledWith(true, { branches: [] }, undefined);
   });
 
   it.each(["sessions.rewind", "sessions.branches.switch"] as const)(

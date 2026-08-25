@@ -8,12 +8,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
-import {
-  buildClaudeLiveRunContext,
-  buildPreparedCliRunContext,
-  mockClaudeLiveRun,
-} from "./cli-runner.test-helpers.js";
-import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.test-support.js";
+import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
@@ -123,8 +118,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  resetClaudeLiveSessionsForTest();
-  vi.useRealTimers();
   await fs.rm(scenarioRoot, { recursive: true, force: true });
 });
 
@@ -219,41 +212,6 @@ function buildReusableProcessContext(params: CliBoundaryParams): PreparedCliRunC
   return context;
 }
 
-function buildReusableLiveContext(params: CliBoundaryParams): PreparedCliRunContext {
-  const context = applyBoundaryParams(
-    buildClaudeLiveRunContext({
-      model: params.model ?? PRIMARY_MODEL,
-      runId: params.runId,
-      workspaceDir: scenarioRoot,
-      timeoutMs: 5_000,
-      backend: {
-        resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
-        forkArg: "--fork-session",
-        resumeAtArg: "--resume-session-at",
-        reliability: {
-          watchdog: {
-            fresh: { noOutputTimeoutRatio: 0.2, minMs: 1_000, maxMs: 1_000 },
-            resume: { noOutputTimeoutRatio: 0.2, minMs: 1_000, maxMs: 1_000 },
-          },
-        },
-      },
-    }),
-    params,
-  );
-  context.reusableCliSession = { mode: "reuse", sessionId: "source-cli-session" };
-  context.openClawHistoryPrompt = RESEED_PROMPT;
-  context.params.cliSessionBinding = {
-    sessionId: "source-cli-session",
-    resumeCheckpointId: "assistant-before-stall",
-  };
-  context.params.onBeforeForkedCliSessionRetry = vi.fn(async () => true);
-  context.params.claimCliSessionFork = vi.fn(async () => true);
-  context.params.persistCliSessionForkSuccessor = vi.fn(async () => undefined);
-  context.params.restoreCliSessionFork = vi.fn(async () => undefined);
-  context.params.onBeforeFreshCliSessionRetry = vi.fn(async () => true);
-  return context;
-}
-
 async function runOuter(options: OuterRunOptions = {}) {
   harness.wholeTurnRuns += 1;
   return runWithModelFallback<EmbeddedAgentRunResult>({
@@ -298,40 +256,6 @@ function currentCounts(): ScenarioCounts {
 
 function expectCounts(expected: ScenarioCounts): void {
   expect(currentCounts()).toEqual(expected);
-}
-
-function installLiveStall(sessionId: string): void {
-  mockClaudeLiveRun(supervisorSpawnMock, {
-    cancelable: true,
-    events: [{ type: "system", subtype: "init", session_id: sessionId }],
-  });
-  harness.managedChildren += 1;
-}
-
-function installLiveSuccess(sessionId: string, text: string): void {
-  mockClaudeLiveRun(supervisorSpawnMock, {
-    events: [
-      { type: "system", subtype: "init", session_id: sessionId },
-      { type: "result", subtype: "success", session_id: sessionId, result: text },
-    ],
-  });
-  harness.managedChildren += 1;
-}
-
-function installLiveFailure(sessionId: string, text: string): void {
-  mockClaudeLiveRun(supervisorSpawnMock, {
-    events: [
-      { type: "system", subtype: "init", session_id: sessionId },
-      {
-        type: "result",
-        subtype: "error_during_execution",
-        is_error: true,
-        session_id: sessionId,
-        result: text,
-      },
-    ],
-  });
-  harness.managedChildren += 1;
 }
 
 describe("CLI runner fault sequences", () => {
@@ -545,80 +469,6 @@ describe("CLI runner fault sequences", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
     expectCounts({
       childProcesses: 1,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
-  });
-
-  it("recovers resume to fork inside one outer candidate", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    harness.contextFor = buildReusableLiveContext;
-    installLiveStall("source-cli-session");
-    installLiveSuccess("forked-cli-session", "fork recovered");
-
-    const outcomePromise = runOuter();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(1_000);
-    const outcome = await outcomePromise;
-
-    expect(outcome.result.payloads).toEqual([{ text: "fork recovered" }]);
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
-    expectCounts({
-      childProcesses: 2,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
-  });
-
-  it("recovers a failed fork with one fresh transcript reseed inside one outer candidate", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    harness.contextFor = buildReusableLiveContext;
-    installLiveStall("source-cli-session");
-    installLiveStall("forked-before-stall");
-    installLiveSuccess("fresh-after-fork", "fresh recovered");
-
-    const outcomePromise = runOuter();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.advanceTimersByTimeAsync(1_000);
-    const outcome = await outcomePromise;
-
-    expect(outcome.result.payloads).toEqual([{ text: "fresh recovered" }]);
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
-    expectCounts({
-      childProcesses: 3,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
-  });
-
-  it("delivers an exhausted three-child recovery ladder to the outer candidate exactly once", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    harness.contextFor = buildReusableLiveContext;
-    installLiveStall("source-cli-session");
-    installLiveStall("forked-before-failure");
-    installLiveFailure("fresh-terminal", "worker exploded after recovery");
-    const outerErrors = vi.fn();
-
-    const outcomePromise = runOuter({ onError: outerErrors });
-    const rejection = outcomePromise.catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.advanceTimersByTimeAsync(1_000);
-    const error = await rejection;
-
-    expect(error).toBeInstanceOf(Error);
-    expect(String(error)).toContain("worker exploded after recovery");
-    expect(outerErrors).toHaveBeenCalledTimes(1);
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
-    expectCounts({
-      childProcesses: 3,
       nativeRunBudgetAttempts: 0,
       outerCandidates: 1,
       runCliAgentCalls: 1,

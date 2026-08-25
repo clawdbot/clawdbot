@@ -1,5 +1,5 @@
 // Verifies model reference validation in config surfaces.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -174,6 +174,36 @@ describe("config model reference validation", () => {
       expect(res.config.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
     }
   });
+
+  it("keeps core-only validation independent from plugin metadata", () => {
+    const loadPluginMetadataSnapshot = vi.fn(() => ({
+      manifestRegistry: createModelNormalizationRegistry(),
+    }));
+    const valid = validateConfigObjectWithPlugins(
+      {
+        gateway: { mode: "local" },
+        models: {
+          providers: {
+            "fixture-external": {
+              baseUrl: "http://127.0.0.1:19432/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      { pluginValidation: "core-only", loadPluginMetadataSnapshot },
+    );
+    const invalid = validateConfigObjectWithPlugins(
+      { gateway: { port: "invalid" } },
+      { pluginValidation: "core-only", loadPluginMetadataSnapshot },
+    );
+
+    expect(valid.ok).toBe(true);
+    expect(invalid.ok).toBe(false);
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       "default policy",

@@ -4,6 +4,7 @@ import {
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString as stringFromUnknown } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageActionTransportOptions } from "./actions-rpc.js";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { createIMessageRpcClient } from "./client.js";
@@ -39,10 +40,6 @@ function asChatList(value: unknown): Array<Record<string, unknown>> {
 
 function numberFromUnknown(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : parseStrictInteger(value);
-}
-
-function stringFromUnknown(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function chatListCacheKey(options: IMessageActionTransportOptions): string {

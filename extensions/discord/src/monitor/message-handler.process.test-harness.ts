@@ -1,11 +1,20 @@
 // Discord tests cover message handler.process plugin behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
+const runtimeEnvMocks = vi.hoisted(() => ({
+  logVerbose: vi.fn(),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: runtimeEnvMocks.logVerbose,
+  sleepWithAbort: runtimeEnvMocks.sleepWithAbort,
+}));
 
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
 
@@ -19,8 +28,8 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 export const getGlobalHookRunnerForTest = getGlobalHookRunner;
 
-export const logVerboseForTest = logVerbose;
-export const sleepWithAbortForTest = sleepWithAbort;
+export const logVerboseForTest = runtimeEnvMocks.logVerbose;
+export const sleepWithAbortForTest = runtimeEnvMocks.sleepWithAbort;
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -183,6 +192,8 @@ export type DispatchInboundParams = {
     isProgressDraftVisible?: () => boolean;
     progressPreambleEnabled?: boolean;
     narrationHideCommandText?: boolean;
+    commentaryPayloadsEnabled?: boolean;
+    shouldDeliverCommentaryPayloads?: () => boolean;
     onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
@@ -229,6 +240,19 @@ const dispatchInboundMessage = vi.hoisted(() =>
       queuedFinal: boolean;
       counts: { final: number; tool: number; block: number };
       failedCounts?: { final?: number; tool?: number; block?: number };
+      settledReceipt?: {
+        counts: Record<
+          "tool" | "block" | "final",
+          {
+            delivered: number;
+            deliveredNotVisible: number;
+            cancelled: number;
+            failedBeforeSend: number;
+            failedAfterSend: number;
+          }
+        >;
+        anyVisibleDelivered: boolean;
+      };
     }>
   >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,
@@ -276,7 +300,6 @@ export const recordInboundSessionForTest = recordInboundSession;
 export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
@@ -389,6 +412,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
           await Promise.all(pendingDeliveries);
         }),
         getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
         markComplete: vi.fn(),
       },
       replyOptions: {
@@ -570,8 +594,7 @@ export function registerDiscordProcessTestLifecycle() {
     vi.useRealTimers();
     ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
       await import("./message-handler.test-harness.js"));
-    ({ testing: threadBindingTesting, createThreadBindingManager } =
-      await import("./thread-bindings.js"));
+    ({ createThreadBindingManager } = await import("./thread-bindings.js"));
     ({ processDiscordMessage, formatDiscordReplySkip } =
       await import("./message-handler.process.js"));
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
@@ -579,6 +602,8 @@ export function registerDiscordProcessTestLifecycle() {
 
   beforeEach(() => {
     vi.useRealTimers();
+    runtimeEnvMocks.logVerbose.mockReset();
+    runtimeEnvMocks.sleepWithAbort.mockReset().mockResolvedValue(undefined);
     sendMocks.reactMessageDiscord.mockClear();
     sendMocks.removeReactionDiscord.mockClear();
     typingMocks.sendTyping.mockClear();
@@ -603,7 +628,7 @@ export function registerDiscordProcessTestLifecycle() {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
     getGlobalHookRunner.mockReturnValue(null);
-    threadBindingTesting.resetThreadBindingsForTests();
+    resetThreadBindingsForTests();
   });
 
   afterEach(() => {

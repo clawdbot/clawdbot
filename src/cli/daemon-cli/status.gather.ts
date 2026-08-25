@@ -1,5 +1,6 @@
 // Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
@@ -23,11 +24,16 @@ import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../..
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceLoadState,
+} from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import type { HostDesktopStatus } from "../../gateway/desktop/host-source.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
 import {
@@ -39,7 +45,6 @@ import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import {
   inspectPortConnections,
@@ -63,6 +68,7 @@ import {
 } from "../../plugins/plugin-version-drift.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -174,10 +180,7 @@ function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): Open
 }
 
 function coerceStatusConfig(value: unknown): OpenClawConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as OpenClawConfig;
+  return asNonArrayRecord(value) as OpenClawConfig;
 }
 
 function hasOwnKey(value: unknown, key: string): boolean {
@@ -240,6 +243,7 @@ async function readFullStatusConfig(params: {
   const io = createConfigIO({
     env: params.env,
     configPath: params.configPath,
+    observe: false,
     pluginValidation: params.pluginValidation ?? "skip",
     logger: {
       error: () => {},
@@ -292,16 +296,12 @@ export type DaemonStatus = {
   logFile?: string;
   service: {
     label: string;
-    loaded: boolean;
+    loaded: boolean | null;
+    loadState: GatewayServiceLoadState;
     loadedText: string;
     notLoadedText: string;
     targetRole?: "target" | "diagnostic-only";
-    command?: {
-      programArguments: string[];
-      workingDirectory?: string;
-      environment?: Record<string, string>;
-      sourcePath?: string;
-    } | null;
+    command?: GatewayServiceCommandConfig | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
     gatewayHeap?: GatewayHeapLimitReport;
@@ -314,6 +314,7 @@ export type DaemonStatus = {
     mismatch?: boolean;
   };
   gateway?: GatewayStatusSummary;
+  hostDesktop?: HostDesktopStatus;
   port?: {
     port: number;
     status: PortUsageStatus;
@@ -342,6 +343,7 @@ export type DaemonStatus = {
     };
     server?: {
       version?: string | null;
+      buildId?: string | null;
       connId?: string | null;
     };
     version?: string | null;
@@ -593,13 +595,16 @@ export async function gatherDaemonStatus(
     allowExecSecretRefs?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
-  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ?? 10_000;
+  const timeoutMs = parseTimeoutMsWithFallback(opts.rpc.timeout, 10_000, {
+    invalidType: "error",
+  });
   const service = resolveGatewayService();
   const serviceState = await readGatewayServiceState(service, {
     env: process.env,
     timeoutMs,
   });
-  const { command, env: serviceEnv, loaded, runtime } = serviceState;
+  const { command, env: serviceEnv, loadState, runtime } = serviceState;
+  const loaded = loadState.status === "loaded";
   // A non-default or externally supervised process does not own the host's
   // native service. Keep that service visible, but do not let it retarget probes.
   const useNativeServiceTargetContext =
@@ -611,6 +616,7 @@ export async function gatherDaemonStatus(
         auditGatewayServiceConfig({
           env: process.env,
           command,
+          timeoutMs,
         }),
       )
     : { ok: true, issues: [] satisfies ServiceConfigAudit["issues"] };
@@ -794,12 +800,17 @@ export async function gatherDaemonStatus(
     }
   }
 
+  const hostDesktop = await (
+    await import("../../gateway/desktop/host-source.js")
+  ).inspectHostDesktop({ config: daemonCfg.desktop?.host });
+
   return {
     cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       label: service.label,
-      loaded,
+      loaded: loadState.status === "unknown" ? null : loaded,
+      loadState,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
       targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
@@ -826,6 +837,7 @@ export async function gatherDaemonStatus(
           }
         : {}),
     },
+    hostDesktop: hostDesktop.status,
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     ...(establishedClients ? { connections: establishedClients } : {}),

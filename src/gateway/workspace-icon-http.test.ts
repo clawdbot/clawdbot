@@ -9,20 +9,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
-  resolveScopes: vi.fn(),
-  authorizeScopes: vi.fn(),
-  resolveIsOwner: vi.fn(),
   resolveLocalSessionWorkspaceRoot: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
-  resolveOpenAiCompatibleHttpOperatorScopes: (...args: unknown[]) => mocks.resolveScopes(...args),
-  resolveOpenAiCompatibleHttpSenderIsOwner: (...args: unknown[]) => mocks.resolveIsOwner(...args),
-}));
-
-vi.mock("./method-scopes.js", () => ({
-  authorizeOperatorScopesForMethod: (...args: unknown[]) => mocks.authorizeScopes(...args),
+  authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
+    mocks.authorize(...args),
 }));
 
 vi.mock("./server-methods/sessions-files.js", () => ({
@@ -33,6 +25,7 @@ vi.mock("./server-methods/sessions-files.js", () => ({
 const {
   clearWorkspaceIconCacheForTest,
   handleWorkspaceIconHttpRequest,
+  prepareSessionWorkspaceIcon,
   resolveWorkspaceIcon,
   SVG_ICON_MAX_BYTES,
   WORKSPACE_ICON_MAX_BYTES,
@@ -73,22 +66,35 @@ afterEach(async () => {
 
 describe("resolveWorkspaceIcon", () => {
   const conventions = [
+    { relative: "favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
+    { relative: "favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { relative: "favicon.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "public/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "public/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
     { relative: "public/favicon.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "public/favicon-32.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "public/apple-touch-icon.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "static/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "static/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
     { relative: "static/favicon.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "ui/public/favicon-32.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "ui/public/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
+    { relative: "ui/public/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { relative: "ui/public/favicon.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "app/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { relative: "app/favicon.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "app/icon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "app/icon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "app/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { relative: "app/icon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { relative: "src/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { relative: "src/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
+    { relative: "src/app/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
     { relative: "src/app/icon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "src/app/icon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "src/app/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
-    { relative: "favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "favicon.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "assets/icon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
+    { relative: "assets/icon.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "assets/logo.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
+    { relative: "assets/logo.png", body: PNG_BYTES, contentType: "image/png" },
   ] as const;
 
   it.each(conventions)("resolves $relative as $contentType", async (convention) => {
@@ -99,16 +105,17 @@ describe("resolveWorkspaceIcon", () => {
     expect(icon?.etag).toMatch(/^"[\w-]+"$/u);
   });
 
-  it("prefers the framework-specific location over a bare root favicon", async () => {
+  it("uses the first valid icon in the fixed precedence", async () => {
     const root = await makeWorkspace({
       "favicon.ico": ICO_BYTES,
       "public/favicon.svg": SVG_BYTES,
+      "ui/public/favicon-32.png": PNG_BYTES,
     });
-    expect((await resolveWorkspaceIcon(root))?.contentType).toBe("image/svg+xml");
+    expect((await resolveWorkspaceIcon(root))?.contentType).toBe("image/x-icon");
   });
 
   const rejected = [
-    { label: "an unconventional location", files: { "assets/favicon.ico": ICO_BYTES } },
+    { label: "an unconventional location", files: { "vendor/favicon.png": PNG_BYTES } },
     { label: "an empty file", files: { "favicon.ico": Buffer.alloc(0) } },
     { label: "bytes that are not an image", files: { "favicon.ico": Buffer.from("#!/bin/sh\n") } },
     {
@@ -199,10 +206,10 @@ describe("handleWorkspaceIconHttpRequest", () => {
   });
 
   beforeEach(() => {
-    mocks.authorize.mockReset().mockResolvedValue({ ok: true });
-    mocks.resolveScopes.mockReset().mockReturnValue(["operator.read"]);
-    mocks.authorizeScopes.mockReset().mockReturnValue({ allowed: true });
-    mocks.resolveIsOwner.mockReset().mockReturnValue(true);
+    mocks.authorize.mockReset().mockResolvedValue({
+      authMethod: "token",
+      operatorScopes: ["operator.admin", "operator.read"],
+    });
     mocks.resolveLocalSessionWorkspaceRoot.mockReset().mockReturnValue(undefined);
   });
 
@@ -212,6 +219,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it("serves the session workspace icon with sandboxed asset headers", async () => {
     const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
     mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
 
     const response = await fetch(iconRoute("agent:main:one"));
     expect(mocks.resolveLocalSessionWorkspaceRoot).toHaveBeenCalledWith({
@@ -233,6 +241,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it("revalidates an unchanged icon without resending its bytes", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
     mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
 
     const first = await fetch(iconRoute("agent:main:one"));
     const etag = first.headers.get("etag");
@@ -249,6 +258,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it("omits the body but keeps the representation headers on HEAD", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
     mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
 
     const response = await fetch(iconRoute("agent:main:one"), { method: "HEAD" });
     expect(response.status).toBe(200);
@@ -265,9 +275,75 @@ describe("handleWorkspaceIconHttpRequest", () => {
     mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(
       hasWorkspace ? await makeWorkspace({}) : undefined,
     );
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("keeps a request made before chat startup retryable", async () => {
+    const response = await fetch(iconRoute("agent:main:one"));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
+  });
+
+  it("waits for preparation already started by chat startup", async () => {
+    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+
+    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:pending" });
+    const responsePromise = fetch(iconRoute("agent:main:pending"));
+
+    await preparation;
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
+  });
+
+  it("records the fallback when preparation fails", async () => {
+    mocks.resolveLocalSessionWorkspaceRoot.mockImplementation(() => {
+      throw new Error("broken workspace metadata");
+    });
+    await expect(prepareSessionWorkspaceIcon({ sessionKey: "agent:main:broken" })).rejects.toThrow(
+      "broken workspace metadata",
+    );
+
+    const response = await fetch(iconRoute("agent:main:broken"));
+    expect(response.status).toBe(404);
+  });
+
+  it("does no session-store or filesystem resolution in the HTTP request", async () => {
+    const root = await makeWorkspace({ "ui/public/favicon-32.png": PNG_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
+    mocks.resolveLocalSessionWorkspaceRoot.mockClear();
+    await fs.rm(path.join(root, "ui/public/favicon-32.png"));
+
+    const first = await fetch(iconRoute("agent:main:one"));
+    const second = await fetch(iconRoute("agent:main:one"));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(Buffer.from(await first.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
+    expect(Buffer.from(await second.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
+    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
+  });
+
+  it("keeps a recently served session snapshot across bounded-cache eviction", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:kept" });
+    for (let index = 0; index < 127; index += 1) {
+      await prepareSessionWorkspaceIcon({ sessionKey: `agent:main:filler-${index}` });
+    }
+
+    expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:newest" });
+
+    expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
+    expect((await fetch(iconRoute("agent:main:filler-0"))).status).toBe(503);
   });
 
   const malformed = ["/__openclaw__/workspace-icon/", "/__openclaw__/workspace-icon/a/b"];
@@ -302,11 +378,17 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 
-  it("never reads a workspace for a caller without owner access", async () => {
+  it("never reads a workspace when the owner-read authorizer denies access", async () => {
     // `sessions.list` hides incognito and non-owner draft sessions per client.
     // Without that filter here, the read scope alone would let a caller who
     // knows such a key pull bytes derived from a session it cannot list.
-    mocks.resolveIsOwner.mockReturnValue(false);
+    mocks.authorize.mockImplementation(
+      async (params: { res: { statusCode: number; end: () => void } }) => {
+        params.res.statusCode = 403;
+        params.res.end();
+        return null;
+      },
+    );
     const response = await fetch(iconRoute("agent:main:hidden"));
     expect(response.status).toBe(403);
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
@@ -316,16 +398,9 @@ describe("handleWorkspaceIconHttpRequest", () => {
     // resolveLocalSessionWorkspaceRoot withholds the root for exec-node sessions
     // so the route can never answer with this Gateway's own project icon.
     mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(undefined);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:remote" });
     const response = await fetch(iconRoute("agent:main:remote"));
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("never reads a workspace for a caller missing the session read scope", async () => {
-    mocks.authorizeScopes.mockReturnValue({ allowed: false, missingScope: "operator.read" });
-    const response = await fetch(iconRoute("agent:main:one"));
-    expect(response.status).toBe(403);
-    expect(mocks.authorizeScopes).toHaveBeenCalledWith("sessions.list", ["operator.read"]);
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 });

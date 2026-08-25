@@ -22,12 +22,25 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens the Control UI in onboarding mode after its first-run install, which
-  offers to import detected Claude Code, Codex, or Hermes memories into the
-  agent workspace (the same import stays available later under
-  Settings → Import Memory)
-- renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
+- opens Model Setup after its first-run install, automatically tests available
+  AI credentials, and verifies an existing model before opening the dashboard
+- continues into guided onboarding after connecting a new model; onboarding can
+  import detected Claude Code, Codex, or Hermes memories into the agent workspace
+  (the same import stays available later under Settings → Import Memory)
 - remains available from the system tray when its window is closed
+
+When the desktop app starts with a supported provider API key in its environment,
+the Gateway service keeps that dedicated inference credential in an owner-only
+environment file. Provider admin keys, GitHub tokens, and unrelated environment
+variables are not copied into the service.
+
+### Host sleep
+
+On systems with systemd-logind, the companion prepares a suspension lease for
+its local Gateway before the host sleeps. After wake, it reconnects and resumes
+the Gateway; remote Gateway routes are left untouched. If logind or the system
+bus is unavailable, the sleep hook disables itself and the app continues
+normally.
 
 Realtime voice Talk inside the companion's embedded WebView is not validated:
 the shell does not grant microphone capture to the WebKitGTK WebView, so
@@ -109,20 +122,12 @@ After an accepted send, Quick Chat stays open and streams the selected agent's
 plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
 `Ctrl+Enter` still opens the dashboard.
 
-### Canvas
-
-Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
-
-The plugin is enabled by default. It advertises Canvas only when the desktop socket exists at `$XDG_RUNTIME_DIR/openclaw-canvas.sock`, or `/tmp/openclaw-canvas-$UID.sock` when `XDG_RUNTIME_DIR` is unavailable. Disable it with `plugins.entries.linux-canvas.enabled: false`. On a headless Linux server without the desktop app, Canvas is not advertised.
-
-Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI actions are accepted only from the bundled renderer.
-
 ## CLI and SSH alternative
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
 1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
-2. `npm i -g openclaw@latest`
+2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
 5. Open `http://127.0.0.1:18789/` and authenticate with the configured shared

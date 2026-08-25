@@ -41,6 +41,7 @@ import {
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import { planPluginUninstall } from "./uninstall.js";
 
 function mergeUnsetPaths(
@@ -213,27 +214,27 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
   }
   const installs = createPluginInstallRecordMap<PluginInstallRecord>();
   setPluginInstallRecordMapEntry(installs, params.pluginId, params.previousRecord);
-  const plan = planPluginUninstall({
-    config: {
-      plugins: {
-        installs,
+  const plan = planPluginUninstall(
+    recordPluginPackageUninstallPlan(
+      {
+        config: {
+          plugins: {
+            installs,
+          },
+        } as OpenClawConfig,
+        pluginId: params.pluginId,
+        deleteFiles: true,
       },
-    } as OpenClawConfig,
-    pluginId: params.pluginId,
-    deleteFiles: true,
-  });
-  if (
-    !plan.ok ||
-    !plan.directoryRemoval ||
-    plan.directoryRemoval.cleanup?.kind !== "npm" ||
-    path.resolve(plan.directoryRemoval.target) !== path.resolve(previousInstallPath)
-  ) {
+      { runtimePluginIds: [] },
+    ),
+  );
+  if (!plan.ok || !plan.directoryRemoval || plan.directoryRemoval.cleanup?.kind !== "npm") {
     return null;
   }
-  if (nextInstallPath && installPathsOverlap(plan.directoryRemoval.target, nextInstallPath)) {
+  if (nextInstallPath && installPathsOverlap(previousInstallPath, nextInstallPath)) {
     return null;
   }
-  return plan.directoryRemoval.target;
+  return previousInstallPath;
 }
 
 function resolveNpmInstallRecordPackageName(record: PluginInstallRecord): string | null {

@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 // Control UI view renders agents panels tools skills screen content.
 import { html, nothing } from "lit";
 import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
@@ -21,10 +23,12 @@ import {
   isAllowedByPolicy,
   matchesList,
   resolveAgentConfig,
+  resolveAgentSkillsFilter,
   resolveToolProfileOptions,
   resolveToolProfile,
   resolveToolSections,
 } from "../../lib/agents/display.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -32,10 +36,8 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
-} from "../../lib/string-coerce.ts";
+import type { GitHubIdentityController } from "./github-identity-controller.ts";
+import { renderGitHubIdentity } from "./github-identity-view.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {
@@ -194,7 +196,7 @@ function renderEffectiveToolNotices(result: ToolsEffectiveResult | null) {
             class="callout ${notice.severity === "warning" ? "warning" : "info"}"
             style="margin-top: 12px"
           >
-            ${notice.message}
+            ${formatUiExternalText(notice.message)}
           </div>
         `,
       )}
@@ -238,6 +240,7 @@ export function renderAgentTools(params: {
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   canUpdateConfig: boolean;
+  githubIdentity: GitHubIdentityController;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -513,6 +516,7 @@ export function renderAgentTools(params: {
       },
       html`${renderEffectiveToolNotices(params.toolsEffectiveResult)}${runtimeAvailability}`,
     )}
+    ${renderGitHubIdentity(params.githubIdentity)}
     ${renderSettingsSection(
       { title: t("agentTools.catalogTitle") },
       html`
@@ -727,12 +731,16 @@ export function renderAgentSkills(params: {
     !params.configLoading &&
     !params.configSaving;
   const config = resolveAgentConfig(params.configForm, params.agentId);
-  const allowlist = Array.isArray(config.entry?.skills) ? config.entry?.skills : undefined;
-  const allowSet = new Set(normalizeStringEntries(allowlist ?? []));
+  const explicitAllowlist = Array.isArray(config.entry?.skills)
+    ? normalizeStringEntries(config.entry.skills)
+    : undefined;
+  const allowlist = resolveAgentSkillsFilter(params.configForm, params.agentId);
+  const allowSet = new Set(allowlist ?? []);
   const usingAllowlist = allowlist !== undefined;
+  const inheritedAllowlist = explicitAllowlist === undefined && usingAllowlist;
   const canClear =
     params.canPatchConfig &&
-    usingAllowlist &&
+    explicitAllowlist !== undefined &&
     Boolean(params.configForm) &&
     !params.configLoading &&
     !params.configSaving;
@@ -757,7 +765,13 @@ export function renderAgentSkills(params: {
       ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
       : nothing}
     ${usingAllowlist
-      ? html`<div class="callout info">${t("agents.skillsPanel.customAllowlist")}</div>`
+      ? html`<div class="callout info">
+          ${t(
+            inheritedAllowlist
+              ? "agents.skillsPanel.inheritedAllowlist"
+              : "agents.skillsPanel.customAllowlist",
+          )}
+        </div>`
       : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`}
     ${!reportReady && !params.loading
       ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`
@@ -769,13 +783,6 @@ export function renderAgentSkills(params: {
         description: html`${t("agents.skillsPanel.subtitle")}
         ${totalCount > 0 ? html`<span class="mono">${enabledCount}/${totalCount}</span>` : nothing}`,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!canClear}
-            @click=${() => params.onClear(params.agentId)}
-          >
-            ${t("agentTools.enableAll")}
-          </button>
           <button
             class="btn btn--sm"
             ?disabled=${!editable}
@@ -834,6 +841,7 @@ export function renderAgentSkills(params: {
                     allowSet,
                     usingAllowlist,
                     editable,
+                    filterActive: Boolean(filter),
                     onToggle: params.onToggle,
                   }),
                 )}
@@ -851,10 +859,12 @@ function renderAgentSkillGroup(
     allowSet: Set<string>;
     usingAllowlist: boolean;
     editable: boolean;
+    filterActive: boolean;
     onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   },
 ) {
-  const collapsedByDefault = group.id === "workspace" || group.id === "built-in";
+  const collapsedByDefault =
+    !params.filterActive && (group.id === "workspace" || group.id === "built-in");
   return html`
     <details class="agent-skills-group" ?open=${!collapsedByDefault}>
       <summary class="agent-skills-header">

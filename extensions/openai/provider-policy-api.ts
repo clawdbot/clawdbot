@@ -11,6 +11,7 @@ import type {
   ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
 } from "openclaw/plugin-sdk/provider-model-types";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
@@ -44,11 +45,7 @@ type OpenAIResolveSingleModelRouteContext = Omit<
 };
 
 function normalizeOptionalRouteApi(value: ModelApi | null | undefined): ModelApi | undefined {
-  return typeof value === "string" && value.trim() ? (value.trim() as ModelApi) : undefined;
-}
-
-function normalizeOptionalRouteBaseUrl(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value) as ModelApi | undefined;
 }
 
 /** Canonical logical id for OpenAI catalog projection. */
@@ -138,7 +135,7 @@ function firstRouteBaseUrl(...values: unknown[]): unknown {
 }
 
 function concreteBaseUrl(value: unknown, fallback: string): string {
-  return normalizeOptionalRouteBaseUrl(value) ?? fallback;
+  return normalizeOptionalString(value) ?? fallback;
 }
 
 function resolveOpenAIEnvironmentBaseUrl(

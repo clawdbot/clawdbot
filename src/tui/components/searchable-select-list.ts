@@ -34,6 +34,12 @@ export interface SearchableSelectItem extends SelectItem {
  */
 export class SearchableSelectList implements Component, Focusable {
   private items: SearchableSelectItem[];
+  private preparedItems?: Array<{
+    item: SearchableSelectItem;
+    label: string;
+    description: string;
+    searchText: string;
+  }>;
   private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
   private maxVisible: number;
@@ -103,35 +109,35 @@ export class SearchableSelectList implements Component, Focusable {
     const scoredItems: ScoredItem[] = [];
     const fuzzyCandidates: FuzzyCandidate[] = [];
 
-    for (const item of this.items) {
-      const rawLabel = this.getItemLabel(item);
-      const rawDesc = item.description ?? "";
-      const label = normalizeLowercaseStringOrEmpty(stripAnsi(rawLabel));
-      const desc = normalizeLowercaseStringOrEmpty(stripAnsi(rawDesc));
-
+    // Rows are fixed for the overlay lifetime; defer search projection until it is needed.
+    this.preparedItems ??= this.items.map((item) => {
+      const label = stripAnsi(this.getItemLabel(item));
+      const description = stripAnsi(item.description ?? "");
+      const searchText = stripAnsi(item.searchText ?? "");
+      return {
+        item,
+        label: normalizeLowercaseStringOrEmpty(label),
+        description: normalizeLowercaseStringOrEmpty(description),
+        searchText: normalizeLowercaseStringOrEmpty(
+          [label, description, searchText].filter((value) => value.length > 0).join(" "),
+        ),
+      };
+    });
+    for (const prepared of this.preparedItems) {
       // Tier 1: Exact substring in label
-      const labelIndex = label.indexOf(q);
+      const labelIndex = prepared.label.indexOf(q);
       if (labelIndex !== -1) {
-        scoredItems.push({ item, tier: 0, score: labelIndex });
+        scoredItems.push({ item: prepared.item, tier: 0, score: labelIndex });
         continue;
       }
       // Tier 2: Exact substring in description
-      const descIndex = desc.indexOf(q);
+      const descIndex = prepared.description.indexOf(q);
       if (descIndex !== -1) {
-        scoredItems.push({ item, tier: 1, score: descIndex });
+        scoredItems.push({ item: prepared.item, tier: 1, score: descIndex });
         continue;
       }
       // Tier 3: Fuzzy match
-      const searchText = item.searchText ?? "";
-      fuzzyCandidates.push({
-        item,
-        searchText: normalizeLowercaseStringOrEmpty(
-          [rawLabel, rawDesc, searchText]
-            .map((value) => stripAnsi(value))
-            .filter((value) => value.length > 0)
-            .join(" "),
-        ),
-      });
+      fuzzyCandidates.push(prepared);
     }
 
     scoredItems.sort(this.compareByScore);

@@ -6,6 +6,7 @@ import { createSessionsYieldTool } from "./sessions-yield-tool.js";
 type SessionsYieldDetails = {
   status?: string;
   message?: string;
+  acknowledgment?: string;
   error?: string;
 };
 
@@ -22,34 +23,67 @@ describe("sessions_yield tool", () => {
 
   it("invokes onYield callback with default message", async () => {
     const onYield = vi.fn();
-    const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      claimYield: () => true,
+      onYield,
+    });
     const result = await tool.execute("call-1", {});
     const details = result.details as SessionsYieldDetails;
     expect(details.status).toBe("yielded");
     expect(details.message).toBe("Turn yielded.");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.");
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined);
   });
 
   it("passes the custom message through the yield callback", async () => {
     // The callback message becomes operator-visible scheduler context, so the
     // tool must not replace a supplied reason with the default text.
     const onYield = vi.fn();
-    const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      claimYield: () => true,
+      onYield,
+    });
     const result = await tool.execute("call-1", { message: "Waiting for fact-checker" });
     const details = result.details as SessionsYieldDetails;
     expect(details.status).toBe("yielded");
     expect(details.message).toBe("Waiting for fact-checker");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker");
+    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker", undefined);
   });
 
-  it("persists yield intent before aborting the requester run", async () => {
+  it("keeps private context separate from the user-facing acknowledgment", async () => {
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      claimYield: () => true,
+      onYield,
+    });
+    const result = await tool.execute("call-1", {
+      message: "Resume after the fact-checker replies",
+      acknowledgment: "Research started; results will follow.",
+    });
+    const details = result.details as SessionsYieldDetails;
+
+    expect(details).toMatchObject({
+      status: "yielded",
+      message: "Resume after the fact-checker replies",
+      acknowledgment: "Research started; results will follow.",
+    });
+    expect(onYield).toHaveBeenCalledWith(
+      "Resume after the fact-checker replies",
+      "Research started; results will follow.",
+    );
+  });
+
+  it("claims completion ownership before aborting the requester run", async () => {
     const order: string[] = [];
     const tool = createSessionsYieldTool({
       sessionId: "test-session",
-      onBeforeYield: () => {
-        order.push("persist");
+      claimYield: () => {
+        order.push("claim");
+        return true;
       },
       onYield: () => {
         order.push("abort");
@@ -58,7 +92,7 @@ describe("sessions_yield tool", () => {
 
     await tool.execute("call-1", {});
 
-    expect(order).toEqual(["persist", "abort"]);
+    expect(order).toEqual(["claim", "abort"]);
   });
 
   it("does not abort the requester when yield intent cannot persist", async () => {
@@ -66,13 +100,34 @@ describe("sessions_yield tool", () => {
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({
       sessionId: "test-session",
-      onBeforeYield: () => {
+      claimYield: () => {
         throw failure;
       },
       onYield,
     });
 
     await expect(tool.execute("call-1", {})).rejects.toThrow(failure);
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "the claim callback is unavailable" },
+    { name: "the turn owns no pending child completion", claimYield: () => false },
+  ])("keeps the turn active when $name", async ({ claimYield }) => {
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      ...(claimYield ? { claimYield } : {}),
+      onYield,
+    });
+
+    const result = await tool.execute("call-1", {});
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error:
+        "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.",
+    });
     expect(onYield).not.toHaveBeenCalled();
   });
 

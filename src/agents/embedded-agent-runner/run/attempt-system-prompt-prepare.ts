@@ -10,8 +10,8 @@ import {
 } from "../../../plugins/provider-runtime.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
-import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
@@ -109,6 +109,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     config: attempt.config,
     agentId: params.sessionAgentId,
     sessionKey: attempt.sessionKey,
+    permissionMode: attempt.permissionMode,
     sandboxAvailable: params.sandbox?.enabled === true,
     execOverrides: attempt.execOverrides,
   });

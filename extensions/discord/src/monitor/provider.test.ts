@@ -147,7 +147,7 @@ function expectMessagesContainAll(messages: string[], expected: string[]): void 
   }
 }
 
-vi.mock("../voice/manager.runtime.js", () => {
+vi.mock("../voice/voice-runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
   return {
     DiscordVoiceManager: function DiscordVoiceManager() {

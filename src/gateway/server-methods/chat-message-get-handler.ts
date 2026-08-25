@@ -13,11 +13,9 @@ import {
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import {
-  readSessionMessageByIdAsync,
-  readSessionMessagesAsync,
-} from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
+import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryMessageId } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
@@ -37,7 +35,9 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   if (params.sessionStartedAt === undefined) {
     return true;
   }
-  const messages = await readSessionMessagesAsync(
+  // The anchored reader includes the immediately preceding row, which is the
+  // complete context needed to hide a stale announce and its paired reply.
+  const { messages } = await readSessionMessagesAroundIdWithStatsAsync(
     {
       agentId: params.agentId,
       sessionEntry: params.sessionEntry,
@@ -46,8 +46,8 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
       storePath: params.storePath,
     },
     {
-      mode: "full",
-      reason: "chat.message.get visibility",
+      maxMessages: 1,
+      messageId: params.messageId,
       ...(params.allowResetArchiveFallback === true ? { allowResetArchiveFallback: true } : {}),
     },
   );
@@ -68,17 +68,25 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       maxChars?: number;
     };
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-    const requestedAgentId = resolveRequestedChatAgentId({
+    const requestedAgent = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: sessionKey,
       agentId: agentIdOverride,
     });
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const requestedAgentId = requestedAgent.agentId;
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry } = loadSessionEntryReadOnly(sessionKey, sessionLoadOptions);
+    const { cfg, storePath, entry } = loadGatewaySessionEntryReadOnly(
+      sessionKey,
+      sessionLoadOptions,
+    );
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,
-      agentId: requestedAgentId,
+      explicitAgentId: agentIdOverride,
     });
     if (!selectedAgent.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));

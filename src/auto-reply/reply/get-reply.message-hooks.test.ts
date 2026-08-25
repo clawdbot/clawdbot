@@ -1,5 +1,6 @@
 // Tests get-reply message hooks before and after agent execution.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
@@ -9,10 +10,13 @@ import {
   buildGetReplyGroupCtx,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
+  registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-mocks.js";
+
+registerGetReplyBaselineBypass();
 
 const mocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn<
@@ -185,6 +189,52 @@ async function resetMessageHookTestState() {
       isGroup: true,
     }),
   );
+}
+
+async function runLocalPathSelfServeCase(params: {
+  ctx: Partial<MsgContext>;
+  cfg: OpenClawConfig;
+  opts?: Parameters<typeof getReplyFromConfig>[1];
+  provider?: string;
+  model?: string;
+  senderIsOwner?: boolean;
+}) {
+  const ctx = buildCtx(params.ctx);
+  const enableLocalPathSelfServe = vi.fn();
+  mocks.applyMediaUnderstanding.mockResolvedValueOnce({
+    outputs: [],
+    decisions: [],
+    extractedFileImages: [],
+    appliedImage: false,
+    appliedAudio: false,
+    appliedVideo: false,
+    appliedFile: true,
+    enableLocalPathSelfServe,
+  });
+  mocks.initSessionState.mockResolvedValueOnce(
+    createGetReplySessionState({
+      sessionCtx: ctx,
+      sessionKey: ctx.SessionKey,
+      isGroup: false,
+    }),
+  );
+  mocks.resolveReplyDirectives.mockResolvedValueOnce(
+    createGetReplyContinueDirectivesResult({
+      body: ctx.BodyForAgent ?? "read the document",
+      abortKey: ctx.SessionKey ?? "agent:main:main",
+      from: ctx.From ?? "webchat:operator",
+      to: ctx.To ?? "webchat:local",
+      senderId: ctx.SenderId ?? "operator",
+      commandSource: "message",
+      senderIsOwner: params.senderIsOwner ?? false,
+      resetHookTriggered: false,
+      provider: params.provider,
+      model: params.model,
+    }),
+  );
+
+  await getReplyFromConfig(ctx, params.opts, withFastReplyConfig(params.cfg));
+  return enableLocalPathSelfServe;
 }
 
 describe("getReplyFromConfig message hooks", () => {
@@ -365,6 +415,153 @@ describe("getReplyFromConfig message hooks", () => {
         }),
       }),
     );
+  });
+
+  const hostDocumentCtx = {
+    SessionKey: "agent:main:main",
+    OriginatingChannel: undefined,
+    Provider: "webchat",
+    Surface: "webchat",
+    ChatType: "direct",
+    SenderId: "operator",
+  } as const;
+
+  it("promotes local document self-service for a host main session", async () => {
+    const enable = await runLocalPathSelfServeCase({ ctx: hostDocumentCtx, cfg: {} });
+    expect(enable).toHaveBeenCalledOnce();
+  });
+
+  it("promotes the staged document path for a sandboxed external conversation", async () => {
+    const stagedPath = "media/inbound/report.docx";
+    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
+      staged: new Map([[0, stagedPath]]),
+    });
+    const enable = await runLocalPathSelfServeCase({
+      ctx: {
+        ...hostDocumentCtx,
+        OriginatingChannel: "telegram",
+        AccountId: "default",
+        SenderId: "42",
+      },
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+          list: [{ id: "main", default: true }],
+        },
+      },
+    });
+    expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
+  });
+
+  it("withholds local document self-service when sandbox staging fails", async () => {
+    const enable = await runLocalPathSelfServeCase({
+      ctx: {
+        ...hostDocumentCtx,
+        OriginatingChannel: "telegram",
+        AccountId: "default",
+        SenderId: "42",
+      },
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+          list: [{ id: "main", default: true }],
+        },
+      },
+    });
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it("promotes a remote document staged before media understanding", async () => {
+    const remotePath = "/remote/report.docx";
+    const stagedPath = "media/inbound/report.docx";
+    const contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+      const stagedFacts = [
+        {
+          path: stagedPath,
+          contentType,
+          workspaceDir: "/tmp/workspace",
+        },
+      ];
+      params.ctx.media = stagedFacts;
+      params.sessionCtx.media = stagedFacts;
+      return { staged: new Map([[0, stagedPath]]) };
+    });
+    const enable = await runLocalPathSelfServeCase({
+      ctx: {
+        ...hostDocumentCtx,
+        media: [
+          {
+            path: remotePath,
+            contentType,
+          },
+        ],
+        MediaRemoteHost: "user@gateway-host",
+        OriginatingChannel: "telegram",
+        AccountId: "default",
+        SenderId: "42",
+      },
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+          list: [{ id: "main", default: true }],
+        },
+      },
+    });
+
+    expect(stageSandboxMediaMock).toHaveBeenCalledOnce();
+    expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
+  });
+
+  it("withholds local document self-service when the turn cannot read files", async () => {
+    const enable = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg: {},
+      opts: { toolsAllow: ["message"] },
+    });
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it("withholds local document self-service from workspace-only file tools", async () => {
+    const enable = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg: { tools: { fs: { workspaceOnly: true } } },
+    });
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it("projects local document self-service against the final provider", async () => {
+    const cfg = { tools: { byProvider: { anthropic: { deny: ["read"] } } } };
+    const denied = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet",
+    });
+    expect(denied).not.toHaveBeenCalled();
+
+    await resetMessageHookTestState();
+    const unrelated = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg,
+      provider: "openai",
+      model: "gpt-5",
+    });
+    expect(unrelated).toHaveBeenCalledOnce();
+  });
+
+  it("applies wildcard sender policy only to non-owner turns", async () => {
+    const cfg = { tools: { toolsBySender: { "*": { deny: ["read"] } } } };
+    const nonOwner = await runLocalPathSelfServeCase({ ctx: hostDocumentCtx, cfg });
+    expect(nonOwner).not.toHaveBeenCalled();
+
+    await resetMessageHookTestState();
+    const owner = await runLocalPathSelfServeCase({
+      ctx: hostDocumentCtx,
+      cfg,
+      senderIsOwner: true,
+    });
+    expect(owner).toHaveBeenCalledOnce();
   });
 
   it("keeps unconfigured audio with a model-locked harness", async () => {

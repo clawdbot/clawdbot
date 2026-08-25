@@ -17,6 +17,7 @@ import {
   applyAuthProfileConfig,
   type AuthProfileStore,
   buildTokenProfileId,
+  CLAUDE_CLI_PROFILE_ID,
   createProviderApiKeyAuthMethod,
   listProfilesForProvider,
   type OpenClawConfig as ProviderAuthConfig,
@@ -57,6 +58,7 @@ import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_OFF_THINKING_PROFILE,
+  supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
@@ -127,7 +129,7 @@ const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
-  "OpenClaw prefers Claude CLI reuse when it is available on the host.",
+  "OpenClaw prefers the native Claude CLI runtime when it is available on the host.",
   "Anthropic staff told us this OpenClaw path is allowed again.",
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
@@ -551,7 +553,7 @@ function buildAnthropicForwardCompatModel(
       ? {
           thinkingLevelMap: {
             ...(isAnthropicMandatoryClaude5Model(trimmedModelId)
-              ? { off: "low" as const, minimal: "low" as const }
+              ? { minimal: "low" as const }
               : {}),
             xhigh: "xhigh",
             max: "max",
@@ -771,7 +773,7 @@ function applyAnthropicThinkingLevelMap(params: {
   const nativeDefaults = isAnthropicMythosPreviewModel(params.modelId)
     ? { max: "max" as const }
     : {
-        ...(mandatoryClaude5 ? { off: "low" as const, minimal: "low" as const } : {}),
+        ...(mandatoryClaude5 ? { minimal: "low" as const } : {}),
         xhigh: nativeXhigh ? ("xhigh" as const) : null,
         max: "max" as const,
       };
@@ -967,8 +969,10 @@ function buildAnthropicAuthDoctorHint(params: {
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
-  if (!credential) {
+  const authStatus = claudeCliAuth.probeClaudeCliAuthStatus(
+    resolveAnthropicCliAuthProbe(ctx.env ?? process.env),
+  );
+  if (authStatus.status !== "available") {
     throw new Error(
       [
         "Claude CLI is not authenticated on this host.",
@@ -976,7 +980,7 @@ async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<Provi
       ].join("\n"),
     );
   }
-  return buildAnthropicCliMigrationResult(ctx.config, credential);
+  return buildAnthropicCliMigrationResult(ctx.config);
 }
 
 async function runAnthropicCliMigrationNonInteractive(ctx: {
@@ -984,19 +988,26 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForSetupNonInteractive();
-  if (!credential) {
-    ctx.runtime.error(
-      [
-        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-        `Run ${formatCliCommand("claude auth login")} first.`,
-      ].join("\n"),
-    );
+  const authStatus = claudeCliAuth.probeClaudeCliAuthStatus(
+    resolveAnthropicCliAuthProbe(process.env),
+  );
+  if (authStatus.status !== "available") {
+    const error =
+      authStatus.status === "unreadable"
+        ? [
+            'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
+            `Run ${formatCliCommand("claude auth status")}, then retry.`,
+          ]
+        : [
+            'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
+            `Run ${formatCliCommand("claude auth login")} first.`,
+          ];
+    ctx.runtime.error(error.join("\n"));
     ctx.runtime.exit(1);
     return null;
   }
 
-  const result = buildAnthropicCliMigrationResult(ctx.config, credential);
+  const result = buildAnthropicCliMigrationResult(ctx.config);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
   const currentFallbacks =
@@ -1028,6 +1039,18 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
+function resolveAnthropicCliAuthProbe(env: NodeJS.ProcessEnv): {
+  command: string;
+  env: NodeJS.ProcessEnv;
+} {
+  const backend = buildAnthropicCliBackend().config;
+  const probeEnv = { ...env, ...backend.env };
+  for (const name of backend.clearEnv ?? []) {
+    delete probeEnv[name];
+  }
+  return { command: backend.command, env: probeEnv };
+}
+
 /** Build the full Anthropic provider descriptor used by runtime registration. */
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
@@ -1035,6 +1058,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
   return {
     id: providerId,
     label: "Anthropic",
+    deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
     docsPath: "/providers/models",
     hookAliases: [CLAUDE_CLI_BACKEND_ID],
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -1193,7 +1217,28 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 /** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
-  api.registerCliBackend(buildAnthropicCliBackend());
+  let supportsDynamicSystemPromptSections = false;
+  // Start once at plugin load. The first Claude execution awaits the same promise,
+  // so a post-ready gateway hook cannot race the first session's immutable argv.
+  const dynamicSystemPromptSectionsProbe = (async () => {
+    try {
+      const result = await api.runtime.system.runCommandWithTimeout(["claude", "--version"], {
+        timeoutMs: 1_500,
+        killProcessTree: true,
+        maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
+      });
+      supportsDynamicSystemPromptSections =
+        result?.code === 0 && supportsClaudeDynamicSystemPromptSections(result.stdout);
+    } catch {
+      supportsDynamicSystemPromptSections = false;
+    }
+  })();
+  api.registerCliBackend(
+    buildAnthropicCliBackend({
+      ensureDynamicSystemPromptSectionsSupport: () => dynamicSystemPromptSectionsProbe,
+      supportsDynamicSystemPromptSections: () => supportsDynamicSystemPromptSections,
+    }),
+  );
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
   registerClaudeSessionDiscovery(api);

@@ -25,7 +25,6 @@ type QuickstartGatewayOptionOverrides = Pick<
   | "gatewayTokenRefEnv"
   | "gatewayPassword"
   | "tailscale"
-  | "tailscaleResetOnExit"
 >;
 
 export function hasQuickstartGatewayOverrides(
@@ -38,9 +37,43 @@ export function hasQuickstartGatewayOverrides(
     overrides.gatewayToken !== undefined ||
     overrides.gatewayTokenRefEnv !== undefined ||
     overrides.gatewayPassword !== undefined ||
-    overrides.tailscale !== undefined ||
-    overrides.tailscaleResetOnExit !== undefined
+    overrides.tailscale !== undefined
   );
+}
+
+export function formatQuickstartGatewaySummary(
+  defaults: QuickstartGatewayDefaults,
+  keepExisting: boolean,
+): string {
+  const bind = {
+    auto: t("wizard.gateway.bindAuto"),
+    custom: t("wizard.gateway.bindCustom"),
+    lan: t("wizard.gateway.bindLan"),
+    loopback: t("wizard.gateway.bindLoopback"),
+    tailnet: t("wizard.gateway.bindTailnet"),
+  }[defaults.bind];
+  return [
+    ...(keepExisting ? [t("wizard.setup.quickstartKeepSettings")] : []),
+    t("wizard.setup.quickstartGatewayPort", { port: defaults.port }),
+    t("wizard.setup.quickstartGatewayBind", { bind }),
+    ...(defaults.bind === "custom" && defaults.customBindHost
+      ? [
+          t("wizard.setup.quickstartGatewayCustomIp", {
+            host: defaults.customBindHost,
+          }),
+        ]
+      : []),
+    t("wizard.setup.quickstartGatewayAuth", {
+      auth:
+        defaults.authMode === "token"
+          ? t("wizard.setup.quickstartAuthTokenDefault")
+          : t("common.password"),
+    }),
+    t("wizard.setup.quickstartTailscaleExposure", {
+      exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
+    }),
+    t("wizard.setup.quickstartDirectChannels"),
+  ].join("\n");
 }
 
 /**
@@ -134,6 +167,36 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/** Ask once during interactive setup; automation never creates telemetry consent. */
+export async function requestTelemetryConsent(params: {
+  opts: OnboardOptions;
+  prompter: WizardPrompter;
+  config: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  if (params.opts.nonInteractive === true || params.config.telemetry?.consentedAt) {
+    return params.config;
+  }
+
+  await params.prompter.note(t("wizard.telemetry.description"), t("wizard.telemetry.title"));
+  const enabled = await params.prompter.select<boolean>({
+    message: t("wizard.telemetry.title"),
+    options: [
+      { value: false, label: t("wizard.telemetry.decline") },
+      { value: true, label: t("wizard.telemetry.accept") },
+    ],
+    initialValue: false,
+  });
+
+  return {
+    ...params.config,
+    telemetry: {
+      ...params.config.telemetry,
+      enabled,
+      consentedAt: new Date().toISOString(),
+    },
+  };
+}
+
 /** Derive quickstart gateway defaults, preserving any existing gateway settings. */
 export function resolveQuickstartGatewayDefaults(
   baseConfig: OpenClawConfig,
@@ -199,7 +262,5 @@ export function resolveQuickstartGatewayDefaults(
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,
-    tailscaleResetOnExit:
-      overrides.tailscaleResetOnExit ?? baseConfig.gateway?.tailscale?.resetOnExit ?? false,
   };
 }

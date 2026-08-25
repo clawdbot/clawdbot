@@ -280,7 +280,7 @@ class ChatControllerTranscriptCacheTest {
       val cache = FakeTranscriptCache()
       cache.transcripts[TranscriptKey("gateway-a", "main", "main")] =
         listOf(
-          cachedMessage("cached hello", role = "user", timestampMs = 10),
+          cachedMessage("cached hello", role = "user", timestampMs = 10).copy(senderLabel = "Alex (Slack)"),
           cachedMessage("stale line", role = "assistant", timestampMs = 11),
         )
       val historyGate = CompletableDeferred<Unit>()
@@ -293,7 +293,7 @@ class ChatControllerTranscriptCacheTest {
               {
                 "sessionId": "session-1",
                 "messages": [
-                  { "role": "user", "content": "cached hello", "timestamp": 10 },
+                  { "role": "user", "content": "cached hello", "timestamp": 10, "senderLabel": "Alex (Slack)" },
                   { "role": "assistant", "content": "fresh reply", "timestamp": 20 }
                 ]
               }
@@ -312,6 +312,7 @@ class ChatControllerTranscriptCacheTest {
         listOf("cached hello", "stale line"),
         controller.messages.value.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null), controller.messages.value.map { it.senderLabel })
       val cachedFirstMessageId =
         controller.messages.value
           .first()
@@ -325,6 +326,7 @@ class ChatControllerTranscriptCacheTest {
         listOf("cached hello", "fresh reply"),
         controller.messages.value.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null), controller.messages.value.map { it.senderLabel })
       // Existing reconciliation keeps stable ids for rows the live history confirms.
       val liveFirstMessageId =
         controller.messages.value
@@ -340,6 +342,7 @@ class ChatControllerTranscriptCacheTest {
         listOf("cached hello", "fresh reply"),
         savedTranscript.messages.map { it.content.single().text },
       )
+      assertEquals(listOf("Alex (Slack)", null), savedTranscript.messages.map { it.senderLabel })
     }
 
   @Test
@@ -1019,21 +1022,21 @@ class ChatControllerTranscriptCacheTest {
   @Test
   fun unscopedHistoryWaitsForAProvableDefaultOwner() =
     runTest {
-      var requestCount = 0
+      var historyRequestCount = 0
       val controller =
         createChatController(
           transcriptCache = FakeTranscriptCache(),
           cacheScope = { gatewayScope },
           currentDefaultAgentId = { null },
-        ) { _, _ ->
-          requestCount += 1
+        ) { method, _ ->
+          if (method == "chat.history") historyRequestCount += 1
           "{}"
         }
 
       controller.load("custom")
       advanceUntilIdle()
 
-      assertEquals(0, requestCount)
+      assertEquals(0, historyRequestCount)
       assertFalse(controller.historyLoading.value)
       assertTrue(controller.messages.value.isEmpty())
       assertEquals(null, controller.errorText.value)

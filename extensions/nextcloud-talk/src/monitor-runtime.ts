@@ -109,6 +109,8 @@ export async function monitorNextcloudTalkProvider(
     onError: (error) => {
       logger.error(`[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`);
     },
+    trustedProxies: cfg.gateway?.trustedProxies,
+    allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
     abortSignal: opts.abortSignal,
   });
 

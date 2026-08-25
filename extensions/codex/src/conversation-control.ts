@@ -4,14 +4,14 @@ import {
   applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
-import {
-  isCodexFastServiceTier,
-  type CodexAppServerApprovalPolicy,
-  type CodexAppServerSandboxMode,
-} from "./app-server/config.js";
+import { isCodexFastServiceTier } from "./app-server/config.js";
 import type { CodexServiceTier } from "./app-server/protocol.js";
 import {
   bindingStoreKey,
@@ -301,24 +301,46 @@ export async function setCodexConversationFastMode(params: {
 }
 
 export async function setCodexConversationPermissions(params: {
-  identity: CodexAppServerBindingIdentity;
-  bindingStore: CodexAppServerBindingStore;
   mode?: PermissionsMode;
-  pluginConfig?: unknown;
-  agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
+  session: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
-  const binding = await requireThreadBinding(params.bindingStore, params.identity);
-  if (!params.mode) {
-    return `Codex permissions: ${formatPermissionsMode(binding)}.`;
-  }
-  const policy = permissionsForMode(params.mode);
-  // Native bound turns pass these settings at turn/start time, so this command
-  // can update the local binding even when app-server resume overrides fail.
-  await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
-    approvalPolicy: policy.approvalPolicy,
-    sandbox: policy.sandbox,
+  const storePath = resolveStorePath(params.config?.session?.store, {
+    agentId: params.session.agentId,
   });
+  if (!params.mode) {
+    const entry = getSessionEntry({
+      agentId: params.session.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+      sessionKey: params.session.sessionKey,
+      storePath,
+    });
+    if (entry?.sessionId !== params.session.sessionId) {
+      throw new Error("Codex session changed while reading the permission mode.");
+    }
+    return `Codex permissions: ${formatPermissionsMode(entry.permissionMode)}.`;
+  }
+  const updated = await patchSessionEntry({
+    agentId: params.session.agentId,
+    storePath,
+    sessionKey: params.session.sessionKey,
+    requireWriteSuccess: true,
+    replaceEntry: true,
+    update: (entry) => {
+      if (entry.sessionId !== params.session.sessionId) {
+        throw new Error("Codex session changed while applying the permission mode.");
+      }
+      if (!entry.sessionRoot?.trim()) {
+        throw new Error("Codex permission mode requires a recorded session root.");
+      }
+      entry.permissionMode = params.mode === "yolo" ? "full" : "guarded";
+      return entry;
+    },
+  });
+  if (!updated) {
+    throw new Error("Codex session changed while applying the permission mode.");
+  }
   return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "default"}.`;
 }
 
@@ -344,19 +366,16 @@ export function parseCodexPermissionsModeArg(arg: string | undefined): Permissio
   if (normalized === "yolo" || normalized === "full" || normalized === "full-access") {
     return "yolo";
   }
-  if (normalized === "default" || normalized === "guardian") {
+  if (["default", "guardian", "guarded", "approve"].includes(normalized)) {
     return "default";
   }
   return undefined;
 }
 
-export function formatPermissionsMode(binding: {
-  approvalPolicy?: CodexAppServerApprovalPolicy;
-  sandbox?: CodexAppServerSandboxMode;
-}): string {
-  return binding.approvalPolicy === "never" && binding.sandbox === "danger-full-access"
-    ? "full access"
-    : "default";
+export function formatPermissionsMode(
+  mode: "read-only" | "guarded" | "workspace" | "full" | undefined,
+): string {
+  return mode === "full" ? "full access" : (mode ?? "default");
 }
 
 async function requireThreadBinding(
@@ -412,13 +431,4 @@ function resolveConversationControlModelProvider(params: {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
-}
-
-function permissionsForMode(mode: PermissionsMode): {
-  approvalPolicy: CodexAppServerApprovalPolicy;
-  sandbox: CodexAppServerSandboxMode;
-} {
-  return mode === "yolo"
-    ? { approvalPolicy: "never", sandbox: "danger-full-access" }
-    : { approvalPolicy: "on-request", sandbox: "workspace-write" };
 }

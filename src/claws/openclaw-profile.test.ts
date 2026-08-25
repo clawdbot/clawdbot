@@ -14,7 +14,7 @@ describe("OpenClaw profile schema", () => {
       agent: {
         tools: {
           profile: "coding",
-          alsoAllow: ["cron"],
+          allow: ["read", "github__list_issues"],
           deny: ["exec"],
           fs: { workspaceOnly: true },
         },
@@ -29,6 +29,15 @@ describe("OpenClaw profile schema", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("accepts a full profile only with a bounded allowlist", () => {
+    expect(
+      parseClawOpenClawProfile({
+        schemaVersion: 1,
+        agent: { tools: { profile: "full", allow: ["read", "write"] } },
+      }).ok,
+    ).toBe(true);
   });
 
   it("rejects disabled host filesystem confinement", () => {
@@ -61,6 +70,17 @@ describe("OpenClaw profile schema", () => {
   it("rejects invalid profile policy", () => {
     for (const agent of [
       { tools: { profile: "future-profile" } },
+      { tools: { profile: "full" } },
+      { tools: { profile: "coding" } },
+      { tools: { profile: "messaging" } },
+      { tools: { profile: "coding", allow: ["bundle-mcp"] } },
+      { tools: { allow: ["bundle-mcp"] } },
+      { tools: { allow: ["*"] } },
+      { tools: { profile: "coding", allow: ["tts"] } },
+      { tools: { profile: "coding", allow: ["read", "tts"] } },
+      { tools: { alsoAllow: ["read"] } },
+      { tools: { alsoAllow: ["group:plugins"] } },
+      { tools: { alsoAllow: ["GROUP:PLUGINS"] } },
       { tools: { allow: ["read"], alsoAllow: ["write"] } },
       { memory: { search: { provider: "openai" } } },
       { memory: { search: { sources: ["sessions"] } } },
@@ -98,6 +118,7 @@ describe("OpenClaw profile reader", () => {
         "agent:",
         "  tools:",
         "    profile: coding",
+        "    allow: [read]",
         "    deny: [exec]",
         "    fs:",
         "      workspaceOnly: true",
@@ -111,7 +132,12 @@ describe("OpenClaw profile reader", () => {
       openClawProfile: {
         schemaVersion: 1,
         agent: {
-          tools: { profile: "coding", deny: ["exec"], fs: { workspaceOnly: true } },
+          tools: {
+            profile: "coding",
+            allow: ["read"],
+            deny: ["exec"],
+            fs: { workspaceOnly: true },
+          },
         },
       },
     });
@@ -121,7 +147,7 @@ describe("OpenClaw profile reader", () => {
 
     await writeFile(
       profilePath,
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: messaging\n",
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: messaging\n    allow: [message]\n",
       "utf8",
     );
     const second = await readClawManifestFile(root);
@@ -130,6 +156,80 @@ describe("OpenClaw profile reader", () => {
       throw new Error("expected changed OpenClaw profile to parse");
     }
     expect(second.source.integrity).not.toBe(first.source.integrity);
+  });
+
+  it.each([
+    { toolProfile: "coding", strictOk: false },
+    { toolProfile: "minimal", strictOk: true },
+  ] as const)(
+    "loads a legacy dynamic $toolProfile profile through the update migration path",
+    async ({ toolProfile, strictOk }) => {
+      const root = tempDirs.make("openclaw-claw-legacy-profile-");
+      await mkdir(join(root, "profiles"));
+      await writeFile(
+        join(root, "openclaw.claw.json"),
+        JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }),
+        "utf8",
+      );
+      await writeFile(
+        join(root, "profiles", "openclaw.yml"),
+        `schemaVersion: 1\nagent:\n  tools:\n    profile: ${toolProfile}\n`,
+        "utf8",
+      );
+
+      const manifestPath = join(root, "openclaw.claw.json");
+      await expect(readClawManifestFile(manifestPath)).resolves.toMatchObject({ ok: strictOk });
+      const migrated = await readClawManifestFile(manifestPath, {
+        allowLegacyDynamicToolProfile: true,
+      });
+
+      expect(migrated).toMatchObject({
+        ok: true,
+        openClawProfile: {
+          agent: {
+            tools: {
+              profile: "full",
+              allow: expect.not.arrayContaining(["bundle-mcp"]),
+            },
+          },
+        },
+        legacyOpenClawProfile: {
+          agent: {
+            tools: {
+              profile: toolProfile,
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it("requires package authors to bound a legacy full profile before update", async () => {
+    const root = tempDirs.make("openclaw-claw-legacy-full-profile-");
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "openclaw.claw.json"),
+      JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: full\n",
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(join(root, "openclaw.claw.json"), {
+      allowLegacyDynamicToolProfile: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        expect.objectContaining({
+          message: expect.stringContaining("bounded explicit allowlist"),
+        }),
+      ],
+    });
   });
 
   it("rejects a hardlinked profile", async () => {
@@ -219,7 +319,7 @@ describe("OpenClaw profile reader", () => {
     );
     await writeFile(
       join(root, "profiles", "triage.openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
       "utf8",
     );
 
@@ -227,7 +327,10 @@ describe("OpenClaw profile reader", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      openClawProfile: { schemaVersion: 1, agent: { tools: { profile: "coding" } } },
+      openClawProfile: {
+        schemaVersion: 1,
+        agent: { tools: { profile: "coding", allow: ["read"] } },
+      },
     });
     if (!result.ok) {
       throw new Error("expected the deprecated pointer to keep resolving");
@@ -257,7 +360,7 @@ describe("OpenClaw profile reader", () => {
     );
     await writeFile(
       join(root, "profiles", "openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
       "utf8",
     );
 

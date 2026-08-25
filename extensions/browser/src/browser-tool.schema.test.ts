@@ -1,7 +1,7 @@
 // Browser tests cover browser tool.schema plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { BrowserToolSchema } from "./browser-tool.schema.js";
+import { createBrowserToolSchema, resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 
 type SchemaRecord = Record<string, { maximum?: number; properties?: SchemaRecord }>;
@@ -18,6 +18,7 @@ function requireSchemaProperty<T>(properties: Record<string, T>, name: string, c
 }
 
 describe("browser tool schema", () => {
+  const BrowserToolSchema = createBrowserToolSchema(resolveBrowserToolCapabilities());
   it("advertises the viewport resize maximum on nested and flattened act params", () => {
     const properties = BrowserToolSchema.properties as SchemaRecord;
     const requestProperties =

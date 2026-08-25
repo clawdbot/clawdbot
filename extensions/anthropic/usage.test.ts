@@ -1,22 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importActual) => {
-  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-auth")>();
-  return {
-    ...actual,
-    readClaudeCliCredentialsCached: vi.fn(() => ({
-      type: "oauth",
-      provider: "anthropic",
-      access: "cli-access",
-      refresh: "cli-refresh",
-      expires: Date.now() + 3_600_000,
-      subscriptionType: "max",
-      rateLimitTier: "default_max_20x",
-    })),
-  };
-});
-
 function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
@@ -184,10 +168,8 @@ describe("Anthropic provider usage", () => {
     });
   });
 
-  it("falls back to the synced claude-cli OAuth profile when anthropic has none", async () => {
-    const resolveOAuthToken = vi.fn(async (params?: { provider?: string }) =>
-      params?.provider === "claude-cli" ? { token: "claude-cli-token" } : null,
-    );
+  it("does not refresh the native Claude login for usage polling", async () => {
+    const resolveOAuthToken = vi.fn(async () => null);
     const result = await resolveAnthropicUsageAuth({
       config: {},
       env: {},
@@ -195,12 +177,14 @@ describe("Anthropic provider usage", () => {
       resolveApiKeyFromConfigAndStore: () => undefined,
       resolveOAuthToken,
     });
-    expect(result).toEqual({ token: "claude-cli-token" });
-    expect(resolveOAuthToken).toHaveBeenNthCalledWith(1);
-    expect(resolveOAuthToken).toHaveBeenNthCalledWith(2, { provider: "claude-cli" });
+    expect(result).toEqual({ handled: true });
+    expect(resolveOAuthToken).toHaveBeenCalledOnce();
+    expect(resolveOAuthToken).toHaveBeenCalledWith({
+      excludeProfileIds: ["anthropic:claude-cli"],
+    });
   });
 
-  it("prefers plan metadata from the resolved auth profile over CLI reads", async () => {
+  it("uses plan metadata from the resolved auth profile", async () => {
     const fetchFn = vi.fn(
       async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
     );
@@ -217,7 +201,7 @@ describe("Anthropic provider usage", () => {
     expect(snapshot.plan).toBe("Pro");
   });
 
-  it("labels OAuth usage snapshots with the local Claude CLI plan", async () => {
+  it("does not read Claude CLI auth to label OAuth usage", async () => {
     const fetchFn = vi.fn(
       async () =>
         new Response(
@@ -236,7 +220,7 @@ describe("Anthropic provider usage", () => {
       timeoutMs: 5000,
       fetchFn,
     });
-    expect(snapshot.plan).toBe("Max (20x)");
+    expect(snapshot.plan).toBeUndefined();
     expect(snapshot.windows).toHaveLength(2);
   });
 

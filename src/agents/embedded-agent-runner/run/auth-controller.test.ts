@@ -1,4 +1,7 @@
 // Coverage for embedded run auth initialization and runtime credential refresh.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -10,6 +13,9 @@ import {
   resolveSecretSentinel,
 } from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
+import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../../auth-profiles/store.js";
 import { FailoverError } from "../../failover-error.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
@@ -101,14 +107,17 @@ function createMutableEmbeddedRunAuthController(params: {
   profileCandidates?: string[];
   authStore?: AuthProfileStore;
   fallbackConfigured?: boolean;
+  lockedProfileId?: string;
+  allowTransientCooldownProbe?: boolean;
   warn?: (message: string) => void;
+  agentDir?: string;
   prepareModelForAuthProfile?: Parameters<
     typeof createEmbeddedRunAuthController
   >[0]["prepareModelForAuthProfile"];
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
-    agentDir: "/tmp/agent",
+    agentDir: params.agentDir ?? "/tmp/agent",
     workspaceDir: "/tmp/workspace",
     authStore:
       params.authStore ??
@@ -118,10 +127,11 @@ function createMutableEmbeddedRunAuthController(params: {
       } as AuthProfileStore),
     authStorage: { setRuntimeApiKey: params.setRuntimeApiKey },
     profileCandidates: params.profileCandidates ?? ["default"],
+    lockedProfileId: params.lockedProfileId,
     initialThinkLevel: "medium",
     attemptedThinking: new Set(),
     fallbackConfigured: params.fallbackConfigured ?? false,
-    allowTransientCooldownProbe: false,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe ?? false,
     getProvider: () => "custom-openai",
     getModelId: () => "test-model",
     getRuntimeModel: () => params.harness.runtimeModel,
@@ -371,6 +381,125 @@ describe("createEmbeddedRunAuthController", () => {
     expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "backup-source-key");
   });
 
+  it("exhausts the remaining auth profile after a non-cooling failure", async () => {
+    const harness = createMutableAuthControllerHarness();
+    mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
+      if (profileId === "backup") {
+        throw new Error("provider overloaded");
+      }
+      return {
+        apiKey: "default-key",
+        mode: "api-key" as const,
+        profileId,
+        source: `profile:${String(profileId)}`,
+      };
+    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["default", "backup"],
+    });
+
+    await controller.initializeAuthProfile();
+    await expect(controller.advanceAuthProfile()).resolves.toBe(false);
+    await expect(controller.advanceAuthProfile()).resolves.toBe(false);
+
+    expect(
+      mocks.getApiKeyForModelCore.mock.calls.filter(([params]) => params.profileId === "backup"),
+    ).toHaveLength(1);
+    expect(harness.profileIndex).toBe(2);
+  });
+
+  it.each([
+    {
+      label: "initial candidate",
+      profileCandidates: ["expired", "healthy"],
+      expectedOrder: ["healthy", "expired"],
+      advanceAfterInitialization: false,
+    },
+    {
+      label: "rotated candidate",
+      profileCandidates: ["current", "expired", "healthy"],
+      expectedOrder: ["current", "healthy", "expired"],
+      advanceAfterInitialization: true,
+    },
+  ])(
+    "records a failed OAuth refresh for the $label and prefers the healthy profile next",
+    async ({ profileCandidates, expectedOrder, advanceAfterInitialization }) => {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-controller-"));
+      try {
+        const authStore: AuthProfileStore = {
+          version: 1,
+          profiles: {
+            current: { type: "api_key", provider: "custom-openai", key: "current-key" },
+            expired: {
+              type: "oauth",
+              provider: "custom-openai",
+              access: "expired-access",
+              refresh: "revoked-refresh",
+              expires: 0,
+            },
+            healthy: { type: "api_key", provider: "custom-openai", key: "healthy-key" },
+          },
+          order: { "custom-openai": profileCandidates },
+        };
+        saveAuthProfileStore(authStore, agentDir);
+        mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
+          if (profileId === "expired") {
+            throw new OAuthRefreshFailureError({
+              provider: "custom-openai",
+              profileId,
+              message: "OAuth token refresh failed for custom-openai: invalid_grant",
+            });
+          }
+          return {
+            apiKey: `${String(profileId)}-key`,
+            mode: "api-key" as const,
+            profileId,
+            source: `profile:${String(profileId)}`,
+          };
+        });
+        mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+        const harness = createMutableAuthControllerHarness();
+        const warn = vi.fn<(message: string) => void>();
+        const controller = createMutableEmbeddedRunAuthController({
+          harness,
+          setRuntimeApiKey: vi.fn(),
+          profileCandidates,
+          authStore,
+          agentDir,
+          warn,
+        });
+
+        await controller.initializeAuthProfile();
+        if (advanceAfterInitialization) {
+          await expect(controller.advanceAuthProfile()).resolves.toBe(true);
+        }
+
+        expect(harness.lastProfileId).toBe("healthy");
+        const persistedStore = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+        expect(persistedStore.usageStats?.expired).toMatchObject({
+          disabledReason: "auth_permanent",
+          failureCounts: { auth_permanent: 1 },
+        });
+        expect(persistedStore.usageStats?.expired?.disabledUntil).toBeGreaterThan(Date.now());
+        expect(
+          resolveAuthProfileOrder({
+            store: persistedStore,
+            provider: "custom-openai",
+            forModel: "test-model",
+          }),
+        ).toEqual(expectedOrder);
+        expect(warn).toHaveBeenCalledWith(
+          'auth profile "expired" failed for provider "custom-openai": OAuth token refresh failed for custom-openai: invalid_grant',
+        );
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("unwraps a sentinel for runtime auth exchange but keeps auth storage opaque", async () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
@@ -533,29 +662,84 @@ describe("createEmbeddedRunAuthController", () => {
         allowTransientCooldownProbe: true,
       });
 
-    expect(
-      resolve(
-        createStore({
-          first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
-        }),
-      ),
-    ).toEqual({ allowProbe: false, unavailableReason: null });
-    expect(
-      resolve(
-        createStore({
-          first: { disabledUntil: now + 60_000, disabledReason: "billing" },
-          second: { disabledUntil: now + 60_000, disabledReason: "billing" },
-        }),
-      ),
-    ).toEqual({ allowProbe: false, unavailableReason: "billing" });
-    expect(
-      resolve(
-        createStore({
-          first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
-          second: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
-        }),
-      ),
-    ).toEqual({ allowProbe: true, unavailableReason: "rate_limit" });
+    const partiallyAvailable = resolve(
+      createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+      }),
+    );
+    expect([...partiallyAvailable.probeProfileIds]).toEqual([]);
+    expect(partiallyAvailable.unavailableReason).toBeNull();
+
+    const billingDisabled = resolve(
+      createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "billing" },
+        second: { disabledUntil: now + 60_000, disabledReason: "billing" },
+      }),
+    );
+    expect([...billingDisabled.probeProfileIds]).toEqual([]);
+    expect(billingDisabled.unavailableReason).toBe("billing");
+
+    const rateLimited = resolve(
+      createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+        second: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+      }),
+    );
+    expect([...rateLimited.probeProfileIds]).toEqual(["first", "second"]);
+    expect(rateLimited.unavailableReason).toBe("rate_limit");
+
+    const mixedPinnedState = resolveEmbeddedAuthCooldownProbePolicy({
+      authStore: createStore({
+        first: { disabledUntil: now + 60_000, disabledReason: "billing" },
+        second: { disabledUntil: now + 60_000, disabledReason: "rate_limit" },
+      }),
+      profileCandidates: ["first", "second"],
+      lockedProfileId: "first",
+      modelId: "test-model",
+      allowTransientCooldownProbe: true,
+    });
+    expect([...mixedPinnedState.probeProfileIds]).toEqual(["second"]);
+    expect(mixedPinnedState.unavailableReason).toBe("rate_limit");
+  });
+
+  it("preserves the transient cooldown probe for a rate-limited backup after a billing-disabled pin", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const now = Date.now();
+    mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => ({
+      apiKey: `${String(profileId)}-key`,
+      mode: "api-key" as const,
+      profileId,
+      source: `profile:${String(profileId)}`,
+    }));
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["pinned", "backup"],
+      lockedProfileId: "pinned",
+      allowTransientCooldownProbe: true,
+      authStore: {
+        version: 1,
+        profiles: {
+          pinned: { type: "api_key", provider: "custom-openai", key: "pinned-key" },
+          backup: { type: "api_key", provider: "custom-openai", key: "backup-key" },
+        },
+        usageStats: {
+          pinned: { disabledUntil: now + 60_000, disabledReason: "billing" },
+          backup: { blockedUntil: now + 60_000 },
+        },
+      },
+    });
+
+    await controller.initializeAuthProfile();
+
+    expect(mocks.getApiKeyForModelCore).toHaveBeenCalledOnce();
+    expect(mocks.getApiKeyForModelCore).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "backup" }),
+    );
+    expect(harness.profileIndex).toBe(1);
+    expect(harness.lastProfileId).toBe("backup");
   });
 
   it("rejects privileged runtime transport overrides on the first auth exchange", async () => {

@@ -138,6 +138,10 @@ function stableStringifyJson(value: JsonValue): string {
 export function withMcpElicitationsApprovalPolicy(
   policy: CodexAppServerEffectiveApprovalPolicy,
 ): CodexAppServerEffectiveApprovalPolicy {
+  // UnlessTrusted already allows MCP elicitation; granular would erase per-command approvals.
+  if (policy === "untrusted") {
+    return policy;
+  }
   if (typeof policy !== "string") {
     return {
       granular: {
@@ -294,7 +298,8 @@ export function resolveDefaultCodexAppServerPolicy(params: {
   const yoloSandboxAllowed =
     allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
   const yoloApprovalAllowed =
-    allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("never");
+    allowedApprovalPolicies === undefined ||
+    (allowedApprovalPolicies.has("never") && !allowedApprovalPolicies.has("untrusted"));
   const yoloReviewerAllowed =
     allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user");
   if (!params.forceGuardian && yoloSandboxAllowed && yoloApprovalAllowed && yoloReviewerAllowed) {

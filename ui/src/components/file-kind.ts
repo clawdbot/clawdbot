@@ -108,6 +108,42 @@ export function fileKindForPath(path: string): FileKind {
   return FILE_KIND_BY_EXTENSION[extension] ?? "file";
 }
 
+type SuffixTrieNode = {
+  pathCount: number;
+  children: Map<string, SuffixTrieNode>;
+};
+
+// One reversed-segment trie indexes every path's suffixes together, so the
+// per-path depth search below never rescans the other paths: it descends one
+// child lookup per depth instead of comparing against every other path at
+// every depth. Model-controlled Markdown can carry thousands of distinct
+// paths, so this keeps label derivation near-linear in total path length
+// rather than quadratic in path count.
+function insertReversedSegments(root: SuffixTrieNode, segments: readonly string[]): void {
+  let node = root;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const segment = segments[i]!;
+    let child = node.children.get(segment);
+    if (!child) {
+      child = { pathCount: 0, children: new Map() };
+      node.children.set(segment, child);
+    }
+    node = child;
+    node.pathCount += 1;
+  }
+}
+
+function shortestUniqueSuffixDepth(root: SuffixTrieNode, segments: readonly string[]): number {
+  let node = root;
+  for (let depth = 1; depth <= segments.length; depth++) {
+    node = node.children.get(segments[segments.length - depth]!) ?? node;
+    if (node.pathCount === 1 || depth === segments.length) {
+      return depth;
+    }
+  }
+  return segments.length;
+}
+
 /**
  * Shortest unambiguous label per path: the basename alone when it is unique
  * among the supplied paths, otherwise the smallest trailing run of segments
@@ -119,22 +155,14 @@ export function shortestFileLabels(paths: readonly string[]): Map<string, string
   const segmentsByPath = new Map(
     unique.map((path) => [path, path.split(PATH_SEPARATOR_RE).filter(Boolean)]),
   );
-  const suffixKey = (segments: readonly string[], depth: number) =>
-    segments.slice(-depth).join("/");
+  const suffixTrie: SuffixTrieNode = { pathCount: 0, children: new Map() };
+  for (const segments of segmentsByPath.values()) {
+    insertReversedSegments(suffixTrie, segments);
+  }
   const labels = new Map<string, string>();
   for (const path of unique) {
     const segments = segmentsByPath.get(path) ?? [];
-    let depth = 1;
-    while (
-      depth < segments.length &&
-      unique.some(
-        (other) =>
-          other !== path &&
-          suffixKey(segmentsByPath.get(other) ?? [], depth) === suffixKey(segments, depth),
-      )
-    ) {
-      depth += 1;
-    }
+    const depth = shortestUniqueSuffixDepth(suffixTrie, segments);
     // Render the suffix with the separator the path itself used so a Windows
     // path never reads as a POSIX one.
     labels.set(path, segments.slice(-depth).join(path.includes("\\") ? "\\" : "/"));

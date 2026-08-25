@@ -34,7 +34,10 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-const facadeModuleLocationCache = new PluginLruCache<FacadeModuleLocation>(128);
+// Null entries memoize failed resolutions: plugin install topology is
+// process-stable, so a missing plugin must not re-walk the filesystem on
+// every request-time lookup. Install/reload flows clear via the lifecycle hook.
+const facadeModuleLocationCache = new PluginLruCache<FacadeModuleLocation | null>(128);
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   facadeModuleLocationCache.clear();
@@ -96,14 +99,12 @@ function resolveFacadeModuleLocation(params: {
     return resolveFacadeModuleLocationUncached(params);
   }
   const resolutionKey = createFacadeResolutionKey(params);
-  const cached = facadeModuleLocationCache.get(resolutionKey);
-  if (cached) {
-    return cached;
+  const cached = facadeModuleLocationCache.getResult(resolutionKey);
+  if (cached.hit) {
+    return cached.value;
   }
   const location = resolveFacadeModuleLocationUncached(params);
-  if (location) {
-    facadeModuleLocationCache.set(resolutionKey, location);
-  }
+  facadeModuleLocationCache.set(resolutionKey, location);
   return location;
 }
 

@@ -5,9 +5,9 @@
 // legacy-state import, so it stays a leaf.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 
 export const TTL_MS = 24 * 60 * 60 * 1000;
 export const TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE = "telegram.sent-messages";
@@ -20,22 +20,39 @@ export type PersistedSentMessage = {
   timestamp: number;
 };
 
-export type SentMessageConfig = Pick<OpenClawConfig, "agents" | "session">;
+export type SentMessageConfig = Pick<
+  OpenClawConfig,
+  "agents" | "bindings" | "channels" | "session"
+>;
 
-function resolveSentMessageAgentId(cfg?: SentMessageConfig, agentId?: string): string {
-  return agentId?.trim() || (cfg?.agents ? resolveDefaultAgentId(cfg as OpenClawConfig) : "main");
+function resolveSentMessageAgentId(
+  cfg?: SentMessageConfig,
+  owner?: { accountId?: string; agentId?: string },
+): string {
+  return (
+    owner?.agentId?.trim() ||
+    (cfg
+      ? resolveTelegramAccountOwnerAgentId({
+          cfg: cfg as OpenClawConfig,
+          accountId: owner?.accountId,
+        })
+      : "main")
+  );
 }
 
 function sentMessageScopeKeyForStorePath(storePath: string): string {
   return createHash("sha256").update(storePath, "utf8").digest("hex").slice(0, 24);
 }
 
-export function resolveSentMessageScopeKey(cfg?: SentMessageConfig, agentId?: string): string {
+export function resolveSentMessageScopeKey(
+  cfg?: SentMessageConfig,
+  owner?: { accountId?: string; agentId?: string },
+): string {
   // This 24-hour cache follows the current agent owner. Do not revive a prior owner's
   // transient bucket when the configured default changes.
   return sentMessageScopeKeyForStorePath(
     resolveStorePath(cfg?.session?.store, {
-      agentId: resolveSentMessageAgentId(cfg, agentId),
+      agentId: resolveSentMessageAgentId(cfg, owner),
     }),
   );
 }
@@ -47,9 +64,12 @@ export function sentMessageEntryKey(scopeKey: string, chatId: string, messageId:
     .slice(0, 32);
 }
 
-function resolveSentMessageStorePath(cfg?: SentMessageConfig, agentId?: string): string {
+function resolveSentMessageStorePath(
+  cfg?: SentMessageConfig,
+  owner?: { accountId?: string; agentId?: string },
+): string {
   return `${resolveStorePath(cfg?.session?.store, {
-    agentId: resolveSentMessageAgentId(cfg, agentId),
+    agentId: resolveSentMessageAgentId(cfg, owner),
   })}.telegram-sent-messages.json`;
 }
 
@@ -89,8 +109,9 @@ export function listTelegramLegacySentMessageCacheEntries(params: {
 }): Array<{ key: string; value: PersistedSentMessage; ttlMs?: number; timestamp?: number }> {
   const scopeKey = params.targetStorePath
     ? sentMessageScopeKeyForStorePath(params.targetStorePath)
-    : resolveSentMessageScopeKey(params.cfg, params.agentId);
-  const filePath = params.persistedPath ?? resolveSentMessageStorePath(params.cfg, params.agentId);
+    : resolveSentMessageScopeKey(params.cfg, { agentId: params.agentId });
+  const filePath =
+    params.persistedPath ?? resolveSentMessageStorePath(params.cfg, { agentId: params.agentId });
   const legacy = fs.existsSync(filePath)
     ? readLegacySentMessages(filePath)
     : new Map<string, Map<string, number>>();

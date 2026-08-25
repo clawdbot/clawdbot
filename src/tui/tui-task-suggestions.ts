@@ -13,6 +13,7 @@ import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { selectListTheme, tuiTheme as theme } from "./theme/theme.js";
 import type { TuiBackend, TuiTaskSuggestionAcceptMode } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
+import { matchesOwnedTuiSession } from "./tui-session-events.js";
 
 type TaskSelector = Component & {
   onSelect?: (item: SelectItem) => void;
@@ -274,8 +275,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   };
 
   const matchesSession = (suggestion: TaskSuggestion) =>
-    suggestion.sessionKey === deps.getSessionKey() &&
-    (suggestion.sessionKey !== "global" || suggestion.agentId === deps.getAgentId());
+    matchesOwnedTuiSession(deps.getSessionKey(), deps.getAgentId(), suggestion);
 
   const availableActions = () => {
     const capabilities = deps.client.getTaskSuggestionActionCapabilities?.() ?? {

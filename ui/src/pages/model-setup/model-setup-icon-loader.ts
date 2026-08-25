@@ -90,7 +90,7 @@ export class ModelSetupIconLoader {
     const context = this.getContext();
     void fetchCatalogIconBlobUrl({
       iconUrl,
-      basePath: context.basePath,
+      resourceBasePath: context.resourceBasePath,
       gatewayUrl: context.gateway.connection.gatewayUrl,
       auth: {
         hello: context.gateway.snapshot.hello,

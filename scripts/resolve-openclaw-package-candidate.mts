@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
 import { Buffer } from "node:buffer";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
@@ -17,20 +17,14 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-
-function coercePackageCandidateError(value: unknown, fallbackMessage: string): Error {
-  return toErrorObject(value, fallbackMessage);
-}
-
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
+import { validatePackageSourceDir } from "./package-source-preflight.mjs";
 import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
 const ROOT_DIR = resolveRepoRoot(import.meta.url);
@@ -46,11 +40,9 @@ const FORWARDED_SIGNAL_KILL_AFTER_MS = 250;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type ChildSignal = ChildProcess["signalCode"];
-type ProcessSignal = Parameters<ChildProcess["kill"]>[0];
 type TimerHandle = ReturnType<typeof setTimeout>;
-type ChildKiller = (signal: ProcessSignal) => void;
+type ChildKiller = (signal: NodeJS.Signals) => void;
 type ProcessTreeChild = Pick<ChildProcess, "exitCode" | "kill" | "pid" | "signalCode">;
-type ProcessTreeSignalTarget = Pick<ChildProcess, "kill" | "pid">;
 type CommandOutputBuffer = {
   text: string;
   truncatedChars: number;
@@ -332,7 +324,10 @@ function numericTimerValueMs(valueMs: unknown) {
   return Number.isFinite(value) ? Math.floor(value) : undefined;
 }
 
-function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS) {
+function resolvePackageCandidateTimeoutMs(
+  valueMs: unknown,
+  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
+) {
   const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
   return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
 }
@@ -341,13 +336,13 @@ function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   if (valueMs === undefined) {
     return undefined;
   }
-  return resolveTimerTimeoutMs(valueMs, 1);
+  return resolvePackageCandidateTimeoutMs(valueMs, 1);
 }
 
 function run(command: string, args: readonly string[], options: RunOptions = {}) {
   return new Promise<string>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
-    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+    const resolvedKillAfterMs = resolvePackageCandidateTimeoutMs(
       options.killAfterMs,
       COMMAND_TIMEOUT_KILL_AFTER_MS,
     );
@@ -367,7 +362,7 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     let killTimer: TimerHandle | undefined;
     let forceKillAt: number | undefined;
     const killChild: ChildKiller = (signal) =>
-      signalChildProcessTree(child, signal, { useProcessGroup });
+      terminateManagedChild(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
       forceKillAt = Date.now() + resolvedKillAfterMs;
@@ -398,7 +393,7 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     }
     child.on("error", (error: Error) => {
       ACTIVE_CHILD_KILLERS.delete(killChild);
-      reject(coercePackageCandidateError(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     });
     child.on("close", (status: number | null, signal: ChildSignal) => {
       if (timeout) {
@@ -481,53 +476,6 @@ async function finishTimedOutProcessTree(
     killChild("SIGKILL");
     await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
   }
-}
-
-export function signalChildProcessTree(
-  processChild: ProcessTreeSignalTarget,
-  processSignal: ProcessSignal,
-  {
-    platform = process.platform,
-    runTaskkill = (command, args, options) => spawnSync(command, args, options),
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: typeof process.platform;
-    runTaskkill?:
-      | ((
-          command: string,
-          args: readonly string[],
-          options: { stdio: "ignore" },
-        ) => { error?: Error; status: number | null })
-      | undefined;
-    useProcessGroup?: boolean | undefined;
-  } = {},
-) {
-  if (useProcessGroup && processChild.pid) {
-    try {
-      process.kill(-processChild.pid, processSignal);
-      return;
-    } catch {
-      // The process group can disappear between timeout and cleanup.
-    }
-  }
-  if (platform === "win32" && typeof processChild.pid === "number") {
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const args = ["/PID", String(processChild.pid), "/T"];
-    if (processSignal === "SIGKILL") {
-      args.push("/F");
-    }
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (processSignal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  processChild.kill(processSignal);
 }
 
 function childHasExited(child: ProcessTreeChild) {
@@ -1512,7 +1460,10 @@ async function openHttpsPackageDownloadResponse(
 
 async function openPackageDownloadResponse(url: string, options: PackageDownloadOptions) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, PACKAGE_URL_DOWNLOAD_TIMEOUT_MS);
+  const timeoutMs = resolvePackageCandidateTimeoutMs(
+    options.timeoutMs,
+    PACKAGE_URL_DOWNLOAD_TIMEOUT_MS,
+  );
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
   let parsed = new URL(url);
@@ -1572,7 +1523,7 @@ async function* limitWebResponseBody(
       const next = reader.read();
       const { done, value } = timeoutRead ? await Promise.race([next, timeoutRead]) : await next;
       if (timedOut) {
-        throw coercePackageCandidateError(timeoutFailure, "package_url download timed out");
+        throw toErrorObject(timeoutFailure, "package_url download timed out");
       }
       if (done) {
         return;
@@ -1726,6 +1677,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
       }
       packageSourceSha = packageSource.selectedSha;
       packageTrustedReason = packageSource.trustedReason;
+      validatePackageSourceDir(packageSource.sourceDir, { allowUnreleasedChangelog: true });
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",

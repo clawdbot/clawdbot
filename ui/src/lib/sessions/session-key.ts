@@ -1,9 +1,10 @@
 // Control UI module implements session key behavior.
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../string-coerce.ts";
+} from "@openclaw/normalization-core/string-coerce";
 
 type ParsedAgentSessionKey = {
   agentId: string;
@@ -25,10 +26,7 @@ type UiSessionDefaults = {
   mainSessionKey?: string | null;
 };
 
-const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
-const LEADING_DASH_RE = /^-+/;
-const TRAILING_DASH_RE = /-+$/;
+export { normalizeAgentId };
 
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
@@ -326,23 +324,6 @@ export function uiSessionRowMatchesSelectedChat(
   );
 }
 
-export function normalizeAgentId(value: string | undefined | null): string {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  if (VALID_ID_RE.test(trimmed)) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
-  }
-  return (
-    normalizeLowercaseStringOrEmpty(trimmed)
-      .replace(INVALID_CHARS_RE, "-")
-      .replace(LEADING_DASH_RE, "")
-      .replace(TRAILING_DASH_RE, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
-}
-
 export function buildAgentMainSessionKey(params: {
   agentId: string;
   mainKey?: string | undefined;
@@ -373,9 +354,7 @@ export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | nu
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
 }
 
-// Archive policy shared by the chat picker, sidebar recents, and Sessions
-// table: Gateway drains live work; main/global/unknown rows stay protected.
-export function canArchiveSessionRow(
+function isProtectedSessionLifecycleKey(
   row: { key: string; kind?: string },
   configuredMainKey: string,
 ): boolean {
@@ -386,13 +365,22 @@ export function canArchiveSessionRow(
     normalizedKey === "global" ||
     normalizedKey === "unknown"
   ) {
-    return false;
+    return true;
   }
-  const isMainSession =
+  return (
     row.key === "main" ||
     normalizeLowercaseStringOrEmpty(parseAgentSessionKey(row.key)?.rest) ===
-      normalizeMainKey(configuredMainKey);
-  return !isMainSession;
+      normalizeMainKey(configuredMainKey)
+  );
+}
+
+// Archive policy shared by the chat picker, sidebar recents, and Sessions
+// table: Gateway drains live work; main/global/unknown rows stay protected.
+export function canArchiveSessionRow(
+  row: { key: string; kind?: string; sessionId?: string },
+  configuredMainKey: string,
+): boolean {
+  return Boolean(row.sessionId?.trim() && !isProtectedSessionLifecycleKey(row, configuredMainKey));
 }
 
 /** Preserve Delete's prior all-idle-or-all-archived batch policy independently of Archive. */
@@ -407,7 +395,9 @@ export function canDeleteSessionRows(
 ): boolean {
   return (
     rows.every((row) => row.archived === true) ||
-    rows.every((row) => row.hasActiveRun !== true && canArchiveSessionRow(row, configuredMainKey))
+    rows.every(
+      (row) => row.hasActiveRun !== true && !isProtectedSessionLifecycleKey(row, configuredMainKey),
+    )
   );
 }
 

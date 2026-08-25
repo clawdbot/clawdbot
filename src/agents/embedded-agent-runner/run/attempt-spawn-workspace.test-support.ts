@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { expect, vi, type Mock } from "vitest";
+import { vi, type Mock } from "vitest";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -28,7 +28,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -132,12 +132,14 @@ function createSubscriptionMock(): SubscriptionMock {
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
-    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
-      await toolParams.execute(),
+    runToolLifecycle: async <T>(toolParams: {
+      execute: (onImplementationStart: () => void) => Promise<T>;
+    }) => await toolParams.execute(() => undefined),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
     waitForPendingEvents: async () => {},
+    flushPartialAssistantText: () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -206,6 +208,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   }));
   const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
@@ -667,17 +670,6 @@ vi.mock("../../cache-trace.js", () => ({
 vi.mock("../../agent-tools.js", () => ({
   createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
     hoisted.createOpenClawCodingToolsMock(options),
-  resolveProcessToolScopeKey: ({
-    scopeKey,
-    sessionKey,
-    sessionId,
-    agentId,
-  }: {
-    scopeKey?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    agentId?: string;
-  }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
@@ -758,9 +750,8 @@ vi.mock("../../tool-call-id.js", async (importOriginal) => {
 });
 
 vi.mock("../../tool-fs-policy.js", () => ({
-  createToolFsPolicy: (params: { workspaceOnly?: boolean }) => ({
-    workspaceOnly: params.workspaceOnly === true,
-  }),
+  resolveSessionPermissionExecMode: (policy: { mode: string }) =>
+    ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
 
@@ -947,7 +938,7 @@ type MutableSession = {
   agent: {
     convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
-    streamFn?: (...args: unknown[]) => Promise<unknown>;
+    streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
     subscribe?: (
       listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
@@ -1089,6 +1080,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   });
   hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
@@ -1160,7 +1152,14 @@ export function createDefaultEmbeddedSession(params?: {
             preflightResult?: (submitted: boolean) => void;
           },
         };
-        await session.agent.streamFn?.();
+        await session.agent.streamFn?.(
+          testModel,
+          {
+            systemPrompt: session.agent.state.systemPrompt ?? "",
+            messages: session.messages as Parameters<StreamFn>[1]["messages"],
+          },
+          {},
+        );
       },
       streamFn: async () => {
         if (params?.prompt && pendingPrompt) {
@@ -1236,10 +1235,6 @@ export function createContextEngineBootstrapAndAssemble() {
       }),
     ),
   };
-}
-
-export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
-  expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
 const testModel = {

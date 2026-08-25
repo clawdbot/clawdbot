@@ -1,6 +1,7 @@
 // Copilot plugin module implements runtime behavior.
 import { normalize, resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
+import { toStringifiedError as toCopilotRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { loadCopilotSdk } from "./sdk-loader.js";
 
 // SAFETY: The pool reuses CopilotClient instances per normalized PoolKey and does not
@@ -388,11 +389,4 @@ function normalizeCopilotHome(copilotHome: string): string {
     normalizedHome = normalizedHome.toLowerCase();
   }
   return normalizedHome;
-}
-
-function toCopilotRuntimeError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-  return new Error(String(error));
 }

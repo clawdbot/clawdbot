@@ -39,6 +39,7 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
 
@@ -78,16 +79,55 @@ export const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryRe
 export const recordAnnounceDeliveryResult = (
   entry: SubagentRunRecord,
   delivery: SubagentAnnounceDeliveryResult,
+  runs?: ReadonlyMap<string, SubagentRunRecord>,
 ) => {
   const deliveryState = ensureDeliveryState(entry);
   if (typeof delivery.enqueuedAt === "number") {
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
+  }
+  if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
+    if (
+      delivery.reason === "steer_dropped" ||
+      delivery.phases?.some((phase) => phase.reason === "steer_dropped")
+    ) {
+      deliveryState.lastDropReason = "steer_dropped";
+    } else if (delivery.path === "none") {
+      deliveryState.lastDropReason = "sink_unavailable";
+    }
   }
   if (delivery.delivered) {
     const deliveredAt =
       typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
     deliveryState.deliveredAt = deliveredAt;
     deliveryState.lastDropReason = undefined;
+    const requesterTurnRunId = entry.requesterTurnRunId?.trim();
+    if (
+      delivery.path === "direct" &&
+      delivery.requesterVisibleFinalDelivered &&
+      requesterTurnRunId
+    ) {
+      const siblings = [...(runs?.values() ?? [])].filter(
+        (sibling) =>
+          sibling.requesterSessionKey === entry.requesterSessionKey &&
+          sibling.requesterTurnRunId === requesterTurnRunId &&
+          sibling.expectsCompletionMessage === true,
+      );
+      if (
+        siblings.some((sibling) => sibling === entry) &&
+        siblings.every(
+          (sibling) =>
+            sibling.execution.status === "terminal" &&
+            hasSubagentRunEnded(sibling) &&
+            (sibling === entry || sibling.delivery?.status === "delivered"),
+        )
+      ) {
+        // Bind final evidence before yielding; direct delivery is fenced once a yield is frozen.
+        deliveryState.requesterVisibleFinal = {
+          requesterTurnRunId,
+          batchRunIds: siblings.map((sibling) => sibling.runId).toSorted(),
+        };
+      }
+    }
   }
   deliveryState.disposition =
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");

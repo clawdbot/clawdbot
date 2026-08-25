@@ -109,11 +109,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
   <Step title="Register the backend">
     ```typescript index.ts
     import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import {
-      CLI_FRESH_WATCHDOG_DEFAULTS,
-      CLI_RESUME_WATCHDOG_DEFAULTS,
-      type CliBackendPlugin,
-    } from "openclaw/plugin-sdk/cli-backend";
+    import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 
     function buildAcmeCliBackend(): CliBackendPlugin {
       return {
@@ -156,12 +152,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
           imageArg: "--image",
           imageMode: "repeat",
           imagePathScope: "workspace",
-          reliability: {
-            watchdog: {
-              fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-              resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-            },
-          },
           serialize: true,
         },
       };
@@ -188,7 +178,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
 `CliBackendConfig` describes how OpenClaw should launch and parse the CLI. The
 worked example above intentionally exercises the same command, resume, JSONL,
-model-alias, session, image, and watchdog fields as the bundled
+model-alias, session, and image fields as the bundled
 `google-gemini-cli` adapter:
 
 | Field                                                     | Use                                                                               |
@@ -215,7 +205,26 @@ model-alias, session, image, and watchdog fields as the bundled
 | `imagePathScope`                                          | Where staged image files live before handoff: `temp` or `workspace`               |
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
+| `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+
+Omit `reliability.watchdog` to inherit the standard profiles, including the
+longer resumed-run budget for cron and explicit timeouts. Set it only when a
+backend intentionally needs its own watchdog policy.
+
+`freshSessionRecovery` is a backend-owned compatibility contract:
+
+- Leave it undefined or set it to `"replace-binding"` to preserve the legacy
+  clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
+  with a fresh session when the failure is eligible for recovery.
+- Set it to `"invalidated-only"` to suppress fresh replacement unless the
+  canonical invalidation predicate proves the old session is dead. Currently,
+  only `session_expired` does so.
+
+Choose the value from the CLI or SDK session contract, not from a provider id
+or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
+its Agent SDK contract does not treat non-expiration failures as proof that the
+conversation can no longer resume.
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
 only for behavior that really belongs to the backend.
@@ -237,24 +246,31 @@ only for behavior that really belongs to the backend.
 | `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
-| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
+| `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract            |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
-| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
 
-`liveSessionRequirement` declares one exact capability that the CLI must
-advertise in its initialization record before OpenClaw trusts streamed output.
-It also supplies the first known compatible version, version-probe arguments,
-and update command used by setup and Doctor. Runtime support remains
-capability-based, so a compatible backport or wrapper is not rejected only
-because of its version string.
-
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
-budget into their CLI-specific launch contract.
+budget into their CLI-specific launch contract. It also receives the optional
+effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `adaptive`, or `max`. Use that field when the selected level must be
+applied through launch environment or staged configuration; the same field is
+available to `resolveExecutionArgs(ctx)` for native CLI flags.
+
+`prepareExecution(ctx)` may also return an optional `execute` transport when a
+backend owns a vendor-supported SDK for the installed CLI. The transport
+receives the exact prepared command, arguments, environment, prompt, session,
+and tool availability; it yields the backend's existing structured stream
+records. Native tool actions must use the provided, run-bound
+`requestToolPermission` callback rather than creating independent approval
+authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
+grant ownership. Explicit credential forwarding, paired-node execution, and
+manual compaction continue through the existing host-managed process path.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
@@ -302,16 +318,6 @@ Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
 
-Plugins built against `v2026.7.2-beta.1` through `v2026.7.2-beta.3` may still
-read the deprecated `ctx.toolAvailability.mcp` transport-name projection and
-may omit `toolAvailabilityEnforcement` when a selectable backend implements
-`resolveExecutionArgs`. OpenClaw recognizes that shipped beta path from the
-plugin package's required `openclaw.build.openclawVersion` metadata and
-preserves it through the `2026.8.x` line. New and updated plugins should use canonical
-`ctx.toolAvailability.openClaw` names and declare
-`toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
-compatibility path is scheduled for removal after that window.
-
 ### `parseJsonlEvent`: provider-specific JSONL streams
 
 Set `parseJsonlEvent` when a backend emits line-delimited JSON that does not
@@ -333,10 +339,13 @@ diagnostics, loopback correlation, or message-delivery evidence.
 
 If your backend runs an agent that compacts its **own** transcript, set
 `ownsNativeCompaction: true` so OpenClaw's safeguard summarizer never runs
-against its sessions - the CLI compaction lifecycle returns a no-op and the
+against its sessions - automatic CLI compaction defers to the backend and the
 turn proceeds. `claude-cli` declares it because Claude Code compacts
-internally with no harness endpoint. Native-harness sessions such as Codex
-keep routing to their harness compaction endpoint instead.
+internally with no harness endpoint. It also declares
+`manualCompaction`, so an explicit OpenClaw `/compact` resumes the
+bound Claude Code session and invokes its native `/compact` command without
+recording a conversation turn. Native-harness sessions such as Codex keep
+routing to their harness compaction endpoint instead.
 
 **Only declare it when all of the following hold**, or a deferred
 over-budget session can stay over budget or go stale (OpenClaw no longer
@@ -348,6 +357,27 @@ rescues it):
   (for example `--resume` / `--session-id`);
 - it is not a native-harness compaction session - matching `agentHarnessId`
   sessions route to the harness endpoint instead.
+
+If the backend supports an in-place manual command, declare it alongside the
+ownership flag:
+
+```typescript
+manualCompaction: {
+  buildPrompt: (instructions) =>
+    instructions ? `/compact ${instructions}` : "/compact",
+  input: "arg",
+  validateOutput: (rawOutput) =>
+    rawOutput.includes('"type":"compaction_complete"')
+      ? { ok: true }
+      : { ok: false, reason: "CLI did not confirm compaction." },
+},
+```
+
+The builder receives optional `/compact` instructions. The validator receives
+the bounded raw process output and must require a backend-owned positive
+acknowledgement; a zero exit alone is not proof of compaction. Do not declare
+this capability for a command that creates a separate session or requires an
+ordinary model turn.
 
 ## MCP tool bridge
 

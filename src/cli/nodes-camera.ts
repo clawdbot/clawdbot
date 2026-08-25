@@ -195,39 +195,38 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
       throw new Error(`failed to download ${url}: empty response body`);
     }
 
-    const fileHandle = await fs.open(filePath, "w");
-    let thrown: unknown;
-    const reader = body.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (!value || value.byteLength === 0) {
-          continue;
-        }
-        bytes += value.byteLength;
-        if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+    await publishOutputFileAtomically({
+      filePath,
+      writeTemp: async (tempPath) => {
+        const fileHandle = await fs.open(tempPath, "wx");
+        const reader = body.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+            bytes += value.byteLength;
+            if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+              await reader.cancel().catch(() => undefined);
+              throw new Error(
+                `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
+              );
+            }
+            await fileHandle.writeFile(value);
+          }
+        } catch (err) {
           await reader.cancel().catch(() => undefined);
-          throw new Error(
-            `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
-          );
+          throw toErrorObject(err, "Non-Error thrown");
+        } finally {
+          reader.releaseLock();
+          await fileHandle.close();
         }
-        await fileHandle.write(value);
-      }
-    } catch (err) {
-      thrown = err;
-      await reader.cancel().catch(() => undefined);
-    } finally {
-      reader.releaseLock();
-      await fileHandle.close();
-    }
-
-    if (thrown) {
-      await fs.unlink(filePath).catch(() => {});
-      throw toErrorObject(thrown, "Non-Error thrown");
-    }
+        if (bytes === 0) {
+          throw new Error(`writeUrlToFile: empty download from ${url}`);
+        }
+      },
+    });
   } finally {
     await release();
   }

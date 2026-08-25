@@ -35,6 +35,21 @@
         "defaultModel": "glm-5.2",
         "models": [
           {
+            "id": "glm-5.3",
+            "name": "GLM-5.3",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
             "id": "glm-5.2",
             "name": "GLM-5.2",
             "reasoning": true,

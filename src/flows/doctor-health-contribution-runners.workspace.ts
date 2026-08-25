@@ -1,5 +1,6 @@
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isGatewayHostServiceEnvironment } from "../infra/gateway-supervision.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
@@ -53,7 +54,11 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+  const catalog = await loadPreparedModelCatalog({
+    config: ctx.cfg,
+    readOnly: true,
+    providerDiscoveryProviderIds: [],
+  });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,
@@ -81,7 +86,7 @@ export async function collectWorkspaceStatusPluginVersionDrift(params: {
   cfg: OpenClawConfig;
   options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
 }): Promise<PluginVersionDriftReport | undefined> {
-  if (params.cfg.gateway?.mode === "remote") {
+  if (params.cfg.gateway?.mode === "remote" || !isGatewayHostServiceEnvironment()) {
     return undefined;
   }
   try {

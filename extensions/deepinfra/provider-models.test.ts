@@ -3,15 +3,9 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const isProviderApiKeyConfiguredMock = vi.hoisted(() => vi.fn<(p: unknown) => boolean>());
-vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
-    "openclaw/plugin-sdk/provider-auth",
-  );
-  return {
-    ...actual,
-    isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+}));
 
 import {
   buildDeepInfraModelDefinition,

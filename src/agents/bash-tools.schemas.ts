@@ -8,13 +8,26 @@ import { Type } from "typebox";
 import { optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
+const PROCESS_TOOL_ACTIONS = [
+  "list",
+  "poll",
+  "log",
+  "write",
+  "send-keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
+] as const;
 
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(
     Type.String({
-      description: "Working directory; omit for default. Blank/whitespace is invalid.",
+      description:
+        "Working directory; omit for default. An empty string means omitted; whitespace-only is invalid.",
     }),
   ),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -60,6 +73,9 @@ export const execSchema = Type.Object({
   ),
 });
 
+/** Exec parameters when no process-control continuation is authorized. */
+export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
+
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({
   command: execSchema.properties.command,
@@ -75,6 +91,7 @@ export const nodeExecSchema = Type.Object({
 /** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({
+    enum: [...PROCESS_TOOL_ACTIONS],
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),

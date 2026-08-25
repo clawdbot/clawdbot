@@ -14,8 +14,8 @@ import { loadWebMedia } from "../../media/web-media.js";
 import { fileStore } from "../file-store.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
-  cancelDeliveryQueueMediaStage,
-  createDeliveryQueueMediaStage,
+  cancelDeliveryQueueMediaRetention,
+  createDeliveryQueueMediaRetention,
   loadDeliveryQueueMediaRetentionSnapshot,
 } from "./delivery-queue-media-staging.js";
 
@@ -98,7 +98,9 @@ export async function stageQueuePayloadMedia(params: {
   // The SQLite stage row is visible before any artifact. GC either preserves it
   // or expires it; enqueue then consumes it atomically or fails closed.
   const mediaStageId =
-    artifacts.length > 0 ? createDeliveryQueueMediaStage(artifacts, params.stateDir) : undefined;
+    artifacts.length > 0
+      ? createDeliveryQueueMediaRetention(artifacts, "outbound-media-stage", params.stateDir)
+      : undefined;
   const store = openSpoolStore(params.stateDir, params.maxBytes);
   const publishedSources = new Set<string>();
 
@@ -161,7 +163,7 @@ export async function stageQueuePayloadMedia(params: {
       stagedPayloads.push(staged);
     }
   } catch (err) {
-    cancelDeliveryQueueMediaStage(mediaStageId, params.stateDir);
+    cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
     await releaseSpoolArtifacts(artifacts, params.stateDir);
     throw err;
   }
@@ -187,9 +189,9 @@ async function removeArtifact(absolutePath: string, stateDir: string | undefined
   if (!relative) {
     return;
   }
-  await openSpoolStore(stateDir)
-    .remove(relative)
-    .catch(() => undefined);
+  try {
+    await openSpoolStore(stateDir).remove(relative);
+  } catch {}
 }
 
 /** Discards spool artifacts whose durable row is already gone. Never throws. */

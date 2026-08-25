@@ -153,6 +153,7 @@ function runXaiWebSearch(params: {
       inlineCitations: params.inlineCitations,
       ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     const payload = buildXaiWebSearchPayload({
       query: params.query,
       provider: "grok",

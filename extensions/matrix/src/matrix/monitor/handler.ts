@@ -2,6 +2,7 @@ import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
+  resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -288,11 +289,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         botLoopProtection,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
+        resolveMessageIngress,
       } = resolvedIngressResult;
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const inboundContext = await resolveMatrixInboundContext({
+        resolveMessageIngress,
         client,
         core,
         cfg,
@@ -574,7 +577,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
       const { dispatchResult } = turnResult;
-      const { queuedFinal, counts } = dispatchResult;
+      const { queuedFinal } = dispatchResult;
       if (replyDispatcher.finalReplyDeliveryFailed()) {
         logVerboseMessage(
           `matrix: final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
@@ -601,16 +604,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           threadRootId ? thread.threadId : undefined,
         );
       }
-      if (!hasFinalInboundReplyDispatch({ queuedFinal, counts })) {
+      if (!hasFinalInboundReplyDispatch(dispatchResult)) {
         await commitInboundEventIfClaimed();
         return;
       }
-      const finalCount = counts.final;
+      const finalCount = resolveInboundReplyDispatchCounts(dispatchResult).final;
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
       await commitInboundEventIfClaimed();
     } catch (err) {
+      const draftController = draftControllerRef;
+      if (
+        draftController?.draftStream?.eventId() &&
+        draftController.draftDisposition() === "active"
+      ) {
+        // A Matrix-accepted preview is the only visible reply after an abort.
+        draftController.markDraftRetained();
+      }
       runtime.error?.(`matrix handler failed: ${String(err)}`);
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
@@ -618,7 +629,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const draftStream = draftControllerRef?.draftStream;
       if (draftStream) {
         const draftEventId = await draftStream.stop().catch(() => undefined);
-        if (draftEventId && draftControllerRef?.isDraftConsumed() !== true) {
+        if (draftEventId && draftControllerRef?.draftDisposition() === "active") {
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }

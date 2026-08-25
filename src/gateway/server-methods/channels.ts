@@ -510,6 +510,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
             await buildAccountSnapshot(channelId, plugin, accountId, defaultAccountId),
         ),
         limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
+        onTaskError: (error, index) => {
+          const accountId = accountIds[index] ?? `account ${index + 1}`;
+          statusWarnings.push(`${channelId}:${accountId} status failed: ${formatForLog(error)}`);
+        },
       });
       const accounts: ChannelAccountSnapshot[] = [];
       for (const result of results) {
@@ -572,6 +576,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
         return { pluginId: plugin.id, summary, accounts, defaultAccountId };
       }),
       limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : selectedPlugins.length || 1,
+      onTaskError: (error, index) => {
+        const channelId = statusPlugins[index]?.id ?? `channel ${index + 1}`;
+        statusWarnings.push(`${channelId} channel status failed: ${formatForLog(error)}`);
+      },
     });
     for (const result of channelResults) {
       if (result) {
@@ -582,7 +590,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     if (statusWarnings.length > 0) {
       payload.partial = true;
-      payload.warnings = statusWarnings.slice(0, 50);
+      payload.warnings = statusWarnings.toSorted().slice(0, 50);
     }
 
     respond(true, payload, undefined);

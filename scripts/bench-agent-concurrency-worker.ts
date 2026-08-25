@@ -11,6 +11,7 @@ import {
   type WorkerResult,
   type WorkerScenario,
 } from "./bench-agent-concurrency.js";
+import { classifyBoundedUnsignedDecimal } from "./lib/arg-utils.mts";
 
 type WorkerOptions = {
   scenario: WorkerScenario;
@@ -33,14 +34,14 @@ const SCENARIOS = new Set<WorkerScenario>([
 ]);
 
 function parseInteger(raw: string | undefined, flag: string, min: number, max: number): number {
-  if (!raw || !/^\d+$/u.test(raw)) {
+  const result = classifyBoundedUnsignedDecimal(raw, min, max);
+  if (result.kind === "syntax") {
     throw new Error(`${flag} must be an integer`);
   }
-  const value = Number(raw);
-  if (value < min || value > max) {
+  if (result.kind !== "value") {
     throw new Error(`${flag} must be between ${min} and ${max}`);
   }
-  return value;
+  return result.value;
 }
 
 function parseOptions(argv: string[]): WorkerOptions {
@@ -85,15 +86,18 @@ async function waitForCondition(check: () => boolean): Promise<boolean> {
   return check();
 }
 
-async function drainSpawnSampleRootWork(
-  waitForRootWork?: (timeoutMs: number) => Promise<{ drained: boolean; active: number }>,
+async function drainSpawnSampleActiveWork(
+  waitForActiveWork?: (
+    timeoutMs: number,
+  ) => Promise<{ drained: boolean; snapshot: { counts: { totalActive: number } } }>,
 ): Promise<void> {
   const wait =
-    waitForRootWork ??
-    (await import("../src/process/gateway-work-admission.js")).waitForActiveGatewayRootWork;
+    waitForActiveWork ??
+    (await import("../src/infra/gateway-active-work.js")).waitForGatewayActiveWork;
   const result = await wait(30_000);
-  if (!result.drained || result.active !== 0) {
-    throw new Error(`spawn sample left ${result.active} active gateway root work items`);
+  const active = result.snapshot.counts.totalActive;
+  if (!result.drained || active !== 0) {
+    throw new Error(`spawn sample left ${active} active gateway work items`);
   }
 }
 
@@ -442,7 +446,7 @@ async function runSpawnSample(
     }
     // Terminal rows can settle before detached cleanup and requester-wake roots.
     // Drain before reset so leaked work stays visible and cannot reach the next sample.
-    await drainSpawnSampleRootWork();
+    await drainSpawnSampleActiveWork();
     result = {
       durationMs,
       invariant: {
@@ -815,7 +819,7 @@ async function main(): Promise<void> {
   process.stdout.write(`${WORKER_RESULT_SENTINEL}${JSON.stringify(result)}\n`);
 }
 
-export const testing = { drainSpawnSampleRootWork };
+export const testing = { drainSpawnSampleActiveWork };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {

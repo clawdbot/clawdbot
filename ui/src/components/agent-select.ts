@@ -1,7 +1,6 @@
 import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import type { PropertyValues } from "lit";
-import { html, nothing, type TemplateResult } from "lit";
+import { type PropertyValues, html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
@@ -68,6 +67,7 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) value = "";
   @property({ attribute: false }) placeholder = "";
   @property({ attribute: false }) accessibleLabel = "";
+  @property({ attribute: false }) menuLabel = "";
   @property({ attribute: false }) identityById: Record<string, AgentIdentityResult> = {};
   @property({ attribute: false }) authToken: string | null = null;
   @property({ attribute: false }) disabled = false;
@@ -191,6 +191,9 @@ export class AgentSelect extends OpenClawLightDomElement {
             : nothing}
           <span class="agent-select__chevron" aria-hidden="true">${icons.chevronDown}</span>
         </button>
+        ${this.menuLabel
+          ? html`<div class="agent-select__menu-title">${this.menuLabel}</div>`
+          : nothing}
         ${this.options.map((option) => {
           const selected = option.value === this.value;
           const accessibleLabel = [option.label, option.description, option.badge]

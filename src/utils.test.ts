@@ -1,9 +1,9 @@
 // Tests shared utility helpers used by CLI and runtime modules.
 import fs from "node:fs";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { isAbortError } from "./infra/abort-signal.js";
-import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {

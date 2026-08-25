@@ -3,6 +3,7 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeLowercaseStringOrEmpty as normalizeModelId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
   OPENAI_GPT_54_MINI_MODEL_ID,
@@ -52,10 +53,6 @@ const OPENAI_UNIFIED_XHIGH_MODEL_IDS = [
   OPENAI_GPT_54_MINI_MODEL_ID,
   OPENAI_GPT_54_NANO_MODEL_ID,
 ] as const;
-
-function normalizeModelId(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
   const normalizedId = normalizeModelId(id);
@@ -113,6 +110,12 @@ function buildOpenAIThinkingProfile(params: {
     (agentRuntime === "openclaw" ||
       agentRuntime === "auto" ||
       (agentRuntime === "codex" && codexSupportsUltra));
+  const nativeCodexNeedsAccountEffortValidation =
+    agentRuntime === "codex" &&
+    params.compat?.supportedReasoningEfforts === undefined &&
+    (params.api === undefined || params.api === "openai-chatgpt-responses") &&
+    !matchesExactOrPrefix(params.modelId, params.xhighModelIds) &&
+    !modelId.startsWith("gpt-5.6");
   const defaultLevel = isGpt56Variant ? "medium" : undefined;
   const fallbackLevels: ProviderThinkingProfile["levels"] = [
     ...OPENAI_THINKING_BASE_LEVELS,
@@ -121,6 +124,9 @@ function buildOpenAIThinkingProfile(params: {
       : []),
     ...(supportsMax ? [{ id: "max" as const }] : []),
     ...(supportsUltra ? [{ id: "ultra" as const }] : []),
+    ...(nativeCodexNeedsAccountEffortValidation
+      ? [{ id: "xhigh" as const }, { id: "max" as const }]
+      : []),
   ];
   const levels =
     agentRuntime === "codex" && resolvedCodexEfforts !== undefined

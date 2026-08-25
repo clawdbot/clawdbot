@@ -12,10 +12,15 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { extractToolResultMediaArtifact } from "../agents/embedded-agent-tool-media.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  completeSessionDelivery,
+  enqueueSessionDelivery,
+} from "../infra/session-delivery-queue-storage.js";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import {
@@ -27,6 +32,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   attachManagedImageRecordToMessage,
   insertManagedImageRecord,
+  listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
@@ -67,7 +73,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
-  loadSessionEntryReadOnly: loadSessionEntryMock,
+  loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
   resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 
@@ -381,12 +387,6 @@ async function requestManagedImage(params: {
     });
   }
 }
-
-describe("resolveManagedImageAttachmentLimits", () => {
-  it("keeps the existing public limit shape", () => {
-    expect(resolveManagedImageAttachmentLimits()).toEqual(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS);
-  });
-});
 
 describe("handleManagedOutgoingImageHttpRequest", () => {
   let stateDir: string;
@@ -912,6 +912,34 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a managed audio filename stable in artifact downloads", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "meeting-note.mp3",
+      contentType: "audio/mpeg",
+      body: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+    });
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "sessions.sqlite"),
+      entry: { sessionId: "sess-1" },
+    });
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [{ type: "audio", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download?.title).toBe("meeting-note.mp3");
+  });
+
   it("serves a bounded thumbnail through the full-image artifact ticket", async () => {
     const source = createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 });
     const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
@@ -949,6 +977,22 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
     expect(readImageProbeFromHeader(result.body)).toMatchObject({ width: 300, height: 150 });
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a managed global artifact owned by another agent", async () => {
+    const { attachmentId } = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "ops",
+    });
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey: "global",
+      agentId: "research",
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download).toBeNull();
   });
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {
@@ -1294,6 +1338,35 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it.each([
+    { providedName: "friendly-cover.png", expectedName: "friendly-cover.png" },
+    { providedName: "../album\\cover\r\n.png", expectedName: "cover.png" },
+  ])(
+    "preserves safe generated image filenames in the record and HTTP response",
+    async ({ providedName, expectedName }) => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+        attachments: [{ type: "image", name: providedName }],
+        stateDir,
+        messageId: "msg-1",
+      });
+      const block = requireBlock(blocks);
+      const attachmentId = requireAttachmentIdFromUrl(block.url);
+
+      expect(readManagedImageRecord(attachmentId, stateDir)?.original.filename).toBe(expectedName);
+
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: String(block.url),
+        authResponse: { authMethod: "token" },
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
+    },
+  );
+
+  it.each([
     { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
     { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
   ])(
@@ -1334,6 +1407,127 @@ describe("createManagedOutgoingImageBlocks", () => {
     },
   );
 
+  it.each([
+    {
+      kind: "audio" as const,
+      sourceName: "theme.mp3",
+      providedName: "../album\\cover\r\n.mp3",
+      expectedName: "cover.mp3",
+    },
+    {
+      kind: "video" as const,
+      sourceName: "clip.mp4",
+      providedName: "../album\\NUL\r\n.webp",
+      expectedName: "NUL_.mp4",
+    },
+  ])(
+    "sanitizes generated $kind filenames in media blocks, records, and downloads",
+    async ({ kind, sourceName, providedName, expectedName }) => {
+      const sourcePath = path.join(stateDir, "workspace", sourceName);
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(
+        sourcePath,
+        kind === "audio"
+          ? Buffer.from([0xff, 0xfb, 0x90, 0x00])
+          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
+      );
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [sourcePath],
+        attachments: [{ type: kind, path: sourcePath, name: providedName }],
+        stateDir,
+        localRoots: [path.dirname(sourcePath)],
+        allowLocalNonImage: true,
+        messageId: "msg-1",
+      });
+      const block = requireBlock(blocks);
+      const pathName = String(block.url);
+
+      expect(block).toMatchObject({ type: kind, fileName: expectedName });
+      expect(
+        readManagedImageRecord(requireAttachmentIdFromUrl(pathName), stateDir)?.original.filename,
+      ).toBe(expectedName);
+
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName,
+        authResponse: { authMethod: "token" },
+        transcriptMessages: [
+          {
+            role: "assistant",
+            content: [{ type: kind, url: pathName, openUrl: pathName }],
+            __openclaw: { id: "msg-1" },
+          },
+        ],
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
+    },
+  );
+
+  it.each([
+    { kind: "audio" as const, contentType: "audio/mpeg" },
+    { kind: "video" as const, contentType: "video/mp4" },
+  ])(
+    "preserves generated $kind labels without attachment metadata",
+    async ({ kind, contentType }) => {
+      const buffer =
+        kind === "audio"
+          ? Buffer.from([0xff, 0xfb, 0x90, 0x00])
+          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [`data:${contentType};base64,${buffer.toString("base64")}`],
+        stateDir,
+      });
+
+      expect(requireBlock(blocks)).toMatchObject({
+        type: kind,
+        fileName: `Generated ${kind} 1`,
+      });
+    },
+  );
+
+  it("prepares generated audio when provider attachment metadata contains malformed values", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "theme.mp3");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    const extracted = extractToolResultMediaArtifact({
+      details: {
+        media: {
+          mediaUrls: [sourcePath],
+          attachments: [
+            {
+              type: "audio",
+              path: sourcePath,
+              name: 1,
+              mimeType: false,
+              durationMs: -1,
+              width: Infinity,
+            },
+          ],
+        },
+      },
+    });
+    const onPrepareError = vi.fn();
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: extracted?.mediaUrls,
+      attachments: extracted?.attachments,
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+
+    expect(onPrepareError).not.toHaveBeenCalled();
+    expect(blocks).toHaveLength(1);
+    expect(requireBlock(blocks)).toMatchObject({ type: "audio", fileName: "theme.mp3" });
+  });
+
   it("marks exotic managed media metadata for playback transcoding", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.caf");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -1352,6 +1546,28 @@ describe("createManagedOutgoingImageBlocks", () => {
       mimeType: "audio/x-caf",
       playback: "transcode",
     });
+  });
+
+  it("does not publish a record when playback inspection fails", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    resolvePlaybackModeForSourceMock.mockRejectedValueOnce(
+      new Error("synthetic playback inspection failure"),
+    );
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      continueOnPrepareError: true,
+    });
+
+    expect(blocks).toEqual([]);
+    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    await expectPathMissing(path.join(stateDir, "media", "outgoing", "originals"));
   });
 
   it.each(["audio", "video"] as const)("caps managed %s data URLs by media kind", async (kind) => {
@@ -1661,6 +1877,23 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks, 1).type).toBe("text");
   });
 
+  it("updates generated image filenames to the actual format after resizing", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [await createPngDataUrl(200, 120)],
+      attachments: [{ type: "image", name: "generated-poster.webp" }],
+      stateDir,
+      limits: { maxWidth: 64, maxHeight: 64, maxPixels: 4096 },
+    });
+    const block = requireBlock(blocks);
+    const record = readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir);
+
+    expect(record?.original.contentType).toBe("image/jpeg");
+    expect(record?.original.filename).toBe("generated-poster.jpg");
+    expect(record?.original.mediaId).toMatch(/\.jpg$/);
+    expect(requireBlock(blocks, 1).type).toBe("text");
+  });
+
   it("skips broken attachments when continueOnPrepareError is enabled", async () => {
     const onPrepareError = vi.fn();
     const blocks = await createManagedOutgoingImageBlocks({
@@ -1925,7 +2158,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
       stateDir,
     });
 
-    await attachManagedOutgoingImagesToMessage({
+    attachManagedOutgoingImagesToMessage({
       messageId: "msg-committed",
       blocks: blocks as Record<string, unknown>[],
       stateDir,
@@ -2000,6 +2233,42 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     const attached = readManagedImageRecord(fixture.attachmentId, stateDir);
     expect(attached?.messageId).toBe("msg-late");
     expect(attached?.retentionClass).toBe("history");
+  });
+
+  it("retains transient records referenced by pending prepared session delivery", async () => {
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
+      stateDir,
+    });
+    const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+    const record = readManagedImageRecord(attachmentId, stateDir);
+    if (!record) {
+      throw new Error("expected pending managed media record");
+    }
+    const queueId = await enqueueSessionDelivery(
+      {
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "deliver generated image",
+        messageId: "generated-image-agent-turn",
+        expectedMediaUrls: ["/tmp/generated.png"],
+        preparedMediaBlocks: {
+          "/tmp/generated.png": blocks as Array<Record<string, unknown>>,
+        },
+      },
+      stateDir,
+    );
+    const afterTtl = Date.parse(record.createdAt) + 16 * 60 * 1000;
+
+    await expect(
+      cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl }),
+    ).resolves.toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+
+    await completeSessionDelivery(queueId, stateDir);
+    await expect(
+      cleanupManagedOutgoingImageRecords({ stateDir, nowMs: afterTtl }),
+    ).resolves.toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
   });
 
   it("reaps an aged transient record once its session has no active run", async () => {
@@ -2493,6 +2762,10 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   });
 
   it("retains other selected-agent global records during scoped cleanup", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+      session: { store: path.join(stateDir, "sessions.sqlite") },
+    });
     await replaceTestSessionEntry(
       {
         agentId: "main",
@@ -2531,12 +2804,24 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(deletedFixture.originalPath);
   });
 
-  it("uses the recorded owner for unscoped session keys", async () => {
-    const fixture = await createFixture(stateDir, {
-      agentId: "work",
+  it.each([
+    {
+      label: "uses the recorded owner for unscoped session keys",
       sessionKey: "legacy-session",
+      recordAgentId: "work",
+    },
+    {
+      label: "uses an agent-scoped session key owner when the record omits agentId",
+      sessionKey: "agent:work:main",
+      recordAgentId: undefined,
+    },
+  ])("$label", async ({ sessionKey, recordAgentId }) => {
+    const fixture = await createFixture(stateDir, {
+      sessionKey,
+      ...(recordAgentId ? { agentId: recordAgentId } : {}),
     });
     getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
       session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
     });
     prepareAgentSessionStore(stateDir, "work");
@@ -2544,7 +2829,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       {
         agentId: "work",
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey: "legacy-session",
+        sessionKey,
       },
       { sessionId: "sess-work", updatedAt: Date.now() },
     );
@@ -2627,6 +2912,27 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.retainedCount).toBe(1);
     await expectPathMissing(deletedFixture.originalPath);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("retains ownerless global records when no compatibility owner exists", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work" }] },
+    });
+    const fixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: "global",
+    });
+
+    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
+    expect(readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   it("does not retain selected-agent global records during full cleanup", async () => {

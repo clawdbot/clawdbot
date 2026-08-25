@@ -2,12 +2,17 @@
 import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasCompletedMessagingToolDeliveryEvidence,
 } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
-import { hasAsyncActivity, hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
+import {
+  hasAsyncActivity,
+  hasAttemptTerminalState,
+  isCurrentAttemptReplaySafe,
+} from "./attempt-terminal-evidence.js";
 import {
   hasOnlySilentAssistantReply,
   hasPositiveOutputTokenUsage,
@@ -60,9 +65,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
   // Current-attempt evidence avoids blocking on prior committed effects; older
   // harnesses retain the cumulative, fail-closed behavior.
-  const retryReplayMetadata =
-    params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata;
-  if (retryReplayMetadata.hadPotentialSideEffects) {
+  if (!isCurrentAttemptReplaySafe(params.attempt)) {
     return false;
   }
 
@@ -187,6 +190,85 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+type SettledToolCall = { id: string | null; name: string | null };
+type SettledToolResult = { toolCallId?: unknown; toolName?: unknown; isError?: unknown };
+
+function readSettledToolCalls(
+  message: EmbeddedRunAttemptResult["currentAttemptAssistant"] | null | undefined,
+): SettledToolCall[] {
+  if (!Array.isArray(message?.content)) {
+    return [];
+  }
+  return message.content.flatMap((item) => {
+    const block = item as { type?: unknown; id?: unknown; name?: unknown } | null;
+    return block?.type === "toolCall"
+      ? [
+          {
+            id: typeof block.id === "string" ? block.id : null,
+            name: typeof block.name === "string" ? block.name : null,
+          },
+        ]
+      : [];
+  });
+}
+
+/** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
+export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) {
+  const snapshot = attempt.messagesSnapshot ?? [];
+  const latestUserIndex = snapshot.findLastIndex((message) => message.role === "user");
+  let assistant = attempt.currentAttemptAssistant;
+  let assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
+  if (assistantIndex <= latestUserIndex || readSettledToolCalls(assistant).length === 0) {
+    assistantIndex = snapshot.findLastIndex(
+      (message, index) =>
+        index > latestUserIndex &&
+        message.role === "assistant" &&
+        readSettledToolCalls(message).length > 0,
+    );
+    const candidate = assistantIndex >= 0 ? snapshot[assistantIndex] : undefined;
+    assistant = candidate?.role === "assistant" ? candidate : undefined;
+  }
+  const requestedToolCalls = readSettledToolCalls(assistant);
+  // Results must follow their owning assistant; session-wide reused ids cannot settle a new turn.
+  const settledToolResults = new Map(
+    (assistantIndex >= 0 ? snapshot.slice(assistantIndex + 1) : []).flatMap((message) => {
+      const { toolCallId, toolName, isError } = message as SettledToolResult;
+      return message.role === "toolResult" &&
+        typeof toolCallId === "string" &&
+        typeof toolName === "string"
+        ? [[toolCallId, { toolName, isError: isError === true }] as const]
+        : [];
+    }),
+  );
+  const allToolsProvenSettled =
+    attempt.itemLifecycle.startedCount > 0 &&
+    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
+    attempt.itemLifecycle.activeCount === 0 &&
+    requestedToolCalls.length > 0 &&
+    requestedToolCalls.every(
+      ({ id, name }) =>
+        id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
+    );
+  const failedToolNames = new Set(
+    requestedToolCalls.flatMap(({ id, name }) =>
+      id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
+    ),
+  );
+  const intentionalTermination =
+    allToolsProvenSettled &&
+    assistant?.stopReason === "toolUse" &&
+    failedToolNames.size === 0 &&
+    !attempt.lastToolError &&
+    !hasAsyncActivity(attempt.toolMetas) &&
+    requestedToolCalls.every(({ id, name }) => {
+      const metadata = attempt.toolMetas.findLast(
+        (entry) => entry.toolCallId === id && entry.toolName === name,
+      );
+      return metadata?.terminate === true && metadata.isError !== true;
+    });
+  return { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination };
+}
+
 /** Builds one fresh continuation after settled tools ended without a visible final answer. */
 export function resolveSettledToolTerminalContinuationInstruction(params: {
   provider?: string;
@@ -197,107 +279,58 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   payloadCount: number;
   hasTerminalToolPresentation?: boolean;
   aborted: boolean;
-  promptError?: unknown;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  const currentAttemptAssistant = params.attempt.currentAttemptAssistant;
+  const { attempt } = params;
+  const { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination } =
+    resolveSettledToolBatchEvidence(attempt);
+  const terminal = attempt.terminal;
+  const idlePromptTimeout =
+    terminal.kind === "timeout" &&
+    terminal.phase === "prompt" &&
+    terminal.source === "idle" &&
+    attempt.currentAttemptReplayMetadata?.hadPotentialSideEffects === true;
   const emptyStopAfterSettledTools = Boolean(
     params.allowEmptyStopContinuation &&
-    currentAttemptAssistant?.stopReason === "stop" &&
-    params.attempt.toolMetas.length > 0 &&
-    params.attempt.toolMetas.every((tool) => tool.isError !== true && tool.asyncStarted !== true) &&
-    params.attempt.itemLifecycle.startedCount > 0 &&
-    params.attempt.itemLifecycle.completedCount === params.attempt.itemLifecycle.startedCount &&
-    params.attempt.itemLifecycle.activeCount === 0 &&
-    !hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) &&
+    attempt.currentAttemptAssistant?.stopReason === "stop" &&
+    attempt.toolMetas.length > 0 &&
+    attempt.toolMetas.every((tool) => tool.isError !== true && tool.asyncStarted !== true) &&
+    attempt.itemLifecycle.startedCount > 0 &&
+    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
+    attempt.itemLifecycle.activeCount === 0 &&
+    !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) &&
     isEmptyResponseAssistantTurn({
       payloadCount: params.payloadCount,
-      attempt: params.attempt,
+      attempt,
     }),
   );
-  // Idle is not proof of settlement: skipped or partially dispatched tools must
-  // never be described as completed. Match each terminal call's id and owner to
-  // its own current-batch result; a reported failure is settled, not successful.
-  const requestedToolCalls = Array.isArray(assistant?.content)
-    ? assistant.content.flatMap((item) => {
-        const block = item as { type?: unknown; id?: unknown; name?: unknown } | null;
-        return block?.type === "toolCall"
-          ? [
-              {
-                id: typeof block.id === "string" ? block.id : null,
-                name: typeof block.name === "string" ? block.name : null,
-              },
-            ]
-          : [];
-      })
-    : [];
-  // Scan only results AFTER the terminal assistant: the snapshot spans the whole
-  // session, and a prior turn's toolResult with a model-reused id would otherwise
-  // prove "completion" for a batch that never dispatched. Assistant not found in
-  // the snapshot fails closed to the existing incomplete-turn error.
-  const snapshot = params.attempt.messagesSnapshot ?? [];
-  const assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
-  const settledToolResults = new Map(
-    (assistantIndex >= 0 ? snapshot.slice(assistantIndex + 1) : []).flatMap((message) => {
-      const result = message as {
-        role?: unknown;
-        toolCallId?: unknown;
-        toolName?: unknown;
-        isError?: unknown;
-      };
-      return result.role === "toolResult" &&
-        typeof result.toolCallId === "string" &&
-        typeof result.toolName === "string"
-        ? [
-            [
-              result.toolCallId,
-              { toolName: result.toolName, isError: result.isError === true },
-            ] as const,
-          ]
-        : [];
-    }),
-  );
-  const allToolsProvenSettled =
-    params.attempt.itemLifecycle?.activeCount === 0 &&
-    requestedToolCalls.length > 0 &&
-    requestedToolCalls.every(
-      ({ id, name }) =>
-        id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
-    );
-  const failedTerminalToolNames = new Set(
-    requestedToolCalls.flatMap(({ id, name }) =>
-      id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
-    ),
-  );
-  const hasSettledTerminalToolFailure = allToolsProvenSettled && failedTerminalToolNames.size > 0;
   // ToolErrorSummary has no call id: its owner must match a failed result in the
   // proven terminal batch, or a stale/unrelated error could authorize finalization.
   const hasUnsettledToolError = Boolean(
-    params.attempt.lastToolError &&
+    attempt.lastToolError &&
     (assistant?.stopReason !== "toolUse" ||
-      !hasSettledTerminalToolFailure ||
-      !failedTerminalToolNames.has(params.attempt.lastToolError.toolName)),
+      !allToolsProvenSettled ||
+      !failedToolNames.has(attempt.lastToolError.toolName)),
   );
   if (
     params.payloadCount !== 0 ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
-    params.promptError != null ||
-    params.timedOut ||
+    ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||
+    (terminal.kind === "failed" && !attempt.settledTurnFinalizationContext) ||
     (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
+    intentionalTermination ||
     hasUnsettledToolError ||
-    (hasSettledTerminalToolFailure &&
-      (hasAsyncActivity(params.attempt.toolMetas) ||
-        hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns))) ||
-    params.attempt.clientToolCalls ||
-    params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt
+    hasAsyncActivity(attempt.toolMetas) ||
+    hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    attempt.clientToolCalls ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt
   ) {
     return null;
   }
-  if (hasCompletedMessagingToolDeliveryEvidence(params.attempt)) {
+  if (hasCompletedMessagingToolDeliveryEvidence(attempt)) {
     return null;
   }
   if (
@@ -310,8 +343,8 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  return hasSettledTerminalToolFailure
-    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If any tool failed, state that failure plainly and do not claim it succeeded.`
+  return allToolsProvenSettled && failedToolNames.size > 0
+    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`
     : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
 }
 

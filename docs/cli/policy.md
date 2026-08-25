@@ -14,7 +14,7 @@ conformance layer over existing OpenClaw settings, not a second configuration
 system. You author requirements in `policy.jsonc`; OpenClaw observes the active
 workspace as evidence; policy reports drift through `doctor --lint`. Policy
 does not enforce tool calls or rewrite runtime behavior at request time, and it
-does not attest per-agent credential stores such as `auth-profiles.json`.
+does not attest per-agent credential stores such as `openclaw-agent.sqlite`.
 
 Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
@@ -199,7 +199,7 @@ Cross-cutting notes not obvious from the rule tables below:
   unobservable evidence, not a synthetic pass.
 - Secret and auth-profile evidence records provider/source posture and
   SecretRef metadata only, never raw values. Policy does not read or attest
-  per-agent credential stores such as `auth-profiles.json`.
+  per-agent credential stores such as `openclaw-agent.sqlite`.
 - Data-handling evidence is config-level posture (telemetry capture toggle,
   session maintenance mode, transcript-indexing setting) plus the always-on log
   redaction invariant. It does not inspect logs, telemetry exports,
@@ -528,6 +528,7 @@ Run policy-only checks during authoring:
 
 ```bash
 openclaw policy check
+openclaw policy check --agent ops
 openclaw policy check --json
 openclaw policy check --severity-min error
 ```
@@ -535,11 +536,16 @@ openclaw policy check --severity-min error
 `policy check` runs only the policy check set and emits evidence, findings,
 and attestation hashes. The same findings also appear in
 `openclaw doctor --lint` when the Policy plugin is enabled.
+In a multi-agent fleet with explicit ownership, pass `--agent <id>` so the
+command reads governed declarations and `policy.jsonc` from that agent's
+workspace. A sole-agent or retained legacy-owner configuration still resolves
+without the flag; OpenClaw never selects an arbitrary first agent.
 
 Compare an operator policy file against an authored baseline:
 
 ```bash
 openclaw policy compare --baseline official.policy.jsonc
+openclaw policy compare --baseline official.policy.jsonc --agent ops
 openclaw policy compare --baseline official.policy.jsonc --policy policy.jsonc --json
 ```
 
@@ -557,6 +563,9 @@ For routing probes, every baseline probe id must remain with the same route
 and expected agent. A checked policy may add probes or narrow `matchedBy`, but
 removing a probe, changing its route or agent, or widening its accepted match
 kinds is weaker.
+When the checked policy path comes from the plugin configuration and is
+relative, `--agent <id>` selects the workspace used to resolve it. Absolute
+policy paths do not depend on an agent workspace.
 
 Clean compare (`--json`):
 
@@ -796,6 +805,7 @@ longer matches `expectedAttestationHash`:
 
 ```bash
 openclaw policy watch --json
+openclaw policy watch --agent ops --json
 ```
 
 Use `--once` in CI or scripts that need a single drift evaluation. Without

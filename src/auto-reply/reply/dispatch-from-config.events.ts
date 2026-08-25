@@ -27,9 +27,3 @@ export function createReplyDispatchEvent(
     get: shouldSendToolSummaries,
   }) as PluginHookReplyDispatchEvent;
 }
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.dispatchFromConfigTestApi")] = {
-    createReplyDispatchEvent,
-  };
-}

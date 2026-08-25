@@ -1,11 +1,11 @@
-import type { GatewayHelloOk } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { isCronSessionKey } from "../session-display.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../string-coerce.ts";
+} from "@openclaw/normalization-core/string-coerce";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { isCronSessionKey } from "../session-display.ts";
 import { parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -239,16 +239,16 @@ type VisibleSessionRowOptions = {
  * message text, which rots and false-positives real chats. Rows without
  * recorded provenance (legacy stores) stay visible.
  *
- * Accepted tradeoff: a profile-less client's unnamed `run` session (e.g. an
- * explicit `--session-key` CLI conversation without an operator profile) is
- * indistinguishable from a probe and hides by default too. It stays fully
+ * Accepted tradeoff: a profile-less client's unnamed `run` session is
+ * indistinguishable from a probe and hides by default too. Operator-named CLI
+ * sessions are stamped at creation and remain visible. Unnamed rows stay fully
  * reachable: the selected session always renders in the sidebar, the Sessions
  * page never applies this filter, and the sort-menu toggle reveals all rows.
  */
 export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
   // Cron rows are owned by the automation toggle; cron creation stamps a
   // system actor, so classifying them here would demand both toggles at once.
-  if ((row.kind as string) === "cron" || isCronSessionKey(row.key)) {
+  if (isCronSessionKey(row.key)) {
     return false;
   }
   if (row.createdActor?.type === "system") {
@@ -273,6 +273,21 @@ export function sessionMatchesArchivedFilter(
   return (row.archived === true) === (archivedFilter === "archived");
 }
 
+export function sessionMatchesVisibleSessionScope(
+  row: GatewaySessionRow,
+  options: VisibleSessionRowOptions,
+): boolean {
+  return (
+    sessionMatchesArchivedFilter(row, options.archivedFilter) &&
+    row.kind !== "global" &&
+    row.kind !== "unknown" &&
+    (options.showCron === true || !isCronSessionKey(row.key)) &&
+    (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
+    (!options.filterByAgent ||
+      isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
+  );
+}
+
 export function filterVisibleSessionRows(
   rows: readonly GatewaySessionRow[],
   options: VisibleSessionRowOptions,
@@ -286,16 +301,9 @@ export function filterVisibleSessionRows(
       return true;
     }
     return (
-      sessionMatchesArchivedFilter(row, options.archivedFilter) &&
-      row.kind !== "global" &&
-      row.kind !== "unknown" &&
-      (options.showCron === true ||
-        ((row.kind as string) !== "cron" && !isCronSessionKey(row.key))) &&
-      (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
+      sessionMatchesVisibleSessionScope(row, options) &&
       !isSubagentSessionKey(row.key) &&
-      !row.spawnedBy &&
-      (!options.filterByAgent ||
-        isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
+      !row.spawnedBy
     );
   });
 }
@@ -313,7 +321,13 @@ export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySe
     return pinnedStateDiff;
   }
   const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-  return pinnedDiff !== 0 ? pinnedDiff : (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  if (pinnedDiff !== 0) {
+    return pinnedDiff;
+  }
+  const updatedDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  // Stable key tie-break mirrors the gateway comparator (session-list-order.ts)
+  // so tied rows don't swap when the canonical refresh replaces an event merge.
+  return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
 export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {

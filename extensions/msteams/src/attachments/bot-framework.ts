@@ -1,4 +1,5 @@
 // Msteams plugin module implements bot framework behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -108,7 +109,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentInfo fetch failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
@@ -126,7 +127,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     );
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
@@ -168,7 +169,7 @@ async function saveBotFrameworkAttachmentView(params: {
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentView fetch failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
@@ -185,7 +186,7 @@ async function saveBotFrameworkAttachmentView(params: {
   } catch (err) {
     await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentView invalid content-length", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
@@ -204,7 +205,7 @@ async function saveBotFrameworkAttachmentView(params: {
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentView save failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   } finally {
@@ -256,7 +257,7 @@ async function downloadMSTeamsBotFrameworkAttachment(params: {
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework token acquisition failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
@@ -401,7 +402,7 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
     } catch (err) {
       media.push({ kind: "document", sourceId: attachmentId });
       params.logger?.warn?.("msteams botFramework attachment download failed", {
-        error: err instanceof Error ? err.message : String(err),
+        error: coerceErrorMessage(err),
         attachmentId,
       });
     }

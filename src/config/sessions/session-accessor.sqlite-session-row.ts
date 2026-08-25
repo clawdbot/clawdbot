@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
@@ -5,11 +6,13 @@ import {
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import {
+  projectCanonicalSessionEntryShape,
+  stripRuntimeOnlySessionSkillsFields,
+} from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
-  const raw = entry as unknown as Record<string, unknown>;
   const hasLegacyDeliveryFields = [
     "route",
     "deliveryContext",
@@ -19,7 +22,7 @@ export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntr
     "lastTo",
     "lastAccountId",
     "lastThreadId",
-  ].some((key) => key in raw);
+  ].some((key) => key in entry);
   const delivery =
     entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
   if (typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)) {
@@ -83,9 +86,7 @@ export function bindSessionNode(params: {
   sessionKey: string;
   updatedAt: number;
 }) {
-  const canonicalEntry = projectCanonicalSessionEntryShape(
-    params.entry as unknown as Record<string, unknown>,
-  );
+  const canonicalEntry = projectCanonicalSessionEntryShape({ ...params.entry });
   const actor = params.entry.createdActor;
   const legacyActorId = normalizeText(
     (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
@@ -93,7 +94,7 @@ export function bindSessionNode(params: {
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(canonicalEntry),
+    entry_json: JSON.stringify(stripRuntimeOnlySessionSkillsFields(canonicalEntry)),
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeStatus(params.entry.status),
@@ -102,6 +103,7 @@ export function bindSessionNode(params: {
     created_actor_type:
       normalizeSqliteCreatedActorType(actor?.type) ?? (legacyActorId ? "human" : null),
     created_actor_id: normalizeText(actor?.id) ?? legacyActorId,
+    project_id: normalizeText(params.entry.projectId),
     parent_session_key:
       normalizeText(params.entry.parentSessionKey) ?? normalizeText(params.entry.spawnedBy),
     spawned_by: normalizeText(params.entry.spawnedBy),
@@ -111,8 +113,7 @@ export function bindSessionNode(params: {
     label: normalizeText(params.entry.label),
     display_name: normalizeText(params.entry.displayName),
     category: normalizeText(params.entry.category),
-    // The retired custom-icon column remains nullable until a future schema-version migration.
-    icon: null,
+    icon: normalizeText(canonicalEntry.icon),
     pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
     archived_at: finiteSqliteNumber(params.entry.archivedAt),
     last_read_at: finiteSqliteNumber(params.entry.lastReadAt),
@@ -163,7 +164,7 @@ function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): 
 }
 
 function finiteSqliteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 function resolveSqliteSessionChannel(entry: SessionEntry): string | null {

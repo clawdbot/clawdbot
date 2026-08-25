@@ -1,6 +1,7 @@
 // Slack plugin module implements slash behavior.
 import type {
   AllMiddlewareArgs,
+  BlockAction,
   SlackActionMiddlewareArgs,
   SlackCommandMiddlewareArgs,
   SlackOptionsMiddlewareArgs,
@@ -16,8 +17,6 @@ import {
   resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
-} from "openclaw/plugin-sdk/command-auth-native";
-import {
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -48,13 +47,17 @@ import {
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
+import { requireSlackPostMessageTimestamp } from "../client-delivery.js";
 import { formatSlackError } from "../errors.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
-import type { SlackMonitorContext } from "./context.js";
-import { normalizeSlackChannelType, resolveSlackChatType } from "./context.js";
+import {
+  normalizeSlackChannelType,
+  resolveSlackChatType,
+  type SlackMonitorContext,
+} from "./context.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "./event-scope.js";
@@ -89,7 +92,7 @@ const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG
 
 type SlackCommandHandlerArgs = SlackCommandMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
-type SlackArgActionHandlerArgs = SlackActionMiddlewareArgs &
+type SlackArgActionHandlerArgs = SlackActionMiddlewareArgs<BlockAction> &
   Pick<AllMiddlewareArgs, "context" | "client">;
 type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs<"block_suggestion"> &
   Pick<AllMiddlewareArgs, "context" | "client">;
@@ -498,6 +501,7 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       if (
         !ctx.isChannelAllowed({
+          teamId: eventScope?.teamId ?? ctx.teamId,
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channelType,
@@ -557,6 +561,8 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       if (isRoom) {
         channelConfig = resolveSlackChannelConfig({
+          teamId: eventScope?.teamId ?? ctx.teamId,
+          allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channels: ctx.channelsConfig,
@@ -598,6 +604,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       const senderName = sender?.name ?? command.user_name ?? command.user_id;
       const slashIngress = await resolveSlackCommandIngress({
         ctx,
+        teamId: eventScope?.teamId ?? ctx.teamId,
         senderId: command.user_id,
         senderName,
         channelType: channelType ?? "channel",
@@ -847,6 +854,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
         },
         ctxPayload,
+        dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
         replyPipeline: {
           transformReplyPayload: (payload) => {
             if (payload.isReasoning === true) {
@@ -1171,11 +1179,13 @@ export async function registerSlackMonitorSlashCommands(params: {
                   blocks?: (Block | KnownBlock)[];
                   mrkdwn?: boolean;
                 });
+          const threadTs = body.container?.thread_ts ?? body.message?.thread_ts;
           await args.client.chat.postEphemeral({
             token: ctx.botToken,
             channel: body.channel.id,
             user: body.user.id,
             text: payload.text ?? "",
+            ...(threadTs ? { thread_ts: threadTs } : {}),
             ...(payload.blocks ? { blocks: payload.blocks } : {}),
             ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
           });
@@ -1284,12 +1294,13 @@ async function deliverSlackSlashResponseWithWebApi(params: {
 
   if (payload.response_type === "in_channel") {
     const postSlackMessage = params.client.chat.postMessage;
-    await postSlackMessage({
+    const response = await postSlackMessage({
       channel: params.command.channel_id,
       text,
       ...(blocks ? { blocks } : {}),
       ...(mrkdwn !== undefined ? { mrkdwn } : {}),
     });
+    requireSlackPostMessageTimestamp(response);
   } else {
     await params.client.chat.postEphemeral({
       channel: params.command.channel_id,

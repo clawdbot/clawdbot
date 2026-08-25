@@ -105,12 +105,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       background: var(--bg-elevated);
     }
 
-    .kbd {
-      font-family: var(--mono);
-      border: 1px solid var(--border);
-      color: var(--muted);
-    }
-
     .body {
       flex: 1;
       display: grid;
@@ -399,8 +393,10 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
 
     .kbd {
+      font-family: var(--mono);
       font-size: 10.5px;
       padding: 2px 6px;
+      border: 1px solid var(--border);
       border-radius: 4px;
       background: var(--bg-elevated);
       color: var(--text);

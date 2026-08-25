@@ -1,4 +1,4 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
@@ -211,7 +211,7 @@ export function requireOnlyKeys(
   }
 }
 
-export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
+export function readPageParams(value: unknown): CodexSessionCatalogPageParams & { limit: number } {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
@@ -228,7 +228,9 @@ export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
   };
 }
 
-export function readGatewayParams(value: unknown): CodexSessionCatalogParams {
+export function readGatewayParams(
+  value: unknown,
+): CodexSessionCatalogParams & { limitPerHost: number } {
   if (value !== undefined && !isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
@@ -303,10 +305,6 @@ export function parseJsonParams(paramsJSON?: string | null): unknown {
   } catch (error) {
     throw new Error("Codex session catalog parameters must be valid JSON", { cause: error });
   }
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function parseOptionalCatalogString(
@@ -385,9 +383,9 @@ function parseCatalogSession(
   const sessionKey = options.allowSessionKey
     ? parseOptionalCatalogString(value.sessionKey, "OpenClaw session key", MAX_SESSION_KEY_LENGTH)
     : undefined;
-  const createdAt = readFiniteNumber(value.createdAt);
-  const updatedAt = readFiniteNumber(value.updatedAt);
-  const recencyAt = value.recencyAt === null ? null : readFiniteNumber(value.recencyAt);
+  const createdAt = asFiniteNumber(value.createdAt);
+  const updatedAt = asFiniteNumber(value.updatedAt);
+  const recencyAt = value.recencyAt === null ? null : asFiniteNumber(value.recencyAt);
   return {
     threadId: value.threadId,
     status,
@@ -442,7 +440,9 @@ export function filterCatalogPageByTitle(
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      session.name?.toLocaleLowerCase().includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)
+        ?.toLocaleLowerCase()
+        .includes(searchTerm.toLocaleLowerCase()),
     ),
   };
 }

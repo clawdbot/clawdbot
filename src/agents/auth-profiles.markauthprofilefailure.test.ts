@@ -10,7 +10,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
 }));
@@ -429,6 +428,33 @@ describe("markAuthProfileFailure", () => {
         expect(throwingHook).toHaveBeenCalledTimes(1);
         // Failure still got recorded despite the hook throwing.
         expect(store.usageStats?.["anthropic:default"]?.errorCount ?? 0).toBeGreaterThan(0);
+      } finally {
+        setAuthProfileFailureHook(undefined);
+      }
+    });
+  });
+
+  it("does not break inline failure recording when the hook throws", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const throwingHook = vi.fn(() => {
+        throw new Error("boom");
+      });
+      setAuthProfileFailureHook(throwingHook);
+      try {
+        await expect(
+          markInlineProviderApiKeyFailure({
+            store,
+            provider: "anthropic",
+            reason: "billing",
+            agentDir,
+          }),
+        ).resolves.toBeUndefined();
+        expect(throwingHook).toHaveBeenCalledTimes(1);
+        const usageId = resolveInlineProviderApiKeyUsageId("anthropic");
+        expect(store.usageStats?.[usageId]?.disabledReason).toBe("billing");
+        expect(ensureAuthProfileStore(agentDir).usageStats?.[usageId]?.disabledReason).toBe(
+          "billing",
+        );
       } finally {
         setAuthProfileFailureHook(undefined);
       }

@@ -74,15 +74,14 @@ const RETIRED_CODEX_MODEL_OVERRIDES = modelTable({
 });
 
 function applyRetiredModelTable(
-  model: string,
+  normalizedModel: string,
   table: Readonly<Record<string, string>>,
   overrides?: Readonly<Record<string, string>>,
 ): string | null {
-  const normalized = normalizeString(model);
-  if (overrides && Object.hasOwn(overrides, normalized)) {
-    return overrides[normalized] ?? null;
+  if (overrides && Object.hasOwn(overrides, normalizedModel)) {
+    return overrides[normalizedModel] ?? null;
   }
-  return Object.hasOwn(table, normalized) ? (table[normalized] ?? null) : null;
+  return Object.hasOwn(table, normalizedModel) ? (table[normalizedModel] ?? null) : null;
 }
 
 function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
@@ -232,14 +231,14 @@ function canonicalizeKnownModelRef(value: string): string | null {
   }
   const retiredOwnerModel =
     normalizedProvider === "groq"
-      ? applyRetiredModelTable(model, RETIRED_GROQ_MODELS)
+      ? applyRetiredModelTable(normalizedModel, RETIRED_GROQ_MODELS)
       : normalizedProvider === "xai"
-        ? applyRetiredModelTable(model, RETIRED_XAI_MODELS)
+        ? applyRetiredModelTable(normalizedModel, RETIRED_XAI_MODELS)
         : normalizedProvider === "openai" ||
             normalizedProvider === "openai-codex" ||
             normalizedProvider === "github-copilot"
           ? applyRetiredModelTable(
-              model,
+              normalizedModel,
               RETIRED_OPENAI_MODELS,
               normalizedProvider === "openai-codex" ? RETIRED_CODEX_MODEL_OVERRIDES : undefined,
             )

@@ -216,7 +216,7 @@ function classifySystemLaunchDaemonQuery(
 
 export async function inspectSystemLaunchDaemonOwnership(
   label: string,
-  options: { scanInstalledPlists?: boolean } = {},
+  options: { scanInstalledPlists?: boolean; timeoutMs?: number } = {},
 ): Promise<SystemLaunchDaemonOwnership> {
   const serviceTarget = `system/${label}`;
   if (process.platform !== "darwin") {
@@ -225,7 +225,7 @@ export async function inspectSystemLaunchDaemonOwnership(
 
   const initialQuery = classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
   if (initialQuery.status !== "absent") {
     return initialQuery;
@@ -251,7 +251,7 @@ export async function inspectSystemLaunchDaemonOwnership(
   // activation paths therefore repeat this complete probe immediately before use.
   return classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
 }
 

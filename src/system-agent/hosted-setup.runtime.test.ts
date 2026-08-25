@@ -1,3 +1,4 @@
+import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,
@@ -667,7 +668,6 @@ describe("SystemAgentChatEngine runtime", () => {
 
     expect(stopped.text).toContain("Telegram setup stopped");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledOnce();
-    expect(mocks.runCollectedChannelOnboardingPostWriteHooks).toHaveBeenCalledOnce();
     expect(hook.run).not.toHaveBeenCalled();
   });
 });
@@ -709,11 +709,12 @@ describe("hosted channel post-write hooks", () => {
       { channels: { matrix: { enabled: true } } },
       { allowConfigSizeDrop: false, baseHash: "hook-base-hash" },
     );
-    expect(mocks.runCollectedChannelOnboardingPostWriteHooks).toHaveBeenCalledWith({
-      hooks: [hook],
+    expect(hook.run).toHaveBeenCalledWith({
       cfg: committed,
       runtime: expect.any(Object),
-      beforePersistentEffect: expect.any(Function),
     });
+    expect(mocks.writeWizardConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
+      hook.run.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 });

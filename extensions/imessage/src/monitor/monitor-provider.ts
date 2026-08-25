@@ -1,6 +1,7 @@
 // Imessage provider module implements model/runtime integration.
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
@@ -20,6 +21,7 @@ import {
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
+  ensureConfiguredBindingRouteReady,
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -45,6 +47,7 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -54,6 +57,7 @@ import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
+import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
@@ -94,7 +98,6 @@ import {
   isStaleIMessageBacklog,
 } from "./inbound-dedupe.js";
 import {
-  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
@@ -112,7 +115,7 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { normalizeAllowList, resolveRuntime } from "./runtime.js";
+import { resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
@@ -371,9 +374,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const selfChatCache = createSelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
-  const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const allowFrom = normalizeStringEntries(opts.allowFrom ?? imessageCfg.allowFrom);
   const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
-  const groupAllowFrom = normalizeAllowList(
+  const groupAllowFrom = normalizeStringEntries(
     configuredGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
@@ -911,6 +914,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
+    if (decision.bindingResolution) {
+      const readiness = await ensureConfiguredBindingRouteReady({
+        cfg,
+        bindingResolution: decision.bindingResolution,
+      });
+      if (!readiness.ok) {
+        runtime.error?.(
+          `imessage: dropped inbound message; configured ACP binding unavailable for ${decision.bindingResolution.record.conversation.conversationId}: ${readiness.error}`,
+        );
+        return;
+      }
+    }
+
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
@@ -939,12 +955,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       sendPolicy !== "deny" &&
       (configuredTypingMode === undefined || configuredTypingMode === "instant");
     const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingService =
+      resolveIMessageDirectChatService(imessageCfg.service, decision.chatGuid) ?? "auto";
     const earlyDirectTypingTarget = shouldStartDirectTyping
-      ? buildDirectIMessageReplyTarget({
-          cfg,
-          accountId: decision.route.accountId,
-          sender: decision.sender,
-        })
+      ? `${earlyDirectTypingService}:${decision.sender}`
       : undefined;
     let stopEarlyDirectTyping: (() => void) | undefined;
     if (earlyDirectTypingTarget) {
@@ -1045,8 +1059,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
+      accountService: imessageCfg.service,
       decision: contextDecision,
       message,
       previousTimestamp,
@@ -1054,6 +1071,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
       media: {
         facts: mediaAttachments,
       },
@@ -1076,13 +1094,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
+    // The read RPC has no service argument, so preserve the inbound direct
+    // conversation through its exact chat GUID instead of a bare handle.
+    const readTarget =
+      !decision.isGroup && decision.chatGuid ? `chat_guid:${decision.chatGuid}` : typingTarget;
 
-    if (supportsRead && sendReadReceipts && typingTarget) {
+    if (supportsRead && sendReadReceipts && readTarget) {
       // Read receipts are best-effort channel UI. Do not put them on the
       // critical path before model dispatch; slow private-API reads otherwise
       // make accepted iMessage turns feel stuck before the agent starts. Use
       // a short-lived client so a stuck read cannot block monitor-client typing.
-      void markIMessageChatRead(typingTarget, {
+      void markIMessageChatRead(readTarget, {
         cfg,
         accountId: accountInfo.accountId,
         cliPath,
@@ -1248,6 +1270,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             sessionKey: decision.route.sessionKey,
           },
           ctxPayload,
+          // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+          dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget

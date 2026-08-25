@@ -144,6 +144,7 @@ function buildTrajectoryExportApprovalRequest(
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "trajectory-export-private-route",
     request: {
       command: request.command,

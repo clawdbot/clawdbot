@@ -11,7 +11,6 @@ import {
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
-  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
   getModelRefStatus,
@@ -747,6 +746,44 @@ describe("model-selection", () => {
     ])("$name", ({ cfg, model }) => {
       expect(inferUniqueProviderFromConfiguredModels({ cfg, model })).toBeUndefined();
     });
+
+    it("prefers a unique agent match over global and provider-config collisions", () => {
+      const cfg = {
+        agents: {
+          defaults: { models: { "openai/shared-model": {} } },
+          entries: {
+            worker: { models: { "anthropic/shared-model": {} } },
+          },
+        },
+        models: {
+          providers: { minimax: { models: [{ id: "shared-model" }] } },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({ cfg, agentId: "worker", model: "shared-model" }),
+      ).toBe("anthropic");
+    });
+
+    it("keeps ambiguous agent matches unresolved without falling back globally", () => {
+      const cfg = {
+        agents: {
+          defaults: { models: { "openai/shared-model": {} } },
+          entries: {
+            worker: {
+              models: {
+                "anthropic/shared-model": {},
+                "minimax/shared-model": {},
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({ cfg, agentId: "worker", model: "shared-model" }),
+      ).toBeUndefined();
+    });
   });
 
   describe("buildConfiguredModelCatalog", () => {
@@ -805,6 +842,7 @@ describe("model-selection", () => {
       );
       expect(model?.compat).toEqual({ thinkingFormat: "qwen-chat-template" });
       expect(model?.reasoning).toBe(true);
+      expect(model?.configuredReasoning).toBe(true);
     });
 
     it("carries configured model params into catalog entries for provider policy", () => {
@@ -909,6 +947,77 @@ describe("model-selection", () => {
       });
     });
 
+    it.each([
+      {
+        name: "inherits the global alias when agent metadata omits alias",
+        agentMetadata: { agentRuntime: { id: "codex" } },
+        expectedAlias: "global-luna",
+      },
+      {
+        name: "replaces the global alias with an explicit agent alias",
+        agentMetadata: { alias: "worker-luna" },
+        expectedAlias: "worker-luna",
+      },
+      {
+        name: "disables the global alias with an explicit empty agent alias",
+        agentMetadata: { alias: "" },
+        expectedAlias: undefined,
+      },
+    ])("$name", ({ agentMetadata, expectedAlias }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.6-luna": { alias: "global-luna" } },
+          },
+          entries: {
+            worker: { models: { "openai/gpt-5.6-luna": agentMetadata } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const index = buildModelAliasIndex({
+        cfg,
+        agentId: "worker",
+        defaultProvider: "openai",
+      });
+
+      expect(index.byKey.get("openai/gpt-5.6-luna")?.at(-1)).toBe(expectedAlias);
+      expect(index.byAlias.get("global-luna")?.ref).toEqual(
+        expectedAlias === "global-luna" ? { provider: "openai", model: "gpt-5.6-luna" } : undefined,
+      );
+    });
+
+    it("preserves another model's provider-qualified duplicate alias during replacement", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-a": { alias: "shared" },
+              "openai/gpt-b": { alias: "shared" },
+            },
+          },
+          entries: {
+            worker: { models: { "openai/gpt-a": { alias: "worker-a" } } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const index = buildModelAliasIndex({
+        cfg,
+        agentId: "worker",
+        defaultProvider: "openai",
+      });
+
+      expect(index.byProviderAlias?.get("openai/shared")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-b",
+      });
+      expect(index.byProviderAlias?.get("openai/worker-a")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-a",
+      });
+    });
+
     it("does not normalize configured model keys that have no alias", () => {
       providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
       const models = Object.fromEntries(
@@ -937,45 +1046,6 @@ describe("model-selection", () => {
       expect(
         providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
       ).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe("buildConfiguredAllowlistKeys", () => {
-    it("resolves per-agent policy aliases to the enforcement key", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-          },
-          list: [
-            {
-              id: "research",
-              models: {
-                "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-              },
-              modelPolicy: { allow: ["sonnet"] },
-            },
-          ],
-        },
-      } as OpenClawConfig;
-
-      const keys = buildConfiguredAllowlistKeys({
-        cfg,
-        defaultProvider: "openai",
-        agentId: "research",
-      });
-      const policy = createModelVisibilityPolicy({
-        cfg,
-        catalog: [],
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        agentId: "research",
-      });
-
-      expect(keys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
-      expect(keys?.has("openai/sonnet")).toBe(false);
-      expect(policy.allowsKey("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(policy.allowsKey("openai/sonnet")).toBe(false);
     });
   });
 
@@ -1078,6 +1148,7 @@ describe("model-selection", () => {
           name: "Configured Llama Fast",
           contextWindow: 128_000,
           reasoning: true,
+          configuredReasoning: true,
         },
       ]);
     });
@@ -1415,6 +1486,7 @@ describe("model-selection", () => {
           contextTokens: undefined,
           input: undefined,
           reasoning: true,
+          configuredReasoning: true,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
@@ -2270,6 +2342,29 @@ describe("model-selection", () => {
       });
     });
 
+    it("prefers an agent-configured OpenRouter free model over the global default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:free" },
+            models: { "openrouter/global/default:free": {} },
+          },
+          entries: {
+            worker: { models: { "openrouter/agent/preferred:free": {} } },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          agentId: "worker",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+        }),
+      ).toEqual({ provider: "openrouter", model: "agent/preferred:free" });
+    });
+
     it("resolves openrouter:free from configured OpenRouter provider models when needed", () => {
       const cfg = {
         agents: {
@@ -2627,6 +2722,26 @@ describe("resolveDefaultModelForAgent", () => {
       model: "gpt-5.5",
     });
   });
+
+  it("uses agent model metadata to resolve an inherited bare default", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "claude-sonnet-4-6" },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "worker-sonnet" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "worker" })).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
 });
 
 describe("normalizeModelSelection", () => {
@@ -2751,6 +2866,21 @@ describe("resolveSubagentSpawnModelSelection", () => {
       agentId: "main",
       modelOverride: undefined,
       expected: "openai/gpt-5.4",
+    },
+    {
+      name: "resolves an alias configured only on the target agent",
+      config: {
+        modelEntries: { "openai/gpt-5.4": { alias: "global-gpt" } },
+        agents: [
+          {
+            id: "research",
+            models: { "anthropic/claude-opus-4-6": { alias: "research-opus" } },
+          },
+        ],
+      },
+      agentId: "research",
+      modelOverride: "research-opus",
+      expected: "anthropic/claude-opus-4-6",
     },
     {
       name: "passes through already-qualified provider/model refs unchanged",

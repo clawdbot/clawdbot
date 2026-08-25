@@ -368,6 +368,38 @@ afterEach(() => {
 });
 
 describe("Windows startup fallback", () => {
+  it("uses the locale-independent task probe when a scheduled task is missing", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "FEHLER: Die angegebene Datei wurde nicht gefunden." },
+      );
+      spawnSync.mockReturnValue(makeSpawnSyncResult({ status: 1, stdout: "-2147024894" }));
+
+      await expect(readScheduledTaskRuntime(env)).resolves.toEqual({
+        status: "stopped",
+        missingUnit: true,
+      });
+    });
+  });
+
+  it("keeps unexpected scheduled-task query failures visible", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const detail = "Zugriff verweigert";
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: detail },
+      );
+      spawnSync.mockReturnValue(makeSpawnSyncResult({ status: 1, stdout: "-2147024891" }));
+
+      await expect(readScheduledTaskRuntime(env)).resolves.toEqual({
+        status: "unknown",
+        detail,
+        missingUnit: false,
+      });
+    });
+  });
+
   it("reports login item removal failures without leaking the item path", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);

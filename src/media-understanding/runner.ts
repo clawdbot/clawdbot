@@ -11,6 +11,10 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import {
+  normalizeMediaExecutionProviderId,
+  normalizeMediaProviderId,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
@@ -43,7 +47,6 @@ import {
   inspectLocalAudioSelection,
 } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
-import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -481,13 +484,16 @@ function resolveImageModelFromAgentDefaults(params: {
       : (inferUniqueProviderFromConfiguredModels({
           cfg: params.cfg,
           model: ref,
+          agentId: params.agentId,
         }) ?? defaultProvider);
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: effectiveDefaultProvider,
+      agentId: params.agentId,
     });
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
+      agentId: params.agentId,
       raw: ref,
       defaultProvider: effectiveDefaultProvider,
       aliasIndex,
@@ -607,49 +613,23 @@ export async function resolveAutoImageModel(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
-    if (!entry || entry.type === "cli") {
-      return null;
+  const entries = await resolveAutoEntries({
+    ...params,
+    providerRegistry,
+    capability: "image",
+    nativeVisionActive: false,
+  });
+  for (const entry of entries) {
+    if (entry.type === "cli") {
+      continue;
     }
     const provider = entry.provider;
     const model = entry.model?.trim();
-    if (!provider || !model) {
-      return null;
+    if (provider && model) {
+      return { provider, model };
     }
-    return { provider, model };
-  };
-  const configuredImageModel = resolveImageModelFromAgentDefaults({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  })
-    .map((entry) => toActive(entry))
-    .find((entry): entry is ActiveMediaModel => entry !== null);
-  if (configuredImageModel) {
-    return configuredImageModel;
   }
-  const activeEntry = await resolveActiveModelEntry({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    providerRegistry,
-    capability: "image",
-    activeModel: params.activeModel,
-  });
-  const resolvedActive = toActive(activeEntry);
-  if (resolvedActive) {
-    return resolvedActive;
-  }
-  const keyEntry = await resolveKeyEntry({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    providerRegistry,
-    capability: "image",
-    activeModel: params.activeModel,
-  });
-  return toActive(keyEntry);
+  return null;
 }
 
 async function resolveActiveModelEntry(params: {

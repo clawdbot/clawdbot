@@ -1,6 +1,5 @@
 // Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
@@ -10,11 +9,14 @@ import {
   isValidFileSecretRefId,
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
+import { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import { ENV_SECRET_REF_ID_RE } from "./types.secrets.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+export { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
 
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
@@ -204,6 +206,13 @@ export const SecretProviderSchema = z.union([
 /** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
+    egressProxy: z
+      .object({
+        enabled: z.boolean().optional(),
+        bypassHosts: z.array(z.string().trim().min(1)).max(256).optional(),
+      })
+      .strict()
+      .optional(),
     providers: z
       .object({
         // Keep this as a record so users can define multiple named providers per source.
@@ -444,92 +453,6 @@ const ModelProviderLocalServiceSchema = z
   .strict()
   .optional();
 
-const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
-  "amazon-bedrock",
-  "amazon-bedrock-mantle",
-  "anthropic",
-  "anthropic-vertex",
-  "arcee",
-  "azure-openai-responses",
-  "byteplus",
-  "byteplus-plan",
-  "cerebras",
-  "chutes",
-  "claude-cli",
-  "clawrouter",
-  "cloudflare-ai-gateway",
-  "codex",
-  "comfy",
-  "copilot-proxy",
-  "dashscope",
-  "deepinfra",
-  "deepseek",
-  "fal",
-  "fireworks",
-  "github-copilot",
-  "gmi",
-  "gmi-cloud",
-  "gmicloud",
-  "google",
-  "google-antigravity",
-  "google-gemini-cli",
-  "google-vertex",
-  "groq",
-  "huggingface",
-  "kilocode",
-  "kimi",
-  "kimi-coding",
-  "litellm",
-  "lmstudio",
-  "meta",
-  "microsoft-foundry",
-  "minimax",
-  "minimax-portal",
-  "mistral",
-  "modelstudio",
-  "moonshot",
-  "moonshot-ai",
-  "moonshotai",
-  "nvidia",
-  "novita",
-  "novita-ai",
-  "novitaai",
-  "ollama",
-  "ollama-cloud",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "qianfan",
-  "qwen",
-  "qwen-token-plan",
-  "qwencloud",
-  "sglang",
-  "stepfun",
-  "stepfun-plan",
-  "synthetic",
-  "tencent-tokenhub",
-  "tencent-tokenplan",
-  "together",
-  "venice",
-  "vercel-ai-gateway",
-  "vllm",
-  "volcengine",
-  "volcengine-plan",
-  "vydra",
-  "x-ai",
-  "xai",
-  "xiaomi",
-  "xiaomi-token-plan",
-  "z.ai",
-  "z-ai",
-  "zai",
-]);
-
-export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
-  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
-}
-
 const ModelProviderSchema = z
   .object({
     // Bundled provider overlays are materialized with an empty-string sentinel.
@@ -540,8 +463,6 @@ const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
-    contextWindow: z.number().positive().optional(),
-    contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     region: z.string().min(1).optional(),

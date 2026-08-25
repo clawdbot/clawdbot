@@ -3,8 +3,10 @@
  */
 import { expect } from "vitest";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
-import type { MusicGenerationProviderPlugin } from "../../plugins/types.js";
-import type { VideoGenerationProviderPlugin } from "../../plugins/types.js";
+import type {
+  MusicGenerationProviderPlugin,
+  VideoGenerationProviderPlugin,
+} from "../../plugins/types.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 
 function hasPositiveModeLimit(

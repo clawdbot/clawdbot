@@ -4,7 +4,6 @@ import type {
   ModelInputContent,
   ProviderMessage,
   ProviderModel,
-  VideoContent,
 } from "./provider-types.js";
 import { transformMessages } from "./transcript-transform.js";
 import type { Message, Model as CanonicalModel } from "./types.js";
@@ -15,10 +14,15 @@ const VIDEO_OMISSION = "(video omitted: provider does not support video input)";
 function projectUserMediaForTransport(
   content: ModelInputContent[],
   supportsImages: boolean,
-): Exclude<ModelInputContent, VideoContent>[] {
-  const result: Exclude<ModelInputContent, VideoContent>[] = [];
+  supportsVideo: boolean,
+): ModelInputContent[] {
+  const result: ModelInputContent[] = [];
   for (const block of content) {
-    if (block.type === "text" || (block.type === "image" && supportsImages)) {
+    const supported =
+      block.type === "text" ||
+      (block.type === "image" && supportsImages) ||
+      (block.type === "video" && supportsVideo);
+    if (supported) {
       result.push(block);
       continue;
     }
@@ -50,9 +54,13 @@ export function transformProviderMessages<TApi extends Api>(
         return message as Message;
       }
       return Object.assign({}, message, {
-        content: projectUserMediaForTransport(message.content, model.input.includes("image")),
+        content: projectUserMediaForTransport(
+          message.content,
+          model.input.includes("image"),
+          model.api === "openai-completions" && model.input.includes("video"),
+        ),
       }) as Extract<Message, { role: "user" }>;
-    }),
+    }) as Message[],
     target,
     normalizeToolCallId,
   );

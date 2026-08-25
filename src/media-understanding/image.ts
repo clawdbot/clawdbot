@@ -1,12 +1,14 @@
-// Model-backed image understanding runtime for providers without a native media
-// provider hook.
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+// Model-backed image understanding runtime for providers without a native media
+// provider hook.
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import {
+  getModelProviderRequestRouteFacts,
   getModelProviderRequestTransport,
   type ModelProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
@@ -23,7 +25,6 @@ import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -56,6 +57,7 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
     baseUrl: model.baseUrl,
     capability: "image",
     transport: "media-understanding",
+    providerMetadataOwners: getModelProviderRequestRouteFacts(model)?.providerMetadataOwners,
   }).usesKnownNativeOpenAIRoute;
 }
 
@@ -162,6 +164,7 @@ function shouldPlaceImagePromptInUserContent(model: Model): boolean {
     baseUrl: model.baseUrl,
     capability: "image",
     transport: "media-understanding",
+    providerMetadataOwners: getModelProviderRequestRouteFacts(model)?.providerMetadataOwners,
   });
   return (
     capabilities.endpointClass === "openrouter" ||

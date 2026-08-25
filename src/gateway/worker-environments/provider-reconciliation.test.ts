@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
@@ -67,6 +68,220 @@ describe("worker environment service", () => {
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
   });
 
+  it("destroys a persisted SSH lease after its provider becomes worker-turn-only", async () => {
+    const environmentId = "worker-stale-ssh-transport";
+    support.seedBootstrapping(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        inspect,
+        destroy,
+      }),
+    );
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: "worker-turn providers must return a node lease",
+    });
+  });
+
+  it.each([
+    ["SSH", { leaseId: "lease-direct-only-ssh", ssh: support.SSH_ENDPOINT }],
+    ["node", { leaseId: "lease-direct-only-node", node: { deviceId: "device-direct-only-node" } }],
+  ] as const)(
+    "P1: preserves a direct-only %s lease after profile removal and reconciliation",
+    async (_transport, lease) => {
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const workerService = support.createService(
+        support.createProvider({
+          supportedExecutionModes: undefined,
+          provision: async () => lease,
+          inspect,
+          destroy,
+        }),
+        { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+      );
+      const environment = await workerService.create("development", `request-${lease.leaseId}`);
+      support.testState.config.cloudWorkers!.profiles = {};
+
+      await workerService.reconcileOnce();
+
+      expect(environment.profileSnapshot).not.toHaveProperty("executionMode");
+      expect(inspect).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "ready",
+        leaseId: lease.leaseId,
+      });
+    },
+  );
+
+  it("P1: destroys a persisted SSH lease when provider capabilities and its profile are removed", async () => {
+    const leaseId = "lease-unadvertised-persisted-ssh";
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      supportedExecutionModes: ["remote-exec"],
+      provision: async () => ({ leaseId, ssh: support.SSH_ENDPOINT }),
+      inspect,
+      destroy,
+    });
+    const workerService = support.createService(provider);
+    const environment = await workerService.create(
+      "development",
+      "request-unadvertised-persisted-ssh",
+      undefined,
+      "remote-exec",
+    );
+    provider.supportedExecutionModes = undefined;
+    support.testState.config.cloudWorkers!.profiles = {};
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: expect.stringContaining("remote-exec"),
+    });
+  });
+
+  it.each([
+    { name: "all placement capabilities", supportedExecutionModes: undefined },
+    { name: "its exact remote-exec capability", supportedExecutionModes: ["worker-turn"] as const },
+  ])(
+    "destroys a persisted node lease when its provider loses $name",
+    async ({ supportedExecutionModes }) => {
+      const leaseId = "lease-unadvertised-persisted-node";
+      const deviceId = "device-unadvertised-persisted-node";
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({
+        supportedExecutionModes: ["worker-turn", "remote-exec"],
+        provisionBeforeInstallation: true,
+        provision: async () => ({ leaseId, node: { deviceId } }),
+        inspect,
+        destroy,
+      });
+      const workerService = support.createService(provider, {
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+      });
+      const environment = await workerService.create(
+        "development",
+        "request-unadvertised-persisted-node",
+        undefined,
+        "remote-exec",
+      );
+      provider.supportedExecutionModes = supportedExecutionModes;
+      support.getDevelopmentProfile().settings = { region: "edited" };
+
+      await workerService.reconcileOnce();
+
+      expect(inspect).not.toHaveBeenCalled();
+      expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+        nodeDeviceId: null,
+        lastError: expect.stringMatching(/node|remote-exec/u),
+      });
+    },
+  );
+
+  it.each([
+    ["remote-exec-only", ["remote-exec"]],
+    ["dual-mode", ["worker-turn", "remote-exec"]],
+  ] as const)(
+    "preserves a persisted node lease after restarting with a %s provider",
+    async (_label, supportedExecutionModes) => {
+      const leaseId = "lease-persisted-multimode-node";
+      const deviceId = "device-persisted-multimode-node";
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const initial = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          provisionBeforeInstallation: true,
+          provision: async () => ({ leaseId, node: { deviceId } }),
+          inspect,
+          destroy,
+        }),
+        { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+      );
+      const environment = await initial.create(
+        "development",
+        "request-persisted-multimode-node",
+        undefined,
+        "remote-exec",
+      );
+      await initial.stop();
+
+      const restarted = support.createService(
+        support.createProvider({ supportedExecutionModes, inspect, destroy }),
+      );
+      await restarted.reconcileOnce();
+
+      expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "ready",
+        leaseId,
+        nodeDeviceId: deviceId,
+        sshEndpoint: null,
+      });
+    },
+  );
+
+  it("reconciles one exact environment without sweeping its siblings", async () => {
+    support.seedReady("worker-target");
+    support.seedReady("worker-sibling");
+    const inspected: string[] = [];
+    const workerService = support.createService(
+      support.createProvider({
+        inspect: async (lease) => {
+          inspected.push(lease.leaseId);
+          return { status: "active" };
+        },
+      }),
+    );
+
+    await workerService.reconcileEnvironment("worker-target");
+
+    expect(inspected).toEqual(["lease:worker-target"]);
+  });
+
+  it("targeted reconciliation revokes a disappeared worker credential", async () => {
+    const environmentId = "worker-revoked";
+    support.seedReady(environmentId);
+    const workerService = support.createService(
+      support.createProvider({ inspect: async () => ({ status: "unknown" }) }),
+    );
+    const admitted = await workerService.admitWorker(support.admissionFor(environmentId));
+    if (!admitted.ok) {
+      throw new Error("fixture worker admission failed");
+    }
+
+    await workerService.reconcileEnvironment(environmentId);
+
+    expect(support.testState.store.get(environmentId)?.state).toBe("orphaned");
+    expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
+  });
+
   it("skips an active lease whose durable receipt matches the lifecycle bundle", async () => {
     support.seedReady("worker-current");
 
@@ -129,10 +344,49 @@ describe("worker environment service", () => {
       profile: { region: "test" },
     });
     expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "destroyed",
-      leaseId: `lease:${environmentId}`,
+      state: "failed",
+      leaseId: null,
       attachedSessionIds: [],
-      lastError: null,
+      lastError: STALE_WORKER_BUILD_REASON,
+    });
+  });
+
+  it("retires a node environment whose installed Gateway bundle is stale", async () => {
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      provisionBeforeInstallation: true,
+      provision: async () => ({
+        leaseId: "device-lease-stale",
+        node: { deviceId: "device-1" },
+        sharedHost: true,
+      }),
+      inspect: async () => ({ status: "active", sharedHost: true }),
+      destroy,
+    });
+    const workerService = support.createService(provider, {
+      ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+    });
+    const environment = await workerService.create("development", "request-stale-node-bundle");
+    await workerService.attachSession({
+      environmentId: environment.environmentId,
+      ownerEpoch: environment.ownerEpoch,
+      sessionId: "session-stale-node-bundle",
+    });
+    support.testState.stateDb.db
+      .prepare(
+        "UPDATE worker_environments SET bootstrap_bundle_hash = ?, bootstrap_install_kind = 'local' WHERE environment_id = ?",
+      )
+      .run("b".repeat(64), environment.environmentId);
+
+    await workerService.reconcileOnce();
+
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      attachedSessionIds: [],
+      lastError: STALE_WORKER_BUILD_REASON,
     });
   });
 
@@ -395,10 +649,33 @@ describe("worker environment service", () => {
     });
   });
 
+  it("keeps a dormant paired-device lease in its nonterminal holding state", async () => {
+    support.seedReady("worker-dormant");
+    const destroy = vi.fn(async () => {});
+    const tunnelManager = {
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+      status: () => "stopped" as const,
+    } as unknown as WorkerTunnelManager;
+    const workerService = support.createService(
+      support.createProvider({ inspect: async () => ({ status: "dormant" }), destroy }),
+      { tunnelManager },
+    );
+
+    await workerService.reconcileOnce();
+    await workerService.reconcileOnce();
+
+    expect(support.testState.store.get("worker-dormant")).toMatchObject({ state: "ready" });
+    expect(tunnelManager.stop).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
   it.each([
     null,
     { status: "future" },
     { status: "active", sharedHost: "yes" },
+    { status: "dormant", sharedHost: true },
     { status: "unknown", sharedHost: true },
   ])("retains retryable state for malformed inspection result %#", async (inspection) => {
     support.seedReady("worker-malformed");

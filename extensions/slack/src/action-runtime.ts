@@ -8,9 +8,15 @@ import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
+import {
+  resolveSlackAutoThreadId,
+  SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
+} from "./action-threading.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { buildSlackChannelIdCandidates } from "./group-policy.js";
+import { getSlackInstallationKind } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
@@ -44,7 +50,7 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
-const SLACK_REACTION_USER_LIMIT = 100;
+const SLACK_REACTION_RESULT_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 
@@ -120,55 +126,24 @@ export type SlackActionContext = {
   preparedMessages?: readonly SlackReplyDeliveryMessage[];
 };
 
-/**
- * Resolve threadTs for a Slack message based on context and replyToMode.
- * - "all": always inject threadTs
- * - "first"/"batched": inject only for the first eligible message (updates hasRepliedRef)
- * - "off": never auto-inject
- */
 function resolveThreadTsFromContext(
   explicitThreadTs: string | undefined,
   targetChannel: string,
   context: SlackActionContext | undefined,
   opts?: { suppressImplicitThread?: boolean },
 ): string | undefined {
-  // Agent explicitly provided threadTs - use it
   if (explicitThreadTs) {
     return explicitThreadTs;
   }
   if (opts?.suppressImplicitThread) {
     return undefined;
   }
-  if (!context?.currentChannelId && !context?.currentMessagingTarget) {
+  const threadTs = resolveSlackAutoThreadId({ to: targetChannel, toolContext: context });
+  if (isSingleUseReplyToMode(context?.replyToMode ?? "off") && !context?.hasRepliedRef) {
     return undefined;
   }
-
-  // Different channel - don't inject
-  if (!slackContextTargetsMatch(targetChannel, context)) {
-    return undefined;
-  }
-  if (!context.currentThreadTs) {
-    if (context.sameChannelThreadRequired) {
-      throw new Error(
-        "Slack thread context is required for same-channel replies from a threaded Slack turn. Set topLevel=true or threadId=null to post at the channel root.",
-      );
-    }
-    return undefined;
-  }
-
-  // Check replyToMode
-  if (context.replyToMode === "all") {
-    return context.currentThreadTs;
-  }
-  if (
-    isSingleUseReplyToMode(context.replyToMode ?? "off") &&
-    context.hasRepliedRef &&
-    !context.hasRepliedRef.value
-  ) {
-    context.hasRepliedRef.value = true;
-    return context.currentThreadTs;
-  }
-  return undefined;
+  // Planning stays pure so failed sends cannot consume a thread before delivery.
+  return threadTs;
 }
 
 function readSlackBlocksParam(params: Record<string, unknown>) {
@@ -282,6 +257,7 @@ function resolveSlackChannelReadPolicy(params: {
   account: ResolvedSlackAccount;
   cfg: OpenClawConfig;
   channelId: string;
+  teamId?: string;
   channelName?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   metadataResolved?: boolean;
@@ -290,6 +266,8 @@ function resolveSlackChannelReadPolicy(params: {
   const channels = params.account.config.channels;
   const channelKeys = Object.keys(channels ?? {});
   const channelConfig = resolveSlackChannelConfig({
+    teamId: params.teamId,
+    allowUnscoped: getSlackInstallationKind(params.account.accountId) !== "enterprise",
     channelId: params.channelId,
     channelName: params.channelName,
     channels,
@@ -344,7 +322,7 @@ function resolveSlackChannelReadPolicy(params: {
       params.account.config.dm?.enabled !== false &&
       params.account.config.dm?.groupEnabled === true &&
       (params.currentConversation ||
-        isSlackGroupDmTargetConfigured(params.account, params.channelId)),
+        isSlackGroupDmTargetConfigured(params.account, params.channelId, params.teamId)),
     shouldResolveName,
   };
 }
@@ -461,16 +439,26 @@ async function assertSlackReadTargetAllowed(params: {
   }
 }
 
-function isSlackGroupDmTargetConfigured(account: ResolvedSlackAccount, channelId: string): boolean {
+function isSlackGroupDmTargetConfigured(
+  account: ResolvedSlackAccount,
+  channelId: string,
+  teamId?: string,
+): boolean {
   const entries = account.config.dm?.groupChannels ?? [];
   if (entries.length === 0) {
     return true;
   }
+  const candidates = new Set(
+    buildSlackChannelIdCandidates(channelId, teamId, {
+      allowUnscoped: getSlackInstallationKind(account.accountId) !== "enterprise",
+    }).map((candidate) => candidate.toLowerCase()),
+  );
   const target = channelId.trim().toLowerCase();
   return entries.some((entry) => {
     const candidate = String(entry).trim().toLowerCase();
     return (
       candidate === "*" ||
+      candidates.has(candidate) ||
       candidate === target ||
       candidate === `slack:${target}` ||
       candidate === `channel:${target}` ||
@@ -627,8 +615,8 @@ export async function handleSlackAction(
     const limit = Math.min(
       readPositiveIntegerParam(params, "limit", {
         message: "limit must be a positive integer.",
-      }) ?? SLACK_REACTION_USER_LIMIT,
-      SLACK_REACTION_USER_LIMIT,
+      }) ?? SLACK_REACTION_RESULT_LIMIT,
+      SLACK_REACTION_RESULT_LIMIT,
     );
     const reactions = await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts);
     return jsonResult({
@@ -645,6 +633,31 @@ export async function handleSlackAction(
     if (!isActionEnabled("messages")) {
       throw new Error("Slack messages are disabled.");
     }
+    const sendSlackMessage = async (
+      target: string,
+      content: string,
+      options: Parameters<typeof slackActionRuntime.sendSlackMessage>[2],
+    ) => {
+      const replyReference =
+        context?.hasRepliedRef && slackContextTargetsMatch(target, context)
+          ? context.hasRepliedRef
+          : undefined;
+      const result = await slackActionRuntime.sendSlackMessage(target, content, {
+        ...options,
+        ...(replyReference
+          ? {
+              [SLACK_PRIVATE_ACTION_DELIVERY_RESULT]: () => {
+                replyReference.value = true;
+              },
+            }
+          : {}),
+      });
+      // Injected adapters may expose only their complete delivery result.
+      if (replyReference) {
+        replyReference.value = true;
+      }
+      return result;
+    };
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
@@ -658,6 +671,7 @@ export async function handleSlackAction(
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         const textIsSlackMrkdwn = readBooleanParam(params, "textIsSlackMrkdwn");
         const textIsSlackPlainText = readBooleanParam(params, "textIsSlackPlainText");
+        const forceDocument = readBooleanParam(params, "forceDocument") === true;
         const preparedMessages = context?.preparedMessages;
         const authoredTextPlacement = readStringParam(params, "authoredTextPlacement") as
           | "none"
@@ -697,6 +711,7 @@ export async function handleSlackAction(
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+          ...(forceDocument ? { forceDocument: true } : {}),
         };
         const sendOpts = {
           ...baseSendOpts,
@@ -713,13 +728,13 @@ export async function handleSlackAction(
             // Reuse the resolved thread for both sends. Invoking the action twice
             // could consume replyToMode=first and move the full text off-thread.
             const { replyBroadcast: _replyBroadcast, ...blockSendOpts } = sendOpts;
-            await slackActionRuntime.sendSlackMessage(destination, "", {
+            await sendSlackMessage(destination, "", {
               ...blockSendOpts,
               blocks,
             });
-            return await slackActionRuntime.sendSlackMessage(destination, content, sendOpts);
+            return await sendSlackMessage(destination, content, sendOpts);
           }
-          return await slackActionRuntime.sendSlackMessage(destination, content ?? "", {
+          return await sendSlackMessage(destination, content ?? "", {
             ...sendOpts,
             blocks,
           });
@@ -730,13 +745,13 @@ export async function handleSlackAction(
                 | Awaited<ReturnType<typeof slackActionRuntime.sendSlackMessage>>
                 | undefined;
               if (mediaUrl) {
-                lastResult = await slackActionRuntime.sendSlackMessage(destination, "", {
+                lastResult = await sendSlackMessage(destination, "", {
                   ...baseSendOpts,
                   mediaUrl,
                 });
               }
               for (const [index, message] of preparedMessages.entries()) {
-                lastResult = await slackActionRuntime.sendSlackMessage(destination, message.text, {
+                lastResult = await sendSlackMessage(destination, message.text, {
                   ...baseSendOpts,
                   ...(index === 0 && replyBroadcast ? { replyBroadcast: true } : {}),
                   ...(message.blocks ? { blocks: message.blocks } : {}),
@@ -757,25 +772,18 @@ export async function handleSlackAction(
           : blocks
             ? await (async () => {
                 if (mediaUrl) {
-                  await slackActionRuntime.sendSlackMessage(destination, "", {
+                  await sendSlackMessage(destination, "", {
                     ...sendOpts,
                     mediaUrl,
                   });
                 }
                 return await sendContentAndBlocks();
               })()
-            : await slackActionRuntime.sendSlackMessage(destination, content ?? "", {
+            : await sendSlackMessage(destination, content ?? "", {
                 ...sendOpts,
                 mediaUrl: mediaUrl ?? undefined,
                 blocks,
               });
-
-        // Keep "first" mode consistent even when the agent explicitly provided
-        // threadTs: once we send a message to the current channel, consider the
-        // first reply "used" so later tool calls don't auto-thread again.
-        if (context?.hasRepliedRef && slackContextTargetsMatch(destination, context)) {
-          context.hasRepliedRef.value = true;
-        }
 
         return jsonResult({ ok: true, result });
       }
@@ -792,6 +800,7 @@ export async function handleSlackAction(
         });
         const filename = readStringParam(params, "filename");
         const title = readStringParam(params, "title");
+        const forceDocument = readBooleanParam(params, "forceDocument") === true;
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         if (replyBroadcast) {
           throw new Error(
@@ -806,24 +815,17 @@ export async function handleSlackAction(
             suppressImplicitThread: params.topLevel === true || params.threadTs === null,
           },
         );
-        const result = await slackActionRuntime.sendSlackMessage(
-          destination,
-          initialComment ?? "",
-          {
-            ...buildActionOpts("write"),
-            mediaUrl: filePath,
-            mediaAccess: context?.mediaAccess,
-            mediaLocalRoots: context?.mediaLocalRoots,
-            mediaReadFile: context?.mediaReadFile,
-            threadTs: threadTs ?? undefined,
-            ...(filename ? { uploadFileName: filename } : {}),
-            ...(title ? { uploadTitle: title } : {}),
-          },
-        );
-
-        if (context?.hasRepliedRef && slackContextTargetsMatch(destination, context)) {
-          context.hasRepliedRef.value = true;
-        }
+        const result = await sendSlackMessage(destination, initialComment ?? "", {
+          ...buildActionOpts("write"),
+          mediaUrl: filePath,
+          mediaAccess: context?.mediaAccess,
+          mediaLocalRoots: context?.mediaLocalRoots,
+          mediaReadFile: context?.mediaReadFile,
+          threadTs: threadTs ?? undefined,
+          ...(forceDocument ? { forceDocument: true } : {}),
+          ...(filename ? { uploadFileName: filename } : {}),
+          ...(title ? { uploadTitle: title } : {}),
+        });
 
         return jsonResult({ ok: true, result });
       }
@@ -923,7 +925,8 @@ export async function handleSlackAction(
         if (!downloaded) {
           return jsonResult({
             ok: false,
-            error: "File could not be downloaded (not found, too large, or inaccessible).",
+            error:
+              "File could not be downloaded. Confirm the fileId came from the requested Slack channel or explicit thread and that the file is accessible and within the size limit.",
           });
         }
         if (!isImageContentType(downloaded.contentType)) {
@@ -1014,25 +1017,24 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
-    const limit = readPositiveIntegerParam(params, "limit", {
-      message: "limit must be a positive integer.",
-    });
+    const limit = Math.min(
+      readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      }) ?? SLACK_REACTION_RESULT_LIMIT,
+      SLACK_REACTION_RESULT_LIMIT,
+    );
     const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
     assertSlackDetachedTargetAllowed(account.accountId, teamId);
     const result = await slackActionRuntime.listSlackEmojis(buildActionOpts("read", teamId));
-    if (limit != null && limit > 0 && result.emoji != null) {
-      const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
-      if (entries.length > limit) {
-        return jsonResult({
-          ok: true,
-          emojis: {
-            ...result,
-            emoji: Object.fromEntries(entries.slice(0, limit)),
-          },
-        });
-      }
-    }
-    return jsonResult({ ok: true, emojis: result });
+    const emojis = Object.entries(result.emoji ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .slice(0, limit)
+      .map(([name, value]) =>
+        value.startsWith("alias:")
+          ? { name, identifier: name, aliasOf: value.slice("alias:".length) }
+          : { name, identifier: name },
+      );
+    return jsonResult({ ok: true, emojis });
   }
 
   throw new Error(`Unknown action: ${action}`);

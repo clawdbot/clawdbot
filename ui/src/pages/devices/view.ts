@@ -17,6 +17,17 @@ export function renderDevices(props: DevicesProps) {
   const approvalsState = resolveExecApprovalsState(props);
   return renderSettingsPage(
     html`
+      ${!props.canManagePairing || !props.canAdmin
+        ? html`<div class="callout info" role="note">
+            ${t(
+              !props.canManagePairing && !props.canAdmin
+                ? "devices.readOnly.pairingAndAdminRequired"
+                : !props.canManagePairing
+                  ? "devices.readOnly.pairingRequired"
+                  : "devices.readOnly.adminRequired",
+            )}
+          </div>`
+        : nothing}
       ${renderDeviceInventory(props)} ${renderExecApprovals(approvalsState)}
       ${renderBindings(bindingState)}
     `,
@@ -47,6 +58,7 @@ type BindingState = {
   onSave: () => void;
   onLoadConfig: () => void;
   formMode: "form" | "raw";
+  canAdmin: boolean;
 };
 
 function resolveBindingsState(props: DevicesProps): BindingState {
@@ -54,7 +66,7 @@ function resolveBindingsState(props: DevicesProps): BindingState {
   const nodes = resolveExecNodes(props.nodes);
   const { defaultBinding, agents } = resolveAgentBindings(config);
   const ready = Boolean(config);
-  const disabled = props.configSaving || props.configFormMode === "raw";
+  const disabled = !props.canAdmin || props.configSaving || props.configFormMode === "raw";
   return {
     ready,
     disabled,
@@ -69,18 +81,19 @@ function resolveBindingsState(props: DevicesProps): BindingState {
     onSave: props.onSaveBindings,
     onLoadConfig: props.onLoadConfig,
     formMode: props.configFormMode,
+    canAdmin: props.canAdmin,
   };
 }
 
 function renderBindings(state: BindingState) {
   const supportsBinding = state.nodes.length > 0;
-  const defaultValue = state.defaultBinding ?? "";
   const saveButton = html`
     <button class="btn" ?disabled=${state.disabled || !state.configDirty} @click=${state.onSave}>
       ${state.configSaving ? t("common.saving") : t("common.save")}
     </button>
   `;
   const rows = html`
+    ${!state.canAdmin ? renderSettingsRow({ title: t("devices.readOnly.adminRequired") }) : nothing}
     ${state.formMode === "raw"
       ? renderSettingsRow({ title: t("devices.binding.formModeHint") })
       : nothing}
@@ -99,28 +112,7 @@ function renderBindings(state: BindingState) {
             description: supportsBinding
               ? t("devices.binding.defaultBindingHint")
               : html`${t("devices.binding.defaultBindingHint")} ${t("devices.binding.noNodes")}`,
-            control: html`
-              <select
-                class="settings-select"
-                aria-label=${t("devices.binding.node")}
-                ?disabled=${state.disabled || !supportsBinding}
-                @change=${(event: Event) => {
-                  const target = event.target as HTMLSelectElement;
-                  const value = target.value.trim();
-                  state.onBindDefault(value ? value : null);
-                }}
-              >
-                <option value="" ?selected=${defaultValue === ""}>
-                  ${t("devices.binding.anyNode")}
-                </option>
-                ${state.nodes.map(
-                  (node) =>
-                    html`<option value=${node.id} ?selected=${defaultValue === node.id}>
-                      ${node.label}
-                    </option>`,
-                )}
-              </select>
-            `,
+            control: renderBindingSelect(null, state),
           })}
           ${state.agents.length === 0
             ? renderSettingsRow({ title: t("devices.binding.noAgents") })
@@ -140,7 +132,6 @@ function renderBindings(state: BindingState) {
 function renderAgentBinding(agent: BindingAgent, state: BindingState) {
   const bindingValue = agent.binding ?? "__default__";
   const label = agent.name?.trim() ? `${agent.name} (${agent.id})` : agent.id;
-  const supportsBinding = state.nodes.length > 0;
   return renderSettingsRow({
     title: label,
     description: html`
@@ -151,29 +142,38 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
           })
         : t("devices.binding.override", { node: agent.binding ?? "" })}
     `,
-    control: html`
-      <select
-        class="settings-select"
-        aria-label=${t("devices.binding.binding")}
-        ?disabled=${state.disabled || !supportsBinding}
-        @change=${(event: Event) => {
-          const target = event.target as HTMLSelectElement;
-          const value = target.value.trim();
-          state.onBindAgent(agent.id, value === "__default__" ? null : value);
-        }}
-      >
-        <option value="__default__" ?selected=${bindingValue === "__default__"}>
-          ${t("devices.binding.useDefault")}
-        </option>
-        ${state.nodes.map(
-          (node) =>
-            html`<option value=${node.id} ?selected=${bindingValue === node.id}>
-              ${node.label}
-            </option>`,
-        )}
-      </select>
-    `,
+    control: renderBindingSelect(agent, state),
   });
+}
+
+function renderBindingSelect(agent: BindingAgent | null, state: BindingState) {
+  const isDefault = agent === null;
+  const sentinel = isDefault ? "" : "__default__";
+  const selected = isDefault ? (state.defaultBinding ?? "") : (agent.binding ?? "__default__");
+  const onChange = (event: Event) => {
+    const value = (event.target as HTMLSelectElement).value.trim();
+    if (agent === null) {
+      state.onBindDefault(value || null);
+    } else {
+      state.onBindAgent(agent.id, value === "__default__" ? null : value);
+    }
+  };
+  return html`
+    <select
+      class="settings-select"
+      aria-label=${t(isDefault ? "devices.binding.node" : "devices.binding.binding")}
+      ?disabled=${state.disabled || state.nodes.length === 0}
+      @change=${onChange}
+    >
+      <option value=${sentinel} ?selected=${selected === sentinel}>
+        ${t(isDefault ? "devices.binding.anyNode" : "devices.binding.useDefault")}
+      </option>
+      ${state.nodes.map(
+        (node) =>
+          html`<option value=${node.id} ?selected=${selected === node.id}>${node.label}</option>`,
+      )}
+    </select>
+  `;
 }
 
 function resolveExecNodes(nodes: Array<Record<string, unknown>>): BindingNode[] {

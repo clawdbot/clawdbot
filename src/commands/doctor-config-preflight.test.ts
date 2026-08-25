@@ -1,7 +1,7 @@
 // Doctor config preflight tests cover last-known-good snapshots and config snapshot promotion.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyCliProfileEnv } from "../cli/profile.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { writeConfigHealthStateToStore } from "../config/io.health-state.js";
@@ -17,6 +17,10 @@ import {
   runDoctorConfigPreflight,
   shouldSkipPluginValidationForDoctorConfigPreflight,
 } from "./doctor-config-preflight.js";
+
+const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
@@ -72,6 +76,25 @@ async function seedLastKnownGood(
 describe("runDoctorConfigPreflight", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+    noteMock.mockClear();
+  });
+
+  it("renders legacy context-budget notices with their config paths", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        models: { providers: { openai: { contextTokens: 64_000 } } },
+      });
+
+      await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+      });
+
+      const output = noteMock.mock.calls.map(([message]) => message).join("\n");
+      expect(output).toContain("- models.providers.openai.contextTokens:");
+      expect(output).not.toContain("- : ");
+    });
   });
 
   it("supports non-observing config reads", async () => {
@@ -349,38 +372,53 @@ describe("runDoctorConfigPreflight", () => {
       );
 
       expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain("Config could not be parsed or recovered");
+      expect((failure as Error).message).toContain("cannot be repaired automatically");
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
     });
   });
 
-  it("preserves and rejects unparseable config without last-known-good during repair preflight", async () => {
+  it("leaves unparseable config untouched and provides recovery steps", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const brokenRaw = '{ "gateway": { "mode": "local" }, "models": {';
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, brokenRaw, "utf-8");
 
-      const failure = await runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-        invalidConfigNote: false,
-      }).then(
-        () => null,
-        (error: unknown) => error,
-      );
+      await withEnvOverride({ OPENCLAW_CONTAINER_HINT: "repair-test" }, async () => {
+        const failures: unknown[] = [];
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          failures.push(
+            await runDoctorConfigPreflight({
+              migrateState: false,
+              migrateLegacyConfig: false,
+              repairPrefixedConfig: true,
+              invalidConfigNote: false,
+            }).then(
+              () => null,
+              (error: unknown) => error,
+            ),
+          );
+        }
 
-      expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain("Config could not be parsed or recovered.");
+        for (const failure of failures) {
+          expect(failure).toBeInstanceOf(Error);
+          expect((failure as Error).message).toContain(configPath);
+          expect((failure as Error).message).toContain(
+            "is not parseable and cannot be repaired automatically",
+          );
+          expect((failure as Error).message).toContain(
+            "openclaw --container repair-test config validate",
+          );
+          expect((failure as Error).message).toContain("hand-edit the file");
+          expect((failure as Error).message).toContain("move it aside");
+          expect((failure as Error).message).toContain("openclaw --container repair-test onboard");
+        }
+      });
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
       const entries = await fs.readdir(path.dirname(configPath));
       const clobbered = entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."));
-      expect(clobbered).toHaveLength(1);
-      const clobberedPath = path.join(path.dirname(configPath), clobbered[0] ?? "missing");
-      expect((failure as Error).message).toContain(`Original preserved at ${clobberedPath}.`);
-      await expect(fs.readFile(clobberedPath, "utf-8")).resolves.toBe(brokenRaw);
+      expect(clobbered).toHaveLength(0);
     });
   });
 

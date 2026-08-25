@@ -8,6 +8,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
+const COMPANION_ASK_TIMEOUT_MS = 70_000;
 
 export type ChatSessionCompanionThread = {
   exchanges: SessionCompanionExchange[];
@@ -22,13 +23,17 @@ export type ChatSessionCompanionThread = {
     | "unavailable"
     | null;
   retryable?: boolean;
-  phase?: "answering" | "reading" | null;
   draft: string;
 };
 
 type MutableCompanionThread = ChatSessionCompanionThread & {
+  failedQuestionKnownExchanges: ReadonlySet<string> | null;
   revision: number;
 };
+
+function exchangeKey(exchange: SessionCompanionExchange): string {
+  return JSON.stringify([exchange.question, exchange.answer, exchange.ts]);
+}
 
 function errorDetailCode(error: unknown): string | null {
   if (!error || typeof error !== "object") {
@@ -65,12 +70,16 @@ function createThread(): MutableCompanionThread {
     exchanges: [],
     pendingQuestion: null,
     failedQuestion: null,
+    failedQuestionKnownExchanges: null,
     hint: null,
     retryable: false,
-    phase: null,
     draft: "",
     revision: 0,
   };
+}
+
+function companionThreadKey(sessionKey: string, agentId?: string | null): string {
+  return `${agentId?.trim() ?? ""}\0${sessionKey.trim()}`;
 }
 
 /** Pane-owned ephemeral companion threads, keyed by the exact selected session. */
@@ -81,12 +90,12 @@ export class ChatSessionCompanionThreads {
 
   constructor(private readonly notify: () => void = () => {}) {}
 
-  view(sessionKey: string): ChatSessionCompanionThread {
-    return this.get(sessionKey);
+  view(sessionKey: string, agentId?: string | null): ChatSessionCompanionThread {
+    return this.get(sessionKey, agentId);
   }
 
-  setDraft(sessionKey: string, draft: string): void {
-    const thread = this.get(sessionKey);
+  setDraft(sessionKey: string, draft: string, agentId?: string | null): void {
+    const thread = this.get(sessionKey, agentId);
     if (thread.draft === draft) {
       return;
     }
@@ -98,17 +107,19 @@ export class ChatSessionCompanionThreads {
   async hydrate(
     sessionKey: string,
     load: (sessionKey: string) => Promise<SessionsCompanionStateResult>,
+    agentId?: string | null,
   ): Promise<void> {
-    const key = sessionKey.trim();
-    if (!key) {
+    const targetSessionKey = sessionKey.trim();
+    if (!targetSessionKey) {
       return;
     }
-    const thread = this.get(key);
+    const key = companionThreadKey(targetSessionKey, agentId);
+    const thread = this.get(targetSessionKey, agentId);
     const revision = thread.revision;
     const token = Symbol(key);
     this.hydrationTokens.set(key, token);
     try {
-      const result = await load(key);
+      const result = await load(targetSessionKey);
       if (this.hydrationTokens.get(key) !== token || thread.revision !== revision) {
         return;
       }
@@ -119,9 +130,14 @@ export class ChatSessionCompanionThreads {
       }));
       if (
         thread.failedQuestion &&
-        thread.exchanges.some((exchange) => exchange.question === thread.failedQuestion)
+        thread.exchanges.some(
+          (exchange) =>
+            exchange.question === thread.failedQuestion &&
+            !thread.failedQuestionKnownExchanges?.has(exchangeKey(exchange)),
+        )
       ) {
         thread.failedQuestion = null;
+        thread.failedQuestionKnownExchanges = null;
         thread.hint = null;
         thread.retryable = false;
       }
@@ -140,106 +156,46 @@ export class ChatSessionCompanionThreads {
   async submit(
     sessionKey: string,
     question: string,
-    ask: (
-      sessionKey: string,
-      question: string,
-      onPrepared: () => void,
-    ) => Promise<SessionsCompanionAskResult>,
-    isCurrent: () => boolean = () => true,
-    reload?: (sessionKey: string) => Promise<SessionsCompanionStateResult>,
+    ask: (sessionKey: string, question: string) => Promise<SessionsCompanionAskResult>,
+    agentId?: string | null,
   ): Promise<void> {
-    const key = sessionKey.trim();
+    const targetSessionKey = sessionKey.trim();
     const normalized = question.trim();
-    if (!key || !normalized) {
+    if (!targetSessionKey || !normalized) {
       return;
     }
-    const thread = this.get(key);
+    const key = companionThreadKey(targetSessionKey, agentId);
+    const thread = this.get(targetSessionKey, agentId);
     if (thread.pendingQuestion) {
       return;
     }
     thread.pendingQuestion = normalized;
     thread.failedQuestion = null;
+    thread.failedQuestionKnownExchanges = null;
     thread.hint = null;
     thread.retryable = false;
-    thread.phase = "reading";
     thread.draft = "";
     thread.revision += 1;
     const token = Symbol(key);
+    const knownExchanges = new Set(thread.exchanges.map(exchangeKey));
     this.submissionTokens.set(key, token);
     this.notify();
-    const knownExchanges = new Set(
-      thread.exchanges.map(({ question: priorQuestion, answer, ts }) =>
-        JSON.stringify([priorQuestion, answer, ts]),
-      ),
-    );
-    const reconcileStale = async (
-      expectedAnswer?: string,
-    ): Promise<"committed" | "missing" | "superseded" | "unavailable"> => {
-      if (!reload) {
-        return "unavailable";
-      }
-      try {
-        const result = await reload(key);
-        if (this.submissionTokens.get(key) !== token) {
-          return "superseded";
-        }
-        thread.exchanges = result.exchanges.map(({ question: nextQuestion, answer, ts }) => ({
-          question: nextQuestion,
-          answer,
-          ts,
-        }));
-        const committed = thread.exchanges.some(
-          (exchange) =>
-            exchange.question === normalized &&
-            (expectedAnswer === undefined || exchange.answer === expectedAnswer) &&
-            !knownExchanges.has(JSON.stringify([exchange.question, exchange.answer, exchange.ts])),
-        );
-        return committed ? "committed" : "missing";
-      } catch {
-        return "unavailable";
-      }
-    };
     try {
-      const result = await ask(key, normalized, () => {
-        if (this.submissionTokens.get(key) !== token || !isCurrent()) {
-          return;
-        }
-        thread.phase = "answering";
-        thread.revision += 1;
-        this.notify();
-      });
+      const result = await ask(targetSessionKey, normalized);
       if (this.submissionTokens.get(key) !== token) {
-        return;
-      }
-      if (!isCurrent()) {
-        const reconciliation = await reconcileStale(result.answer);
-        if (reconciliation === "committed" || reconciliation === "superseded") {
-          return;
-        }
-        thread.failedQuestion = normalized;
-        thread.hint = "unavailable";
-        thread.retryable = false;
         return;
       }
       thread.exchanges = [
         ...thread.exchanges,
         { question: normalized, answer: result.answer, ts: result.ts },
       ].slice(-MAX_COMPANION_EXCHANGES);
+      thread.failedQuestionKnownExchanges = null;
     } catch (error) {
       if (this.submissionTokens.get(key) !== token) {
         return;
       }
-      if (!isCurrent()) {
-        const reconciliation = await reconcileStale();
-        if (reconciliation === "committed" || reconciliation === "superseded") {
-          return;
-        }
-        thread.failedQuestion = normalized;
-        thread.hint = reconciliation === "missing" ? "history-unavailable" : "unavailable";
-        thread.retryable = reconciliation === "missing";
-        return;
-      }
       thread.failedQuestion = normalized;
+      thread.failedQuestionKnownExchanges = knownExchanges;
       const reason = errorDetailReason(error);
       thread.hint =
         errorDetailCode(error) === COMPANION_BUSY_DETAIL_CODE
@@ -253,12 +209,11 @@ export class ChatSessionCompanionThreads {
                 : reason === "utility-model-unavailable"
                   ? "model-unavailable"
                   : "unavailable";
-      thread.retryable = errorIsRetryable(error);
+      thread.retryable = errorIsRetryable(error) || reason === null;
     } finally {
       if (this.submissionTokens.get(key) === token) {
         this.submissionTokens.delete(key);
         thread.pendingQuestion = null;
-        thread.phase = null;
         thread.revision += 1;
         this.notify();
       }
@@ -268,20 +223,26 @@ export class ChatSessionCompanionThreads {
   async reset(
     sessionKey: string,
     clear: (sessionKey: string) => Promise<SessionsCompanionResetResult>,
+    agentId?: string | null,
   ): Promise<void> {
-    const key = sessionKey.trim();
-    if (!key) {
+    const targetSessionKey = sessionKey.trim();
+    if (!targetSessionKey) {
       return;
     }
-    await clear(key);
-    this.hydrationTokens.delete(key);
-    this.submissionTokens.delete(key);
-    this.threads.set(key, createThread());
+    await clear(targetSessionKey);
+    this.retire(targetSessionKey, agentId);
+  }
+
+  retire(sessionKey?: string, agentId?: string | null): void {
+    const key = sessionKey ? companionThreadKey(sessionKey, agentId) : null;
+    for (const store of [this.threads, this.hydrationTokens, this.submissionTokens]) {
+      void (key ? store.delete(key) : store.clear());
+    }
     this.notify();
   }
 
-  private get(sessionKey: string): MutableCompanionThread {
-    const key = sessionKey.trim();
+  private get(sessionKey: string, agentId?: string | null): MutableCompanionThread {
+    const key = companionThreadKey(sessionKey, agentId);
     let thread = this.threads.get(key);
     if (!thread) {
       thread = createThread();
@@ -295,25 +256,33 @@ export function requestSessionCompanionAnswer(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
   question: string,
-  onPrepared: () => void,
+  agentId?: string | null,
 ): Promise<SessionsCompanionAskResult> {
   return client.request<SessionsCompanionAskResult>(
     "sessions.companion.ask",
-    { sessionKey, question },
-    { expectFinal: true, onAccepted: onPrepared },
+    { sessionKey, ...(agentId ? { agentId } : {}), question },
+    { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );
 }
 
 export function requestSessionCompanionState(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
+  agentId?: string | null,
 ): Promise<SessionsCompanionStateResult> {
-  return client.request<SessionsCompanionStateResult>("sessions.companion.state", { sessionKey });
+  return client.request<SessionsCompanionStateResult>("sessions.companion.state", {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+  });
 }
 
 export function resetSessionCompanion(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
+  agentId?: string | null,
 ): Promise<SessionsCompanionResetResult> {
-  return client.request<SessionsCompanionResetResult>("sessions.companion.reset", { sessionKey });
+  return client.request<SessionsCompanionResetResult>("sessions.companion.reset", {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+  });
 }

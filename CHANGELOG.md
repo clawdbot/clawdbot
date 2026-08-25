@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.
 - **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.
@@ -68,8 +69,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Control UI session companion:** load bounded selected-session context before answering, show Reading/Answering and retryable history errors, and prevent private companion context envelopes from appearing as answers. Fixes #120746. Thanks @shakkernerd.
+- **Control UI terminal transcript settlement:** retire live commentary, tool, and streamed reply projections atomically when the matching durable terminal message arrives, preventing duplicated final responses and transient row overlap after steering. Fixes #127209. Thanks @shakkernerd.
+- **Control UI Codex compaction history:** preserve successful native context compactions as durable, model-excluded activity inside completed work traces after the composer status clears or the session reloads. Fixes #127206. Thanks @shakkernerd.
+- **Control UI Codex steering:** preserve pre-steer commentary and tool activity in durable transcript order, keep it visible while active, and collapse it before the steering message after completion. Fixes #126938. Thanks @shakkernerd.
+- **Onboarding migration menu:** group Claude, Codex, Hermes, and plugin-provided imports under a single **Import from another agent** setup choice while preserving detected source hints, manual paths, and Back navigation before import begins. Fixes #126440. Thanks @shakkernerd.
+- **Onboarding provider hook loading:** scope selected-model hook fallback to the chosen provider so metadata-only setup providers do not load unrelated plugins before configuration completes. Fixes #126408. Thanks @shakkernerd.
+- **Plugin setup diagnostics:** stop treating metadata-only provider setup descriptors as missing runtime registrations while retaining undeclared runtime and CLI drift warnings. Fixes #125506. Thanks @shakkernerd.
+- **Onboarding model browsing:** keep preferred-provider model discovery scoped to the selected provider, preserve route variants, and avoid loading unrelated provider setup surfaces. Fixes #125363. Thanks @shakkernerd.
+- **Codex subagent fan-out:** settle successful terminal yields immediately and preserve requester ownership so completed children reliably resume their parent.
+- **Control UI session companion:** load bounded visible session context before answering, keep unavailable questions retryable, and prevent private companion reference wrappers from appearing as answers. Fixes #120746. Thanks @shakkernerd.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
+- **Workboard validation errors:** include the rejected normalized length in bounded-string limit errors so agents can trim and retry deterministically. Fixes #118845. Thanks @Kailigithub and @shakkernerd.
 - **Updater plugin convergence:** keep pre-plugin doctor passes from installing configured plugins before the updater's plugin sweep, while preserving the final post-plugin migration pass and preventing ambient update-phase state from leaking into fresh doctor processes.
 - **Control UI browser tab identity:** keep selected tab styling, accessibility, focus, address, and page snapshot aligned across in-place navigation and tab reordering. Fixes #120745. Thanks @shakkernerd.
 - **Control UI staged attachments:** preserve unsent images, files, pasted images, and large pasted text across same-tab route and narrow split-pane remounts while keeping pane close, mismatched pane/session/Gateway remounts, application shutdown, and hard reload as cleanup boundaries. Fixes #121519. Thanks @shakkernerd.

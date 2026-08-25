@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
@@ -16,6 +15,7 @@ import {
 } from "./installed-plugin-index.js";
 import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
@@ -26,7 +26,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -626,6 +626,38 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
+  });
+
+  it("keeps unrelated installed plugins usable beside a vanished package owner", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const demoDir = path.join(stateDir, "extensions", "demo");
+    const goneDir = path.join(stateDir, "extensions", "gone");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    writePackagePlugin(demoDir, { pluginId: "demo" });
+    const config = {
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+          gone: { enabled: true },
+        },
+      },
+    };
+    const installRecords = {
+      demo: { source: "path" as const, sourcePath: demoDir, installPath: demoDir },
+      gone: { source: "path" as const, sourcePath: goneDir, installPath: goneDir },
+    };
+    const index = loadInstalledPluginIndex({ config, env, stateDir, installRecords });
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toContain("demo");
   });
 
   it("keeps persisted manifestless Claude bundles on the fast path", () => {

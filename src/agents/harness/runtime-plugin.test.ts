@@ -2,7 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resolveAgentRuntimePluginLoadPlan } from "./runtime-plugin-load-plan.js";
+import {
+  createAgentRuntimeMetadataPluginIdScope,
+  resolveAgentRuntimePluginLoadPlan,
+} from "./runtime-plugin-load-plan.js";
 import {
   ensureSelectedAgentHarnessPlugin,
   resolveAgentHarnessRuntimeAvailability,
@@ -14,6 +17,32 @@ const mocks = vi.hoisted(() => ({
   resolveManifestActivationPlan: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
 }));
+
+function installedProviderRecord(
+  pluginId: string,
+  options: {
+    providers?: string[];
+    contracts?: Record<string, string[]>;
+    modelSupportPrefixes?: string[];
+  } = {},
+) {
+  return {
+    pluginId,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    contributions: {
+      providers: options.providers ?? [],
+      modelCatalogProviders: [],
+      modelSupportPrefixes: options.modelSupportPrefixes ?? [],
+      modelSupportPatterns: [],
+      autoEnableProviderIds: [],
+      channels: [],
+      channelConfigs: [],
+      commandAliases: [],
+      contracts: options.contracts ?? {},
+    },
+    compat: [],
+  };
+}
 
 vi.mock("../../plugins/providers.js", () => ({
   resolveActivatableProviderOwnerPluginIds: mocks.resolveActivatableProviderOwnerPluginIds,
@@ -62,6 +91,20 @@ describe("harness runtime plugins", () => {
     expect(pluginRegistry.agentHarnesses).toHaveLength(1);
   });
 
+  it("explains how to recover when the selected harness registration is missing", async () => {
+    await expect(
+      ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry: createEmptyPluginRegistry(),
+      }),
+    ).rejects.toThrow(
+      'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.',
+    );
+  });
+
   it("force-activates a default-disabled harness owner selected for a run", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
       config: {},
@@ -71,6 +114,118 @@ describe("harness runtime plugins", () => {
 
     expect(plan.pluginIds).toContain("codex");
     expect(plan.config?.plugins?.entries?.codex).toEqual({ enabled: true });
+  });
+
+  it("includes the selected provider owner for the default runtime", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
+    mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: { plugins: { allow: ["openai"] } },
+      workspaceDir: "/tmp/workspace",
+      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
+    });
+
+    expect(plan.pluginIds).toEqual(["openai"]);
+    expect(plan.config?.plugins?.entries?.openai).toEqual({ enabled: true });
+  });
+
+  it("scopes cold metadata to selected runtime candidates from the installed index", () => {
+    const scope = createAgentRuntimeMetadataPluginIdScope({
+      config: { plugins: { slots: { memory: "none" } } },
+      workspaceDir: "/tmp/workspace",
+      selections: [
+        { provider: "selected-provider", modelId: "selected-model", runtime: "openclaw" },
+      ],
+    });
+    expect(
+      scope.resolve({
+        index: {
+          plugins: [
+            installedProviderRecord("selected-plugin", { providers: ["selected-provider"] }),
+            installedProviderRecord("unrelated-plugin", {
+              providers: ["unrelated-provider"],
+            }),
+          ],
+        } as never,
+      }),
+    ).toEqual(["selected-plugin"]);
+  });
+
+  it("retains shorthand model owners while resolving the fallback provider", () => {
+    const scope = createAgentRuntimeMetadataPluginIdScope({
+      config: { plugins: { slots: { memory: "none" } } },
+      workspaceDir: "/tmp/workspace",
+      selections: [{ provider: "fallback-provider", modelId: "magic-model" }],
+      shorthandModelIds: ["magic-model"],
+    });
+    expect(
+      scope.resolve({
+        index: {
+          plugins: [
+            installedProviderRecord("fallback-provider", {
+              providers: ["fallback-provider"],
+            }),
+            installedProviderRecord("magic-model-owner", {
+              modelSupportPrefixes: ["magic-"],
+            }),
+          ],
+        } as never,
+      }),
+    ).toEqual(["fallback-provider", "magic-model-owner"]);
+  });
+
+  it("prefers the direct model provider owner over unrelated provider contributions", () => {
+    const scope = createAgentRuntimeMetadataPluginIdScope({
+      config: { plugins: { slots: { memory: "none" } } },
+      workspaceDir: "/tmp/workspace",
+      selections: [{ provider: "selected-provider", modelId: "selected-model" }],
+    });
+    expect(
+      scope.resolve({
+        index: {
+          plugins: [
+            installedProviderRecord("selected-provider", {
+              providers: ["selected-provider"],
+            }),
+            installedProviderRecord("embedding-helper", {
+              contracts: { embeddingProviders: ["selected-provider"] },
+            }),
+          ],
+        } as never,
+      }),
+    ).toEqual(["selected-provider"]);
+  });
+
+  it("keeps metadata unscoped for ambiguous indirect provider ownership", () => {
+    const scope = createAgentRuntimeMetadataPluginIdScope({
+      config: { plugins: { slots: { memory: "none" } } },
+      workspaceDir: "/tmp/workspace",
+      selections: [{ provider: "provider-alias", modelId: "selected-model" }],
+    });
+    expect(
+      scope.resolve({
+        index: {
+          plugins: [
+            installedProviderRecord("first-owner", { providers: ["provider-alias"] }),
+            installedProviderRecord("second-owner", { providers: ["provider-alias"] }),
+          ],
+        } as never,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("includes the selected provider owner when policy selects an omitted harness", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
+    mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
+    mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: { plugins: { allow: ["openai"] } },
+      workspaceDir: "/tmp/workspace",
+      selections: [{ provider: "openai", modelId: "gpt-5" }],
+    });
+
+    expect(plan.pluginIds).toEqual(["openai"]);
+    expect(plan.config?.plugins?.entries?.openai).toEqual({ enabled: true });
   });
 
   it("includes and enables the context-engine owner in the prepared load plan", () => {

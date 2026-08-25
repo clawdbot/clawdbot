@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createReasoningTagTextPartitioner,
@@ -14,7 +15,11 @@ import type {
   CliToolUseStartDelta,
   CliUsage,
 } from "./cli-output-contracts.js";
-import { isGeminiStreamJsonDialect, supportsCliJsonlToolEvents } from "./cli-output-records.js";
+import {
+  isClaudeSubagentRecord,
+  isGeminiStreamJsonDialect,
+  supportsCliJsonlToolEvents,
+} from "./cli-output-records.js";
 
 type PendingToolUse = {
   toolCallId: string;
@@ -248,7 +253,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
 }): void {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!supportsCliJsonlToolEvents(params) || isClaudeSubagentRecord(params.parsed)) {
     return;
   }
   const tracker = params.tracker;
@@ -470,11 +475,7 @@ function readThinkingProgressTokens(delta: Record<string, unknown>): number | un
   if (delta.type !== "thinking_delta" || delta.thinking !== "") {
     return undefined;
   }
-  const estimatedTokens = delta.estimated_tokens;
-  if (typeof estimatedTokens !== "number" || !Number.isFinite(estimatedTokens)) {
-    return undefined;
-  }
-  return estimatedTokens > 0 ? estimatedTokens : undefined;
+  return asPositiveFiniteNumber(delta.estimated_tokens);
 }
 
 function emitClaudeThinkingProgress(
@@ -494,7 +495,7 @@ export function dispatchClaudeCliThinking(params: {
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
 }): void {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!supportsCliJsonlToolEvents(params) || isClaudeSubagentRecord(params.parsed)) {
     return;
   }
   const tracker = params.tracker;

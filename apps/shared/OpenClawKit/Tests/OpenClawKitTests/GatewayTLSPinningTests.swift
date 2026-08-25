@@ -153,10 +153,17 @@ struct GatewayTLSPinningTests {
     @Test func `TLS authority includes normalized host and effective port`() throws {
         let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
         let route = try #require(GatewayTLSAuthority(url: url))
+        let explicitPortURL = try #require(URL(string: "wss://gateway.example.com:8443/path"))
+        let explicitPort = try #require(GatewayTLSAuthority(url: explicitPortURL))
 
-        #expect(route == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "gateway.example.com", port: 8443))
+        #expect(route.host == "gateway.example.com")
+        #expect(route.port == 443)
+        #expect(route.matches(host: "gateway.example.com", port: 0))
+        #expect(route.matches(host: "gateway.example.com", port: 443))
+        #expect(!route.matches(host: "redirect.example.com", port: 443))
+        #expect(!route.matches(host: "gateway.example.com", port: 8443))
+        #expect(!explicitPort.matches(host: "gateway.example.com", port: 0))
+        #expect(explicitPort.matches(host: "gateway.example.com", port: 8443))
     }
 
     @Test func `matching explicit pin overrides system trust`() {
@@ -198,6 +205,23 @@ struct GatewayTLSPinningTests {
             host: "gateway.example",
             port: 443,
             params: mismatch) == .reject)
+    }
+
+    @Test func `server trust evaluator rejects a different system-trusted certificate after pinning`() throws {
+        let trust = try gatewayTLSTestTrust(systemTrusted: true)
+        let pinnedFingerprint = SHA256.hash(data: Data("previous certificate".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: pinnedFingerprint,
+            allowTOFU: false,
+            storeKey: "profile:pinned")
+
+        #expect(GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: "gateway.example",
+            port: 443,
+            params: params) == .reject)
     }
 
     @Test func `server trust evaluator claims trusted first use`() throws {

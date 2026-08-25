@@ -30,7 +30,7 @@ The lobster is a guest, not furniture. It wanders in when it feels like it, stay
 - **Click it** to say hi. It startles, which is rude of you, but it forgives quickly.
 - **Click it repeatedly** and you will learn something about lobster patience. Keep going and you will learn something about lobster dignity.
 - **Press and hold** to pet it. There is a heart. Any accumulated grudges are forgotten.
-- **Right-click it** to shoo it away for the rest of the page load. It will not take it personally. It will, however, remember.
+- **Right-click it** to open a small menu: **Dismiss** shoos it away for the rest of the page load, and **Dismiss and don't show again** turns Lobster visits off for good. It will not take either personally. It will, however, remember.
 - **Watch it when a run finishes.** Lobsters take genuine pride in your completed work, and it shows when things went well. When things did not go well, they take that seriously too.
 - **Move your cursor around.** You are being watched. Affectionately.
 

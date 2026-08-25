@@ -38,6 +38,8 @@ type MediaBufferResult = {
   mime?: string;
   fileName: string;
   size: number;
+  /** Set only when bytes came from an approved local read under the root policy. */
+  localPath?: string;
 };
 
 type MediaPathResult = {
@@ -287,6 +289,9 @@ export class MediaAttachmentCache {
       mime: classification.mime,
       fileName: path.basename(filePath) || `media-${params.attachmentIndex + 1}`,
       size: buffer.length,
+      // Root-checked resolution the agent may be pointed at; remote-fetched
+      // buffers never carry one so a blocked path cannot reach the prompt.
+      localPath: filePath,
     };
     return entry.bufferResult;
   }
@@ -386,11 +391,17 @@ export class MediaAttachmentCache {
       prefix: "openclaw-media",
       extension,
     });
-    await fs.writeFile(tmpPath, bufferResult.buffer);
-    entry.tempPath = tmpPath;
+    // Keep failed staging owned when model fallback retries the same attachment.
+    const previousCleanup = entry.tempCleanup;
     entry.tempCleanup = async () => {
+      await previousCleanup?.();
       await fs.unlink(tmpPath).catch(() => {});
     };
+    await fs.writeFile(tmpPath, bufferResult.buffer).catch(async (error: unknown) => {
+      await entry.tempCleanup?.();
+      throw error;
+    });
+    entry.tempPath = tmpPath;
     return { path: tmpPath, cleanup: entry.tempCleanup };
   }
 

@@ -1,43 +1,24 @@
 #!/usr/bin/env node
 
 // Inventories core plugin imports that cross into bundled extension files.
-import { promises as fs } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mts";
 import {
-  createCachedAsync,
-  diffInventoryEntries,
   formatGroupedInventoryHuman,
-  runBaselineInventoryCheck,
   resolveRepoSpecifier,
+  writeLine,
 } from "./lib/guard-inventory-utils.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-const baselinePath = path.join(
-  repoRoot,
-  "test",
-  "fixtures",
-  "plugin-extension-import-boundary-inventory.json",
-);
-
-const bundledWebSearchProviders = new Set([
-  "brave",
-  "firecrawl",
-  "gemini",
-  "grok",
-  "kimi",
-  "perplexity",
-]);
-const bundledWebSearchPluginIds = new Set([
-  "brave",
-  "firecrawl",
-  "google",
-  "moonshot",
-  "perplexity",
-  "xai",
-]);
+const AUTHORED_MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+const RETIRED_WEB_SEARCH_CORE_MODULES = [
+  "src/agents/tools/web-search-plugin-factory",
+  "src/plugins/bundled-web-search-registry",
+  "src/plugins/web-search-providers",
+] as const;
 
 type PluginExtensionInventoryEntry = {
   file: string;
@@ -47,7 +28,6 @@ type PluginExtensionInventoryEntry = {
   resolvedPath: string | null;
   reason: string;
 };
-
 function compareEntries(left: PluginExtensionInventoryEntry, right: PluginExtensionInventoryEntry) {
   return (
     left.file.localeCompare(right.file) ||
@@ -74,147 +54,84 @@ function classifyResolvedExtensionReason(kind: string, resolvedPath: string | nu
   return `${verb} extension-owned file from src/plugins`;
 }
 
-function scanWebSearchRegistrySmells(
-  source: string,
-  relativeFile: string,
-): PluginExtensionInventoryEntry[] {
-  if (relativeFile !== "src/plugins/web-search-providers.ts") {
-    return [];
-  }
-
-  const entries: PluginExtensionInventoryEntry[] = [];
-  const lines = source.split(/\r?\n/);
-  for (const [index, line] of lines.entries()) {
-    const lineNumber = index + 1;
-
-    if (line.includes("web-search-plugin-factory.js")) {
-      entries.push({
-        file: relativeFile,
-        line: lineNumber,
-        kind: "registry-smell",
-        specifier: "../agents/tools/web-search-plugin-factory.js",
-        resolvedPath: "src/agents/tools/web-search-plugin-factory.js",
-        reason: "imports core-owned web search provider factory into plugin registry",
-      });
-    }
-
-    const pluginMatch = line.match(/pluginId:\s*"([^"]+)"/);
-    const pluginId = pluginMatch?.[1];
-    if (pluginId && bundledWebSearchPluginIds.has(pluginId)) {
-      entries.push({
-        file: relativeFile,
-        line: lineNumber,
-        kind: "registry-smell",
-        specifier: pluginId,
-        resolvedPath: relativeFile,
-        reason: "hardcodes bundled web search plugin ownership in core registry",
-      });
-    }
-
-    const providerMatch = line.match(/id:\s*"(brave|firecrawl|gemini|grok|kimi|perplexity)"/);
-    const providerId = providerMatch?.[1];
-    if (providerId && bundledWebSearchProviders.has(providerId)) {
-      entries.push({
-        file: relativeFile,
-        line: lineNumber,
-        kind: "registry-smell",
-        specifier: providerId,
-        resolvedPath: relativeFile,
-        reason: "hardcodes bundled web search provider metadata in core registry",
-      });
-    }
-  }
-
-  return entries;
-}
-
 const boundaryChecker = createExtensionImportBoundaryChecker({
   roots: ["src/plugins"],
   shouldSkipFile(relativeFile) {
     return (
-      relativeFile === "src/plugins/bundled-web-search-registry.ts" ||
       relativeFile.startsWith("src/plugins/contracts/") ||
       /^src\/plugins\/runtime\/runtime-[^/]+-contract\.[cm]?[jt]s$/u.test(relativeFile)
     );
   },
-  collectEntries({ source, filePath, relativeFile, references }) {
-    return [
-      ...references.map(({ kind, line, specifier }) => {
-        const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
-        return {
-          file: relativeFile,
-          line,
-          kind,
-          specifier,
-          resolvedPath,
-          reason: classifyResolvedExtensionReason(kind, resolvedPath),
-        };
-      }),
-      ...scanWebSearchRegistrySmells(source, relativeFile),
-    ];
+  collectEntries({ filePath, relativeFile, references }) {
+    return references.map(({ kind, line, specifier }) => {
+      const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+      return {
+        file: relativeFile,
+        line,
+        kind,
+        specifier,
+        resolvedPath,
+        reason: classifyResolvedExtensionReason(kind, resolvedPath),
+      };
+    });
   },
   compareEntries,
 });
 
-/** Cached inventory of src/plugins imports that cross into bundled extensions. */
-const collectPluginExtensionImportBoundaryInventory = boundaryChecker.collectInventory;
-
-/**
- * Cached expected plugin-extension import inventory baseline.
- */
-const readExpectedInventory = createCachedAsync(
-  async (): Promise<PluginExtensionInventoryEntry[]> =>
-    JSON.parse(await fs.readFile(baselinePath, "utf8")),
-);
-
-/**
- * Diffs expected and actual plugin-extension boundary inventory entries.
- */
-function diffInventory(
-  expected: PluginExtensionInventoryEntry[],
-  actual: PluginExtensionInventoryEntry[],
-) {
-  return diffInventoryEntries(expected, actual, compareEntries);
+/** Rejects retired core registries whose ownership now comes from plugin manifests. */
+export function collectRetiredWebSearchCorePathEntries(
+  rootDir = repoRoot,
+): PluginExtensionInventoryEntry[] {
+  return RETIRED_WEB_SEARCH_CORE_MODULES.flatMap((modulePath) =>
+    AUTHORED_MODULE_EXTENSIONS.map((extension) => `${modulePath}${extension}`),
+  )
+    .filter((relativeFile) => existsSync(path.join(rootDir, relativeFile)))
+    .map((relativeFile) => ({
+      file: relativeFile,
+      line: 1,
+      kind: "retired-path",
+      specifier: relativeFile,
+      resolvedPath: relativeFile,
+      reason: "restores retired core web-search registry or factory ownership",
+    }));
 }
 
+/** Inventory of src/plugins extension imports and retired core web-search ownership paths. */
+async function collectPluginExtensionImportBoundaryInventory() {
+  return [
+    ...(await boundaryChecker.collectInventory()),
+    ...collectRetiredWebSearchCorePathEntries(),
+  ].toSorted(compareEntries);
+}
+
+const ruleText =
+  "Rule: src/plugins/** must not import bundled plugin files or restore retired web-search registries";
 const formatInventoryHuman = (inventory: PluginExtensionInventoryEntry[]) =>
   formatGroupedInventoryHuman(
     {
-      rule: "Rule: src/plugins/** must not import bundled plugin files",
+      rule: ruleText,
       cleanMessage: "No plugin import boundary violations found.",
       inventoryTitle: "Plugin extension import boundary inventory:",
     },
     inventory,
   );
 
-function formatEntry(entry: PluginExtensionInventoryEntry) {
-  return `${entry.file}:${entry.line} [${entry.kind}] ${entry.reason} (${entry.specifier} -> ${entry.resolvedPath})`;
-}
-
 /**
- * Runs the plugin-extension import boundary baseline check.
+ * Runs the plugin-extension import boundary check.
  */
-async function runPluginExtensionImportBoundaryCheck(argv?: string[], io?: unknown) {
-  return await runBaselineInventoryCheck({
-    argv: argv ?? process.argv.slice(2),
-    io,
-    collectActual: collectPluginExtensionImportBoundaryInventory,
-    readExpected: readExpectedInventory,
-    diffInventory,
-    formatInventoryHuman,
-    formatEntry,
-  });
-}
+async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
+  const actual = await collectPluginExtensionImportBoundaryInventory();
 
-/**
- * Entrypoint wrapper for the plugin-extension import boundary check.
- */
-export async function main(argv?: string[], io?: unknown) {
-  const exitCode = await runPluginExtensionImportBoundaryCheck(argv, io);
-  if (!io && exitCode !== 0) {
-    process.exit(exitCode);
+  writeLine(process.stdout, formatInventoryHuman(actual));
+  if (actual.length === 0) {
+    return 0;
   }
-  return exitCode;
+  writeLine(process.stderr, `${ruleText} violations found (${actual.length}).`);
+  return 1;
+}
+
+async function main(): Promise<void> {
+  process.exitCode = await runPluginExtensionImportBoundaryCheck();
 }
 
 runAsScript(import.meta.url, main);

@@ -7,11 +7,10 @@ import {
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
 const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
-export const continueOperations = new Map<string, Promise<{ sessionKey: string }>>();
 
 async function readFileRange(
   handle: Awaited<ReturnType<typeof fs.open>>,
@@ -119,7 +118,7 @@ function readMarkerOffset(probe: SessionUpstreamProbe): number | undefined {
     return undefined;
   }
   const offset = probe.marker.offset ?? probe.marker.size;
-  return Number.isSafeInteger(offset) && (offset as number) >= 0 ? (offset as number) : undefined;
+  return asSafeIntegerInRange(offset, { min: 0 });
 }
 
 async function checkClaudeSessionUpstreamActivity(

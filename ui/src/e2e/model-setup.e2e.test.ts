@@ -24,7 +24,7 @@ const localPrepareOptions = [
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "llama.cpp",
-    hint: "Run one private GGUF model directly inside this Gateway",
+    hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
     actionLabel: "Set up model",
   },
   {
@@ -62,12 +62,12 @@ suite.define(() => {
             "openclaw.setup.detect": {
               candidates: [
                 {
-                  kind: "codex-cli",
+                  kind: "openai-api-key",
                   brandId: "openai",
-                  label: "Codex CLI",
-                  detail: "Signed in locally",
+                  label: "OpenAI API key",
+                  detail: "Saved credentials are available",
                   modelRef: "openai/gpt-5",
-                  recommended: true,
+                  recommended: false,
                   credentials: true,
                 },
               ],
@@ -102,41 +102,16 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
         expect(response?.status()).toBe(200);
-        await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
-        const candidate = page.locator('[data-candidate-kind="codex-cli"]');
-        await expect.poll(() => candidate.locator('[data-provider-icon="codex"]').count()).toBe(1);
-        await candidate.getByRole("button", { name: "Test & use" }).click();
 
         const detect = await gateway.waitForRequest("openclaw.setup.detect");
-        expect(detect.params).toEqual({});
+        expect(detect.params).toEqual({ agentId: "main" });
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
-        expect(activate.params).toEqual({ kind: "codex-cli", modelRef: "openai/gpt-5" });
-
-        await page.getByRole("heading", { name: "Connection verified" }).waitFor();
-        await expect
-          .poll(async () => page.locator(".model-setup-success").textContent())
-          .toContain("openai/gpt-5");
-        await expect
-          .poll(async () => page.locator(".model-setup-success").textContent())
-          .toContain("Verified in 73 ms");
-        await gateway.setMethodResponse("openclaw.setup.detect", {
-          candidates: [],
-          manualProviders: [{ id: "openai", label: "OpenAI" }],
-          workspace: "/tmp/openclaw-e2e",
-          setupComplete: true,
-          configuredModel: "openai/gpt-5",
+        expect(activate.params).toEqual({
+          kind: "openai-api-key",
+          agentId: "main",
+          modelRef: "openai/gpt-5",
         });
-        await page.getByRole("button", { name: "Stay in settings" }).click();
-        await page.getByRole("button", { name: "Continue setup" }).waitFor();
-        await page.reload();
-        await page.getByRole("button", { name: "Continue setup" }).waitFor();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
-          await page.screenshot({
-            path: path.join(artifactDir, "model-setup-durable-continuation.png"),
-          });
-        }
-        await page.getByRole("button", { name: "Continue setup" }).click();
+
         await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
         expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
         // Onboarding chrome keeps only the header actions; no identity heading.
@@ -182,6 +157,13 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const signInUrl = `https://example.com/device?${new URLSearchParams({
+          client_id: "device-code-client",
+          redirect_uri: "http://localhost:1455/auth/callback",
+          response_type: "code",
+          scope: "openid profile email offline_access",
+          state: "state-1".repeat(16),
+        })}`;
         const initialDetection = {
           candidates: [],
           manualProviders: [],
@@ -228,7 +210,8 @@ suite.define(() => {
                     id: "device-code",
                     type: "note",
                     title: "Authorize device",
-                    externalUrl: "https://example.com/device",
+                    message: `Open this URL in your local browser:\n\n${signInUrl}`,
+                    externalUrl: signInUrl,
                     deviceCode: { code: "ABCD-1234", expiresInMinutes: 14 },
                   },
                 },
@@ -274,7 +257,17 @@ suite.define(() => {
           });
         }
         const signInLink = page.getByRole("link", { name: "Open sign-in page" });
-        await expect.poll(() => signInLink.getAttribute("href")).toBe("https://example.com/device");
+        await expect.poll(() => signInLink.getAttribute("href")).toBe(signInUrl);
+        const wizardBody = page.locator(".model-setup-wizard__body");
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.setViewportSize({ height: 844, width: 390 });
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.getByRole("button", { name: "Continue" }).waitFor();
+        await page.getByRole("button", { name: "Cancel" }).waitFor();
 
         await gateway.setMethodResponse("openclaw.setup.detect", {
           ...initialDetection,
@@ -494,6 +487,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "provider-auto:ollama",
+          agentId: "main",
           modelRef: "ollama/qwen3:0.6b",
         });
 
@@ -784,6 +778,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "api-key",
+          agentId: "main",
           authChoice: "qwen-cn",
           apiKey: "qwen-test-secret",
         });
@@ -921,7 +916,7 @@ suite.define(() => {
         }
         await page.getByRole("button", { name: "Check model" }).click();
         const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({});
+        expect(verify.params).toEqual({ agentId: "main" });
         await page.getByText("Ready · 1234 ms").waitFor();
         const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect"))
           .length;

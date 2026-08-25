@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as migratedText } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
@@ -40,7 +42,9 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
+  ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
+  hasPendingSessionConversationRouteContextColumn,
   migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
@@ -149,6 +153,11 @@ function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean 
       .get(),
   );
   return !sessionNodeColumns.has("entry_valid") || !hasContractTable;
+}
+
+function hasPendingSessionProjectColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  return Boolean(columns && !columns.has("project_id"));
 }
 
 function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
@@ -371,24 +380,14 @@ function parseMigratedSessionEntry(value: unknown): MigratedSessionEntry | null 
   if (typeof value !== "string") {
     return null;
   }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as MigratedSessionEntry)
-      : null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(value) ?? null;
 }
 
 function migratedObjectField(
   entry: MigratedSessionEntry,
   key: string,
 ): MigratedSessionEntry | null {
-  const value = entry[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as MigratedSessionEntry)
-    : null;
+  return asNullableRecord(entry[key]);
 }
 
 function migratedNumber(value: unknown): number | null {
@@ -566,18 +565,13 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
   }
-  const hasPendingMemoryMigration =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
-    hasPendingMemoryChunkMetadataMigration(database);
-  const hasPendingSessionContractMigration =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
-    hasPendingSessionKeyContractSchemaMigration(database);
-  const hasPendingRetiredLeaseMigration =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && hasRetiredAgentStateLeaseSchema(database);
   const hasPendingCurrentVersionMigration =
-    hasPendingMemoryMigration ||
-    hasPendingSessionContractMigration ||
-    hasPendingRetiredLeaseMigration;
+    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
+    (hasPendingMemoryChunkMetadataMigration(database) ||
+      hasPendingSessionKeyContractSchemaMigration(database) ||
+      hasRetiredAgentStateLeaseSchema(database) ||
+      hasPendingSessionConversationRouteContextColumn(database) ||
+      hasPendingSessionProjectColumn(database));
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
       allowMissingColumns: true,
@@ -636,6 +630,7 @@ function ensureAgentSchema(
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
+        ensureSessionAdditiveColumns(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
@@ -670,6 +665,7 @@ function ensureAgentSchema(
       }
       backfillSessionEntryProvenance(db, previousVersion);
       migrateSessionNodesAndWindows(db, previousVersion);
+      ensureSessionAdditiveColumns(db);
       ensureSessionEntryValidityProjection(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
       migrateMemoryChunkMetadataSchema(db);
@@ -703,13 +699,25 @@ function ensureAgentSchema(
             updated_at: now,
           })
           .onConflict((conflict) =>
-            conflict.column("meta_key").doUpdateSet({
-              role: "agent",
-              schema_version: targetVersion,
-              agent_id: agentId,
-              app_version: VERSION,
-              updated_at: now,
-            }),
+            conflict
+              .column("meta_key")
+              .doUpdateSet({
+                role: "agent",
+                schema_version: targetVersion,
+                agent_id: agentId,
+                app_version: VERSION,
+                updated_at: now,
+              })
+              // updated_at records when schema metadata last changed, not when
+              // the database was last opened; unconditional bumps make every
+              // open dirty the row and defeat no-change backup detection.
+              .where((eb) =>
+                eb.or([
+                  eb("schema_meta.schema_version", "!=", targetVersion),
+                  eb("schema_meta.app_version", "!=", VERSION),
+                  eb("schema_meta.agent_id", "!=", agentId),
+                ]),
+              ),
           ),
       );
       assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });

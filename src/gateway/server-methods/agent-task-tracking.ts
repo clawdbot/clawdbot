@@ -17,7 +17,11 @@ import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
 
 export type TrustedGroupMetadata = {
   groupId?: string;
@@ -99,7 +103,8 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
     return "none";
   }
-  if (params.client?.internal?.agentRunTracking === "plugin_subagent") {
+  const runTaskOwner = params.client?.internal?.agentRunTracking;
+  if (runTaskOwner === "plugin_subagent") {
     return "plugin_subagent";
   }
   // The subagent registry created the authoritative row before its host-owned
@@ -109,6 +114,12 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
     existingTask?.runtime === "subagent" &&
     existingTask.childSessionKey === params.sessionKey?.trim()
   ) {
+    return "none";
+  }
+  // The native spawn control plane registers the canonical `subagent` row for
+  // this same runId once the gateway returns, so tracking here would show one
+  // run twice. The marker rides an internal synthetic client only.
+  if (runTaskOwner === "native_subagent") {
     return "none";
   }
   // A confirmed ACP manual-spawn child turn already owns its requester-visible
@@ -169,6 +180,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   task: string;
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
+  gatewayContextResolver?: GatewayContextResolver;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
   if (!childSessionKey) {
@@ -193,6 +205,9 @@ export async function registerPluginSubagentRunFromGateway(params: {
       childSessionKey,
       runId: params.runId,
       task: params.task,
+      ...(params.gatewayContextResolver
+        ? { gatewayContextResolver: params.gatewayContextResolver }
+        : {}),
     })
   ) {
     return;
@@ -209,6 +224,9 @@ export async function registerPluginSubagentRunFromGateway(params: {
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: params.requester !== undefined,
     spawnMode: "run",
+    ...(params.gatewayContextResolver
+      ? { gatewayContextResolver: params.gatewayContextResolver }
+      : {}),
   });
 }
 

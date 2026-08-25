@@ -42,6 +42,16 @@ const status = {
   lastAttemptAtMs: 1,
   lastSuccessAtMs: 1,
   lastError: null,
+  collectionReview: {
+    workspace1: { attemptedAtMs: Date.now() - 60_000, succeededAtMs: Date.now() - 30_000 },
+  },
+  experienceReview: {
+    workspace1: {
+      attemptedAtMs: Date.now() - 15_000,
+      outcome: "proposed" as const,
+      proposalId: "proposal-1",
+    },
+  },
   counts: { active: 1, stale: 0, archived: 0 },
   skills: [
     {
@@ -61,7 +71,7 @@ const status = {
 };
 
 function createProgram(): Command {
-  const program = new Command();
+  const program = new Command().enablePositionalOptions();
   program.exitOverride();
   registerSkillsCli(program);
   return program;
@@ -79,6 +89,20 @@ describe("skills curator cli", () => {
     });
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.writeStdout.mockClear();
+  });
+
+  it("uses a parent --json when the leaf has its default false value", async () => {
+    await createProgram().parseAsync(["skills", "curator", "--json", "status"], {
+      from: "user",
+    });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
+  });
+
+  it("uses --json for the default curator action", async () => {
+    await createProgram().parseAsync(["skills", "curator", "--json"], { from: "user" });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
   });
 
   it("supports status, pin, unpin, and restore JSON paths", async () => {
@@ -110,7 +134,7 @@ describe("skills curator cli", () => {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("Error: remote unavailable");
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("remote unavailable");
   });
 
   it("disambiguates duplicate skill keys in text status", async () => {
@@ -132,6 +156,16 @@ describe("skills curator cli", () => {
     );
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
       expect.stringContaining("daily-brief (/other-workspace/skills/daily-brief/SKILL.md)  active"),
+    );
+  });
+
+  it("prints the last collection and experience outcomes", async () => {
+    await createProgram().parseAsync(["skills", "curator", "status"], { from: "user" });
+    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
+      expect.stringContaining("Collection review workspac"),
+    );
+    expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
+      expect.stringContaining("Experience review workspac: proposed (proposal-1)"),
     );
   });
 });

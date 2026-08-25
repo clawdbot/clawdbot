@@ -1,7 +1,5 @@
 import type OpenAI from "openai";
 import type {
-  ResponseInput,
-  ResponseOutputItem,
   ResponsesClientEvent,
   ResponsesServerEvent,
 } from "openai/resources/responses/responses.js";
@@ -9,9 +7,16 @@ import { ResponsesWS } from "openai/resources/responses/ws.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import {
+  resolveResponsesContinuationRequest,
+  type ResponsesContinuationRequest,
+  type ResponsesContinuationState,
+  type ResponsesContinuationStatus,
+} from "./openai-responses-continuation.js";
+import {
+  parseOpenAIResponsesWebSocketServerError,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
-  OpenAIResponsesWebSocketResponseFailedError,
+  OpenAIResponsesWebSocketSafeRetryError,
 } from "./openai-responses-contracts.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 import { sha256Hex } from "./transport-utils.js";
@@ -20,24 +25,13 @@ const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
 const SESSION_WEBSOCKET_MAX_AGE_MS = 55 * 60 * 1000;
 const WEBSOCKET_OPEN_STATE = 1;
 
-type ResponsesWebSocketRequest = Record<string, unknown> & {
-  input?: ResponseInput;
-  previous_response_id?: string;
-};
-
-type CachedWebSocketContinuation = {
-  lastRequest: ResponsesWebSocketRequest;
-  lastResponseId: string;
-  lastResponseItems: ResponseOutputItem[];
-};
-
 type CachedWebSocketConnection = {
   socket: ResponsesWS;
   sessionId: string;
   busy: boolean;
   createdAt: number;
   idleTimer?: ReturnType<typeof setTimeout>;
-  continuation?: CachedWebSocketContinuation;
+  continuation?: ResponsesContinuationState;
 };
 
 type ResponsesWebSocketStreamMessage =
@@ -47,16 +41,9 @@ export type OpenAIResponsesWebSocketMode = "websocket" | "websocket-cached" | "a
 
 type OpenAIResponsesWebSocketStream = {
   stream: AsyncIterable<unknown>;
-  request: ResponsesWebSocketRequest;
+  request: ResponsesContinuationRequest;
   reusedConnection: boolean;
-  continuationStatus:
-    | "continued"
-    | "explicit_previous_response_id"
-    | "history_changed"
-    | "history_shorter"
-    | "no_previous_response"
-    | "request_changed"
-    | "socket_not_cached";
+  continuationStatus: ResponsesContinuationStatus | "socket_not_cached";
   finish: (options?: { keep?: boolean }) => void;
 };
 
@@ -72,22 +59,19 @@ function isOfficialOpenAIResponsesBaseUrl(baseUrl: string | undefined): boolean 
   }
   try {
     const url = new URL(baseUrl);
-    const path = url.pathname.replace(/\/+$/, "");
     return (
-      url.protocol === "https:" &&
-      url.hostname === "api.openai.com" &&
-      url.port === "" &&
+      url.origin === "https://api.openai.com" &&
       url.username === "" &&
       url.password === "" &&
       url.search === "" &&
       url.hash === "" &&
-      path === "/v1"
+      url.pathname.replace(/\/+$/, "") === "/v1"
     );
   } catch {
     return false;
   }
 }
-export function supportsNativeOpenAIResponsesWebSocket(params: {
+export function supportsNativeOpenAIResponsesEndpoint(params: {
   provider: string;
   api: string;
   baseUrl?: string;
@@ -281,98 +265,9 @@ function acquireWebSocket(
   return createCachedWebSocketLease(cacheKey, entry, false);
 }
 
-function requestWithoutInput(request: ResponsesWebSocketRequest): ResponsesWebSocketRequest {
-  const { input: _input, previous_response_id: _previousResponseId, ...rest } = request;
-  if (!rest.metadata || typeof rest.metadata !== "object" || Array.isArray(rest.metadata)) {
-    return rest;
-  }
-  const metadata = Object.fromEntries(
-    Object.entries(rest.metadata as Record<string, unknown>).filter(
-      ([key]) => key !== "openclaw_turn_id" && key !== "openclaw_turn_attempt",
-    ),
-  );
-  return { ...rest, metadata };
-}
-
-function sanitizeWebSocketRequest(request: Record<string, unknown>): ResponsesWebSocketRequest {
+function sanitizeWebSocketRequest(request: Record<string, unknown>): ResponsesContinuationRequest {
   const { stream: _stream, background: _background, ...websocketRequest } = request;
-  return websocketRequest as ResponsesWebSocketRequest;
-}
-
-function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
-  return input.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      return item;
-    }
-    const typedItem = item as unknown as Record<string, unknown>;
-    if (typedItem.type === "reasoning") {
-      return { type: "reasoning" };
-    }
-    if (
-      typedItem.type !== "function_call" &&
-      !(typedItem.type === "message" && typedItem.role === "assistant")
-    ) {
-      return item;
-    }
-    const { id: _id, status: _status, ...stableItem } = typedItem;
-    return stableItem;
-  });
-}
-
-function buildCachedWebSocketRequest(
-  entry: CachedWebSocketConnection,
-  request: ResponsesWebSocketRequest,
-): Pick<OpenAIResponsesWebSocketStream, "continuationStatus" | "request"> {
-  const continuation = entry.continuation;
-  if (!continuation) {
-    return { request, continuationStatus: "no_previous_response" };
-  }
-  const rejectContinuation = (
-    continuationStatus: Exclude<
-      OpenAIResponsesWebSocketStream["continuationStatus"],
-      "continued" | "no_previous_response" | "socket_not_cached"
-    >,
-  ) => {
-    entry.continuation = undefined;
-    return { request, continuationStatus };
-  };
-  if (request.previous_response_id) {
-    return rejectContinuation("explicit_previous_response_id");
-  }
-  if (
-    JSON.stringify(requestWithoutInput(request)) !==
-    JSON.stringify(requestWithoutInput(continuation.lastRequest))
-  ) {
-    return rejectContinuation("request_changed");
-  }
-
-  const currentInput = request.input ?? [];
-  const previousInput = continuation.lastRequest.input ?? [];
-  const baselineLength = previousInput.length + continuation.lastResponseItems.length;
-  if (currentInput.length < baselineLength) {
-    return rejectContinuation("history_shorter");
-  }
-  if (
-    JSON.stringify(normalizeAssistantReplayInput(currentInput.slice(0, previousInput.length))) !==
-      JSON.stringify(normalizeAssistantReplayInput(previousInput)) ||
-    JSON.stringify(
-      normalizeAssistantReplayInput(currentInput.slice(previousInput.length, baselineLength)),
-    ) !== JSON.stringify(normalizeAssistantReplayInput(continuation.lastResponseItems))
-  ) {
-    return rejectContinuation("history_changed");
-  }
-
-  // Continuations are single-use. A terminal incomplete/error cannot leave an
-  // older response id eligible for a later, unrelated turn.
-  entry.continuation = undefined;
-  return {
-    request: {
-      ...request,
-      previous_response_id: continuation.lastResponseId,
-      input: currentInput.slice(baselineLength),
-    },
-    continuationStatus: "continued",
-  };
+  return websocketRequest as ResponsesContinuationRequest;
 }
 
 async function nextWebSocketMessage(
@@ -408,7 +303,10 @@ function readServerEvent(
     return message.message;
   }
   if (message.type === "error") {
-    throw new Error("OpenAI Responses WebSocket transport failed", { cause: message.error });
+    throw (
+      parseOpenAIResponsesWebSocketServerError(message.error) ??
+      new Error("OpenAI Responses WebSocket transport failed", { cause: message.error })
+    );
   }
   if (message.type === "close") {
     throw new Error(`OpenAI Responses WebSocket closed before completion (code ${message.code})`);
@@ -454,14 +352,19 @@ export function createOpenAIResponsesWebSocketStream(params: {
     markDegraded();
     throw new OpenAIResponsesWebSocketPreDispatchError(error);
   }
-  let prepared: ReturnType<typeof buildCachedWebSocketRequest>;
+  let prepared: Pick<OpenAIResponsesWebSocketStream, "continuationStatus" | "request">;
   try {
-    prepared = lease.entry
-      ? buildCachedWebSocketRequest(lease.entry, fullRequest)
-      : {
-          request: fullRequest,
-          continuationStatus: "socket_not_cached" as const,
-        };
+    const continuation = lease.entry?.continuation;
+    if (continuation && lease.entry) {
+      // Consume before dispatch so incomplete/error terminals cannot reuse stale state.
+      lease.entry.continuation = undefined;
+      prepared = resolveResponsesContinuationRequest(continuation, fullRequest);
+    } else {
+      prepared = {
+        request: fullRequest,
+        continuationStatus: lease.entry ? "no_previous_response" : "socket_not_cached",
+      };
+    }
   } catch (error) {
     void lease.iterator.return?.().catch(() => undefined);
     lease.release({ keep: false });
@@ -521,14 +424,13 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (!event) {
             continue;
           }
-          if (event.type === "response.failed") {
-            throw new OpenAIResponsesWebSocketResponseFailedError(event.response.output.length > 0);
-          }
           if (event.type === "response.completed") {
             terminalResponse = event.response;
           }
           terminalReceived =
-            event.type === "response.completed" || event.type === "response.incomplete";
+            event.type === "response.completed" ||
+            event.type === "response.incomplete" ||
+            event.type === "response.failed";
           yield event;
           if (terminalReceived) {
             degradedWebSocketConnections.delete(degradationKey);
@@ -539,17 +441,14 @@ export function createOpenAIResponsesWebSocketStream(params: {
         if (lease.entry) {
           lease.entry.continuation = undefined;
         }
-        if (!params.callerSignal?.aborted) {
+        const safeRetry = error instanceof OpenAIResponsesWebSocketSafeRetryError;
+        if (!params.callerSignal?.aborted && !safeRetry) {
           markDegraded();
         }
         if (!requestDispatched && !params.signal?.aborted) {
           throw new OpenAIResponsesWebSocketPreDispatchError(error);
         }
-        if (
-          !requestDispatched ||
-          params.callerSignal?.aborted ||
-          error instanceof OpenAIResponsesWebSocketResponseFailedError
-        ) {
+        if (!requestDispatched || params.callerSignal?.aborted || safeRetry) {
           throw error;
         }
         throw new OpenAIResponsesWebSocketPostDispatchError(error);

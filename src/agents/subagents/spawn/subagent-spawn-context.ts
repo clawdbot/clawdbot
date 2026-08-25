@@ -40,10 +40,12 @@ export async function prepareSubagentSessionContext(params: {
   const childTarget = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.childSessionKey,
+    agentId: params.targetAgentId,
   });
   const parentTarget = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.requesterInternalKey,
+    agentId: params.requesterAgentId,
   });
 
   let parentEntry: SessionEntry | undefined;

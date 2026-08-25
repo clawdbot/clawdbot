@@ -8,11 +8,8 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-
-vi.mock("../../lib/clipboard.ts", () => ({ copyToClipboard: vi.fn() }));
 
 const suggestion: TaskSuggestion = {
   id: "task_123",
@@ -27,16 +24,41 @@ const suggestion: TaskSuggestion = {
 
 describe("chat pane task suggestion lifecycle", () => {
   it("surfaces clipboard failure through the pane error path", async () => {
-    vi.mocked(copyToClipboard).mockResolvedValueOnce(false);
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const execCommand = vi.fn(() => false);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
       sessions: {} as SessionCapability,
     });
 
-    await pane.copyTaskSuggestionPrompt(suggestion);
+    try {
+      await pane.copyTaskSuggestionPrompt(suggestion);
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+      if (originalExecCommand) {
+        Object.defineProperty(document, "execCommand", originalExecCommand);
+      } else {
+        Reflect.deleteProperty(document, "execCommand");
+      }
+    }
 
-    expect(copyToClipboard).toHaveBeenCalledWith(suggestion.prompt);
+    expect(writeText).toHaveBeenCalledWith(suggestion.prompt);
+    expect(execCommand).toHaveBeenCalledWith("copy");
     expect(state.lastError).toBe("Couldn't copy the prompt to the clipboard");
     expect(state.chatError).toBe("Couldn't copy the prompt to the clipboard");
   });

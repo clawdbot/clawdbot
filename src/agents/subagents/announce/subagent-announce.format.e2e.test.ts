@@ -1,5 +1,8 @@
 // Subagent announce format e2e tests exercise the full announce flow with
 // channel fixtures, session stores, hooks, and gateway calls wired together.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
@@ -8,6 +11,7 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import * as configSessions from "../../../config/sessions.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -36,7 +40,7 @@ import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-ou
 type AgentCallRequest = {
   method?: string;
   params?: Record<string, unknown> & {
-    internalEvents?: Array<{ type?: string; taskLabel?: string }>;
+    internalEvents?: Array<{ type?: string; taskLabel?: string; result?: string }>;
   };
 };
 type RequesterResolution = {
@@ -68,7 +72,7 @@ type MockSubagentRun = {
   };
   cleanupCompletedAt?: number;
   label?: string;
-  frozenResultText?: string | null;
+  completion?: { required: boolean; resultText?: string | null };
 };
 type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
   updatedAt?: number;
@@ -566,6 +570,28 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
   });
 
+  it("bounds an oversized leaf result only in the parent prompt projection", async () => {
+    const fullResult = `${"<".repeat(6_000)}-unbounded-tail`;
+    readLatestAssistantReplyMock.mockResolvedValue(fullResult);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-oversized-result",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = getAgentCall();
+    const prompt = call.params?.message as string;
+    const projectedResult = prompt.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)?.[1];
+
+    expect(projectedResult?.length).toBeLessThanOrEqual(6_000);
+    expect(projectedResult?.endsWith("\n[child result truncated]")).toBe(true);
+    expect(projectedResult).not.toContain("unbounded-tail");
+    expect(call.params?.internalEvents?.[0]?.result).toBe(fullResult);
+  });
+
   it("includes success status when outcome is ok", async () => {
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
     await runSubagentAnnounceFlow({
@@ -759,6 +785,77 @@ describe("subagent announce formatting", () => {
     );
     expect(msg).toContain("step-0");
     expect(msg).toContain("step-139");
+  });
+
+  // These two cases deliberately drop the readSubagentSessionEntry stub and read
+  // a real agent session store on disk, so the Stats: clause in the parent-facing
+  // announcement is produced by the production read path rather than a fixture.
+  async function withRealChildSessionStore(
+    entryPatch: Record<string, unknown>,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "announce-real-store-")),
+    );
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const childSessionKey = "agent:main:subagent:test";
+    try {
+      await patchSessionEntryCore(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        () => ({ sessionId: "child-session-real-store", ...entryPatch }),
+        {
+          fallbackEntry: { sessionId: "child-session-real-store", updatedAt: Date.now() },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+      // readSubagentSessionEntry is intentionally omitted so the real reader runs.
+      subagentAnnounceOutputTesting.setDepsForTest({
+        callGateway: async <T = Record<string, unknown>>(
+          req: Parameters<typeof gatewayCall.callGateway>[0],
+        ) => (await callGatewaySpy(req)) as T,
+        getRuntimeConfig: () => configOverride,
+        resolveAgentIdFromSessionKey: () => "main",
+        resolveSessionStorePathCore: () => storePath,
+      });
+      await run();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("announces tokens unknown when child usage never landed on the real session store", async () => {
+    await withRealChildSessionStore({}, async () => {
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-real-store-absent",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+      });
+
+      const msg = getAgentCall().params?.message as string;
+      expect(msg).toContain("Stats:");
+      expect(msg).toContain("tokens unknown");
+      expect(msg).not.toContain("tokens 0 (in 0 / out 0)");
+    });
+  });
+
+  it("announces a genuine zero-usage reading from the real session store", async () => {
+    await withRealChildSessionStore({ inputTokens: 0, outputTokens: 0 }, async () => {
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-real-store-zero",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+      });
+
+      const msg = getAgentCall().params?.message as string;
+      expect(msg).toContain("Stats:");
+      expect(msg).toContain("tokens 0 (in 0 / out 0)");
+      expect(msg).not.toContain("tokens unknown");
+    });
   });
 
   it("routes manual spawn completion through a parent-agent announce turn", async () => {
@@ -1434,6 +1531,15 @@ describe("subagent announce formatting", () => {
         expectedStatus: "timed out",
         spawnMode: undefined,
       },
+      {
+        childSessionId: "child-session-direct-timeout-cause",
+        requesterSessionId: "requester-session-timeout-cause",
+        childRunId: "run-direct-completion-timeout-cause",
+        replyText: "partial output",
+        outcome: { status: "timeout", error: "child run failed before completing" } as const,
+        expectedStatus: "timed out: child run failed before completing",
+        spawnMode: undefined,
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -1901,8 +2007,16 @@ describe("subagent announce formatting", () => {
     });
 
     expect(delivery.delivered).toBe(false);
+    expect(delivery.reason).toBe("steer_dropped");
+    expect(delivery.terminal).toBeUndefined();
     expect(delivery.phases).toEqual([
-      { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+      {
+        phase: "steer-primary",
+        delivered: false,
+        path: "none",
+        reason: "steer_dropped",
+        error: undefined,
+      },
     ]);
     expect(direct).not.toHaveBeenCalled();
   });
@@ -2564,7 +2678,7 @@ describe("subagent announce formatting", () => {
               createdAt: 1,
               execution: { endedAt: 2, outcome: { status: "ok" } },
               cleanupCompletedAt: 3,
-              frozenResultText: "stale result that should be filtered",
+              completion: { required: true, resultText: "stale result that should be filtered" },
             },
           ];
         }
@@ -2580,7 +2694,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "result from child a",
+            completion: { required: true, resultText: "result from child a" },
           },
           {
             runId: "run-child-b",
@@ -2593,7 +2707,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
-            frozenResultText: "result from child b",
+            completion: { required: true, resultText: "result from child b" },
           },
         ];
       },
@@ -2649,7 +2763,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "stale result from child a",
+            completion: { required: true, resultText: "stale result from child a" },
           },
           {
             runId: "run-child-current",
@@ -2662,7 +2776,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 22, outcome: { status: "ok" } },
             cleanupCompletedAt: 23,
-            frozenResultText: "current result from child a",
+            completion: { required: true, resultText: "current result from child a" },
           },
           {
             runId: "run-child-b",
@@ -2675,7 +2789,7 @@ describe("subagent announce formatting", () => {
             createdAt: 12,
             execution: { endedAt: 24, outcome: { status: "ok" } },
             cleanupCompletedAt: 25,
-            frozenResultText: "result from child b",
+            completion: { required: true, resultText: "result from child b" },
           },
         ];
       },
@@ -2722,7 +2836,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "stale old parent result",
+            completion: { required: true, resultText: "stale old parent result" },
           },
         ];
       },
@@ -2743,7 +2857,7 @@ describe("subagent announce formatting", () => {
           createdAt: 11,
           execution: { endedAt: 22, outcome: { status: "ok" } },
           cleanupCompletedAt: 23,
-          frozenResultText: "current new parent result",
+          completion: { required: true, resultText: "current new parent result" },
         };
       },
     );
@@ -2795,7 +2909,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "result from child a",
+            completion: { required: true, resultText: "result from child a" },
           },
           {
             runId: "run-child-b",
@@ -2808,7 +2922,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
-            frozenResultText: "result from child b",
+            completion: { required: true, resultText: "result from child b" },
           },
         ];
       },
@@ -2875,7 +2989,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "result from child a",
+            completion: { required: true, resultText: "result from child a" },
           },
         ];
       },
@@ -2930,7 +3044,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "grandchild final output",
+            completion: { required: true, resultText: "grandchild final output" },
           },
         ];
       }
@@ -2947,7 +3061,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
-            frozenResultText: "child synthesized output from grandchild",
+            completion: { required: true, resultText: "child synthesized output from grandchild" },
           },
         ];
       }
@@ -3244,7 +3358,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: string;
       task: string;
       createdAt: number;
-      frozenResultText: string;
+      resultText: string;
       outcome?: { status: "ok" | "error" | "timeout"; error?: string };
       endedAt?: number;
       cleanupCompletedAt?: number;
@@ -3264,7 +3378,7 @@ describe("subagent announce formatting", () => {
           outcome: params.outcome ?? ({ status: "ok" } as const),
         },
         cleanupCompletedAt: params.cleanupCompletedAt ?? params.createdAt + 2,
-        frozenResultText: params.frozenResultText,
+        completion: { required: true, resultText: params.resultText },
       };
     }
 
@@ -3300,7 +3414,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-2-level",
                 task: "child task",
                 createdAt: 10,
-                frozenResultText: "child final answer",
+                resultText: "child final answer",
               }),
             ]
           : [],
@@ -3339,7 +3453,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-fanout",
                 task: "child a",
                 createdAt: 10,
-                frozenResultText: "result A",
+                resultText: "result A",
               }),
               makeChildCompletion({
                 runId: "run-fanout-b",
@@ -3347,7 +3461,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-fanout",
                 task: "child b",
                 createdAt: 11,
-                frozenResultText: "result B",
+                resultText: "result B",
               }),
             ]
           : [],
@@ -3397,7 +3511,7 @@ describe("subagent announce formatting", () => {
                 task: "fast child",
                 createdAt: 10,
                 endedAt: 11,
-                frozenResultText: "fast child result",
+                resultText: "fast child result",
               }),
               makeChildCompletion({
                 runId: "run-slow",
@@ -3406,7 +3520,7 @@ describe("subagent announce formatting", () => {
                 task: "slow child",
                 createdAt: 11,
                 endedAt: 40,
-                frozenResultText: "slow child result",
+                resultText: "slow child result",
               }),
             ]
           : [],
@@ -3458,7 +3572,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: middleSessionKey,
               task: "middle child a",
               createdAt: 10,
-              frozenResultText: "middle child result A",
+              resultText: "middle child result A",
             }),
             makeChildCompletion({
               runId: "run-middle-b",
@@ -3466,7 +3580,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: middleSessionKey,
               task: "middle child b",
               createdAt: 11,
-              frozenResultText: "middle child result B",
+              resultText: "middle child result B",
             }),
           ];
         }
@@ -3478,7 +3592,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: "agent:main:subagent:parent-nested",
               task: "middle orchestrator",
               createdAt: 12,
-              frozenResultText: "middle synthesized output from A and B",
+              resultText: "middle synthesized output from A and B",
             }),
           ];
         }
@@ -3533,7 +3647,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-sequential",
                 task: "step one",
                 createdAt: 10,
-                frozenResultText: "result one",
+                resultText: "result one",
               }),
               makeChildCompletion({
                 runId: "run-seq-2",
@@ -3541,7 +3655,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-sequential",
                 task: "step two",
                 createdAt: 20,
-                frozenResultText: "result two",
+                resultText: "result two",
               }),
               makeChildCompletion({
                 runId: "run-seq-3",
@@ -3549,7 +3663,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-sequential",
                 task: "step three",
                 createdAt: 30,
-                frozenResultText: "result three",
+                resultText: "result three",
               }),
             ]
           : [],
@@ -3587,7 +3701,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-error",
                 task: "error child",
                 createdAt: 10,
-                frozenResultText: "traceback: child exploded",
+                resultText: "traceback: child exploded",
                 outcome: { status: "error", error: "child exploded" },
               }),
             ]
@@ -3625,7 +3739,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-gated",
                 task: "gated child",
                 createdAt: 10,
-                frozenResultText: "gated child output",
+                resultText: "gated child output",
               }),
             ]
           : [],
@@ -3680,7 +3794,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: childSessionKey,
               task: "grandchild task",
               createdAt: 10,
-              frozenResultText: "grandchild settled output",
+              resultText: "grandchild settled output",
             }),
           ];
         }
@@ -3692,7 +3806,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: parentSessionKey,
               task: "child task",
               createdAt: 20,
-              frozenResultText: "child synthesized from grandchild",
+              resultText: "child synthesized from grandchild",
             }),
           ];
         }

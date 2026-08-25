@@ -51,6 +51,8 @@ export type SystemAgentChatEngineOptions = {
   surface?: "cli" | "gateway";
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   operatorApprovalOnly?: boolean;
+  /** Host-recorded origin for delegated create-agent proposals. */
+  requesterAgentId?: string;
 };
 
 type SystemAgentChatEngineInternals = {
@@ -138,7 +140,12 @@ export class SystemAgentChatEngine {
   }
 
   seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
-    this.history.push(...turns.map((turn) => ({ ...turn })));
+    this.history.push(
+      ...turns.map((turn) => ({
+        ...turn,
+        text: turn.role === "user" ? redactSensitiveCommandText(turn.text) : turn.text,
+      })),
+    );
   }
 
   historyLength(): number {
@@ -152,6 +159,15 @@ export class SystemAgentChatEngine {
   async dispose(): Promise<void> {
     this.wizard.dispose();
     await cleanupSystemAgentSession(this.agentSession);
+  }
+
+  /**
+   * Project the live hosted-wizard interaction onto a rejoin reply so a
+   * reconnecting client re-renders the answer controls this session still
+   * awaits; a no-op when no wizard is active.
+   */
+  decorateRejoinReply(reply: SystemAgentChatReply): SystemAgentChatReply {
+    return this.wizard.decorateReply(reply);
   }
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {

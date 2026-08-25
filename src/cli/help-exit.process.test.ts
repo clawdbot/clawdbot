@@ -1,5 +1,5 @@
 // Process coverage for CLI help exits and route-first fallback validation.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +17,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // to cold-load the CLI graph on shared hosted runners, while still exiting correctly.
 // Keep the default guard below the shared Vitest deadline so it always reports
 // captured child output before the framework can replace it with an opaque timeout.
+// Guard, signal, and wrong-code failures embed both output tails so CI shows the
+// child's last completed startup step.
 const DEFAULT_CHILD_PROCESS_TIMEOUT_MS = DEFAULT_VITEST_TEST_TIMEOUT_MS - 20_000;
 const SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS = 240_000;
 const SLOW_DOTENV_TEST_TIMEOUT_MS = SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS + 10_000;
@@ -33,6 +35,21 @@ const LAZY_GROUP_HELP_CASES = [
   { group: "security", usageCommand: "security", registry: "subcli" },
   { group: "update", usageCommand: "update", registry: "subcli" },
 ] as const;
+
+function formatCliProcessFailure(params: {
+  reason: string;
+  stdout: string;
+  stderr: string;
+}): string {
+  const tail = (stream: string) => {
+    const tailLength = 8_000;
+    const truncatedLength = stream.length - tailLength;
+    return truncatedLength > 0
+      ? `[... truncated ${truncatedLength} chars ...]\n${stream.slice(-tailLength)}`
+      : stream;
+  };
+  return `${params.reason}\n--- child stderr (tail) ---\n${tail(params.stderr)}\n--- child stdout (tail) ---\n${tail(params.stdout)}`;
+}
 
 async function createHelpProcessFixture(config?: Record<string, unknown>) {
   const root = tempDirs.make("openclaw-help-exit-");
@@ -93,8 +110,13 @@ async function runCliProcess(params: {
   allowRespawn?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
   timeoutMs?: number;
+  expectedExitCode?: number;
+  pristineHome?: boolean;
 }) {
-  const fixture = await createHelpProcessFixture(params.config);
+  const fixture = await createHelpProcessFixture(params.pristineHome ? undefined : params.config);
+  if (params.pristineHome) {
+    await fs.rm(fixture.stateDir, { force: true, recursive: true });
+  }
   if (params.stateEnv) {
     const lines = Object.entries(params.stateEnv(fixture.stateDir)).map(
       ([key, value]) => `${key}=${value}`,
@@ -133,9 +155,9 @@ async function runCliProcess(params: {
         NODE_ENV: undefined,
         NODE_OPTIONS: undefined,
         NODE_USE_SYSTEM_CA: "1",
-        OPENCLAW_CONFIG_PATH: fixture.configPath,
+        OPENCLAW_CONFIG_PATH: params.pristineHome ? undefined : fixture.configPath,
         OPENCLAW_NO_RESPAWN: params.allowRespawn ? undefined : "1",
-        OPENCLAW_STATE_DIR: fixture.stateDir,
+        OPENCLAW_STATE_DIR: params.pristineHome ? undefined : fixture.stateDir,
         VITEST: undefined,
         ...params.env,
       },
@@ -155,6 +177,8 @@ async function runCliProcess(params: {
 
   const stdoutEnded = once(child.stdout, "end");
   const stderrEnded = once(child.stderr, "end");
+  const expectedExitCode = params.expectedExitCode ?? 0;
+  const timeoutMs = params.timeoutMs ?? DEFAULT_CHILD_PROCESS_TIMEOUT_MS;
   let timeout: NodeJS.Timeout | undefined;
   const exit = await Promise.race([
     Promise.all([once(child, "exit"), stdoutEnded, stderrEnded]).then(([[code, signal]]) => ({
@@ -165,14 +189,15 @@ async function runCliProcess(params: {
       timeout = setTimeout(() => {
         child.kill("SIGKILL");
         reject(
-          Object.assign(new Error("CLI process did not exit before the deadlock guard"), {
-            code: child.exitCode,
-            signal: child.signalCode,
-            stderr,
-            stdout,
-          }),
+          new Error(
+            formatCliProcessFailure({
+              reason: `CLI process did not exit before the ${timeoutMs}ms deadlock guard (SIGKILL sent; exitCode=${child.exitCode} signalCode=${child.signalCode})`,
+              stderr,
+              stdout,
+            }),
+          ),
         );
-      }, params.timeoutMs ?? DEFAULT_CHILD_PROCESS_TIMEOUT_MS);
+      }, timeoutMs);
       timeout.unref();
     }),
   ]).finally(() => {
@@ -180,14 +205,25 @@ async function runCliProcess(params: {
       clearTimeout(timeout);
     }
   });
-  if (exit.code !== 0) {
-    throw Object.assign(new Error(`CLI process exited with code ${exit.code}`), {
-      ...exit,
-      stderr,
-      stdout,
-    });
+  if (exit.signal) {
+    throw new Error(
+      formatCliProcessFailure({
+        reason: `CLI process was killed by signal ${exit.signal} (expected exit code ${expectedExitCode})`,
+        stderr,
+        stdout,
+      }),
+    );
   }
-  return { stderr, stdout };
+  if (exit.code !== expectedExitCode) {
+    throw new Error(
+      formatCliProcessFailure({
+        reason: `CLI process exited with code ${exit.code} (expected ${expectedExitCode})`,
+        stderr,
+        stdout,
+      }),
+    );
+  }
+  return { root: fixture.root, stderr, stdout };
 }
 
 function parseJsonLines(stdout: string): Array<Record<string, unknown>> {
@@ -197,11 +233,33 @@ function parseJsonLines(stdout: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-type CliProcessFailure = Error & {
-  code?: number | string;
-  stderr?: string;
-  stdout?: string;
-};
+describe("formatCliProcessFailure", () => {
+  it("includes the failure identity and both captured output tails", () => {
+    const reason =
+      "CLI process did not exit before the 240000ms deadlock guard (SIGKILL sent; exitCode=null signalCode=null)";
+    const message = formatCliProcessFailure({
+      reason,
+      stderr: "startup trace: entry.bootstrap",
+      stdout: "partial command output",
+    });
+
+    expect(message).toContain(reason);
+    expect(message).toContain("startup trace: entry.bootstrap");
+    expect(message).toContain("partial command output");
+  });
+
+  it("keeps the end of streams longer than the output tail cap", () => {
+    const message = formatCliProcessFailure({
+      reason: "wrong exit code",
+      stderr: "",
+      stdout: `${"x".repeat(8_005)}END`,
+    });
+
+    expect(message).toContain("[... truncated 8 chars ...]");
+    expect(message).toMatch(/xEND$/u);
+  });
+});
+
 describe("CLI help process exit", () => {
   it("disables esbuild worker IPC for source CLI children", () => {
     expect(process.env.ESBUILD_WORKER_THREADS).toBe("0");
@@ -316,6 +374,139 @@ describe("CLI help process exit", () => {
   });
 });
 
+describe("rejected CLI process state isolation", () => {
+  it("does not scaffold a selected profile before option validation", async () => {
+    const profile = "rejected-profile";
+    const result = await runCliProcess({
+      args: [
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--gateway-port",
+        "99999",
+        "--profile",
+        profile,
+      ],
+      expectedExitCode: 1,
+      pristineHome: true,
+    });
+
+    expect(result.stderr).toContain("--gateway-port must be an integer between 1 and 65535.");
+    await expect(fs.access(path.join(result.root, `.openclaw-${profile}`))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
+describe("models list JSON failure process output", () => {
+  it.each(
+    [
+      {
+        provider: "Moonshot AI",
+        message:
+          'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
+      },
+      {
+        provider: "autoqa-no-such-provider",
+        message:
+          'Unknown provider filter "autoqa-no-such-provider" for this installation. Run openclaw plugins list --json to see installed providers, or configure it under models.providers.',
+      },
+    ].flatMap(({ provider, message }) => [
+      {
+        name: `routed ${provider}`,
+        provider,
+        message,
+        env: { OPENCLAW_DISABLE_ROUTE_FIRST: undefined },
+      },
+      {
+        name: `Commander ${provider}`,
+        provider,
+        message,
+        env: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" },
+      },
+    ]),
+  )("renders $name as one clean canonical JSON document", async ({ provider, message, env }) => {
+    const result = await runCliProcess({
+      args: ["models", "list", "--provider", provider, "--json"],
+      config: {},
+      env,
+      expectedExitCode: 1,
+    });
+
+    expect(result.stdout).not.toContain("\u001B");
+    expect(result.stdout).not.toContain("\u0007");
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message },
+    });
+    expect(result.stderr).toContain(message);
+  });
+});
+
+describe("message broadcast process exit", () => {
+  it("exits nonzero after a structured target failure", async () => {
+    const root = tempDirs.make("openclaw-message-broadcast-exit-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const entryPath = path.join(root, "run-message-broadcast.mjs");
+    await fs.writeFile(
+      entryPath,
+      `import { registerHooks } from "node:module";
+const messageModule = "data:text/javascript," + encodeURIComponent(\`export async function messageCommand() {
+  return ${JSON.stringify({
+    kind: "broadcast",
+    channel: "fixture",
+    action: "broadcast",
+    handledBy: "core",
+    payload: {
+      results: [
+        { channel: "fixture", to: "ok-target", ok: true },
+        { channel: "fixture", to: "failed-target", ok: false, error: "delivery failed" },
+      ],
+    },
+    dryRun: false,
+  })};
+}\`);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier === "../../../commands/message.js"
+      ? { shortCircuit: true, url: messageModule }
+      : nextResolve(specifier, context);
+  },
+});
+const { createMessageCliHelpers } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/program/message/helpers.ts")).href)});
+const { runMessageAction } = createMessageCliHelpers({}, "fixture");
+await runMessageAction("broadcast", {
+  channel: "fixture",
+  targets: ["ok-target", "failed-target"],
+  message: "hello",
+});
+`,
+    );
+
+    const child = spawnSync(process.execPath, ["--import", "tsx", entryPath], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: root,
+        NODE_ENV: undefined,
+        NODE_OPTIONS: undefined,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+        VITEST: undefined,
+      },
+      timeout: DEFAULT_CHILD_PROCESS_TIMEOUT_MS,
+    });
+
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status, child.stderr).toBe(1);
+  });
+});
+
 describe("JSON console style process output", () => {
   const loggingConfig = {
     logging: {
@@ -328,26 +519,21 @@ describe("JSON console style process output", () => {
   it(
     "captures exact exit code 2 after loading dotenv for entry validation diagnostics",
     async () => {
-      let failure: CliProcessFailure | undefined;
-      try {
-        await runCliProcess({
-          args: ["--container"],
-          config: {
-            logging: {
-              consoleStyle: "${OPENCLAW_TEST_CONSOLE_STYLE}",
-              level: "silent",
-            },
+      const result = await runCliProcess({
+        args: ["--container"],
+        config: {
+          logging: {
+            consoleStyle: "${OPENCLAW_TEST_CONSOLE_STYLE}",
+            level: "silent",
           },
-          env: { OPENCLAW_TEST_CONSOLE_STYLE: undefined },
-          stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
-          timeoutMs: SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS,
-        });
-      } catch (error) {
-        failure = error as CliProcessFailure;
-      }
+        },
+        env: { OPENCLAW_TEST_CONSOLE_STYLE: undefined },
+        stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
+        timeoutMs: SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS,
+        expectedExitCode: 2,
+      });
 
-      expect(failure?.code).toBe(2);
-      expect(parseJsonLines(failure?.stderr ?? "")).toEqual([
+      expect(parseJsonLines(result.stderr)).toEqual([
         expect.objectContaining({
           level: "error",
           message: expect.stringContaining("--container requires a value"),
@@ -360,30 +546,25 @@ describe("JSON console style process output", () => {
   it(
     "loads eligible dotenv before formatting a run-main import failure",
     async () => {
-      let failure: CliProcessFailure | undefined;
-      try {
-        await runCliProcess({
-          args: ["gateway", "status"],
-          config: {
-            logging: {
-              consoleStyle: "${OPENCLAW_TEST_CONSOLE_STYLE}",
-              level: "silent",
-            },
+      const result = await runCliProcess({
+        args: ["gateway", "status"],
+        config: {
+          logging: {
+            consoleStyle: "${OPENCLAW_TEST_CONSOLE_STYLE}",
+            level: "silent",
           },
-          env: {
-            OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-            OPENCLAW_TEST_CONSOLE_STYLE: undefined,
-          },
-          failRunMainImport: true,
-          stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
-          timeoutMs: SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS,
-        });
-      } catch (error) {
-        failure = error as CliProcessFailure;
-      }
+        },
+        env: {
+          OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+          OPENCLAW_TEST_CONSOLE_STYLE: undefined,
+        },
+        failRunMainImport: true,
+        stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
+        timeoutMs: SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS,
+        expectedExitCode: 1,
+      });
 
-      expect(failure?.code).toBe(1);
-      expect(parseJsonLines(failure?.stderr ?? "")).toEqual(
+      expect(parseJsonLines(result.stderr)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             level: "info",

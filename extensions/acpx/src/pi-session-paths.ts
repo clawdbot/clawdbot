@@ -56,10 +56,14 @@ function settingsSessionDir(file: string): string | undefined {
 export function piSessionStore(
   env: NodeJS.ProcessEnv,
   cwd = process.cwd(),
-): { root: string; flat: boolean } {
+): { root: string; flat: boolean; usesProcessHomeFallback: boolean } {
   const customSessionDir = env.PI_CODING_AGENT_SESSION_DIR?.trim();
   if (customSessionDir) {
-    return { root: resolveConfiguredPath(customSessionDir, env), flat: true };
+    return {
+      root: resolveConfiguredPath(customSessionDir, env),
+      flat: true,
+      usesProcessHomeFallback: false,
+    };
   }
   const home = piHome(env);
   const customAgentDir = env.PI_CODING_AGENT_DIR?.trim();
@@ -71,15 +75,21 @@ export function piSessionStore(
     return {
       root: resolveConfiguredPath(projectSessionDir, env, path.join(cwd, ".pi")),
       flat: true,
+      usesProcessHomeFallback: false,
     };
   }
   const globalSessionDir = settingsSessionDir(path.join(agentDir, "settings.json"));
   if (globalSessionDir) {
-    return { root: resolveConfiguredPath(globalSessionDir, env, agentDir), flat: true };
+    return {
+      root: resolveConfiguredPath(globalSessionDir, env, agentDir),
+      flat: true,
+      usesProcessHomeFallback: false,
+    };
   }
   return {
     root: path.join(agentDir, "sessions"),
     flat: false,
+    usesProcessHomeFallback: !customAgentDir,
   };
 }
 
@@ -99,9 +109,12 @@ export function piAcpSessionStoreRoot(env: NodeJS.ProcessEnv): string | undefine
   return path.join(agentDir, "sessions");
 }
 
-export function piSessionStoreAvailable(env: NodeJS.ProcessEnv): boolean {
+export function piSessionStoreAvailable(
+  env: NodeJS.ProcessEnv,
+  store?: ReturnType<typeof piSessionStore>,
+): boolean {
   try {
-    return statSync(piSessionStore(env).root).isDirectory();
+    return statSync((store ?? piSessionStore(env)).root).isDirectory();
   } catch {
     return false;
   }

@@ -8,7 +8,7 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -25,15 +25,13 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../infra/session-cost-usage-totals.js";
-import type {
-  CostUsageSummary,
-  CostUsageTotals,
-  SessionCostSummary,
-  SessionDailyModelUsage,
-  SessionMessageCounts,
-  SessionModelUsage,
-} from "../../infra/session-cost-usage.js";
 import {
+  type CostUsageSummary,
+  type CostUsageTotals,
+  type SessionCostSummary,
+  type SessionDailyModelUsage,
+  type SessionMessageCounts,
+  type SessionModelUsage,
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummariesFromCache,
@@ -62,14 +60,18 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -135,12 +137,13 @@ function resolveSessionUsageTarget(
   config: OpenClawConfig,
   agentIdHint?: string,
 ): ResolvedSessionUsageTarget | undefined {
-  const { canonicalKey, entry, storePath } = loadSessionEntryReadOnly(
+  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(
     key,
     agentIdHint ? { agentId: agentIdHint } : undefined,
   );
   const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId ?? agentIdHint ?? resolveDefaultAgentId(config);
+  const agentId =
+    parsed?.agentId ?? agentIdHint ?? resolveSessionAgentId({ config, sessionKey: key });
   const sessionId = entry?.sessionId ?? parsed?.rest ?? key;
   const sessionFile = entry
     ? resolveExistingUsageSessionFile({
@@ -249,6 +252,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 
 type SessionsUsageCacheKeyParams = {
   configRef: object;
+  visibilityIdentity?: string;
   agentId?: string;
   agentScope?: "all";
   startMs: number;
@@ -274,6 +278,7 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
+    ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
 
@@ -297,9 +302,14 @@ function resolveSessionUsageFileOrRespond(
   respond: RespondFn,
   config: OpenClawConfig,
 ): (ResolvedSessionUsageTarget & { config: OpenClawConfig }) | null {
+  const sessionOwner = resolveRequestedSessionAgentId(config, key);
+  if (!sessionOwner.ok) {
+    respond(false, undefined, sessionOwner.error);
+    return null;
+  }
   let resolved: ResolvedSessionUsageTarget | undefined;
   try {
-    resolved = resolveSessionUsageTarget(key, config);
+    resolved = resolveSessionUsageTarget(key, config, sessionOwner.agentId);
   } catch {
     resolved = undefined;
   }
@@ -515,21 +525,6 @@ const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts
   };
 };
 
-/**
- * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
- * Returns undefined if invalid.
- */
-const parseDateToMs = (
-  raw: unknown,
-  interpretation: DateInterpretation = { mode: "utc" },
-): number | undefined => {
-  const parts = parseDateParts(raw);
-  if (!parts) {
-    return undefined;
-  }
-  return datePartsToStartMs(parts, interpretation);
-};
-
 const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
   const parts = getDateParts(new Date(ms), interpretation);
   return formatDateParts(parts.year, parts.monthIndex, parts.day);
@@ -738,7 +733,7 @@ function filterSessionStoreByAgent(params: {
   const scopedAgentId = normalizeAgentId(params.agentId);
   const scopedStore: Record<string, SessionEntry> = {};
   for (const [key, entry] of Object.entries(params.store)) {
-    if (params.config.session?.scope === "global" && key.trim().toLowerCase() === "global") {
+    if (key.trim().toLowerCase() === "global") {
       scopedStore[key] = entry;
       continue;
     }
@@ -1029,7 +1024,7 @@ async function loadCostUsageSummaryCached(params: {
   const allAgents = params.agentScope === "all";
   const agentId = allAgents
     ? undefined
-    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+    : normalizeAgentId(params.agentId ?? resolveSessionAgentId({ config: params.config }));
   const dayBucketKey = usageDayBucketCacheKey(params.dayBucket);
   const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   return await loadUsageResultCached({
@@ -1061,7 +1056,11 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listAgentIds(params.config).map((agentId) => normalizeAgentId(agentId));
+  // Same agent universe as discoverAllSessionsForUsage: enumerating configured
+  // ids only would list system-agent sessions whose cost never reaches totals.
+  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+    normalizeAgentId(agent.id),
+  );
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>
@@ -1130,18 +1129,10 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseDateParts,
-  parseUtcOffsetToMinutes,
-  resolveDateInterpretation,
-  parseDateToMs,
-  parseDays,
   resolveDateRange,
-  discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
-  loadSessionsUsageResultCached,
   sessionsUsageCache,
-  sessionsUsageCacheKey,
 };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
@@ -1153,27 +1144,47 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "usage.cost": async ({ respond, params, context }) => {
+  "usage.cost": async ({ respond, params, context, client }) => {
     const dateRange = resolveUsageDateRangeOrRespond(params ?? {}, respond);
     if (!dateRange) {
       return;
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
+        ),
+      );
+      return;
+    }
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
+    let effectiveAgentId = agentId;
+    if (!agentScope && !effectiveAgentId) {
+      const requestedAgent = resolveRequestedSessionAgentId(config, "main");
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      effectiveAgentId = requestedAgent.agentId;
+    }
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
       dayBucket: resolveDayBucket(dateInterpretation),
       config,
-      agentId,
+      agentId: effectiveAgentId,
       agentScope,
     });
     respond(true, summary, undefined);
   },
-  "sessions.usage": async ({ respond, params, context }) => {
+  "sessions.usage": async ({ respond, params, context, client }) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
@@ -1185,6 +1196,13 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    const sessionCap = operatorSessionCap(client ?? null, config);
+    const visibilityFilter =
+      sessionCap === "none"
+        ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
+        : undefined;
+    const profileId = gatewayClientSessionCreator(client ?? null)?.id;
+    const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
@@ -1203,22 +1221,26 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const specificKeyAgentId = specificKey ? parseAgentSessionKey(specificKey)?.agentId : undefined;
-    if (
-      requestedAgentId &&
-      specificKeyAgentId &&
-      normalizeAgentId(requestedAgentId) !== specificKeyAgentId
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      );
+    const specificSessionOwner = specificKey
+      ? resolveRequestedSessionAgentId(config, specificKey, requestedAgentId)
+      : undefined;
+    if (specificSessionOwner && !specificSessionOwner.ok) {
+      respond(false, undefined, specificSessionOwner.error);
+      return;
+    }
+    const implicitAgent =
+      !requestedAllAgents && !specificSessionOwner?.agentId && !requestedAgentId
+        ? resolveRequestedSessionAgentId(config, "main")
+        : undefined;
+    if (implicitAgent && !implicitAgent.ok) {
+      respond(false, undefined, implicitAgent.error);
       return;
     }
     const effectiveAgentId = requestedAllAgents
       ? undefined
-      : normalizeAgentId(requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config));
+      : normalizeAgentId(
+          specificSessionOwner?.agentId ?? requestedAgentId ?? implicitAgent?.agentId,
+        );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
@@ -1235,17 +1257,23 @@ export const usageHandlers: GatewayRequestHandlers = {
         groupingMode,
         specificKey,
         includeContextWeight,
+        ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
           const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
-          const scopedStore = effectiveAgentId
+          const agentStore = effectiveAgentId
             ? filterSessionStoreByAgent({
                 config,
                 store,
                 agentId: effectiveAgentId,
               })
             : store;
+          const scopedStore = visibilityFilter
+            ? Object.fromEntries(
+                Object.entries(agentStore).filter(([key, entry]) => visibilityFilter(key, entry)),
+              )
+            : agentStore;
           const now = Date.now();
 
           const mergedEntries: MergedEntry[] = [];
@@ -1254,12 +1282,16 @@ export const usageHandlers: GatewayRequestHandlers = {
           if (specificKey) {
             const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
               cfg: config,
-              agentId: effectiveAgentId ?? resolveDefaultAgentId(config),
+              agentId:
+                effectiveAgentId ??
+                expectDefined(specificSessionOwner?.agentId, "specific session owner"),
               sessionKey: specificKey,
             });
             const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
             const agentIdFromKey =
-              scopedParsed?.agentId ?? effectiveAgentId ?? resolveDefaultAgentId(config);
+              scopedParsed?.agentId ??
+              effectiveAgentId ??
+              expectDefined(specificSessionOwner?.agentId, "specific session owner");
             const keyRest = scopedParsed?.rest ?? specificKey;
 
             // Prefer the store entry when available, even if the caller provides a discovered key
@@ -1277,6 +1309,11 @@ export const usageHandlers: GatewayRequestHandlers = {
               null;
             const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
             const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+            if (visibilityFilter && !storeEntry) {
+              throw new SessionsUsageInvalidRequestError(
+                `Invalid session reference: ${specificKey}`,
+              );
+            }
             const sessionId = storeEntry?.sessionId ?? keyRest;
 
             // Stored sessions are canonical SQLite targets. JSONL discovery remains only for
@@ -1348,6 +1385,9 @@ export const usageHandlers: GatewayRequestHandlers = {
 
             for (const discovered of discoveredSessions) {
               const storeMatch = storeBySessionId.get(discovered.sessionId);
+              if (visibilityFilter && !storeMatch) {
+                continue;
+              }
               if (storeMatch) {
                 // Named session from store
                 maybeMergeFamilyEntry({

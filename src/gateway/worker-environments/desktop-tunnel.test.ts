@@ -396,4 +396,26 @@ describe("worker desktop tunnels", () => {
     await expect(launchApp(failed)).rejects.toThrow("launcher failed");
     await failed.stopAll();
   });
+
+  it("keeps a same-epoch desktop session alive when an app launch fences replaced owners", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    // The launcher claims the epoch first, so its fencing pass runs after the
+    // observer session for that same epoch already exists. Fencing must only
+    // retire strictly older owners; equal epochs share the session.
+    const launching = launchApp(manager, "browser", 1);
+    const starting = acquire(manager, 1);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await starting;
+    await launching;
+
+    const observer = manager.attachObserver("worker:one", {
+      control: false,
+      ownerEpoch: 1,
+      close: vi.fn(),
+    });
+    expect(observer).toBeDefined();
+    observer?.release();
+  });
 });

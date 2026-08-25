@@ -151,7 +151,7 @@ describe("resolveTelegramAccount", () => {
 
   it("preserves normalized agent-bound accounts and default-agent selection", () => {
     const cfg = {
-      agents: { list: [{ id: "primary", default: true }] },
+      agents: { entries: { primary: { default: true } } },
       channels: {
         telegram: {
           botToken: "tok-default",

@@ -223,7 +223,7 @@ export function formatConfigUnsetMissingPathMessage(params: {
 }
 
 function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isPlainRecord(value);
 }
 
 function schemaTypes(schema: JsonSchemaRecord): Set<string> {
@@ -318,6 +318,13 @@ function schemasAtPath(
     }
   }
   return schemas;
+}
+
+export function isConfigSchemaPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean {
+  return schemasAtPath(schema, path).length > 0;
 }
 
 function schemaPrefersArrayAtPath(

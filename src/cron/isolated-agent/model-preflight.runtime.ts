@@ -5,9 +5,9 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isLocalProviderBaseUrl } from "../../agents/model-provider-local.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
@@ -123,45 +123,18 @@ function collectPreflightErrorCauseChain(error: unknown): unknown[] {
   return chain;
 }
 
-function stringifyPreflightErrorValue(error: unknown): string {
-  try {
-    return String(error);
-  } catch {
-    return "Unknown error";
-  }
-}
-
-function formatPreflightErrorDetail(error: unknown): string {
-  const rawName = readErrorProperty(error, "name");
-  const rawMessage = readErrorProperty(error, "message");
-  const rawCode = readErrorProperty(error, "code");
-  const name = typeof rawName === "string" ? rawName.trim() : "";
-  const message = typeof rawMessage === "string" ? rawMessage.trim() : "";
-  const code =
-    typeof rawCode === "string" || typeof rawCode === "number" ? String(rawCode) : undefined;
-  const detail =
-    name && message
-      ? `${name}: ${message}`
-      : message || name || (code ? `code=${code}` : stringifyPreflightErrorValue(error));
-  return code && detail !== `code=${code}` ? `${detail} (code=${code})` : detail;
-}
-
 function formatPreflightError(error: unknown): string {
   const causeChain = collectPreflightErrorCauseChain(error);
-  const details = causeChain
-    .map(formatPreflightErrorDetail)
-    .filter((detail, index, all) => detail && all.indexOf(detail) === index);
-  const causeDetails = details.join(" | ") || stringifyPreflightErrorValue(error);
+  const causeDetails = formatErrorMessageWithCode(error);
   // fetchWithSsrFGuard propagates only its owned deadline as TimeoutError.
   const classified = causeChain.some(
     (candidate) => readErrorProperty(candidate, "name") === "TimeoutError",
   )
     ? `Local provider preflight exceeded its configured ${PREFLIGHT_TIMEOUT_MS}ms deadline | ${causeDetails}`
     : causeDetails;
-  const redacted = redactSensitiveText(classified);
-  return redacted.length <= MAX_PREFLIGHT_ERROR_CHARS
-    ? redacted
-    : `${truncateUtf16Safe(redacted, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
+  return classified.length <= MAX_PREFLIGHT_ERROR_CHARS
+    ? classified
+    : `${truncateUtf16Safe(classified, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
 }
 
 function formatUnavailableReason(params: {

@@ -41,13 +41,14 @@ import {
 import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
-import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
 } from "../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
+  formatTaskStatus,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
@@ -56,9 +57,9 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
-import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
+  resolveUsageCredentialType,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
@@ -108,22 +109,20 @@ function resolveStatusChannelFeatureLine(params: {
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
-const loadStatusMessageRuntime = createLazyPromise(
-  () =>
-    import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
-  { cacheRejections: true },
+// Status loaders keep the lazy-promise eviction default: a transient module-load
+// failure on one /status request self-heals on the next instead of poisoning
+// every reply. Deliberately not createLazyRuntimeModule, whose sticky rejection
+// cache would pin the failure for the process lifetime.
+const loadStatusMessageRuntime = createLazyPromise(() =>
+  import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
 );
-const loadAgentThinkingRuntime = createLazyRuntimeModule(
-  () => import("../agents/thinking-runtime.js"),
-);
-const loadThinkingLevelRuntime = createLazyRuntimeModule(() => import("../auto-reply/thinking.js"));
-const loadStatusSubagentsRuntime = createLazyRuntimeModule(
-  () => import("./status-subagents.runtime.js"),
-);
+const loadAgentThinkingRuntime = createLazyPromise(() => import("../agents/thinking-runtime.js"));
+const loadThinkingLevelRuntime = createLazyPromise(() => import("../auto-reply/thinking.js"));
+const loadStatusSubagentsRuntime = createLazyPromise(() => import("./status-subagents.runtime.js"));
 
-const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"));
+const loadStatusQueueRuntime = createLazyPromise(() => import("./status-queue.runtime.js"));
 
-const loadStatusPluginHealthRuntime = createLazyRuntimeModule(
+const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
 
@@ -206,7 +205,8 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
         : "recently finished";
   const title = formatTaskStatusTitle(task);
   const detail = formatTaskStatusDetail(task);
-  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
+  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
@@ -597,30 +597,11 @@ export async function buildStatusReplyParts(
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const configuredContextTokens =
-    typeof agentConfig?.contextTokens === "number" && agentConfig.contextTokens > 0
-      ? agentConfig.contextTokens
-      : typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
-        ? agentDefaults.contextTokens
-        : undefined;
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
     model: modelRefs.active.model || model,
   });
-  const selectedContextTokens = resolveStatusRuntimeContextTokens({
-    cfg,
-    provider: selectedStatusProvider,
-    model: modelRefs.selected.model || selectedLookupModel,
-  });
-  const statusAgentContextTokens =
-    typeof contextTokens === "number" &&
-    contextTokens > 0 &&
-    (activeRuntimeIsAuthoritative ||
-      contextTokens === configuredContextTokens ||
-      contextTokens === selectedContextTokens)
-      ? contextTokens
-      : undefined;
   const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
     ? (runtimeContextTokens ??
       (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
@@ -677,9 +658,6 @@ export async function buildStatusReplyParts(
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
-      ...(statusAgentContextTokens !== undefined
-        ? { contextTokens: statusAgentContextTokens }
-        : {}),
       thinkingDefault: explicitThinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
@@ -687,7 +665,6 @@ export async function buildStatusReplyParts(
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
-    explicitConfiguredContextTokens: configuredContextTokens,
     runtimeContextTokens: statusRuntimeContextTokens,
     sessionEntry,
     sessionKey,

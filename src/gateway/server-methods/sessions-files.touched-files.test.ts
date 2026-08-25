@@ -22,7 +22,8 @@ const hoisted = vi.hoisted(() => ({
   readSessionTranscriptVisibleMessageDeltaCore: vi.fn(),
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
@@ -32,7 +33,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
-    loadSessionEntryReadOnly: hoisted.loadSessionEntry,
+    loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
   };
 });
 
@@ -151,6 +152,40 @@ describe("sessions.files touched-file folds", () => {
     expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).toHaveBeenCalledTimes(2);
     expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore.mock.calls[1]?.[1]).toMatchObject({
       cursor: "cursor-1",
+    });
+  });
+
+  it("retains incremental cursors across more than 16 concurrently viewed sessions", async () => {
+    hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
+    const storePath = path.join(workspaceRoot, "visible-sessions.sqlite");
+    hoisted.loadSessionEntry.mockImplementation((sessionKey: string) => {
+      const sessionId = sessionKey.split(":").at(-1)!;
+      return {
+        agentId: "main",
+        canonicalKey: sessionKey,
+        cfg: {},
+        storePath,
+        entry: { sessionId, sessionFile: `sqlite:main:${sessionId}:${storePath}` },
+      };
+    });
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockImplementation((scope) => ({
+      kind: "page",
+      cursor: `${scope.sessionId}-cursor`,
+      events: [],
+      hasMore: false,
+      serializedBytes: 100,
+    }));
+
+    const sessionKeys = Array.from({ length: 24 }, (_, index) => `agent:main:visible-${index}`);
+    for (const sessionKey of sessionKeys) {
+      expectOkPayload(await invokeSessionFilesHandler("sessions.files.list", { sessionKey }));
+    }
+    expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", { sessionKey: sessionKeys[0] }),
+    );
+
+    expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore.mock.lastCall?.[1]).toMatchObject({
+      cursor: "visible-0-cursor",
     });
   });
 

@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { SESSION_COMPOSER_FOCUS_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 type RouteDraftHint = { draft?: string; focusComposer?: boolean };
 type RouteDraftData = { sessionKey: string; draft?: string };
@@ -22,9 +23,10 @@ export function locationWithoutDraft(location: RouteLocation): RouteLocation {
 
 export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
   const draft = draftFromLocation(location);
+  const focusComposer = focusComposerFromLocation(location);
   return {
     draft,
-    ...(draft && focusComposerFromLocation(location) ? { focusComposer: true } : {}),
+    ...(focusComposer ? { focusComposer: true } : {}),
   };
 }
 
@@ -34,7 +36,7 @@ export function draftSearchFromLocation(location: RouteLocation): string {
   if (draft) {
     search.set("draft", draft);
   }
-  if (draft && focusComposerFromLocation(location)) {
+  if (focusComposerFromLocation(location)) {
     search.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   return search.size > 0 ? "?" + search.toString() : "";
@@ -46,5 +48,7 @@ export function routeDraft(
   consumed: RouteDraftData | null,
   sessionKey = data?.sessionKey,
 ): string | undefined {
-  return !data || sessionKey !== data.sessionKey || consumed === data ? undefined : data.draft;
+  return !data || !areUiSessionKeysEquivalent(sessionKey, data.sessionKey) || consumed === data
+    ? undefined
+    : data.draft;
 }

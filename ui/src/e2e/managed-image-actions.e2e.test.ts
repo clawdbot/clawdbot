@@ -1,9 +1,15 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  captureUiProofEnabled,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const controlUiBasePath = "/rosita";
+const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "managed-image-actions");
 
 suite.define(() => {
   it("previews, downloads, copies, and opens a ticketed generated image", async () => {
@@ -37,15 +43,18 @@ suite.define(() => {
         },
       });
     });
-    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+    await page.route(`**${controlUiBasePath}/api/chat/media/outgoing/**`, async (route) => {
       const request = route.request();
       const url = new URL(request.url());
+      expect(url.pathname).toMatch(/^\/rosita\/api\/chat\/media\/outgoing\//u);
       expect(url.searchParams.get("mediaTicket")).toBe("ticket-e2e");
       expect(request.headers().authorization).toBeUndefined();
+      expect(request.headers()["x-openclaw-requester-session-key"]).toBeUndefined();
       requestedVariants.push(url.pathname.split("/").at(-1) ?? "");
       await route.fulfill({ body: imageBytes, contentType: "image/png" });
     });
     const gateway = await installMockGateway(page, {
+      basePath: controlUiBasePath,
       historyMessages: [
         {
           role: "assistant",
@@ -79,7 +88,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}${controlUiBasePath.slice(1)}/chat`);
       const image = page.getByAltText("Ticketed generated image");
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect
@@ -90,6 +99,13 @@ suite.define(() => {
         )
         .toBe(1280);
       expect(requestedVariants).toEqual(["thumbnail"]);
+      if (captureUiProofEnabled) {
+        await mkdir(proofDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(proofDir, "ticketed-generated-image-subpath.png"),
+        });
+      }
 
       await page.locator(".chat-image-frame").hover();
       const downloadButton = page.getByRole("button", { name: "Download image" });

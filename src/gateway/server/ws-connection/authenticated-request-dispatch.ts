@@ -15,6 +15,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { classifyGatewayStaleInstall } from "../../stale-install.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -112,8 +113,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       error?: ErrorShape,
       meta?: Record<string, unknown>,
     ) => {
-      send({ type: "res", id: req.id, ok, payload, error });
-      const unauthorizedRoleError = isUnauthorizedRoleError(error);
+      let responseOk = ok;
+      let responseError = error;
+      const sendResult = send({ type: "res", id: req.id, ok, payload, error });
+      if (sendResult.kind === "serialization") {
+        const detail = formatForLog(sendResult.error);
+        logGateway.error(`response serialization failed method=${req.method}: ${detail}`);
+        responseOk = false;
+        responseError = errorShape(ErrorCodes.UNAVAILABLE, "response serialization failed");
+        send({ type: "res", id: req.id, ok: responseOk, error: responseError });
+      }
+      const unauthorizedRoleError = isUnauthorizedRoleError(responseError);
       let logMeta = meta;
       if (unauthorizedRoleError) {
         const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
@@ -143,10 +153,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       logWs("out", "res", {
         connId,
         id: req.id,
-        ok,
+        ok: responseOk,
         method: req.method,
-        errorCode: error?.code,
-        errorMessage: error?.message,
+        errorCode: responseError?.code,
+        errorMessage: responseError?.message,
         ...logMeta,
       });
     };
@@ -184,17 +194,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     };
 
     const executeRequest = async () => {
-      // One-shot CLI clients cancel by closing their authenticated socket;
-      // leave long-lived SDK/UI invocations independent of connection teardown.
-      const nodeInvocationController =
-        req.method === "node.invoke" &&
-        client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
-        client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI
-          ? new AbortController()
-          : undefined;
-      const cancelNodeInvocation = () => nodeInvocationController?.abort();
-      if (nodeInvocationController) {
-        client.socket.once("close", cancelNodeInvocation);
+      // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
+      // without their requester there is no safe recipient for a late answer.
+      const cancelOnDisconnect =
+        req.method === "sessions.companion.ask" ||
+        (req.method === "node.invoke" &&
+          client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
+          client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
+      const requestController = cancelOnDisconnect ? new AbortController() : undefined;
+      const cancelRequest = () => requestController?.abort();
+      if (requestController) {
+        client.socket.once("close", cancelRequest);
       }
       try {
         const { handleGatewayRequest } = await loadGatewayServerMethods();
@@ -206,19 +216,20 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           extraHandlers,
           methodRegistry: getMethodRegistry?.(),
           context,
-          ...(nodeInvocationController ? { signal: nodeInvocationController.signal } : {}),
+          ...(requestController ? { signal: requestController.signal } : {}),
         });
       } catch (err) {
         // Failure diagnostics and responses belong to the same request trace as the handler.
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
+        const staleInstall = classifyGatewayStaleInstall(err);
         respondWithAuthority(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+          staleInstall?.error ?? errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
         );
       } finally {
-        if (nodeInvocationController) {
-          client.socket.off("close", cancelNodeInvocation);
+        if (requestController) {
+          client.socket.off("close", cancelRequest);
         }
       }
     };

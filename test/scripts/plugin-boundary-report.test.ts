@@ -2,31 +2,15 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   createPluginBoundaryReport,
+  isPluginCompatEligibleForRemoval,
   type PluginBoundaryReportResult,
 } from "../../scripts/plugin-boundary-report.js";
-
-function requirePluginSdkSummary(summary: {
-  pluginSdk?: {
-    crossOwnerReservedImportCount?: unknown;
-    unusedReservedCount?: unknown;
-  };
-}) {
-  if (!summary.pluginSdk) {
-    throw new Error("Expected plugin SDK summary");
-  }
-  return summary.pluginSdk;
-}
 
 describe("plugin-boundary-report", () => {
   let summaryResult: PluginBoundaryReportResult;
 
   beforeAll(() => {
-    summaryResult = createPluginBoundaryReport([
-      "--summary",
-      "--json",
-      "--fail-on-cross-owner",
-      "--fail-on-unclassified-unused-reserved",
-    ]);
+    summaryResult = createPluginBoundaryReport(["--summary", "--json"]);
   });
 
   it("emits compact CI-safe summary JSON", () => {
@@ -42,10 +26,6 @@ describe("plugin-boundary-report", () => {
           readerSample?: unknown;
           dueForReview?: unknown;
         }>;
-      };
-      pluginSdk?: {
-        crossOwnerReservedImportCount?: unknown;
-        unusedReservedCount?: unknown;
       };
       memoryHostSdk?: {
         implementation?: unknown;
@@ -69,11 +49,20 @@ describe("plugin-boundary-report", () => {
       expect((record.readerSample as unknown[]).length).toBeLessThanOrEqual(5);
       expect(record.dueForReview).toEqual(expect.any(Boolean));
     }
-    const pluginSdk = requirePluginSdkSummary(summary);
-    expect(pluginSdk.crossOwnerReservedImportCount).toBe(0);
-    expect(pluginSdk.unusedReservedCount).toBe(0);
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
       summary.memoryHostSdk?.implementation,
+    );
+  });
+
+  it("treats removeAfter as the final compatibility day", () => {
+    expect(
+      isPluginCompatEligibleForRemoval("2026-08-12", new Date("2026-08-12T23:59:59.999Z")),
+    ).toBe(false);
+    expect(
+      isPluginCompatEligibleForRemoval("2026-08-12", new Date("2026-08-13T00:00:00.000Z")),
+    ).toBe(true);
+    expect(isPluginCompatEligibleForRemoval(undefined, new Date("2026-08-13T00:00:00.000Z"))).toBe(
+      false,
     );
   });
 

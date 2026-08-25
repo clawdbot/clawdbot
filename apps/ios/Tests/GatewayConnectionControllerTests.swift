@@ -7,6 +7,10 @@ import UIKit
 @testable import OpenClaw
 @testable import OpenClawKit
 
+private func percentEncodedPath(of url: URL?) -> String? {
+    url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
+}
+
 @discardableResult
 private func saveActiveManualGateway(
     host: String,
@@ -300,13 +304,16 @@ private func waitUntil(
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
             let caps = Set(controller._test_currentCaps())
 
-            #expect(caps.contains(OpenClawCapability.canvas.rawValue))
+            #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
             #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
             #expect(caps.contains(OpenClawCapability.talk.rawValue))
+
+            let commands = controller._test_currentCommands()
+            #expect(!commands.contains(where: { $0.hasPrefix("canvas.") }))
         }
     }
 
@@ -631,7 +638,7 @@ private func waitUntil(
             bootstrapToken: lhs.bootstrapToken,
             password: lhs.password,
             nodeOptions: Self.makeNodeOptions(
-                caps: ["canvas", "screen"],
+                caps: ["camera", "screen"],
                 commands: ["location.get", "notify"],
                 permissions: ["screen": true]))
 
@@ -922,6 +929,46 @@ private func waitUntil(
         #expect(appModel.activeGatewayConnectConfig?.password == nil)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == false)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == setupAuth.targetStableID)
+    }
+
+    @Test @MainActor func `setup context path survives registry reconnect`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let instanceID = "ios-context-path-\(UUID().uuidString)"
+        let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
+        defer { temporaryState.restore() }
+        let link = GatewayConnectDeepLink(
+            host: "192.168.1.41",
+            port: 18789,
+            tls: false,
+            contextPath: "/openclaw%2Fgateway",
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.connectManual(
+            host: link.host,
+            port: link.port,
+            useTLS: link.tls,
+            contextPath: link.contextPath,
+            authOverride: setupAuth.manualAuthOverride)
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == "/openclaw%2Fgateway")
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == setupAuth.targetStableID)
+        let stored = try #require(GatewaySettingsStore.activeGatewayEntry())
+        #expect(stored.contextPath == "/openclaw%2Fgateway")
+
+        appModel.disconnectGateway()
+        await controller.connectActiveGateway()
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == "/openclaw%2Fgateway")
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stored.stableID)
     }
 
     @Test @MainActor func `legacy auth preserves proven relay credentials and otherwise requires full re-pair`() throws {
@@ -1513,7 +1560,6 @@ private func waitUntil(
             lanHost: nil,
             tailnetDns: nil,
             gatewayPort: nil,
-            canvasPort: nil,
             tlsEnabled: true,
             tlsFingerprintSha256: nil,
             cliPath: nil)
@@ -2178,6 +2224,35 @@ private func waitUntil(
         #expect(!GatewaySettingsStore.loadGatewayRegistry().entries.contains { $0.stableID == stableID })
     }
 
+    @Test @MainActor func `manual trust handoff persists its context path`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let host = "context-path-trust.example.com"
+        let contextPath = "/openclaw-gateway"
+        let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: host,
+            port: 443,
+            contextPath: contextPath)
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = makeTLSProbeController(appModel: appModel, fingerprint: "context-path-fingerprint")
+
+        await controller.connectManual(
+            host: host,
+            port: 443,
+            useTLS: true,
+            contextPath: contextPath)
+        #expect(controller.pendingTrustPrompt?.stableID == stableID)
+        await controller.acceptPendingTrustPrompt()
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == contextPath)
+        let stored = try #require(GatewaySettingsStore.activeGatewayEntry())
+        #expect(stored.contextPath == contextPath)
+    }
+
     @Test @MainActor func `forget gateway preserves another gateway pending trust handoff`() async {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
@@ -2398,8 +2473,9 @@ private func waitUntil(
         controller.clearPendingTrustPrompt()
         probe.results.continuation.yield(.fingerprint("stale-fingerprint"))
         probe.results.continuation.finish()
-        await connectTask.value
+        let result = await connectTask.value
 
+        #expect(result == .superseded)
         #expect(controller.pendingTrustPrompt == nil)
     }
 
@@ -2432,10 +2508,10 @@ private func waitUntil(
             startDiscovery: false,
             forceReconnectReset: { _ in })
 
-        let failure = await controller.switchToGateway(stableID: stableID)
+        let result = await controller.switchToGateway(stableID: stableID)
         await waitUntil { appModel.activeGatewayConnectConfig != nil }
 
-        #expect(failure == nil)
+        #expect(result == .accepted)
         #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
         #expect(appModel.activeGatewayConnectConfig?.url == URL(string: "ws://127.0.0.1:1"))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == stableID)
@@ -2458,10 +2534,33 @@ private func waitUntil(
         let appModel = NodeAppModel()
         let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-        let failure = await controller.switchToGateway(stableID: discoveredID)
+        let result = await controller.switchToGateway(stableID: discoveredID)
 
-        #expect(failure == "Kitchen Gateway is not currently discoverable on this network.")
+        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == activeID)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor
+    func `reconnect to active undiscoverable gateway returns failure without queuing connection`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let discoveredID = "bonjour|missing-active"
+        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: discoveredID,
+            kind: .discovered,
+            name: "Kitchen Gateway",
+            host: nil,
+            port: nil,
+            useTLS: true,
+            lastConnectedAtMs: nil), activate: true)
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        let result = await controller.connectActiveGateway()
+
+        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
+        #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == discoveredID)
         #expect(appModel.activeGatewayConnectConfig == nil)
     }
 
@@ -2548,7 +2647,7 @@ private func waitUntil(
             bootstrapToken: nil,
             password: nil,
             nodeOptions: self.makeNodeOptions(
-                caps: ["screen", "canvas"],
+                caps: ["screen", "camera"],
                 commands: ["notify", "location.get"],
                 permissions: ["screen": true]))
     }

@@ -1,15 +1,9 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  listAgentIds,
-  listAgentEntries,
-  resolveAgentConfig,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, listAgentEntries, resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
   resolveHeartbeatPromptForResponseTool,
 } from "../auto-reply/heartbeat.js";
@@ -26,6 +20,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { readStoredDeviceIdentityReadOnly } from "./device-identity-store.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
+import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
 
@@ -150,11 +145,6 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
-export function resolveAmbientHeartbeatAgentId(cfg: OpenClawConfig): string {
-  const configured = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
-  return normalizeAgentId(configured ?? resolveDefaultAgentId(cfg));
-}
-
 function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
   if (!heartbeat) {
     return undefined;
@@ -205,8 +195,20 @@ export function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       heartbeat: resolveHeartbeatConfig(cfg, agentId),
     }));
   }
-  const fallbackId = resolveAmbientHeartbeatAgentId(cfg);
+  const fallbackId = tryResolveAmbientHeartbeatAgentId(cfg);
+  if (!fallbackId) {
+    return [];
+  }
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+}
+
+export function isHeartbeatOwnerUnresolved(cfg: OpenClawConfig): boolean {
+  return (
+    listAgentIds(cfg).length > 1 &&
+    !hasExplicitHeartbeatAgents(cfg) &&
+    !cfg.agents?.defaults?.heartbeat &&
+    tryResolveAmbientHeartbeatAgentId(cfg) === undefined
+  );
 }
 
 function resolveHeartbeatPromptRaw(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
@@ -302,10 +304,6 @@ export function shouldUseHeartbeatResponseToolPrompt(params: {
   return usesCodexHarness(params);
 }
 
-export function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _heartbeat?: HeartbeatConfig) {
-  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-}
-
 export function isHeartbeatTypingEnabled(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -324,3 +322,4 @@ export function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   const configured = cfg.agents?.defaults?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
+export { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";

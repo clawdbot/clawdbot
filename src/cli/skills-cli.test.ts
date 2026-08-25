@@ -584,9 +584,17 @@ describe("skills-cli", () => {
     it("sanitizes user-supplied skill name in not-found JSON output", () => {
       const report = createMockReport([]);
       const output = formatSkillInfo(report, "evil\u001b[31m\u009f", { json: true });
-      const parsed = JSON.parse(output) as { error: string; skill: string };
+      const parsed = JSON.parse(output) as {
+        ok: boolean;
+        error: { type: string; message: string };
+        skill: string;
+      };
 
-      expect(parsed.error).toBe("not found");
+      expect(parsed.ok).toBe(false);
+      expect(parsed.error).toEqual({
+        type: "cli_error",
+        message: 'Skill "evil" not found.',
+      });
       expect(parsed.skill).toBe("evil");
       expect(output).not.toContain("\u001b");
     });

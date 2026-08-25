@@ -5,18 +5,18 @@ import type {
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { readProviderBaseUrl } from "./provider-base-url.js";
+import { resolveOllamaApiBase } from "./provider-models.js";
 
 /** Provider config input type — partial config without required `models`. */
 type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
   models?: ModelDefinitionConfig[];
 };
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
-import { readProviderBaseUrl } from "./provider-base-url.js";
-import { resolveOllamaApiBase } from "./provider-models.js";
 
 export const OLLAMA_PROVIDER_ID = "ollama";
-export const OLLAMA_DEFAULT_API_KEY = "ollama-local";
+export { OLLAMA_DEFAULT_API_KEY } from "./defaults.js";
 
 export type OllamaPluginConfig = {
   discovery?: {
@@ -104,7 +104,6 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
 
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "localhost",
-  "127.0.0.1",
   "0.0.0.0",
   "::1",
   "::",
@@ -161,6 +160,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   }
   return (
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
+    isIpv4Loopback(host) ||
     host.endsWith(".local") ||
     isIpv4PrivateRange(host) ||
     isIpv6LocalRange(host) ||

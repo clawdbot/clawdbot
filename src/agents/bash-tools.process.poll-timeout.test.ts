@@ -147,6 +147,36 @@ test("waiting poll returns only output appended since the previous poll", async 
   }
 });
 
+test("process poll preserves callback chronology across running and terminal drains", async () => {
+  const sessionId = "sess-interleaved-stream-order";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stderr", "ERR-before\n");
+  appendOutput(session, "stdout", "OUT-after\n");
+
+  const runningPoll = await pollSession(processTool, "toolcall-interleaved-running", sessionId);
+  const runningText = runningPoll.content[0]?.type === "text" ? runningPoll.content[0].text : "";
+  expect(runningText).toContain("ERR-before\nOUT-after");
+  expect(runningText.indexOf("ERR-before")).toBeLessThan(runningText.indexOf("OUT-after"));
+  expect(runningPoll.details).toMatchObject({
+    status: "running",
+    aggregated: "ERR-before\nOUT-after\n",
+  });
+
+  appendOutput(session, "stderr", "ERR-last\n");
+  markExited(session, 0, null, "completed");
+
+  const terminalPoll = await pollSession(processTool, "toolcall-interleaved-terminal", sessionId);
+  const terminalText = terminalPoll.content[0]?.type === "text" ? terminalPoll.content[0].text : "";
+  expect(terminalText).toContain("ERR-last");
+  expect(terminalText).not.toContain("ERR-before");
+  expect(terminalText).not.toContain("OUT-after");
+  expect(terminalPoll.details).toMatchObject({
+    status: "completed",
+    aggregated: "ERR-before\nOUT-after\nERR-last\n",
+  });
+});
+
 test("waiting poll retains terminal state and its receipt after indexed cleanup", async () => {
   vi.useFakeTimers();
   try {
@@ -660,41 +690,90 @@ test.each([
   }
 });
 
-test("process poll exposes finished-session termination metadata", async () => {
-  const sessionId = "sess-signal";
-  const { processTool, session } = createProcessSessionHarness(sessionId);
+test.each([
+  {
+    name: "overall timeout after a zero exit",
+    exitCode: 0,
+    exitSignal: null,
+    status: "failed",
+    exitReason: "overall-timeout",
+    noOutputTimedOut: false,
+    timedOut: true,
+  },
+  {
+    name: "no-output timeout",
+    exitCode: null,
+    exitSignal: "SIGKILL",
+    status: "failed",
+    exitReason: "no-output-timeout",
+    noOutputTimedOut: true,
+    timedOut: true,
+  },
+  {
+    name: "nonzero exit",
+    exitCode: 7,
+    exitSignal: null,
+    status: "completed",
+    exitReason: "exit",
+    timedOut: false,
+  },
+  {
+    name: "successful exit",
+    exitCode: 0,
+    exitSignal: null,
+    status: "completed",
+    exitReason: "exit",
+    timedOut: false,
+  },
+  {
+    name: "manual cancellation",
+    exitCode: null,
+    exitSignal: "SIGTERM",
+    status: "failed",
+    exitReason: "manual-cancel",
+    timedOut: false,
+  },
+] as const)(
+  "process log and poll preserve authoritative $name without log consuming the completion",
+  async ({ name, exitCode, exitSignal, status, exitReason, timedOut, ...optional }) => {
+    const sessionId = `sess-terminal-${name.replaceAll(" ", "-")}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const remove = vi.fn(() => true);
 
-  appendOutput(session, "stderr", "terminated\n");
-  markExited(session, null, "SIGKILL", "failed", "no-output-timeout", true);
+    appendOutput(session, "stderr", "terminal output\n");
+    markExited(session, exitCode, exitSignal, status, exitReason, optional.noOutputTimedOut);
+    recordNotifyOnExitRemoval(session, remove);
 
-  const poll = await pollSession(processTool, "toolcall-signal", sessionId);
-  const details = poll.details as {
-    status?: string;
-    exitCode?: number | null;
-    exitSignal?: NodeJS.Signals | number | null;
-    exitReason?: string;
-    timedOut?: boolean;
-    noOutputTimedOut?: boolean;
-    aggregated?: string;
-  };
+    const log = await processTool.execute("toolcall-terminal-log", {
+      action: "log",
+      sessionId,
+    });
+    expect(log.details).toMatchObject({
+      status,
+      sessionId,
+      exitCode: exitCode ?? undefined,
+      exitReason,
+      timedOut,
+      ...optional,
+    });
+    const logText = log.content[0]?.type === "text" ? log.content[0].text : "";
+    expect(logText).toContain("terminal output");
+    expect(logText.includes("Verify the resulting state before retrying")).toBe(timedOut);
+    expect(remove).not.toHaveBeenCalled();
 
-  expect(details.status).toBe("failed");
-  expect(details.exitCode).toBeUndefined();
-  expect(details.exitSignal).toBe("SIGKILL");
-  expect(details.exitReason).toBe("no-output-timeout");
-  expect(details.timedOut).toBe(true);
-  expect(details.noOutputTimedOut).toBe(true);
-  expect(details.aggregated).toContain("terminated");
-  expect(poll.content[0]).toMatchObject({
-    type: "text",
-    text: expect.stringContaining("external side effects may already have completed"),
-  });
-  expect(poll.content[0]).toMatchObject({
-    type: "text",
-    text: expect.stringContaining("Verify the resulting state before retrying"),
-  });
-  expect(poll.content[0]).toMatchObject({
-    type: "text",
-    text: expect.stringContaining("Do not automatically rerun non-idempotent commands"),
-  });
-});
+    const poll = await pollSession(processTool, "toolcall-terminal-poll", sessionId);
+    expect(poll.details).toMatchObject({
+      status,
+      sessionId,
+      exitCode: exitCode ?? undefined,
+      exitReason,
+      timedOut,
+      aggregated: "terminal output\n",
+      ...optional,
+    });
+    const pollText = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+    expect(pollText).toContain("terminal output");
+    expect(pollText.includes("Verify the resulting state before retrying")).toBe(timedOut);
+    expect(remove).toHaveBeenCalledOnce();
+  },
+);

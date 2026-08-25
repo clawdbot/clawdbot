@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
@@ -91,21 +93,15 @@ const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), ".
 // verifier on the same release train instead of forcing a republish/correction.
 const NPM_VIEW_ATTEMPTS = 30;
 const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
-
-function isJsonRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeOptionalText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
+const RELEASE_COMMAND_TIMEOUT_MS = 120_000;
+const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function requireString(value: unknown, label: string): string {
-  const stringValue = normalizeOptionalText(value);
+  const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined) {
     throw new Error(`${label} is missing.`);
   }
@@ -141,18 +137,31 @@ function readTrustedClawHubToolchainIdentity(): {
   };
 }
 
-function runCommand(command: string, args: string[], options: { cwd?: string } = {}): string {
+export function runReleaseVerifierCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; maxBufferBytes?: number; timeoutMs?: number } = {},
+): string {
   return execFileSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    killSignal: "SIGKILL",
+    maxBuffer: options.maxBufferBytes ?? RELEASE_COMMAND_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: options.timeoutMs ?? RELEASE_COMMAND_TIMEOUT_MS,
   }).trim();
 }
 
-function runCommandInherited(command: string, args: string[]): void {
-  execFileSync(command, args, {
-    stdio: "inherit",
-  });
+function isNpmPropagationError(error: unknown): boolean {
+  if (!isJsonRecord(error)) {
+    return false;
+  }
+  const details = [error.code, error.message, error.stderr]
+    .map((value) =>
+      Buffer.isBuffer(value) ? value.toString("utf8") : typeof value === "string" ? value : "",
+    )
+    .join("\n");
+  return /\b(?:E404|ETARGET)\b|No match found for version/u.test(details);
 }
 
 export async function runNpmViewWithRetry(
@@ -170,13 +179,16 @@ export async function runNpmViewWithRetry(
       new Promise((resolveDelay) => {
         setTimeout(resolveDelay, delayMs);
       }));
-  const run = options.run ?? ((npmArgs: string[]) => runCommand("npm", npmArgs));
+  const run = options.run ?? ((npmArgs: string[]) => runReleaseVerifierCommand("npm", npmArgs));
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return run([...args, "--prefer-online"]);
     } catch (error) {
+      if (!isNpmPropagationError(error)) {
+        throw error;
+      }
       lastError = error;
     }
     if (attempt < attempts) {
@@ -200,10 +212,10 @@ export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields 
   const parsed = parseJson(raw, "npm view");
   if (Array.isArray(parsed)) {
     return {
-      version: normalizeOptionalText(parsed[0]),
-      distTagVersion: normalizeOptionalText(parsed[1]),
-      integrity: normalizeOptionalText(parsed[2]),
-      tarball: normalizeOptionalText(parsed[3]),
+      version: normalizeOptionalString(parsed[0]),
+      distTagVersion: normalizeOptionalString(parsed[1]),
+      integrity: normalizeOptionalString(parsed[2]),
+      tarball: normalizeOptionalString(parsed[3]),
     };
   }
   if (!isJsonRecord(parsed)) {
@@ -212,13 +224,14 @@ export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields 
   const distTags = isJsonRecord(parsed["dist-tags"]) ? parsed["dist-tags"] : undefined;
   const dist = isJsonRecord(parsed.dist) ? parsed.dist : undefined;
   return {
-    version: normalizeOptionalText(parsed.version),
+    version: normalizeOptionalString(parsed.version),
     distTagVersion:
-      normalizeOptionalText(parsed[`dist-tags.${distTag}`]) ??
-      normalizeOptionalText(distTags?.[distTag]),
+      normalizeOptionalString(parsed[`dist-tags.${distTag}`]) ??
+      normalizeOptionalString(distTags?.[distTag]),
     integrity:
-      normalizeOptionalText(parsed["dist.integrity"]) ?? normalizeOptionalText(dist?.integrity),
-    tarball: normalizeOptionalText(parsed["dist.tarball"]) ?? normalizeOptionalText(dist?.tarball),
+      normalizeOptionalString(parsed["dist.integrity"]) ?? normalizeOptionalString(dist?.integrity),
+    tarball:
+      normalizeOptionalString(parsed["dist.tarball"]) ?? normalizeOptionalString(dist?.tarball),
   };
 }
 
@@ -569,7 +582,7 @@ async function verifyClawHubPackage(params: {
 }
 
 function verifyGitHubRelease(params: ReleaseVerifyBetaArgs): string {
-  const raw = runCommand("gh", [
+  const raw = runReleaseVerifierCommand("gh", [
     "release",
     "view",
     params.tag,
@@ -602,7 +615,7 @@ function verifyWorkflowRun(params: {
   allowedHeadBranches?: string[];
   rerunFailed: boolean;
 }): WorkflowRunSummary {
-  const raw = runCommand("gh", [
+  const raw = runReleaseVerifierCommand("gh", [
     "run",
     "view",
     params.id,
@@ -615,19 +628,19 @@ function verifyWorkflowRun(params: {
   if (!isJsonRecord(run)) {
     throw new Error(`${params.label}: workflow run returned an unsupported JSON shape.`);
   }
-  const workflowName = normalizeOptionalText(run.workflowName);
+  const workflowName = normalizeOptionalString(run.workflowName);
   if (workflowName !== params.expectedWorkflowName) {
     throw new Error(
       `${params.label}: run ${params.id} workflow is ${workflowName ?? "<missing>"}, expected ${params.expectedWorkflowName}.`,
     );
   }
-  const event = normalizeOptionalText(run.event);
+  const event = normalizeOptionalString(run.event);
   if (event !== "workflow_dispatch") {
     throw new Error(
       `${params.label}: run ${params.id} event is ${event ?? "<missing>"}, expected workflow_dispatch.`,
     );
   }
-  const headBranch = normalizeOptionalText(run.headBranch);
+  const headBranch = normalizeOptionalString(run.headBranch);
   const allowedHeadBranches =
     params.allowedHeadBranches ??
     (params.expectedHeadBranch !== undefined ? [params.expectedHeadBranch] : []);
@@ -636,31 +649,31 @@ function verifyWorkflowRun(params: {
       `${params.label}: run ${params.id} branch is ${headBranch ?? "<missing>"}, expected ${allowedHeadBranches.join(" or ")}.`,
     );
   }
-  const status = normalizeOptionalText(run.status);
-  const conclusion = normalizeOptionalText(run.conclusion);
+  const status = normalizeOptionalString(run.status);
+  const conclusion = normalizeOptionalString(run.conclusion);
   const jobs = Array.isArray(run.jobs) ? run.jobs.filter(isJsonRecord) : [];
   const failedJobs = jobs.filter((job) => {
-    const jobConclusion = normalizeOptionalText(job.conclusion);
+    const jobConclusion = normalizeOptionalString(job.conclusion);
     return (
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
   if (failedJobs.length > 0 && params.rerunFailed) {
-    runCommandInherited("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
+    runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
   if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
     const failedNames = failedJobs
-      .map((job) => normalizeOptionalText(job.name) ?? "<unnamed>")
+      .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
     throw new Error(
       `${params.label}: run ${params.id} is ${status ?? "<missing>"}/${conclusion ?? "<missing>"}${failedNames ? `; failed jobs: ${failedNames}` : ""}.`,
     );
   }
-  const createdAt = normalizeOptionalText(run.createdAt);
-  const updatedAt = normalizeOptionalText(run.updatedAt);
+  const createdAt = normalizeOptionalString(run.createdAt);
+  const updatedAt = normalizeOptionalString(run.updatedAt);
   const createdMs = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
   const updatedMs = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
   const durationSeconds =
@@ -670,7 +683,7 @@ function verifyWorkflowRun(params: {
   return {
     id: params.id,
     label: params.label,
-    url: normalizeOptionalText(run.url),
+    url: normalizeOptionalString(run.url),
     durationSeconds,
   };
 }
@@ -679,7 +692,7 @@ function requirePositiveIntegerString(value: unknown, label: string): string {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
     return String(value);
   }
-  const stringValue = normalizeOptionalText(value);
+  const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined || !POSITIVE_INTEGER_PATTERN.test(stringValue)) {
     throw new Error(`${label} must be a positive integer.`);
   }
@@ -1058,14 +1071,14 @@ export function validateClawHubBootstrapEvidence(params: {
     );
   }
 
-  const createdAt = normalizeOptionalText(runBinding.run.created_at);
-  const updatedAt = normalizeOptionalText(runBinding.run.updated_at);
+  const createdAt = normalizeOptionalString(runBinding.run.created_at);
+  const updatedAt = normalizeOptionalString(runBinding.run.updated_at);
   const createdMs = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
   const updatedMs = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
   return {
     id: runId,
     label: "Plugin ClawHub New",
-    url: normalizeOptionalText(runBinding.run.html_url),
+    url: normalizeOptionalString(runBinding.run.html_url),
     durationSeconds:
       Number.isFinite(createdMs) && Number.isFinite(updatedMs)
         ? Math.max(0, Math.round((updatedMs - createdMs) / 1000))
@@ -1087,12 +1100,14 @@ export function validateClawHubBootstrapEvidence(params: {
 }
 
 function readGitHubApiJson(repo: string, endpoint: string, label: string): unknown {
-  return parseJson(runCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
+  return parseJson(runReleaseVerifierCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
 }
 
 function readGitHubToken(): string {
   return requireString(
-    process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? runCommand("gh", ["auth", "token"]),
+    process.env.GH_TOKEN ??
+      process.env.GITHUB_TOKEN ??
+      runReleaseVerifierCommand("gh", ["auth", "token"]),
     "GitHub token",
   );
 }
@@ -1281,7 +1296,9 @@ export async function verifyBetaRelease(
     throw new Error(`package.json version is ${rootVersion}; expected ${args.version}.`);
   }
   if (args.releaseSha !== undefined) {
-    const checkedOutSha = runCommand("git", ["rev-parse", "HEAD"], { cwd: rootDir });
+    const checkedOutSha = runReleaseVerifierCommand("git", ["rev-parse", "HEAD"], {
+      cwd: rootDir,
+    });
     if (checkedOutSha !== args.releaseSha) {
       throw new Error(`release checkout SHA is ${checkedOutSha}; expected ${args.releaseSha}.`);
     }
@@ -1303,7 +1320,9 @@ export async function verifyBetaRelease(
       rootDir,
       args.postpublishVerifier,
     );
-    runCommandInherited("node", ["--import", "tsx", postpublishVerifier, args.version]);
+    execFileSync("node", ["--import", "tsx", postpublishVerifier, args.version], {
+      stdio: "inherit",
+    });
     lines.push("openclaw postpublish verifier OK");
   }
 

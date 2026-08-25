@@ -44,12 +44,19 @@ type SessionStdin = {
 /** Removes one queued notify-on-exit event, if it is still pending. */
 type NotifyOnExitRemoval = () => boolean;
 
+type PendingOutputChunk = {
+  stream: "stdout" | "stderr";
+  text: string;
+};
+
 /** Mutable session state for a running bash exec process. */
 export interface ProcessSession {
   id: string;
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Agent owner frozen when the exec process starts. */
+  agentId?: string;
   /** `session.mainKey` from the runtime config, snapshotted at exec start.
    *  Used by background-exit notifications to remap cron-run keys to the
    *  agent's main queue without an ambient config load. If config changes
@@ -81,8 +88,7 @@ export interface ProcessSession {
   maxOutputChars: number;
   pendingMaxOutputChars?: number;
   totalOutputChars: number;
-  pendingStdout: string[];
-  pendingStderr: string[];
+  pendingOutput: PendingOutputChunk[];
   pendingStdoutChars: number;
   pendingStderrChars: number;
   /** Output was dropped from the pending poll buffers since their last drain. */
@@ -129,6 +135,9 @@ interface FinishedSession {
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
 let finishedSessionsByProcess = new WeakMap<ProcessSession, FinishedSession>();
+// Keep start chronology private while snapshots retain their completion-order eviction contract.
+let processSessionStartOrders = new WeakMap<object, number>();
+let nextProcessSessionStartOrder = 0;
 const activeBackgroundExecSessionIds = new Set<string>();
 let finishedSessionOutputChars = 0;
 
@@ -143,8 +152,20 @@ export function isProcessSessionIdTaken(id: string): boolean {
 
 /** Adds a running session and starts retention sweeping if needed. */
 export function addSession(session: ProcessSession) {
+  processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
   runningSessions.set(session.id, session);
   startSweeper();
+}
+
+/** Sorts registered process records newest-first, including same-millisecond starts. */
+export function compareProcessSessionStartOrder(
+  left: { startedAt: number },
+  right: { startedAt: number },
+): number {
+  return (
+    right.startedAt - left.startedAt ||
+    processSessionStartOrders.get(right)! - processSessionStartOrders.get(left)!
+  );
 }
 
 /** Returns a running session by id. */
@@ -199,22 +220,17 @@ export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): voi
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
-  session.pendingStdout ??= [];
-  session.pendingStderr ??= [];
-  session.pendingStdoutChars ??= sumPendingChars(session.pendingStdout);
-  session.pendingStderrChars ??= sumPendingChars(session.pendingStderr);
-  const buffer = stream === "stdout" ? session.pendingStdout : session.pendingStderr;
-  const bufferChars = stream === "stdout" ? session.pendingStdoutChars : session.pendingStderrChars;
+  const streamChars = stream === "stdout" ? session.pendingStdoutChars : session.pendingStderrChars;
   const pendingCap = Math.min(
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
     session.maxOutputChars,
   );
-  buffer.push(chunk);
-  let pendingChars = bufferChars + chunk.length;
+  session.pendingOutput.push({ stream, text: chunk });
+  let pendingChars = streamChars + chunk.length;
   if (pendingChars > pendingCap) {
     session.truncated = true;
     session.pendingOutputDropped = true;
-    pendingChars = capPendingBuffer(buffer, pendingChars, pendingCap);
+    pendingChars = capPendingStream(session.pendingOutput, stream, pendingChars, pendingCap);
   }
   if (stream === "stdout") {
     session.pendingStdoutChars = pendingChars;
@@ -229,24 +245,22 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   session.tail = tail(session.aggregated, 2000);
 }
 
-/** Drains pending stdout/stderr chunks returned by a process poll. */
+/** Drains pending chunks in producer callback order for a process poll. */
 export function drainSession(session: ProcessSession) {
-  const stdout = session.pendingStdout.join("");
-  const stderr = session.pendingStderr.join("");
+  const output = session.pendingOutput.map((chunk) => chunk.text).join("");
   const outputDropped = session.pendingOutputDropped;
-  session.pendingStdout = [];
-  session.pendingStderr = [];
+  session.pendingOutput = [];
   session.pendingStdoutChars = 0;
   session.pendingStderrChars = 0;
   session.pendingOutputDropped = false;
-  return { stdout, stderr, outputDropped };
+  return { output, outputDropped };
 }
 
 /** Consumes the output transferred to one exact terminal snapshot. */
 export function drainFinishedSession(session: FinishedSession) {
   const output = session.unreadOutput;
   session.unreadOutput = undefined;
-  return output ?? { stdout: "", stderr: "", outputDropped: false };
+  return output ?? { output: "", outputDropped: false };
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -369,6 +383,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     ...(session.terminalPollObserved ? { terminalPollObserved: true } : {}),
     ...(session.notifyOnExitRemoval ? { notifyOnExitRemoval: session.notifyOnExitRemoval } : {}),
   };
+  processSessionStartOrders.set(finished, processSessionStartOrders.get(session)!);
   finishedSessionsByProcess.set(session, finished);
   finishedSessions.set(session.id, finished);
   finishedSessionOutputChars += session.aggregated.length;
@@ -392,46 +407,31 @@ export function tail(text: string, max = 2000) {
   return sliceUtf16Safe(text, text.length - max);
 }
 
-function sumPendingChars(buffer: string[]) {
-  let total = 0;
-  for (const chunk of buffer) {
-    total += chunk.length;
-  }
-  return total;
-}
-
-function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: number) {
+function capPendingStream(
+  output: PendingOutputChunk[],
+  stream: PendingOutputChunk["stream"],
+  pendingCharsInput: number,
+  cap: number,
+) {
   let pendingChars = pendingCharsInput;
-  if (pendingChars <= cap) {
-    return pendingChars;
-  }
-  const last = buffer.at(-1);
-  if (last && last.length >= cap) {
-    buffer.length = 0;
-    const kept = tail(last, cap);
-    buffer.push(kept);
-    return kept.length;
-  }
-  let dropCount = 0;
-  while (dropCount < buffer.length) {
-    const chunk = buffer[dropCount];
-    if (chunk === undefined || pendingChars - chunk.length < cap) {
-      break;
+  let overflow = pendingChars - cap;
+  for (let index = 0; index < output.length && overflow > 0;) {
+    const chunk = output[index];
+    if (!chunk || chunk.stream !== stream) {
+      index += 1;
+      continue;
     }
-    pendingChars -= chunk.length;
-    dropCount += 1;
-  }
-  if (dropCount > 0) {
-    buffer.splice(0, dropCount);
-  }
-  if (buffer.length && pendingChars > cap) {
-    const overflow = pendingChars - cap;
-    const firstChunk = buffer.at(0);
-    if (firstChunk !== undefined) {
-      const trimmedChunk = sliceUtf16Safe(firstChunk, overflow);
-      buffer[0] = trimmedChunk;
-      pendingChars -= firstChunk.length - trimmedChunk.length;
+    if (chunk.text.length <= overflow) {
+      overflow -= chunk.text.length;
+      pendingChars -= chunk.text.length;
+      output.splice(index, 1);
+      continue;
     }
+    const trimmed = sliceUtf16Safe(chunk.text, overflow);
+    const removedChars = chunk.text.length - trimmed.length;
+    pendingChars -= removedChars;
+    chunk.text = trimmed;
+    break;
   }
   return pendingChars;
 }
@@ -456,6 +456,8 @@ function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
   finishedSessionsByProcess = new WeakMap();
+  processSessionStartOrders = new WeakMap();
+  nextProcessSessionStartOrder = 0;
   finishedSessionOutputChars = 0;
   activeBackgroundExecSessionIds.clear();
   stopSweeper();

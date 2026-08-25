@@ -28,6 +28,7 @@ export type TestRealtimeSessionEntry = {
     state: { status: string };
     stop: ReturnType<typeof vi.fn>;
   };
+  playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   realtime?: {
     beginSpeakerTurn: (
@@ -43,6 +44,7 @@ export type TestRealtimeSessionEntry = {
 };
 
 export type TestRealtimeBridgeParams = {
+  agentId?: string;
   audioSink: { sendAudio: (audio: Buffer) => void };
   autoRespondToAudio?: boolean;
   cfg?: unknown;

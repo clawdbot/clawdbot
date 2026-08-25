@@ -55,7 +55,7 @@ export function markTranscriptPromptText(message: AgentMessage, text: string): v
 }
 
 function getTranscriptPromptText(message: AgentMessage): string | undefined {
-  const value = (message as unknown as Record<string, unknown>)[TRANSCRIPT_PROMPT_TEXT_KEY];
+  const value = Reflect.get(message, TRANSCRIPT_PROMPT_TEXT_KEY);
   return typeof value === "string" ? value : undefined;
 }
 
@@ -72,11 +72,11 @@ function restoreTranscriptPromptText(
     return cached;
   }
   const content = (message as { content?: unknown }).content;
-  const { [TRANSCRIPT_PROMPT_TEXT_KEY]: _transcriptPromptText, ...messageRest } =
-    message as unknown as Record<string, unknown>;
+  const messageRest = { ...message };
+  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
   let restoredMessage: AgentMessage = message;
   if (typeof content === "string") {
-    restoredMessage = { ...messageRest, content: transcriptText } as unknown as AgentMessage;
+    restoredMessage = Object.assign(messageRest, { content: transcriptText });
   } else if (Array.isArray(content)) {
     let restored = false;
     const nextContent = content.map((block) => {
@@ -91,7 +91,7 @@ function restoreTranscriptPromptText(
       return Object.assign({}, block, { text: transcriptText });
     });
     if (restored) {
-      restoredMessage = { ...messageRest, content: nextContent } as unknown as AgentMessage;
+      restoredMessage = Object.assign(messageRest, { content: nextContent });
     }
   }
   cache.set(message, restoredMessage);
@@ -102,9 +102,9 @@ function stripTranscriptPromptMarker(message: AgentMessage): AgentMessage {
   if (getTranscriptPromptText(message) === undefined) {
     return message;
   }
-  const { [TRANSCRIPT_PROMPT_TEXT_KEY]: _transcriptPromptText, ...messageRest } =
-    message as unknown as Record<string, unknown>;
-  return messageRest as unknown as AgentMessage;
+  const messageRest = { ...message };
+  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
+  return messageRest;
 }
 
 function projectTranscriptPromptMessages(
@@ -135,8 +135,8 @@ function replaceToolResultContent(
   replacement: string | unknown[],
 ): AgentMessage {
   const content = (msg as { content?: unknown }).content;
-  const sourceRecord = msg as unknown as Record<string, unknown>;
-  const { details: _details, ...rest } = sourceRecord;
+  const rest = { ...msg };
+  Reflect.deleteProperty(rest, "details");
   return {
     ...rest,
     content:
@@ -337,9 +337,11 @@ export function installContextEngineLoopHook(params: {
   const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+    signal?.throwIfAborted();
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
+    signal?.throwIfAborted();
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const transcriptMessages = projectTranscriptPromptMessages(
       sourceMessages,
@@ -413,21 +415,24 @@ export function installContextEngineLoopHook(params: {
                 message,
                 isHeartbeat: params.isHeartbeat,
               });
+              signal?.throwIfAborted();
             }
           }
         }
       }
+      signal?.throwIfAborted();
       lastSeenLength = transcriptMessages.length;
       params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = transcriptMessages;
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
-        messages: providerMessages,
+        messages: providerMessages.slice(),
         tokenBudget,
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
+      signal?.throwIfAborted();
       if (assembled && Array.isArray(assembled.messages)) {
         const repairedMessages =
           params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
@@ -438,6 +443,7 @@ export function installContextEngineLoopHook(params: {
       }
       lastAssembledView = null;
     } catch {
+      signal?.throwIfAborted();
       // Best-effort: any engine failure falls through to the raw source
       // messages so the tool loop still makes forward progress.
       lastSeenLength = prePromptMessageCount;

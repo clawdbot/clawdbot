@@ -144,6 +144,20 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID)
     }
 
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        guard let lease = await self.connection.captureServerLease() else { return nil }
+        return await self.connection.supportsServerMethod(method, ifCurrentServerLease: lease)
+    }
+
+    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.progressCardGet(sessionKey: target.sessionKey)
+        let data = try await self.connection.request(request)
+        let result = try JSONDecoder().decode(ProgressCardGetResult.self, from: data)
+        guard !(result.card.value is NSNull) else { return nil }
+        return try GatewayPayloadDecoding.decode(result.card, as: ProgressCard.self)
+    }
+
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage? {
         let target = self.sessionTarget(for: sessionKey)
         let request = try Self.fullMessageRequest(
@@ -203,9 +217,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) })?.url
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
         do {
-            let data = try await connection.request(OpenClawChatGatewayRequests.modelsList())
+            let data = try await connection.request(OpenClawChatGatewayRequests.modelsList(agentID: agentID))
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(data)
         } catch {
             webChatSwiftLogger.warning(
@@ -637,6 +651,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func patchSession(
         key: String,
+        expectedSessionID: String? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -647,6 +662,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
+            expectedSessionID: expectedSessionID,
             label: label,
             category: category,
             pinned: pinned,
@@ -853,20 +869,17 @@ private struct MacChatSurface: View {
     @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey, store: AppDefaults.standard)
     private var showsToolActivity = WebChatTracePreferences.displayOptions().contains(.toolActivity)
 
-    private let userAccent: Color?
     private let usesPrimaryAppRuntime: Bool
     private let speech: OpenClawChatSpeechController
     private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
 
     init(
         viewModel: OpenClawChatViewModel,
-        userAccent: Color?,
         usesPrimaryAppRuntime: Bool,
         speech: OpenClawChatSpeechController,
         voiceNoteRecorder: OpenClawVoiceNoteRecorder)
     {
         _viewModel = State(initialValue: viewModel)
-        self.userAccent = userAccent
         self.usesPrimaryAppRuntime = usesPrimaryAppRuntime
         self.speech = speech
         self.voiceNoteRecorder = voiceNoteRecorder
@@ -875,7 +888,7 @@ private struct MacChatSurface: View {
     var body: some View {
         OpenClawChatWindowShell(
             viewModel: self.viewModel,
-            userAccent: self.userAccent,
+            userAccent: ColorHexSupport.color(fromHex: self.appState.seamColorHex),
             displayOptions: self.displayOptions,
             emptyAssistantIntro: Self.emptyAssistantIntro,
             emptyAssistantPrompts: Self.emptyAssistantPrompts,
@@ -1148,12 +1161,10 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
                 }
             }
         }
-        let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         // Full window: native split-view shell with sessions sidebar and
         // toolbar pickers bridged into the NSToolbar.
         let hosting = NSHostingController(rootView: MacChatSurface(
             viewModel: vm,
-            userAccent: accent,
             usesPrimaryAppRuntime: usesPrimaryAppRuntime,
             speech: speech,
             voiceNoteRecorder: voiceNoteRecorder))
@@ -1285,10 +1296,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             let frame = WindowPlacement.centeredFrame(size: WebChatSwiftUILayout.windowSize)
             window.setFrame(frame, display: false)
         }
-    }
-
-    private static func color(fromHex raw: String?) -> Color? {
-        ColorHexSupport.color(fromHex: raw)
     }
 
     #if DEBUG

@@ -357,6 +357,40 @@ describe("channelsHandlers channels.status", () => {
     expect(String(accountProbe.error)).toContain("probe failed");
   });
 
+  it("marks account snapshot failures partial", async () => {
+    mocks.resolveChannelAccountSnapshot.mockRejectedValue(new Error("snapshot failed"));
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 1000 });
+
+    expect(payload.partial).toBe(true);
+    expect(payload.warnings).toEqual(["whatsapp:default status failed: Error: snapshot failed"]);
+    const channels = requireGatewayRecord(payload.channels, "channels payload");
+    expect(channels.whatsapp).toEqual({ configured: false });
+  });
+
+  it("isolates a failed channel status task while a sibling succeeds", async () => {
+    const broken = createChannelPlugin({ id: "broken" });
+    broken.config.listAccountIds = () => {
+      throw new Error("channel failed");
+    };
+    configureAutoEnabledChannels([broken, createChannelPlugin({ id: "healthy" })]);
+    mocks.buildChannelUiCatalog.mockImplementation((plugins: Array<{ id: string }>) => ({
+      order: plugins.map((plugin) => plugin.id),
+      labels: {},
+      detailLabels: {},
+      systemImages: {},
+      entries: {},
+    }));
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 1000 });
+
+    expect(payload.partial).toBe(true);
+    expect(payload.warnings).toEqual(["broken channel status failed: Error: channel failed"]);
+    expect(requireGatewayRecord(payload.channels, "channels payload").healthy).toEqual({
+      configured: true,
+    });
+  });
+
   it("isolates a timed-out channel probe while another channel succeeds", async () => {
     vi.useFakeTimers();
     try {

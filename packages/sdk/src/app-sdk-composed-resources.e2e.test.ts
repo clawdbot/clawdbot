@@ -39,6 +39,7 @@ import {
   testState,
   writeSessionStore,
 } from "../../../src/gateway/test-helpers.js";
+import type { WorkerEnvironmentServiceRecord } from "../../../src/gateway/worker-environments/service-contract.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
@@ -101,17 +102,20 @@ async function closeFakeServer(server: WebSocketServer): Promise<void> {
   });
 }
 
-function workerRecord(state: "requested" | "ready" | "destroyed") {
+function workerRecord(state: "requested" | "ready" | "destroyed"): WorkerEnvironmentServiceRecord {
   return {
     environmentId: "worker-sdk-e2e",
     providerId: "testbox",
     leaseId: "lease-sdk-e2e",
+    sharedHost: null,
     state,
     ownerEpoch: 1,
     createdAtMs: 1_000,
     idleSinceAtMs: null,
     attachedSessionIds: ["session-sdk-e2e"],
-    tunnelStatus: "stopped" as const,
+    desktopAvailable: false,
+    desktopApps: [],
+    tunnelStatus: "stopped",
   };
 }
 
@@ -756,6 +760,9 @@ async function proveRealGatewayContracts(): Promise<void> {
       type: "local",
       label: "Gateway local",
       status: "available",
+      platform: process.platform,
+      sessionHost: true,
+      trust: "persistent",
       capabilities: ["agent.run", "sessions", "tools", "workspace"],
     });
     const gatewayEnvironment = await oc.environments.status("gateway");

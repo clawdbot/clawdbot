@@ -19,6 +19,8 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import {
+  formatPermissionsMode,
+  parseCodexPermissionsModeArg,
   steerCodexConversationTurn,
   stopCodexConversationTurn,
   trackCodexConversationActiveTurn,
@@ -55,16 +57,6 @@ function setCodexConversationModel(
   return setCodexConversationModelImpl({ ...rest, ...controlTarget(sessionFile) });
 }
 
-function setCodexConversationPermissions(
-  params: Omit<
-    Parameters<typeof setCodexConversationPermissionsImpl>[0],
-    "identity" | "bindingStore"
-  > & { sessionFile: string },
-) {
-  const { sessionFile, ...rest } = params;
-  return setCodexConversationPermissionsImpl({ ...rest, ...controlTarget(sessionFile) });
-}
-
 let tempDir: string;
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -98,8 +90,25 @@ describe("codex conversation controls", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("persists fast mode and permissions for later bound turns", async () => {
+  it("persists fast mode on the binding and permissions on the session", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const session = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+    };
+    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+    await upsertSessionEntry({
+      agentId: session.agentId,
+      sessionKey: session.sessionKey,
+      storePath,
+      entry: {
+        sessionId: session.sessionId,
+        updatedAt: Date.now(),
+        permissionMode: "full",
+        sessionRoot: tempDir,
+      },
+    });
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
@@ -112,15 +121,73 @@ describe("codex conversation controls", () => {
     await expect(setCodexConversationFastMode({ sessionFile, enabled: true })).resolves.toBe(
       "Codex fast mode enabled.",
     );
-    await expect(setCodexConversationPermissions({ sessionFile, mode: "default" })).resolves.toBe(
-      "Codex permissions set to default.",
-    );
+    await expect(
+      setCodexConversationPermissionsImpl({ session, mode: "default", config: {} }),
+    ).resolves.toBe("Codex permissions set to default.");
 
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-1");
     expect(binding?.serviceTier).toBe("priority");
-    expect(binding?.approvalPolicy).toBe("on-request");
-    expect(binding?.sandbox).toBe("workspace-write");
+    expect(binding?.approvalPolicy).toBe("never");
+    expect(binding?.sandbox).toBe("danger-full-access");
+    expect(
+      getSessionEntry({
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      }),
+    ).toMatchObject({ permissionMode: "guarded", sessionRoot: tempDir });
+
+    await expect(
+      setCodexConversationPermissionsImpl({ session, mode: "yolo", config: {} }),
+    ).resolves.toBe("Codex permissions set to full access.");
+    expect(
+      getSessionEntry({
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      })?.permissionMode,
+    ).toBe("full");
+  });
+
+  it.each([
+    { mode: "read-only" as const, display: "read-only" },
+    { mode: "guarded" as const, display: "guarded" },
+    { mode: "workspace" as const, display: "workspace" },
+    { mode: "full" as const, display: "full access" },
+  ])("reports the explicit $mode conversation permission mode", ({ mode, display }) => {
+    expect(formatPermissionsMode(mode)).toBe(display);
+  });
+
+  it.each(["default", "guardian", "guarded", "approve"])(
+    "recognizes %s as an explicit guarded conversation permission command",
+    (mode) => {
+      expect(parseCodexPermissionsModeArg(mode)).toBe("default");
+    },
+  );
+
+  it("refuses to persist a permission mode without its canonical session root", async () => {
+    const session = {
+      agentId: "main",
+      sessionId: "session-without-root",
+      sessionKey: "agent:main:session-without-root",
+    };
+    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+    await upsertSessionEntry({
+      agentId: session.agentId,
+      sessionKey: session.sessionKey,
+      storePath,
+      entry: { sessionId: session.sessionId, updatedAt: Date.now() },
+    });
+
+    await expect(
+      setCodexConversationPermissionsImpl({ session, mode: "default", config: {} }),
+    ).rejects.toThrow("requires a recorded session root");
+    expect(
+      getSessionEntry({ agentId: session.agentId, sessionKey: session.sessionKey, storePath }),
+    ).not.toHaveProperty("permissionMode");
   });
 
   it("routes supervised stop and steer requests through the native user-home connection", async () => {

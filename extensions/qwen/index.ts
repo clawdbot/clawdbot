@@ -2,6 +2,7 @@
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
@@ -43,10 +44,6 @@ const QWEN_TOKEN_PLAN_GLM_NO_MAX_THINKING_LEVEL_IDS = QWEN_TOKEN_PLAN_THINKING_L
   (id) => id !== "max",
 );
 
-function normalizeProviderId(value: string): string {
-  return value.trim().toLowerCase();
-}
-
 function resolveConfiguredQwenBaseUrl(
   config: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
 ): string | undefined {
@@ -55,7 +52,7 @@ function resolveConfiguredQwenBaseUrl(
     return undefined;
   }
   for (const [providerId, provider] of Object.entries(providers)) {
-    const normalized = normalizeProviderId(providerId);
+    const normalized = normalizeLowercaseStringOrEmpty(providerId);
     if (normalized !== PROVIDER_ID && normalized !== LEGACY_PROVIDER_ID) {
       continue;
     }
@@ -75,7 +72,7 @@ function resolveConfiguredQwenTokenPlanBaseUrl(
     return undefined;
   }
   for (const [providerId, provider] of Object.entries(providers)) {
-    const normalized = normalizeProviderId(providerId);
+    const normalized = normalizeLowercaseStringOrEmpty(providerId);
     if (normalized !== QWEN_TOKEN_PLAN_PROVIDER_ID) {
       continue;
     }

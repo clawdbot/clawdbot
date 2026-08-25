@@ -1,10 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  type PreparedGatewayModelCatalogSnapshot,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
+import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
 } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
+
+const metadataSnapshot = {
+  index: { plugins: [] },
+  manifestRegistry: { plugins: [] },
+  plugins: [],
+} as never;
+const emptyAuthStore = { version: 1, profiles: {} } as const;
 
 describe("models.list provider catalog outcomes", () => {
   it("preserves an auth rejection when no usable models are visible", async () => {
@@ -12,7 +23,13 @@ describe("models.list provider catalog outcomes", () => {
     const snapshot = {
       agentId: "main",
       agentDir: "/tmp/models-list-provider-outcomes-agent",
+      catalogComplete: true,
+      workspaceDir: "/tmp/models-list-provider-outcomes-workspace",
       config,
+      authModes: {},
+      authStore: emptyAuthStore,
+      metadataSnapshot,
+      authMaterializations: [],
       entries: [],
       routeVariants: [],
       providerOutcomes: [
@@ -28,6 +45,10 @@ describe("models.list provider catalog outcomes", () => {
       loadGatewayModelCatalogSnapshot: vi.fn(() => Promise.resolve(snapshot)),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
+    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+      loadDeferred: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
+      readPrepared: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
+    });
 
     await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
       models: [],
@@ -68,6 +89,7 @@ describe("models.list provider catalog outcomes", () => {
       cfg: config,
       agentId: "main",
       snapshot,
+      metadataSnapshot,
       preparedAuthStore: {
         version: 1,
         profiles: {
@@ -143,6 +165,7 @@ describe("models.list provider catalog outcomes", () => {
       cfg: config,
       agentId: "main",
       snapshot,
+      metadataSnapshot,
       preferredProfileId: "openai:accepted",
       preparedAuthStore: {
         version: 1,

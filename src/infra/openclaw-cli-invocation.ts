@@ -15,11 +15,45 @@ const OPENCLAW_PACKAGE_ENTRY_PATHS = new Set([
   path.join("src", "entry.ts"),
 ]);
 
-type OpenClawCliInvocation = Readonly<{
+export type OpenClawCliInvocation = Readonly<{
   command: string;
   args: string[];
   cwd: string;
 }>;
+
+/** Keep child CLI launches on the parent's loader/runtime flags without inheriting its debugger. */
+export function filterOpenClawChildExecArgv(execArgv: readonly string[]): string[] {
+  const filtered: string[] = [];
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const arg = execArgv[index] ?? "";
+    if (
+      arg === "--inspect" ||
+      arg.startsWith("--inspect=") ||
+      arg === "--inspect-brk" ||
+      arg.startsWith("--inspect-brk=") ||
+      arg === "--inspect-wait" ||
+      arg.startsWith("--inspect-wait=")
+    ) {
+      const next = execArgv[index + 1];
+      if (!arg.includes("=") && typeof next === "string" && !next.startsWith("-")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--inspect-port") {
+      const next = execArgv[index + 1];
+      if (typeof next === "string" && !next.startsWith("-")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--inspect-port=")) {
+      continue;
+    }
+    filtered.push(arg);
+  }
+  return filtered;
+}
 
 function resolveTrustedTsxLoader(packageRoot: string): string | null {
   try {
@@ -53,7 +87,7 @@ export function resolveCurrentOpenClawCliInvocation(
   } = {},
 ): OpenClawCliInvocation {
   const execPath = options.execPath ?? process.execPath;
-  const execArgv = options.execArgv ?? process.execArgv;
+  const execArgv = filterOpenClawChildExecArgv(options.execArgv ?? process.execArgv);
   const entry = (options.argv1 ?? process.argv[1])?.trim();
   const cwd = options.cwd ?? tryProcessCwd();
   const entryPackageRoot = entry ? resolveOpenClawPackageRootSync({ argv1: entry }) : null;

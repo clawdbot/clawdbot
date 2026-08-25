@@ -7,13 +7,14 @@ import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-s
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
-import { isSafeToRetrySendError, isTelegramRateLimitError } from "./network-errors.js";
+import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
@@ -427,6 +428,7 @@ export async function withTelegramNativeQuoteFallback<T>(params: {
 export type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
+  ownerAgentId: string;
   api: TelegramApi;
   clientOptionsLease?: TelegramClientOptionsLease | undefined;
 };
@@ -459,6 +461,7 @@ export function resolveTelegramApiContext(opts: {
   return {
     cfg,
     account,
+    ownerAgentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
     api,
     ...(clientOptionsLease ? { clientOptionsLease } : {}),
   };
@@ -571,14 +574,15 @@ export function createTelegramNonIdempotentRequestWithDiag(params: {
   verbose?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  return createTelegramRequestWithDiag({
+  const request = createTelegramRequestWithDiag({
     cfg: params.cfg,
     account: params.account,
     retry: params.retry,
     verbose: params.verbose,
     useApiErrorLogging: params.useApiErrorLogging,
     retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
-    shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
+    shouldRetry: shouldRetryTelegramSendError,
     strictShouldRetry: true,
   });
+  return (fn, label, options) => request(fn, label, options).catch(rethrowTelegramSendError);
 }

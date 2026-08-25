@@ -20,6 +20,7 @@ vi.mock("../infra/widearea-dns.js", async () => {
   return {
     getWideAreaZonePath: () => testState.zonePath,
     normalizeWideAreaDomain: (d: string) => d,
+    replaceWideAreaZoneFile: vi.fn(),
     resolveWideAreaDiscoveryDomain: () => "openclaw.internal.",
   };
 });

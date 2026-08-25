@@ -8,6 +8,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
   promptPressureKeys: new Set<string>(),
+  reconcileToolResultPromptProjectionState: vi.fn(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("../logger.js", () => ({
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
+  reconcileToolResultPromptProjectionState: hoisted.reconcileToolResultPromptProjectionState,
   toolResultWarningDedupe: {
     promptPressure: {
       check: (key: string) => {
@@ -115,6 +117,7 @@ function createInput(options?: {
 beforeEach(() => {
   vi.clearAllMocks();
   hoisted.promptPressureKeys.clear();
+  hoisted.reconcileToolResultPromptProjectionState.mockReset();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
     truncatedCount: 0,
@@ -152,6 +155,10 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     });
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
     expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
+    expect(hoisted.reconcileToolResultPromptProjectionState).toHaveBeenCalledWith(
+      messages,
+      projectionState,
+    );
     const clonedProjectionState = hoisted.truncateOversizedToolResultsInMessages.mock.calls[0]?.[4];
     expect(clonedProjectionState).not.toBe(projectionState);
   });
@@ -170,6 +177,14 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     expect(result.llmBoundaryPromptForPrecheck).toContain('"name":"Alice"');
     expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
+  });
+
+  it("does not reconcile session projection state for raw probes", () => {
+    const fixture = createInput();
+
+    prepareEmbeddedAttemptPromptContext({ ...fixture.input, isRawModelRun: true });
+
+    expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
   });
 
   it("injects the latest heartbeat outcome only as hidden runtime context", () => {

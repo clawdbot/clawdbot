@@ -1,5 +1,8 @@
 import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
-import { readNonBlankString as normalizeTtsSupplementSpokenText } from "@openclaw/normalization-core/string-coerce";
+import {
+  readNonBlankString,
+  readNonBlankString as normalizeTtsSupplementSpokenText,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
@@ -8,6 +11,7 @@ import type {
   MessagePresentation,
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
+import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 
 export type ReplyMediaAttachment = {
   type?: "image" | "audio" | "video" | "file";
@@ -117,10 +121,6 @@ type PairingQrReplyChannelData = {
   expiresAtMs: number;
 };
 
-function normalizePairingQrSetupCode(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {
@@ -129,7 +129,7 @@ export function readPairingQrReplyChannelData(
     return undefined;
   }
   const record = raw as Record<string, unknown>;
-  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const setupCode = readNonBlankString(record.setupCode);
   const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
@@ -153,7 +153,8 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING =
+  "⚠️ Media failed. Try sending a smaller supported file or a different format.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
@@ -167,7 +168,10 @@ export function appendReplyMediaFailureWarning(text: string | undefined): string
 }
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
-  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+  return Boolean(
+    readNonBlankString(payload.mediaUrl) ||
+    (Array.isArray(payload.mediaUrls) && payload.mediaUrls.some(readNonBlankString)),
+  );
 }
 
 /** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
@@ -238,6 +242,10 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Persisted assistant speech facts; never serialized into channel payloads. */
+  tts?: AssistantDeliveryTtsFacts;
+  /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
+  ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */
   assistantTranscriptMediaUrls?: string[];
   /** The runtime owns the transcript decision for this assistant payload. */
@@ -248,10 +256,6 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
-  /** Foreground freshness prevented a visible final after transcript persistence. */
-  foregroundDeliverySuppression?: {
-    reason: "stale-foreground";
-  };
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
@@ -290,6 +294,8 @@ export type ReplyPayloadMetadata = {
     expectedSessionId?: string;
     /** Delivery stays live, but neither side may be appended to a transcript. */
     transcriptWriteBlocked?: boolean;
+    /** The visible reply already owns its durable transcript row. */
+    transcriptOwner?: boolean;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;
@@ -356,3 +362,10 @@ export function isReplyPayloadStatusNotice(
 ): boolean {
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
 }
+
+/** Returns whether a payload carries terminal assistant content rather than a supplemental lane. */
+export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean =>
+  payload.isReasoning !== true &&
+  payload.isCommentary !== true &&
+  !isReplyPayloadStatusNotice(payload) &&
+  !isReplyPayloadTtsSupplement(payload);

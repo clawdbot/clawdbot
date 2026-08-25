@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 /**
  * OAuth credential manager.
  * Resolves usable access tokens, refreshes expired credentials under global
@@ -9,7 +10,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import {
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
   OAUTH_REFRESH_LOCK_OPTIONS,
@@ -30,6 +30,7 @@ import {
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { resolveOAuthRefreshLockPath } from "./paths.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
@@ -503,7 +504,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
-    const authPath = resolveAuthProfileDatabasePath(ownerAgentDir);
+    const authPath = ownerAgentDir
+      ? resolveAuthProfileDatabasePath(ownerAgentDir)
+      : resolveSharedAuthStorePath();
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
     try {
@@ -673,7 +676,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
         }
         if (ownerAgentDir) {
-          const mainPath = resolveAuthProfileDatabasePath(undefined);
+          const mainPath = resolveSharedAuthStorePath();
           if (mainPath !== authPath) {
             await mirrorRefreshedCredentialIntoMainStore({
               profileId: params.profileId,

@@ -7,7 +7,13 @@ import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
+import {
+  runGuidedOnboarding as runGuidedOnboardingImpl,
+  type GuidedOnboardingDeps,
+} from "./onboard-guided.js";
+
+const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
+  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
@@ -126,6 +132,7 @@ vi.mock("./onboard-agent.js", () => ({
     agentId: "main",
     bootstrapPending: true,
   }),
+  validateFirstOnboardingAgentName: () => undefined,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -967,8 +974,7 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    expect(prompter.select).toHaveBeenNthCalledWith(
-      2,
+    expect(prompter.select).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Use Current model (acme/workspace-model)?",
         options: expect.arrayContaining([
@@ -1084,7 +1090,7 @@ describe("runGuidedOnboarding custodian flow", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true, "main");
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("config write raced");
   });

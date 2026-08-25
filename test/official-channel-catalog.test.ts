@@ -20,7 +20,8 @@ import {
   writeOfficialChannelCatalogSource,
 } from "../scripts/write-official-channel-catalog.mts";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 

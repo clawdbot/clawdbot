@@ -158,7 +158,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     the Gateway (models call out to cloud APIs), even a modest Pi handles the load.
 
     A small Pi/VPS can also host just the Gateway while you pair **nodes** on your
-    laptop/phone for local screen/camera/canvas or command execution. See [Nodes](/nodes).
+    laptop/phone for local screen/camera or command execution. A paired Mac can
+    also present hosted widgets in its native panel. See [Nodes](/nodes).
 
     Full setup walkthrough: [Raspberry Pi](/install/raspberry-pi).
 
@@ -431,7 +432,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     treat the host as the source of truth and back it up.
 
     Pair **nodes** (Mac/iOS/Android/headless) to that cloud Gateway for local
-    screen/camera/canvas or command execution on your laptop while the Gateway stays in
+    screen/camera or command execution on your laptop while the Gateway stays in
     the cloud.
 
     Hub: [Platforms](/platforms). Remote access: [Gateway remote](/gateway/remote).
@@ -470,9 +471,10 @@ and troubleshooting see the main [FAQ](/help/faq).
     2. **Workspace** - location + bootstrap files.
     3. **Gateway** - port, bind address, auth mode, Tailscale exposure.
     4. **Channels** - built-in and official plugin chat channels: iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-    5. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
-    6. **Health check** - starts the Gateway and verifies it is running.
-    7. **Skills** - installs recommended skills and optional dependencies.
+    5. **Web search** - configures an optional search provider.
+    6. **Skills** - installs recommended skills and optional dependencies.
+    7. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
+    8. **Health check** - starts the Gateway and verifies it is running.
 
     It sets duration expectations up front and warns if your configured model is unknown
     or missing auth. Full breakdown: [Onboarding (CLI)](/start/wizard).
@@ -662,7 +664,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="If I buy a Mac mini to run OpenClaw, can I connect it to my MacBook Pro?">
     Yes. The **Mac mini can run the Gateway**, and your MacBook Pro connects as a **node**
     (companion device). Nodes do not run the Gateway - they add capabilities like
-    screen/camera/canvas and `system.run` on that device.
+    screen/camera and `system.run` on that device. A Mac node can also present
+    hosted widgets in its native panel.
 
     Common pattern: Gateway on the always-on Mac mini; MacBook Pro runs the macOS app or a
     node host and pairs to the Gateway. Check with `openclaw nodes status` / `openclaw nodes list`.

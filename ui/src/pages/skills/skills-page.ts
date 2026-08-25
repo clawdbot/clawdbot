@@ -3,16 +3,14 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
 import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { searchClawHub, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import {
@@ -20,6 +18,7 @@ import {
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -36,11 +35,8 @@ import {
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import {
-  PLUGINS_HUB_PANEL_ID,
-  pluginsHubTabs,
-  type PluginsHubTab,
-} from "../plugins/plugins-hub.ts";
+import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
+import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
 import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
 
 export type SkillsRouteData = {
@@ -73,13 +69,13 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillsDetailTab: SkillDetailTab = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubDetail: ClawHubSkillDetail | null = null;
-  @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailRef: string | null = null;
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeSlug?: string;
+    acknowledgeRef?: string;
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null = null;
@@ -127,6 +123,7 @@ class SkillsPage extends OpenClawLightDomElement {
     (agents) => {
       const cleanup = agents.subscribe(() => {
         this.reconcileAgentState();
+        this.ensureInitialData();
         this.requestUpdate();
       });
       this.reconcileAgentState();
@@ -184,7 +181,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsDetailTab = "overview";
     this.debouncedClawHubSearchQuery = "";
     this.clawhubDetail = null;
-    this.clawhubDetailSlug = null;
+    this.clawhubDetailRef = null;
     this.clawhubDetailLoading = false;
     this.clawhubDetailError = null;
     this.clawhubInstallMessage = null;
@@ -215,22 +212,28 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
+    if (data.report) {
+      void loadClawHubSecurityVerdicts(this, data.report);
+    }
   }
 
   private ensureInitialData() {
-    if (!this.gateway.connected || !this.gateway.client) {
-      return;
-    }
     if (
-      this.routeDataEnabled &&
-      (this.routeData?.agentsList || this.routeData?.report || this.routeData?.error)
+      this.routeDataEnabled ||
+      !this.routeDataInitialized ||
+      !this.gateway.connected ||
+      !this.gateway.client
     ) {
       return;
     }
     const agents = this.context.agents.state;
-    if (!agents.agentsList && !agents.agentsLoading) {
-      void this.loadAgents();
+    if (!agents.agentsList) {
+      if (!agents.agentsLoading) {
+        void this.loadAgents();
+      }
+      return;
     }
+    this.reconcileAgentState();
     if (!this.skillsReport && !this.skillsLoading) {
       void loadSkills(this);
     }
@@ -254,6 +257,7 @@ class SkillsPage extends OpenClawLightDomElement {
     }
     if (this.context.agents === agentsSource) {
       this.reconcileAgentState();
+      this.ensureInitialData();
     }
   }
 
@@ -317,7 +321,7 @@ class SkillsPage extends OpenClawLightDomElement {
       return null;
     }
     const error = this.clawhubSearchTask.error;
-    return error instanceof Error ? error.message : String(error);
+    return formatUiError(error);
   }
 
   private changeDetailTab(tab: SkillDetailTab) {
@@ -356,23 +360,11 @@ class SkillsPage extends OpenClawLightDomElement {
     const agents = this.context.agents.state;
     const error = this.skillsError ?? agents.agentsError;
     return html`
-      <section class="content-header content-header--page plugins-content-header">
-        <div>
-          <h1 class="page-title">${titleForRoute("skills")}</h1>
-        </div>
-      </section>
+      ${renderPluginsHubHeader({
+        active: "skills",
+        onSelect: (tab) => this.selectHubTab(tab),
+      })}
       ${renderSettingsWorkspace(html`
-        <div class="plugins-hub-tabs-row">
-          ${renderHubTabs({
-            id: "plugins",
-            active: "skills",
-            tabs: pluginsHubTabs(),
-            ariaLabel: t("pluginsPage.hubTablistLabel"),
-            panelId: PLUGINS_HUB_PANEL_ID,
-            className: "plugins-tabs",
-            onSelect: (tab) => this.selectHubTab(tab),
-          })}
-        </div>
         <wa-tab-panel
           id=${PLUGINS_HUB_PANEL_ID}
           name="skills"
@@ -406,7 +398,7 @@ class SkillsPage extends OpenClawLightDomElement {
             clawhubSearchLoading: this.clawhubSearchLoading,
             clawhubSearchError: this.clawhubSearchError,
             clawhubDetail: this.clawhubDetail,
-            clawhubDetailSlug: this.clawhubDetailSlug,
+            clawhubDetailRef: this.clawhubDetailRef,
             clawhubDetailLoading: this.clawhubDetailLoading,
             clawhubDetailError: this.clawhubDetailError,
             clawhubInstallMessage: this.clawhubInstallMessage,
@@ -441,11 +433,11 @@ class SkillsPage extends OpenClawLightDomElement {
             onDetailClose: () => (this.skillsDetailKey = null),
             onDetailTabChange: (tab) => this.changeDetailTab(tab),
             onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
-            onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
+            onClawHubDetailOpen: (ref) => void loadClawHubDetail(this, ref),
             onClawHubDetailClose: () => closeClawHubDetail(this),
-            onClawHubInstall: (slug, acknowledgeClawHubRisk, version) => {
+            onClawHubInstall: (ref, acknowledgeClawHubRisk, version) => {
               if (this.canInstallSkills()) {
-                void installFromClawHub(this, slug, acknowledgeClawHubRisk, version);
+                void installFromClawHub(this, ref, acknowledgeClawHubRisk, version);
               }
             },
           })}

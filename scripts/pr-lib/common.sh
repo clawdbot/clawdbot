@@ -145,6 +145,60 @@ bootstrap_deps_if_needed() {
   fi
 }
 
+read_pr_view_json() {
+  local pr="$1"
+  local fields="$2"
+  local max_attempts=3
+  local temp_dir
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-view.XXXXXX") || {
+    echo "Unable to create temporary storage for GitHub PR metadata." >&2
+    return 1
+  }
+  local stdout_file="$temp_dir/stdout"
+  local stderr_file="$temp_dir/stderr"
+  local attempt exit_code reason
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    exit_code=0
+    if gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
+      if [ -s "$stdout_file" ] && jq -se 'length == 1 and (.[0] | type == "object")' "$stdout_file" >/dev/null 2>&1; then
+        cat "$stdout_file"
+        rm -rf "$temp_dir"
+        return 0
+      fi
+      if [ ! -s "$stdout_file" ]; then
+        reason="gh pr view returned empty stdout"
+      else
+        reason="gh pr view did not return one JSON object"
+      fi
+    else
+      exit_code=$?
+      reason="gh pr view exited with status $exit_code"
+    fi
+    [ "$attempt" -eq "$max_attempts" ] || sleep "$attempt"
+  done
+
+  echo "GitHub API failure while reading PR #$pr: $reason after $max_attempts attempts." >&2
+  [ ! -s "$stderr_file" ] || cat "$stderr_file" >&2
+  rm -rf "$temp_dir"
+  return 1
+}
+
+pr_view_string_field() {
+  local json="$1" field="$2" pr="$3" remedy="${4:-Retry the command.}" label value
+  case "$field" in
+    headRefOid) label="a head SHA" ;;
+    baseRefName) label="a base branch" ;;
+    headRefName) label="a head branch" ;;
+    *) label="a non-empty .$field string" ;;
+  esac
+  if ! value=$(printf '%s\n' "$json" | jq -er --arg field "$field" '.[$field] | if type == "string" and length > 0 then . else error("missing string field") end' 2>/dev/null); then
+    echo "GitHub PR metadata for #$pr did not include $label. $remedy" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
 wait_for_pr_head_sha() {
   local pr="$1"
   local expected_sha="$2"

@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   extractObservedOverflowTokenCount,
@@ -31,8 +32,6 @@ import {
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
 
-const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-
 type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
 type EmbeddedRunOverflowRecoveryOutcome =
@@ -55,7 +54,6 @@ export async function recoverEmbeddedRunOverflow(
     toolResultPromptProjectionState: ToolResultPromptProjectionState;
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
-    prepareCompactedTranscriptRetry: () => Promise<void>;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
@@ -174,20 +172,31 @@ export async function recoverEmbeddedRunOverflow(
         currentTokenCount: overflowTokenCountForCompaction,
       });
       compactResult = compaction.result;
-      if (compactResult.ok && compactResult.compacted) {
+      const sessionAfterCompaction = input.getActiveSession();
+      const stillOwnsCompactionTarget =
+        sessionAfterCompaction.id === activeSession.id &&
+        sessionAfterCompaction.file === activeSession.file;
+      if (!stillOwnsCompactionTarget) {
+        compactResult = {
+          ok: false,
+          compacted: false,
+          reason: "active session changed during overflow compaction",
+        };
+      } else if (compactResult.ok && compactResult.compacted) {
         previousSessionId = await input.adoptCompactionTranscript(compactResult);
-        const sessionAfterCompaction = input.getActiveSession();
+        const adoptedSession = input.getActiveSession();
         await runContextEngineMaintenance({
           contextEngine: input.contextEngine,
-          sessionId: sessionAfterCompaction.id,
+          sessionId: adoptedSession.id,
           sessionKey: runParams.sessionKey,
-          sessionTarget: sessionAfterCompaction.target,
-          sessionFile: sessionAfterCompaction.file,
+          sessionTarget: adoptedSession.target,
+          sessionFile: adoptedSession.file,
           reason: "compaction",
           runtimeContext: compaction.runtimeContext,
           runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: input.contextEngineAgentId,
         });
       }
     } catch (compactErr) {
@@ -205,6 +214,7 @@ export async function recoverEmbeddedRunOverflow(
         config: runParams.config,
         sessionKey: runParams.sessionKey,
         agentId: input.sessionAgentId,
+        sessionPersistence: runParams.sessionPersistence,
       });
       log.info(
         `[context-overflow-precheck] stale token state had no real conversation messages for ` +
@@ -217,7 +227,6 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
-      await input.adoptCompactionTranscript(compactResult);
       const tokensAfter = compactResult.result?.tokensAfter;
       if (typeof tokensAfter === "number" && Number.isFinite(tokensAfter) && tokensAfter >= 0) {
         input.state.lastCompactionTokensAfter = Math.floor(tokensAfter);
@@ -324,9 +333,15 @@ export async function recoverEmbeddedRunOverflow(
     );
   }
   const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+  const currentReplayMetadata =
+    input.attempt.currentAttemptReplayMetadata ?? input.attempt.replayMetadata;
+  const sideEffectCaution = currentReplayMetadata.hadPotentialSideEffects
+    ? " Completed tool actions were not replayed; verify their effects before retrying."
+    : "";
   const userText =
     "Context overflow: prompt too large for the model. " +
-    "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
+    sideEffectCaution;
   log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,

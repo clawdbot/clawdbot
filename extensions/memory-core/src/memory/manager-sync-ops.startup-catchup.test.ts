@@ -19,6 +19,7 @@ import {
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -413,6 +414,10 @@ describe("session startup catch-up", () => {
     }
     startupHarnessDatabases.clear();
     closeOpenClawAgentDatabasesForTest();
+    // Closing the agent databases releases their leases through shared state, which
+    // reopens it, so the shared handle has to be released after that and before the
+    // removal or Windows fails the unlink with EBUSY.
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -880,7 +885,8 @@ describe("session startup catch-up", () => {
     await Promise.resolve();
 
     expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
-    expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+    expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
+    expect(harness.syncCalls[0]?.sessions).toHaveLength(1);
   });
 
   it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {
@@ -1063,7 +1069,7 @@ describe("session startup catch-up", () => {
         await harness.waitForSessionSync();
 
         expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
-        expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+        expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.filePath]);
         expect(harness.indexedPaths).toEqual([
           `sessions/main/thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`,
         ]);

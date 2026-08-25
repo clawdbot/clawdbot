@@ -235,34 +235,6 @@ function appendNormalizedPluginMetadataOwners(
   }
 }
 
-/** Resolve the plugin discovery filter used by implicit provider discovery tests. */
-function resolveProviderDiscoveryFilterForTest(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-  providerIds?: readonly string[];
-}): string[] | undefined {
-  return resolveProviderDiscoveryFilter(params);
-}
-
-/** Resolve provider owner plugin IDs from a preloaded metadata snapshot for tests. */
-function resolvePluginMetadataProviderOwnersForTest(
-  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
-  provider: string,
-): readonly string[] | undefined {
-  return resolvePluginMetadataProviderOwners(pluginMetadataSnapshot, provider);
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.modelsConfigImplicitProvidersTestApi")
-  ] = {
-    resolvePluginMetadataProviderOwnersForTest,
-    resolveProviderDiscoveryFilterForTest,
-  };
-}
-
 function mergeImplicitProviderSet(
   target: Record<string, ProviderConfig>,
   additions: Record<string, ProviderConfig> | undefined,
@@ -505,30 +477,31 @@ async function runProviderCatalogWithTimeout(
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
-  const catalogRun = runProviderCatalog(params);
   const timeoutMs = params.timeoutMs ?? undefined;
   if (!timeoutMs) {
-    return await catalogRun;
+    return await runProviderCatalog(params);
   }
 
-  // Live discovery should not hang startup; timeout means skip this provider,
-  // while non-timeout catalog failures still surface to the caller.
+  const timeoutError = new Error(
+    `provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`,
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const catalogRun = runProviderCatalog(params);
+    // Live discovery should not hang startup; a timeout skips this provider while
+    // preserving the rest of the prepared catalog.
     return await Promise.race([
       catalogRun,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          reject(
-            new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`),
-          );
+          reject(timeoutError);
         }, timeoutMs);
         timer.unref?.();
       }),
     ]);
   } catch (error) {
-    const message = formatErrorMessage(error);
-    if (message.includes("provider catalog timed out after")) {
+    if (error === timeoutError) {
+      const message = formatErrorMessage(error);
       params.reportCatalogOutcome?.({
         provider: params.provider.id,
         status: "unavailable",
