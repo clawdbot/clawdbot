@@ -133,6 +133,21 @@ describe("extractLlamaServerArchive", () => {
     expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
+  it("rejects a malformed tar header without emitting an unhandled second error", async () => {
+    const root = await createTempRoot();
+    const archivePath = path.join(root, "malformed.tar.gz");
+    const invalidHeader = Buffer.alloc(512);
+    invalidHeader.write("bad-entry");
+    await fs.writeFile(archivePath, invalidHeader);
+    const destDir = path.join(root, "dest");
+    await fs.mkdir(destDir);
+
+    await expect(
+      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
+    ).rejects.toThrow(/checksum failure|TAR_ENTRY_INVALID/u);
+    expect(await fs.readdir(destDir)).toStrictEqual([]);
+  });
+
   it("shares one deadline across tar preflight and extraction", async () => {
     const root = await createTempRoot();
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {

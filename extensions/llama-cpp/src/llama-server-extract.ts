@@ -112,28 +112,41 @@ async function readTarAliases(archivePath: string, deadlineMs: number): Promise<
       () => abort(new Error("llama-server archive preflight timed out")),
       timeoutMs,
     );
-    const finish = (error?: Error) => {
+    const finish = () => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
+      resolve();
     };
     const abort = (error: Error) => {
       if (settled) {
         return;
       }
-      input.destroy(error);
-      parser.abort(error);
-      finish(error);
+      settled = true;
+      clearTimeout(timer);
+      input.destroy();
+      // Keep a persistent parser error listener while abort() emits its own
+      // TAR_ABORT error. A one-shot listener is removed before its callback,
+      // which turns that second error into an uncaught process exception.
+      try {
+        parser.abort(error);
+      } finally {
+        reject(error);
+      }
+    };
+    const handleParserError = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      input.destroy();
+      reject(error);
     };
     input.once("error", abort);
-    parser.once("error", abort);
+    parser.on("error", handleParserError);
     parser.once("end", () => finish());
     input.pipe(parser);
   });
