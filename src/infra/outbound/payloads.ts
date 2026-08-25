@@ -9,6 +9,7 @@ import {
 } from "../../auto-reply/reply/reply-payloads.js";
 import { stripLeadingInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { formatLocationText } from "../../channels/location.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
@@ -138,16 +139,12 @@ function collectPresentationMirrorText(presentation: MessagePresentation | undef
   return lines;
 }
 
-function collectInteractiveMirrorText(interactive: LegacyInteractiveReply | undefined): string[] {
-  if (!interactive) {
-    return [];
-  }
-  return collectBlockMirrorText(interactive.blocks);
-}
-
-function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
-  const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
-  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+/** Renders user-visible payload content safely for every outbound transcript mirror. */
+export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string {
+  const text = payload.text?.trim()
+    ? payload.text
+    : payload.location && formatLocationText(payload.location);
+  const presentation = normalizeMessagePresentation(payload.presentation);
   if (text?.trim()) {
     const structuredDataText = presentation
       ? collectBlockMirrorText(
@@ -156,10 +153,10 @@ function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
       : [];
     return [text, ...structuredDataText].join("\n");
   }
-  const interactive = normalizeLegacyInteractiveReply(entry.payload.interactive);
+  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   return [
     ...collectPresentationMirrorText(presentation),
-    ...collectInteractiveMirrorText(interactive),
+    ...collectBlockMirrorText(interactive?.blocks ?? []),
   ].join("\n");
 }
 
@@ -358,7 +355,7 @@ export function projectOutboundPayloadPlanForMirror(
 ): OutboundPayloadMirror {
   return {
     text: plan
-      .map(resolveOutboundMirrorText)
+      .map(({ payload }) => resolveOutboundPayloadMirrorText(payload))
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),

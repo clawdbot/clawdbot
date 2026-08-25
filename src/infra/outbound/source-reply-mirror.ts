@@ -508,6 +508,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
       presentation: params.actionParams.presentation as ReplyPayload["presentation"],
       interactive: params.actionParams.interactive as ReplyPayload["interactive"],
       channelData: params.actionParams.channelData as ReplyPayload["channelData"],
+      location: params.actionParams.location as ReplyPayload["location"],
     },
   ]);
   const mirror = projectOutboundPayloadPlanForMirror(plan);
