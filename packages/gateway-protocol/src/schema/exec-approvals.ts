@@ -305,6 +305,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   ),
   requireDeliveryRoute: Type.Optional(Type.Boolean()),
   suppressDelivery: Type.Optional(Type.Boolean()),
+  deliverToApprovalClientsOnly: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   twoPhase: Type.Optional(Type.Boolean()),
 });

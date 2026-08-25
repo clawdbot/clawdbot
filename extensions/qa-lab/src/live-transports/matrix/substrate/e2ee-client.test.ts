@@ -21,6 +21,7 @@ const testing = {
 
 describe("matrix qa e2ee client storage", () => {
   function createLifecycleFixture(options?: {
+    discard?: () => Promise<void>;
     drain?: () => Promise<void>;
     shutdownTimeoutMs?: number;
   }) {
@@ -35,7 +36,10 @@ describe("matrix qa e2ee client storage", () => {
       stopAndPersist: vi.fn(async () => {
         calls.push("stop-and-persist");
       }),
-      stopWithoutPersist: vi.fn(() => calls.push("stop-and-discard")),
+      stopWithoutPersist: vi.fn(async () => {
+        calls.push("stop-and-discard");
+        await options?.discard?.();
+      }),
     });
     return { calls, lifecycle };
   }
@@ -100,7 +104,12 @@ describe("matrix qa e2ee client storage", () => {
   it("discards without persisting when active operation grace expires", async () => {
     vi.useFakeTimers();
     try {
+      let finishDiscard: (() => void) | undefined;
       const { calls, lifecycle } = createLifecycleFixture({
+        discard: () =>
+          new Promise<void>((resolve) => {
+            finishDiscard = resolve;
+          }),
         shutdownTimeoutMs: 100,
       });
       void lifecycle.runOperation({
@@ -118,8 +127,16 @@ describe("matrix qa e2ee client storage", () => {
 
       await vi.advanceTimersByTimeAsync(100);
 
-      await rejection;
+      let rejected = false;
+      void stop.catch(() => {
+        rejected = true;
+      });
+      await Promise.resolve();
+      expect(rejected).toBe(false);
       expect(calls).toEqual(["operation", "detach", "stop-and-discard"]);
+
+      finishDiscard?.();
+      await rejection;
     } finally {
       vi.useRealTimers();
     }

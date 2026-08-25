@@ -1863,7 +1863,7 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         },
         bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
         broadcast: {
@@ -1878,7 +1878,6 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(cfg.agents?.entries).toEqual({
       [GATEWAY_LIVE_AGENT_ID]: {
-        default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
@@ -1894,7 +1893,6 @@ describe("buildLiveGatewayConfig", () => {
         agents: {
           entries: {
             dev: {
-              default: true,
               agentDir: "/operator/agent",
               workspace: "/operator/workspace",
             },
@@ -1908,7 +1906,6 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(cfg.agents?.entries).toEqual({
       [GATEWAY_LIVE_AGENT_ID]: {
-        default: true,
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
@@ -4737,7 +4734,6 @@ function buildLiveGatewayConfig(params: {
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
   const configuredAgents = {
     [GATEWAY_LIVE_AGENT_ID]: {
-      default: true,
       agentDir: params.liveAgentDir,
       workspace: params.liveAgentWorkspaceDir,
       sandbox: { mode: "off" },
