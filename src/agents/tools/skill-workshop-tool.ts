@@ -299,6 +299,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           agentId: options.agentId,
           toolParams: params,
           preparedSkillPatches,
+          proposalMutationBudgetRemaining: options.proposalMutationBudget?.remaining,
           maxChars: projectionBudgets.artifactChars,
         });
       }

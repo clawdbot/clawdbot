@@ -400,8 +400,9 @@ completed trajectory clears the evidence-gated proposal bar. The foreground mode
 to learn before it replies. The background reviewer preserves the foreground run as proposal
 provenance, cannot access general agent tools, and cannot make lifecycle decisions. In `auto`
 mode, the capture pipeline applies every autonomous proposal only after the isolated run
-completes. Existing-skill changes require a complete read receipt or prepared exact-span authority,
-plus content-hash binding, before they are eligible for that apply step. The review starts
+completes. The reviewer may read or prepare an exact span before its single mutation.
+Existing-skill changes require a complete read receipt or prepared exact-span authority, plus
+content-hash binding, before they are eligible for that apply step. The review starts
 only when the foreground runtime reports its resolved model
 and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
 fails closed and creates no proposal.

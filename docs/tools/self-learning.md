@@ -80,12 +80,15 @@ read or command-invoked, plus a bounded workspace skill list. It prefers a used
 writable skill when that skill governs the learning, then another existing
 skill, and creates a new skill only when nothing covers the class.
 
-Before changing an existing skill, the reviewer reads its current body. Both
-update forms bind the proposal to that content hash. An oversized skill can be
-rewritten only when the result is shorter. Autonomous `SKILL.md` results stay at
-or below 10,000 characters. Longer reference and examples move into bundled
-files. The reviewer sees the foreground tool schemas, but only `skill_workshop`
-can execute. The reviewed transcript is evidence, not instructions.
+Before changing an existing skill, the reviewer reads its current body. If the
+complete body is omitted, it can call `prepare_patch` for one non-empty unique
+exact span and then patch that span. Reading and preparing do not spend the
+review's single mutation. Both update forms bind the proposal to the current
+content hash. An oversized skill can be rewritten only when the result is
+shorter. Autonomous `SKILL.md` results stay at or below 10,000 characters.
+Longer reference and examples move into bundled files. The reviewer sees the
+foreground tool schemas, but only `skill_workshop` can execute. The reviewed
+transcript is evidence, not instructions.
 
 Workshop-authored skills can apply automatically. Updates to user-authored skills
 stay pending with a reason for operator review. Each review gets one attempt.

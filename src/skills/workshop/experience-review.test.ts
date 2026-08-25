@@ -471,7 +471,9 @@ describe("skill experience review prompt", () => {
     });
     expect(prompt).toContain("this message starts a review pass");
     expect(prompt).toContain("NO_REPLY is the correct answer for most turns");
-    expect(prompt).toContain("One call at most, smallest mutation first");
+    expect(prompt).toContain("One mutation at most, smallest mutation first");
+    expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
+    expect(prompt).toContain("Reading and preparing do not spend the mutation");
     expect(prompt).toContain("Writable skills:");
     expect(prompt).toContain("- release-runbook — Ship releases");
     expect(prompt).toContain("- local-notes — Local workflow (user-authored)");

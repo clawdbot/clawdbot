@@ -92,8 +92,15 @@ export async function executePrepareSkillPatch(params: {
   agentId?: string;
   toolParams: Record<string, unknown>;
   preparedSkillPatches: Map<string, SkillWorkshopPreparedPatch>;
+  proposalMutationBudgetRemaining?: number;
   maxChars: number;
 }): Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>> {
+  if (
+    params.proposalMutationBudgetRemaining !== undefined &&
+    params.proposalMutationBudgetRemaining <= 0
+  ) {
+    throw new ToolInputError("this Skill Workshop session has reached its proposal mutation limit");
+  }
   const skill = await readWritableWorkspaceSkill(
     params.workspaceDir,
     readToolStringParam(params.toolParams, "skill_name", {

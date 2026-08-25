@@ -540,6 +540,13 @@ describe("skill_workshop review mode", () => {
     });
     expect(inspected?.content).toContain(newString);
     expect(inspected?.content).not.toContain(oldString);
+    await expect(
+      retriedReviewTool.execute("prepare-after-budget-spent", {
+        action: "prepare_patch",
+        skill_name: "big-skill",
+        old_string: secondOldString,
+      }),
+    ).rejects.toThrow("reached its proposal mutation limit");
   });
 
   it("invalidates prepared patch authority on substitution or target change", async () => {
