@@ -15,6 +15,7 @@ import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeZenLiveProviderConfig,
+  buildStaticOpencodeZenProviderConfig,
   resolveOpencodeZenStarterModel,
 } from "./provider-catalog.js";
 
@@ -456,6 +457,35 @@ describe("opencode provider plugin", () => {
     for (const modelId of exampleModelRefs) {
       expect(provider.resolveDynamicModel?.({ modelId } as never)).toMatchObject({ id: modelId });
     }
+  });
+
+  it("sets a Zen-compatible User-Agent on every OpenCode Zen model", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const staticModels = buildStaticOpencodeZenProviderConfig().models;
+    expect(staticModels.length).toBeGreaterThan(0);
+    for (const model of staticModels) {
+      expect(model.headers?.["User-Agent"]).toMatch(/^opencode\/\S+$/);
+    }
+    const resolved = provider.resolveDynamicModel?.({ modelId: "deepseek-v4-flash-free" } as never);
+    expect(resolved?.headers?.["User-Agent"]).toMatch(/^opencode\/\S+$/);
+  });
+
+  it("keeps the manifest OpenCode Zen User-Agent in sync with the runtime catalog", async () => {
+    const manifestProvider = requireRecord(
+      manifest.modelCatalog.providers.opencode,
+      "manifest provider",
+    );
+    const manifestUserAgent = requireRecord(manifestProvider.headers, "manifest provider headers")[
+      "User-Agent"
+    ];
+    expect(manifestUserAgent).toMatch(/^opencode\/\S+$/);
+    const runtimeModel = requireRecord(
+      buildStaticOpencodeZenProviderConfig().models[0],
+      "runtime model",
+    );
+    expect(manifestUserAgent).toBe(
+      requireRecord(runtimeModel.headers, "runtime model headers")["User-Agent"],
+    );
   });
 
   it("keeps every OpenCode Zen row within the required cost contract", async () => {

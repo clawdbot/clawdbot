@@ -1,4 +1,3 @@
-// Opencode Zen provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -12,6 +11,8 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+// Opencode Zen provider module implements model/runtime integration.
+import opencodePackage from "./package.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode";
 
@@ -20,6 +21,9 @@ const OPENCODE_ZEN_ANTHROPIC_BASE_URL = "https://opencode.ai/zen";
 const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
+// OpenCode Zen's rate limiter rejects free-tier traffic that does not present
+// an official `opencode/...` User-Agent, so every Zen request must carry one.
+const OPENCODE_ZEN_USER_AGENT = `opencode/${opencodePackage.version}`;
 
 const FREE_COST: ModelDefinitionConfig["cost"] = {
   input: 0,
@@ -423,6 +427,7 @@ function buildOpencodeZenModel(modelId: ZenModelId): OpencodeZenModelDefinition 
     api: transport.api,
     provider: PROVIDER_ID,
     baseUrl: transport.baseUrl,
+    headers: { "User-Agent": OPENCODE_ZEN_USER_AGENT },
     reasoning: true,
     input: [...capabilities.input],
     cost: MODEL_COSTS[modelId],

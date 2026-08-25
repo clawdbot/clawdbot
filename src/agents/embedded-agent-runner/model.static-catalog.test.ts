@@ -100,6 +100,7 @@ function createMistralManifestPlugin(overrides?: {
         mistral: {
           baseUrl: "https://api.mistral.ai/v1",
           api: "openai-completions",
+          headers: {} as Record<string, string> | undefined,
           models: [
             {
               id: "mistral-medium-3-5",
@@ -121,6 +122,16 @@ function createMistralManifestPlugin(overrides?: {
         mistral: overrides?.discovery ?? "static",
       },
     },
+  };
+}
+
+function createGoogleProvider(params?: { withStaticCatalog?: boolean }) {
+  return {
+    id: "google",
+    pluginId: "google",
+    label: "Google",
+    auth: [],
+    ...(params?.withStaticCatalog ? { staticCatalog: { run: vi.fn() } } : {}),
   };
 }
 
@@ -632,6 +643,26 @@ describe("resolveBundledStaticCatalogModel", () => {
     expect(model?.maxTokens).toBe(8192);
   });
 
+  it("carries manifest provider headers into configured runtime-discovery models", () => {
+    // Configured OpenCode Zen models resolve through bundled manifest rows with
+    // runtime discovery enabled; provider-level headers must reach the model.
+    const plugin = createMistralManifestPlugin({ discovery: "runtime" });
+    plugin.modelCatalog.providers.mistral.headers = { "User-Agent": "opencode/2026.8.1" };
+    setManifestPlugins([plugin]);
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: {},
+      includeRuntimeDiscovery: true,
+    });
+
+    expect(model).toMatchObject({
+      id: "mistral-medium-3-5",
+      headers: { "User-Agent": "opencode/2026.8.1" },
+    });
+  });
+
   it("requires an exact provider and model match", () => {
     setManifestPlugins([createMistralManifestPlugin()]);
 
@@ -655,13 +686,7 @@ describe("resolveBundledStaticCatalogModel", () => {
 describe("resolveBundledProviderStaticCatalogModel", () => {
   it("loads every enabled bundled provider static catalog for context warmup", async () => {
     const cfg = { plugins: { entries: { google: { enabled: true } } } };
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
+    const provider = createGoogleProvider({ withStaticCatalog: true });
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
@@ -674,13 +699,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
     providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
       google: {
-        models: [
-          {
-            id: "gemini-3.1-pro-preview",
-            name: "Gemini Pro",
-            contextWindow: 1_048_576,
-          },
-        ],
+        models: [{ id: "gemini-3.1-pro-preview", name: "Gemini Pro", contextWindow: 1_048_576 }],
       },
     });
 
@@ -777,13 +796,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       index: {},
       manifestRegistry: { plugins: [] },
     } as never;
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
+    const provider = createGoogleProvider({ withStaticCatalog: true });
     providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
@@ -867,13 +880,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
   });
 
   it("runs each prepared provider static catalog once", async () => {
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
+    const provider = createGoogleProvider({ withStaticCatalog: true });
     providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
@@ -897,13 +904,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
   });
 
   it("resolves context-only nested model ids within the same owning plugin", async () => {
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
+    const provider = createGoogleProvider({ withStaticCatalog: true });
     providerMocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
       ({ provider: providerId }: { provider: string }) =>
         providerId === "google" || providerId === "google-gemini-cli" ? ["google"] : undefined,
@@ -1049,7 +1050,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
   });
 
   it("requires an exact provider and model match", async () => {
-    const provider = { id: "google", pluginId: "google", label: "Google", auth: [] };
+    const provider = createGoogleProvider();
     providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
