@@ -376,6 +376,66 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun preservesFlatGatewayDocumentAttachment() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","name":"report.txt","url":"https://example.test/report.txt"}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(type = "file", fileName = "report.txt", url = "https://example.test/report.txt"),
+      parseChatMessageContent(attachment),
+    )
+  }
+
+  @Test
+  fun preservesNestedGatewayDocumentAttachment() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"document","label":"pasted-note.txt","mimeType":"text/plain","sizeBytes":48,"url":"/__openclaw__/pasted-note.txt"}}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(
+        type = "file",
+        mimeType = "text/plain",
+        fileName = "pasted-note.txt",
+        url = "/__openclaw__/pasted-note.txt",
+        sizeBytes = 48,
+      ),
+      parseChatMessageContent(attachment),
+    )
+  }
+
+  @Test
+  fun preservesHistoricalFileAttachment() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"file","fileName":"summary.pdf","mimeType":"application/pdf","url":"/files/summary.pdf"}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(
+        type = "file",
+        mimeType = "application/pdf",
+        fileName = "summary.pdf",
+        url = "/files/summary.pdf",
+      ),
+      parseChatMessageContent(attachment),
+    )
+  }
+
+  @Test
+  fun dropsUnknownAttachmentKinds() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"future","label":"unknown.bin"}}""",
+      )
+
+    assertNull(parseChatMessageContent(attachment))
+  }
+
+  @Test
   fun parsesDirectAndAttachmentAudioVideoBlocks() {
     val direct =
       Json.parseToJsonElement(
