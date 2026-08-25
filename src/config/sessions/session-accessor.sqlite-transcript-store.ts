@@ -36,6 +36,8 @@ import {
   deleteSessionTranscriptIndexInTransaction,
   indexAppendedTranscriptEventInTransaction,
   markSessionTranscriptIndexDirtyInTransaction,
+  reconcileSessionTranscriptIndexInTransaction,
+  shouldRebuildSessionTranscriptIndexSynchronously,
 } from "./session-transcript-index.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -336,6 +338,9 @@ export function replaceSqliteTranscriptEventsInTransaction(
     preserveSessionWindowRecency?: boolean;
   } = {},
 ): void {
+  const rebuildSynchronously =
+    events.length > 0 &&
+    shouldRebuildSessionTranscriptIndexSynchronously(database.db, resolved.sessionId, events);
   const preservedTranscriptUpdatedAt =
     options.preserveSessionWindowRecency === true
       ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
@@ -362,8 +367,12 @@ export function replaceSqliteTranscriptEventsInTransaction(
   } else {
     ensureTranscriptGenerationInTransaction(database, resolved.sessionId);
   }
-  // Preserve old FTS rows; the dirty watermark hides them and prevents replacement-row indexing.
-  markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
+  if (rebuildSynchronously) {
+    deleteSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+  } else {
+    // Preserve large old FTS rows; the dirty watermark hides them until worker reconciliation.
+    markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
+  }
   let seq = 0;
   const seenEventIds = new Set<string>();
   const seenMessageIdempotencyKeys = new Set<string>();
@@ -386,7 +395,11 @@ export function replaceSqliteTranscriptEventsInTransaction(
   }
   if (deleted || seq > 0) {
     recordTranscriptReplacementMutation(database, resolved.sessionId, preservedTranscriptUpdatedAt);
-    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+    if (rebuildSynchronously) {
+      reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+    } else {
+      scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+    }
   }
 }
 
@@ -419,6 +432,10 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   if (rows.length === 0) {
     return;
   }
+  const rebuildSynchronously = shouldRebuildSessionTranscriptIndexSynchronously(
+    database.db,
+    resolved.sessionId,
+  );
   const db = getSessionKysely(database.db);
   for (const row of rows) {
     const persistedEvent = canonicalizeTranscriptEventMedia(row.event);
@@ -439,13 +456,18 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   }
   rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
-  markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
-  scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+  if (rebuildSynchronously) {
+    deleteSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+    reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+  } else {
+    markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
+    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+  }
 }
 
 // Text-only transcript repair: rewrites event_json for specific rows in place.
 // Preserves seq, created_at, session_key, and session activity recency; rotates the transcript
-// generation and marks the index dirty so readers/search pick up the new text after reconciliation.
+// generation and rebuilds bounded projections immediately or defers large projections.
 export function updateSqliteTranscriptEventJsonInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
@@ -454,6 +476,10 @@ export function updateSqliteTranscriptEventJsonInTransaction(
   if (updates.length === 0) {
     return;
   }
+  const rebuildSynchronously = shouldRebuildSessionTranscriptIndexSynchronously(
+    database.db,
+    sessionId,
+  );
   const db = getSessionKysely(database.db);
   for (const { seq, eventJson } of updates) {
     executeSqliteQuerySync(
@@ -466,7 +492,12 @@ export function updateSqliteTranscriptEventJsonInTransaction(
     );
   }
   rotateTranscriptGenerationInTransaction(database, sessionId);
-  markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
+  if (rebuildSynchronously) {
+    deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
+    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  } else {
+    markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
+  }
   // Minimally advance transcript_updated_at (prev+1), NOT to now. This is a one-time maintenance
   // rewrite: bumping to now would reorder legacy sessions to the top of every recency view
   // (sqlite-history.ts orders by transcript_updated_at). But the watermark must still change,
@@ -482,7 +513,7 @@ export function updateSqliteTranscriptEventJsonInTransaction(
       strictly: true,
     });
   }
-  scheduleTranscriptProjectionReconcile(database, sessionId, true, {});
+  scheduleTranscriptProjectionReconcile(database, sessionId, !rebuildSynchronously, {});
 }
 
 export function readTranscriptIdentityByEventId(

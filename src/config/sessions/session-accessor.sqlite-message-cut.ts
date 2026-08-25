@@ -39,7 +39,12 @@ import type {
 } from "./session-accessor.types.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
-import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
+import {
+  markSessionTranscriptIndexDirtyInTransaction,
+  reconcileSessionTranscriptIndexInTransaction,
+  SYNC_REBUILD_MAX_BYTES,
+  SYNC_REBUILD_MAX_ROWS,
+} from "./session-transcript-index.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -326,11 +331,22 @@ function mutateSqliteSessionAtMessageInTransaction(
             targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
           },
         ];
-  if (params.mode !== "fork") {
+  let copiedBytes = 0;
+  const rebuildSynchronously =
+    params.mode !== "fork" &&
+    nextEvents.length <= SYNC_REBUILD_MAX_ROWS &&
+    nextEvents.every((event) => {
+      copiedBytes += JSON.stringify(event).length;
+      return copiedBytes <= SYNC_REBUILD_MAX_BYTES;
+    });
+  if (params.mode !== "fork" && !rebuildSynchronously) {
     ensureTranscriptSessionRoot(database, targetScope, Date.parse(header.timestamp));
     markSessionTranscriptIndexDirtyInTransaction(database.db, nextSessionId);
   }
   appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
+  if (rebuildSynchronously) {
+    reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
+  }
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.

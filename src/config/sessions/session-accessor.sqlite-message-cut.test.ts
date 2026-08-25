@@ -24,6 +24,7 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -424,12 +425,6 @@ describe("SQLite session message cuts", () => {
     if (result.status !== "created") {
       throw new Error("expected branch switch result");
     }
-    await waitForSessionTranscriptProjection({
-      agentId,
-      env,
-      sessionId: result.entry.sessionId,
-      sessionKey,
-    });
     const activeEventIds = readSessionTranscriptMessageEvents({
       agentId,
       env,
@@ -486,12 +481,6 @@ describe("SQLite session message cuts", () => {
     if (result.status !== "created") {
       throw new Error("expected rewind result");
     }
-    await waitForSessionTranscriptProjection({
-      agentId,
-      env,
-      sessionId: result.entry.sessionId,
-      sessionKey,
-    });
     expect(
       readSessionTranscriptMessageEventPage(
         { agentId, env, sessionId: result.entry.sessionId },
@@ -518,6 +507,31 @@ describe("SQLite session message cuts", () => {
       to: "chat-123",
       accountId: undefined,
     });
+  });
+
+  it("defers an oversized rewind projection until the reconcile worker finishes", async () => {
+    const { env, scope } = await createSession();
+    await appendTranscriptEvent(scope, {
+      type: "oversized-padding",
+      padding: "x".repeat(SYNC_REBUILD_MAX_BYTES),
+    });
+
+    const result = await rewindSessionToMessage({
+      agentId,
+      env,
+      entryId: "user-2",
+      sessionKey,
+    });
+    if (result.status !== "created") {
+      throw new Error("expected oversized rewind result");
+    }
+    const targetScope = { agentId, env, sessionId: result.entry.sessionId, sessionKey };
+    expect(() => readSessionTranscriptMessageEvents(targetScope)).toThrow(
+      /projection is rebuilding/,
+    );
+
+    await waitForSessionTranscriptProjection(targetScope);
+    expect(readSessionTranscriptMessageEvents(targetScope)).toHaveLength(2);
   });
 
   it("omits editor attachments for a text-only message", async () => {

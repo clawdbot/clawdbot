@@ -16,7 +16,10 @@ import {
   appendTranscriptMessage,
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
-import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import {
+  listSessionsNeedingTranscriptIndexReconcile,
+  SYNC_REBUILD_MAX_BYTES,
+} from "./session-transcript-index.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
@@ -182,6 +185,7 @@ describe("searchSessionTranscripts", () => {
         id: "m-new",
         parentId: null,
         message: { role: "user", content: [{ type: "text", text: "replacement text" }] },
+        padding: "x".repeat(SYNC_REBUILD_MAX_BYTES),
         timestamp: 1720000000000,
       } as unknown as TranscriptEvent,
     ]);
