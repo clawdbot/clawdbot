@@ -1126,7 +1126,6 @@ extensions/reef/protocol/canonical.ts	1
 extensions/reef/protocol/envelope.ts	1
 extensions/reef/protocol/guard-adapters.ts	1
 extensions/reef/protocol/guard.ts	1
-extensions/reef/protocol/node.ts	2
 extensions/reef/src/channel.ts	6
 extensions/reef/src/cli.ts	6
 extensions/reef/src/doctor-durable-state.ts	2
