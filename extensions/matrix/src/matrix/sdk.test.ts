@@ -2648,9 +2648,8 @@ describe("MatrixClient crypto bootstrapping", () => {
     const tempDir = tempDirs.make("matrix-idb-startup-abort-");
     const databasePrefix = "openclaw-matrix-startup-abort";
     const initCrypto = createDeferred<void>();
-    const pendingDatabases = createDeferred<IDBDatabaseInfo[]>();
     matrixJsClient.initRustCrypto.mockReturnValue(initCrypto.promise);
-    const databasesSpy = vi.spyOn(indexedDB, "databases").mockReturnValue(pendingDatabases.promise);
+    const databasesSpy = vi.spyOn(indexedDB, "databases");
     const abortController = new AbortController();
 
     try {
@@ -2664,25 +2663,17 @@ describe("MatrixClient crypto bootstrapping", () => {
       await vi.waitFor(() => {
         expect(matrixJsClient.initRustCrypto).toHaveBeenCalledTimes(1);
       });
-      initCrypto.resolve();
-      await vi.waitFor(() => {
-        expect(databasesSpy).toHaveBeenCalledTimes(1);
-      });
-
       abortController.abort();
-      pendingDatabases.resolve([
-        {
-          name: `${databasePrefix}::matrix-sdk-crypto`,
-          version: 1,
-        },
-      ]);
+      expect(matrixJsClient.startClient).not.toHaveBeenCalled();
+      expect(databasesSpy).not.toHaveBeenCalled();
 
+      initCrypto.resolve();
       await expectAbortError(startup);
       expect(readMatrixIdbSnapshotJson(tempDir)).toBeNull();
+      expect(databasesSpy).not.toHaveBeenCalled();
       expect(matrixJsClient.startClient).not.toHaveBeenCalled();
     } finally {
       initCrypto.resolve();
-      pendingDatabases.resolve([]);
       databasesSpy.mockRestore();
       await clearAllIndexedDbState({ databasePrefix });
       resetPluginStateStoreForTests();

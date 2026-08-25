@@ -323,26 +323,26 @@ function forceReleaseLeases(
   state.noLeases.resolve();
 }
 
-async function waitForRetirementDrain(params: {
-  state: SharedMatrixClientState;
-  task: Promise<unknown>;
-  isPending: () => boolean;
-  timeoutMessage: string;
-}): Promise<void> {
-  if (!params.isPending()) {
+async function waitForRetirementDrain(
+  state: SharedMatrixClientState,
+  task: Promise<unknown>,
+  isPending: () => boolean,
+  timeoutMessage: string,
+): Promise<void> {
+  if (!isPending()) {
     return;
   }
   let deadline: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
-      params.task,
+      task,
       new Promise<never>((_, reject) => {
         deadline = setTimeout(() => {
-          if (!params.isPending()) {
+          if (!isPending()) {
             return;
           }
-          params.state.phase = "late-drain";
-          reject(new Error(params.timeoutMessage));
+          state.phase = "late-drain";
+          reject(new Error(timeoutMessage));
         }, MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS);
         deadline.unref?.();
       }),
@@ -354,31 +354,22 @@ async function waitForRetirementDrain(params: {
   }
 }
 
-async function waitForLeaseDrain(state: SharedMatrixClientState): Promise<void> {
-  await waitForRetirementDrain({
-    state,
-    task: state.noLeases.promise,
-    isPending: () => state.leases.size > 0,
-    timeoutMessage: `Matrix transient leases did not drain within ${MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS}ms`,
-  });
-}
-
 async function continueLateGenerationRetirement(
   state: SharedMatrixClientState,
   startup: Promise<void>,
   monitorLeases: SharedMatrixClientLeaseState[],
 ): Promise<void> {
-  await startup.catch(() => undefined);
-  try {
-    await state.client.stopWithoutPersist();
-    state.started = false;
-    await retireMonitorLeases(state, monitorLeases);
-  } catch (error) {
-    state.poisonError = toRetirementError(error);
+  const outcomes = await Promise.allSettled([
+    retireMonitorLeases(state, monitorLeases),
+    startup.catch(() => undefined).then(() => state.client.stopWithoutPersist()),
+  ]);
+  const failure = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failure?.status === "rejected") {
+    state.poisonError = toRetirementError(failure.reason);
     return;
   }
+  state.started = false;
   state.phase = "late-drain-stopped";
-  state.startPromise = null;
   deleteSharedClientStateAfterLateDrain(state);
 }
 
@@ -396,21 +387,17 @@ function beginGenerationRetirement(params: {
     const startup = state.startPromise;
     if (startup) {
       try {
-        await waitForRetirementDrain({
+        await waitForRetirementDrain(
           state,
-          task: startup.catch(() => undefined),
-          isPending: () => state.startPromise === startup,
-          timeoutMessage: `Matrix client startup did not settle within ${MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS}ms during retirement`,
-        });
+          startup.catch(() => undefined),
+          () => state.startPromise === startup,
+          `Matrix client startup did not settle within ${MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS}ms during retirement`,
+        );
       } catch (error) {
         state.poisonError = toRetirementError(error);
         // The SDK cannot cancel crypto initialization. Keep this generation keyed
         // and stop it without persistence as soon as the owned startup settles.
-        state.startPromise = continueLateGenerationRetirement(
-          state,
-          startup,
-          params.monitorLeases ?? [],
-        );
+        void continueLateGenerationRetirement(state, startup, params.monitorLeases ?? []);
         throw state.poisonError;
       }
     }
@@ -431,7 +418,12 @@ function beginGenerationRetirement(params: {
 
     state.phase = "closing";
     try {
-      await waitForLeaseDrain(state);
+      await waitForRetirementDrain(
+        state,
+        state.noLeases.promise,
+        () => state.leases.size > 0,
+        `Matrix transient leases did not drain within ${MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS}ms`,
+      );
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
       if (poisonDisposition !== "retain") {
@@ -591,7 +583,7 @@ export async function acquireSharedMatrixClient(
 }
 
 async function forceRetireState(state: SharedMatrixClientState): Promise<void> {
-  if (state.phase === "late-drain" && state.startPromise) {
+  if (state.phase === "late-drain" || state.phase === "late-drain-stopped") {
     throw state.poisonError ?? new Error("Matrix client generation is still retiring");
   }
   state.releaseMode = mergeReleaseMode(state.releaseMode, "stop");
@@ -600,13 +592,8 @@ async function forceRetireState(state: SharedMatrixClientState): Promise<void> {
     monitorLeases: Array.from(state.leases).filter((lease) => lease.role === "monitor"),
   });
   forceReleaseLeases(state, retirementPromise);
-  if (state.poisonError) {
-    await retirementPromise.catch(() => undefined);
-    deleteSharedClientState(state);
-    return;
-  }
   await retirementPromise.catch((error: unknown) => {
-    if (state.phase === "late-drain" && state.startPromise) {
+    if (state.phase === "late-drain" || state.phase === "late-drain-stopped") {
       throw error;
     }
     if (!state.poisonError) {

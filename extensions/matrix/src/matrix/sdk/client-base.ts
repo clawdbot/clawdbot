@@ -276,25 +276,6 @@ export abstract class MatrixClientBase {
 
   protected idbPersistTimer: ReturnType<typeof setInterval> | null = null;
 
-  private startPeriodicIdbPersist(persistIdbToDisk: MatrixCryptoRuntime["persistIdbToDisk"]): void {
-    if (this.idbPersistPromise) {
-      return;
-    }
-    const abortController = new AbortController();
-    const persistPromise = persistIdbToDisk({
-      snapshotPath: this.idbSnapshotPath,
-      databasePrefix: this.cryptoDatabasePrefix,
-      abortSignal: abortController.signal,
-    })
-      .catch(noop)
-      .finally(() => {
-        this.idbPersistPromise = null;
-        this.idbPersistAbortController = null;
-      });
-    this.idbPersistAbortController = abortController;
-    this.idbPersistPromise = persistPromise;
-  }
-
   protected async ensureCryptoSupportInitialized(): Promise<void> {
     if (
       this.decryptBridge &&
@@ -630,27 +611,17 @@ export abstract class MatrixClientBase {
   }
 
   async stopAndPersist(): Promise<void> {
-    if (!this.stopPersistPromise) {
-      const stopPromise = this.stopClientGeneration(true);
-      const guardedStop = stopPromise.catch((error: unknown) => {
-        if (this.stopPersistPromise === guardedStop) {
-          this.stopPersistPromise = null;
-        }
-        throw error;
-      });
-      this.stopPersistPromise = guardedStop;
-    }
+    this.stopPersistPromise ??= this.stopClientGeneration(true);
     await this.stopPersistPromise;
   }
 
   async stopWithoutPersist(): Promise<void> {
-    if (this.stopPersistPromise) {
-      try {
-        await this.stopPersistPromise;
-        return;
-      } catch {
-        // A failed durable stop still requires non-persisting cleanup.
-      }
+    const alreadyStopped = await this.stopPersistPromise?.then(
+      () => true,
+      () => false,
+    );
+    if (alreadyStopped) {
+      return;
     }
     this.stopPersistPromise = this.stopClientGeneration(false);
     await this.stopPersistPromise;
@@ -737,7 +708,21 @@ export abstract class MatrixClientBase {
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
-        this.startPeriodicIdbPersist(persistIdbToDisk);
+        if (this.idbPersistPromise) {
+          return;
+        }
+        const abortController = new AbortController();
+        this.idbPersistAbortController = abortController;
+        this.idbPersistPromise = persistIdbToDisk({
+          snapshotPath: this.idbSnapshotPath,
+          databasePrefix: this.cryptoDatabasePrefix,
+          abortSignal: abortController.signal,
+        })
+          .catch(noop)
+          .finally(() => {
+            this.idbPersistPromise = null;
+            this.idbPersistAbortController = null;
+          });
       }, MATRIX_IDB_PERSIST_INTERVAL_MS);
       this.idbPersistTimer.unref?.();
     } catch (err) {
