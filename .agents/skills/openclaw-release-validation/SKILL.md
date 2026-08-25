@@ -132,22 +132,24 @@ For a beta tag:
    ```md
    ### [surface](taxonomy-url)
 
-   | **Maturity score**      | <M-level and label>   |
-   | ----------------------- | --------------------- |
-   | **What changed**        | <dominant themes>     |
+   | **Maturity score**      | <M-level and label>                                          |
+   | ----------------------- | ------------------------------------------------------------ |
+   | **What changed**        | <dominant themes>                                            |
    | **Recommended testing** | <action and pass condition, with command or URL when useful> |
-   | **Testing notes**       |                       |
+   | **Testing notes**       |                                                              |
    ```
 
    Keep **Testing notes** empty. Escape table pipes. Recommended testing must
    be one bounded, human-driven action with an observable pass condition; use
    `{{TEST_ENV}}` in OCM commands. Do not say only "use" or "verify."
+
 6. Replace the issue title with `OpenClaw <YYYY.M.D> beta feedback`. Render the
    body in this order, with no beta-history section:
 
    ```md
    <!-- openclaw-release-validation:<stable-train> -->
-   - Current beta: [<beta-tag>](<release-url>)
+
+   - Current beta: [<beta-tag>](release-url)
    - Beta commit: `<full-commit>`
    - Test target: latest immutable `origin/main`
 
@@ -155,16 +157,21 @@ For a beta tag:
    > <live scorecard and maturity-band explanation; any surface may be tested>
 
    <!-- validation-guidance:start -->
+
    ## Priority surfaces for this release
+
    <exactly three surface tables>
 
    ## Priority surfaces since <previous-beta-or-stable>
+
    <exactly three surface tables>
    <!-- validation-guidance:end -->
 
    ## Participate
+
    <concise instruction to run this skill>
    ```
+
 7. Create the issue if absent or update the existing train issue in place. Keep
    all comments. Apply only `release-validation`, read back title/body/labels,
    and require the marker plus guidance bytes to match. Close any older open
@@ -404,10 +411,10 @@ When the tester replies `enable local diagnostics`:
    and continue without diagnostics. Do not force the install, use a local code
    checkout, or select an unverified package version. Enable it with
    `ocm @<test-env> -- plugins enable diagnostics-otel`.
-4. Replace only the fixture's `diagnostics.otel` object with this exact
-   JSON value using `ocm @<test-env> -- config set diagnostics.otel <json>
-   --strict-json`; do not merge so old signal-specific or remote endpoints
-   cannot survive:
+4. Replace only the fixture's `diagnostics.otel` object with this exact JSON
+   value using
+   `ocm @<test-env> -- config set diagnostics.otel <json> --strict-json`. Do not
+   merge, so old signal-specific or remote endpoints cannot survive:
 
    ```json
    {
@@ -573,8 +580,9 @@ When the tester says `finish validation`:
    destroying the disposable environment. If it is retained, retain the
    run-owned runtime too and disable `diagnostics-otel`, set
    `diagnostics.otel.enabled` to `false`, restart the fixture through OCM, and
-   remove the plugin with `ocm @<test-env> -- plugins uninstall diagnostics-otel
-   --force`. If the fixture is destroyed, remove only its run-owned runtime with
+   remove the plugin with
+   `ocm @<test-env> -- plugins uninstall diagnostics-otel --force`. If the
+   fixture is destroyed, remove only its run-owned runtime with
    `ocm runtime remove <run-runtime-name>` after the fixture is gone. Remove the
    run-owned isolated main checkout after no build or fixture command is using
    it. Never remove a shared runtime. Remove the run-owned collector in all cases.
@@ -594,15 +602,17 @@ When the tester says `finish validation`:
    - Current beta: <beta tag> (<beta commit>)
    - Tested main commit: <full SHA>
 
-    ## Test environment
+   ## Test environment
 
-    - OS: <name and version>
-    - CPU: <architecture>, <logical core count> logical cores
-    - Memory: <whole GiB> GiB
-    - OCM: <version>
+   - OS: <name and version>
+   - CPU: <architecture>, <logical core count> logical cores
+   - Memory: <whole GiB> GiB
+   - OCM: <version>
    ```
+
    Omit any unavailable value; do not add substitute device facts. The profile
    is brief diagnostic context, not an upgrade finding or surface result.
+
 8. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment. Keep the
    allow-listed **Test environment** values from the preceding step.
@@ -618,6 +628,7 @@ When the tester says `finish validation`:
 
    On edits, revise and reopen the same files. Never write to GitHub from
    `finish validation` alone.
+
 10. On `approve validation posts`, re-read and privacy-check every approved
     file. Publish each **Create issue** draft with
     `release-validation-finding`, and each corroboration draft to its selected
@@ -628,19 +639,19 @@ When the tester says `finish validation`:
     insertion needs no second approval; do not otherwise rewrite approved prose.
     Return the root comment URL and every finding URL.
 11. Give the tester this concise copy-ready Discord summary, populated only from
-   the same release-facing worksheet evidence and final comment:
+    the same release-facing worksheet evidence and final comment:
 
-   ```md
-   **Release validation — <stable-train> / <current-beta>**
-   Tested main: <full SHA>
-   Tested: <surfaces with non-empty Testing notes, or "No manual surface testing completed">
-   Key findings: <concise release findings, or "None reported">
-   Recommendation: <yes / no>
-   Details: <GitHub comment URL>
-   ```
+    ```md
+    **Release validation — <stable-train> / <current-beta>**
+    Tested main: <full SHA>
+    Tested: <surfaces with non-empty Testing notes, or "No manual surface testing completed">
+    Key findings: <concise release findings, or "None reported">
+    Recommendation: <yes / no>
+    Details: <GitHub comment URL>
+    ```
 
-   Keep it to these six lines. Exclude source gateway details, local paths,
-   OCM/setup information, cleanup, credentials, and untested surface guidance.
-   This is a copy/paste handoff for the tester; do not post it automatically.
+    Keep it to these six lines. Exclude source gateway details, local paths,
+    OCM/setup information, cleanup, credentials, and untested surface guidance.
+    This is a copy/paste handoff for the tester; do not post it automatically.
 
 The skill collects release feedback; it does not make the go/no-go decision.
