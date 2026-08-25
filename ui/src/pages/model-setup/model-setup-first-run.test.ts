@@ -105,7 +105,9 @@ function createFirstRunContext(refreshError?: string) {
     resourceBasePath: "/openclaw",
     navigate: vi.fn(),
     runtimeConfig: { ...runtimeConfig, runExternalMutation },
-  } as ApplicationContext;
+    // SAFETY: the first-run page consumes only the gateway, agent selection,
+    // navigation, and runtime config fixtures defined above.
+  } as unknown as ApplicationContext;
   return {
     client,
     context,
