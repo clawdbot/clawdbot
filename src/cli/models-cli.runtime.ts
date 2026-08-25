@@ -20,7 +20,7 @@ export function resolveModelAgentOption(
   );
 }
 
-/** `models` subcommands that only ever read or write global model config. */
+/** `models` subcommands that operate on global state only, never per-agent. */
 export type GlobalOnlyModelCommandName =
   | "set"
   | "set-image"
@@ -33,12 +33,14 @@ export function rejectAgentScopedModelCommand(
   command: Command,
   commandName: GlobalOnlyModelCommandName,
 ): void {
-  // These commands only touch global config; accepting --agent would imply per-agent scope.
+  // None of these resolve an agent, so accepting --agent would imply a scope that
+  // does not exist. Kept scope-neutral: `scan --no-probe` returns after printing
+  // the catalog without writing config at all.
   const agent = resolveOptionFromCommand<string>(command, "agent");
   if (!agent) {
     return;
   }
   throw new Error(
-    `openclaw models ${commandName} does not support --agent; it only reads or writes global model config. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
+    `openclaw models ${commandName} does not support --agent; it is global and never agent-scoped. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
   );
 }
