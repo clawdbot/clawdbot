@@ -87,7 +87,7 @@ const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
   // SAFETY: Logical session resolution only reads the immutable runtime config snapshot.
-  const currentSessionConfig = registryParams.runtime.config.current as () => OpenClawConfig;
+  const currentSessionConfig = () => registryParams.runtime.config.current() as OpenClawConfig;
   const pluginRuntimeById = new Map<string, PluginRuntime>();
   const pluginRuntimeRecordById = new Map<string, PluginRecord>();
   const activePluginRuntimeRecords = new WeakSet<PluginRecord>();
