@@ -1,3 +1,9 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 /**
  * Live A/B proof that the `message_tool_only` prompt rewrite changes real model
  * behavior, not just rendered prompt bytes (PR #128872).
@@ -65,12 +71,7 @@
  *     --trials 10 --models openai:gpt-5,anthropic:claude-sonnet-4-5 \
  *     --json /tmp/proof.json
  */
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseArgs } from "node:util";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { createMessageTool } from "../../src/agents/tools/message-tool-execution.js";
 import type { TemplateContext } from "../../src/auto-reply/templating.js";
 
@@ -252,18 +253,6 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
   throw new Error(`request failed: ${lastError}`);
 }
 
-function safeParseJson(raw: unknown): Record<string, unknown> {
-  if (typeof raw !== "string") {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
 async function runOpenAiTurn(model: string, system: string, user: string): Promise<TurnResult> {
   const payload = await postJson(
     "https://api.openai.com/v1/responses",
@@ -290,7 +279,7 @@ async function runOpenAiTurn(model: string, system: string, user: string): Promi
     if (item.type === "function_call") {
       toolCalls.push({
         name: typeof item.name === "string" ? item.name : "",
-        args: safeParseJson(item.arguments),
+        args: typeof item.arguments === "string" ? (safeParseJsonRecord(item.arguments) ?? {}) : {},
       });
       continue;
     }
