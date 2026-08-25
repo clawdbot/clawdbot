@@ -8,11 +8,11 @@ import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
   ACT_MAX_CLICK_DELAY_MS,
-  ACT_MAX_VIEWPORT_DIMENSION,
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "../constants.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import {

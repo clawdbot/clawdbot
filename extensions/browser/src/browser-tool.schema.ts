@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 import { BROWSER_TAB_BOUND_ACTIONS } from "./browser-tool-binding.js";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/constants.js";
 import type { BrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 const BROWSER_ACT_KINDS = [

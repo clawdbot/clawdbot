@@ -26,6 +26,8 @@ export const DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS = 8_000;
 export const DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS = 20_000;
 /** Default timeout for snapshot capture. */
 export const DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 20_000;
+/** Maximum viewport side length accepted by browser actions. */
+export const ACT_MAX_VIEWPORT_DIMENSION = 8192;
 /** Default idle age before session tab cleanup can close tabs. */
 export const DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES = 120;
 /** Default maximum tracked tabs kept per session. */

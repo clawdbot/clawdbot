@@ -1,7 +1,7 @@
 /**
  * Shared Browser CLI resize runner used by resize and set viewport commands.
  */
-import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/constants.js";
 import {
   callBrowserResize,
   parseBrowserPositiveIntegerValue,

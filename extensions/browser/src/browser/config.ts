@@ -6,6 +6,7 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   normalizeOptionalString,
@@ -18,10 +19,10 @@ import {
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
+import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { parseBooleanValue } from "../sdk-config.js";
 import { resolveUserPath } from "../utils.js";
-import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,

@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { createBrowserToolSchema, resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/constants.js";
 
 type SchemaRecord = Record<string, { maximum?: number; properties?: SchemaRecord }>;
 type SchemaProperty = {
