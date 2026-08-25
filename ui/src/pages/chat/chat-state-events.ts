@@ -44,6 +44,11 @@ import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
+import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "./composer-persistence.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
@@ -66,6 +71,19 @@ function sessionMessageMatchesChat(
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
   return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
+}
+
+function chatEventOutboxScope(
+  state: ChatPageHost,
+  payload: ChatEventPayload | undefined,
+): StoredChatOutboxScope | undefined {
+  if (!payload?.sessionKey) {
+    return undefined;
+  }
+  const agentId = isUiGlobalSessionKey(payload.sessionKey)
+    ? selectedGlobalEventAgentId(state, payload.agentId ?? null)
+    : payload.agentId;
+  return resolveStoredChatOutboxScope(state, payload.sessionKey, agentId);
 }
 
 function globalSessionEventMatchesChat(
@@ -425,10 +443,13 @@ export function handlePageGatewayEvent(
 ) {
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
+    const sessionMatches = Boolean(
+      payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
+    );
     if (
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
-      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) &&
+      sessionMatches &&
       // Same-session background streams cannot clear the foreground run's status.
       (!state.chatRunId || state.chatRunId === payload.runId) &&
       state.observerDigest &&
@@ -436,26 +457,26 @@ export function handlePageGatewayEvent(
     ) {
       state.observerDigest = null;
     }
-    if (
-      payload?.state === "delta" &&
-      typeof payload.deltaText === "string" &&
-      chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
-    ) {
+    if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
       refreshPullRequestsForStreamedLinks(state, payload, payload.deltaText);
     }
-    const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
+    const shouldCelebrateFirstReply =
+      sessionMatches && hasVisibleFinalAssistantReply(state, payload);
     const shouldRefreshPullRequests =
       shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
     const terminal =
       payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
-    const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
+    const outboxScope = terminal ? chatEventOutboxScope(state, payload) : undefined;
+    const delivered = outboxScope
+      ? rememberDeliveredQueuedUserTurn(state, payload?.runId, outboxScope)
+      : null;
     if (delivered) {
       // The queued projection is the only local copy until history catches up.
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state, payload);
-    if (terminal) {
+    if (terminal && sessionMatches) {
       clearPendingQueueItemsForRun(state, payload?.runId);
     }
     if (shouldCelebrateFirstReply && result === "final") {
@@ -466,9 +487,11 @@ export function handlePageGatewayEvent(
     }
     replayPendingSessionMessageReload(state, payload, isPresented);
     if (terminal) {
-      removeDeliveredQueuedChatSendForRun(state, payload?.runId);
+      if (outboxScope) {
+        removeDeliveredQueuedChatSendForRun(state, payload?.runId, outboxScope);
+      }
       void resumeStoredChatOutboxes(state);
-      if (chatScopedEventSessionMatches(state, payload?.sessionKey, payload?.agentId)) {
+      if (sessionMatches) {
         if (isPresented()) {
           refreshSessionWorkspace(state);
         } else {
@@ -537,6 +560,7 @@ const deliveredQueueTurnsByClient = new WeakMap<object, Map<string, ChatQueueIte
 function rememberDeliveredQueuedUserTurn(
   state: ChatPageHost,
   runId: string | undefined,
+  scope: StoredChatOutboxScope,
 ): ChatQueueItem | null {
   if (!runId) {
     return null;
@@ -550,10 +574,11 @@ function rememberDeliveredQueuedUserTurn(
     turns = new Map();
     deliveredQueueTurnsByClient.set(owner, turns);
   }
-  const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
+  const deliveryKey = `${storedChatOutboxScopeKey(scope)}|${runId}`;
+  const stored = readDeliveredQueuedChatSendForRun(state, runId, scope)?.item;
   if (stored) {
-    turns.delete(runId);
-    turns.set(runId, stored);
+    turns.delete(deliveryKey);
+    turns.set(deliveryKey, stored);
     while (turns.size > MAX_REMEMBERED_DELIVERED_QUEUE_TURNS) {
       const oldestRunId = turns.keys().next().value;
       if (typeof oldestRunId !== "string") {
@@ -562,5 +587,5 @@ function rememberDeliveredQueuedUserTurn(
       turns.delete(oldestRunId);
     }
   }
-  return stored ?? turns.get(runId) ?? null;
+  return stored ?? turns.get(deliveryKey) ?? null;
 }

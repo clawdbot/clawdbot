@@ -396,8 +396,9 @@ export function removeQueuedMessage(host: ChatQueueScopedSessionHost, id: string
 export function removeDeliveredQueuedChatSendForRun(
   host: ChatQueueScopedSessionHost,
   runId: string | undefined,
+  scope: StoredChatOutboxScope,
 ): ChatQueueItem | null {
-  const match = readDeliveredQueuedChatSendForRun(host, runId);
+  const match = readDeliveredQueuedChatSendForRun(host, runId, scope);
   if (!match) {
     return null;
   }
@@ -417,11 +418,13 @@ export function removeDeliveredQueuedChatSendForRun(
 export function readDeliveredQueuedChatSendForRun(
   host: ChatQueueScopedSessionHost,
   runId: string | undefined,
+  scope: StoredChatOutboxScope,
 ): { item: ChatQueueItem; outbox: StoredChatOutbox } | null {
   if (!runId) {
     return null;
   }
   const match = listStoredChatOutboxes(host)
+    .filter((outbox) => outbox.sessionKey === scope.sessionKey && outbox.agentId === scope.agentId)
     .flatMap((outbox) => outbox.queue.map((item) => ({ item, outbox })))
     .find(({ item }) => item.sendRunId === runId);
   return match ?? null;
