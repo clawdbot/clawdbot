@@ -161,31 +161,33 @@ export class ReefTransportClient {
     ]);
   }
 
-  mintFriendCode(): Promise<{ code: string; expires: number }> {
-    return this.signed("POST", "/v1/friend-codes");
+  mintFriendCode(signal?: AbortSignal): Promise<{ code: string; expires: number }> {
+    return this.signed("POST", "/v1/friend-codes", undefined, signal);
   }
-  requestFriend(to: string, code?: string): Promise<{ status: string }> {
+  requestFriend(to: string, code?: string, signal?: AbortSignal): Promise<{ status: string }> {
     return this.signed(
       "POST",
       "/v1/friends/request",
       code ? { to, code } : { to },
-      undefined,
+      signal,
       code ? [code] : [],
     );
   }
   async respondFriend(
     friend: RelayFriend,
     accept: boolean,
+    signal?: AbortSignal,
   ): Promise<{ peer: string; status: "active" | "blocked" }> {
+    const request = {
+      peer: friend.peer,
+      accept,
+      expected_key_epoch: friend.key_epoch,
+      expected_ed25519_pub: friend.ed25519_pub,
+      expected_x25519_pub: friend.x25519_pub,
+    };
     let result: unknown;
     try {
-      result = await this.signed("POST", "/v1/friends/respond", {
-        peer: friend.peer,
-        accept,
-        expected_key_epoch: friend.key_epoch,
-        expected_ed25519_pub: friend.ed25519_pub,
-        expected_x25519_pub: friend.x25519_pub,
-      });
+      result = await this.signed("POST", "/v1/friends/respond", request, signal);
     } catch (error) {
       if (
         error instanceof ReefRelayError &&
@@ -222,11 +224,15 @@ export class ReefTransportClient {
   listFriends(signal?: AbortSignal): Promise<{ friendships: RelayFriend[] }> {
     return this.signed("GET", "/v1/friends", undefined, signal);
   }
-  removeFriend(peer: string): Promise<void> {
-    return this.signed("DELETE", `/v1/friends/${encodeURIComponent(peer)}`);
+  removeFriend(peer: string, signal?: AbortSignal): Promise<void> {
+    return this.signed("DELETE", `/v1/friends/${encodeURIComponent(peer)}`, undefined, signal);
   }
-  sendEnvelope(peer: string, envelope: Envelope): Promise<{ id: string; status: string }> {
-    return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope);
+  sendEnvelope(
+    peer: string,
+    envelope: Envelope,
+    signal?: AbortSignal,
+  ): Promise<{ id: string; status: string }> {
+    return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope, signal);
   }
   acknowledge(peer: string, id: string, receipt: SignedReceipt): Promise<{ result: string }> {
     return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}/ack`, { id, receipt });

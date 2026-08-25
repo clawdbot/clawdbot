@@ -43,14 +43,15 @@ export class ReefFriendManager {
     readonly transport: ReefTransportClient,
     readonly trust: ReefTrustStore,
     readonly pairing: ReefPairingApprovals,
+    private readonly authoritySignal?: AbortSignal,
   ) {}
 
   mintCode() {
-    return this.transport.mintFriendCode();
+    return this.#serialize((signal) => this.transport.mintFriendCode(signal));
   }
 
   request(peer: string, code?: string): Promise<{ status: string }> {
-    return this.#serialize(async () => {
+    return this.#serialize(async (signal) => {
       const normalized = normalizeReefTarget(peer);
       if (!normalized) {
         throw new Error(`Invalid Reef peer handle: ${peer}`);
@@ -60,7 +61,7 @@ export class ReefFriendManager {
       const requestId = this.trust.recordOutboundRequest(normalized);
       let result: { status: string };
       try {
-        result = await this.transport.requestFriend(normalized, code);
+        result = await this.transport.requestFriend(normalized, code, signal);
       } catch (error) {
         const definitiveRejection =
           error instanceof ReefRelayError &&
@@ -97,7 +98,7 @@ export class ReefFriendManager {
       if (!normalized) {
         throw new Error(`Invalid Reef peer handle: ${peer}`);
       }
-      // Local revocation remains fail-closed even when the relay is offline.
+      // Once trust is revoked, finish cleanup even if the account closes.
       this.trust.remove(normalized);
       const results = await Promise.allSettled([
         this.#removePairingApprovalsForPeer(normalized),
@@ -128,8 +129,11 @@ export class ReefFriendManager {
   }
 
   async list(): Promise<ListedReefFriend[]> {
+    const signal = this.authoritySignal;
+    signal?.throwIfAborted();
     const local = new Map(this.trust.list().map((entry) => [entry.peer, entry.trust]));
-    const { friendships } = await this.transport.listFriends();
+    const { friendships } = await this.transport.listFriends(signal);
+    signal?.throwIfAborted();
     const listed: ListedReefFriend[] = [];
     for (const friend of friendships) {
       const autonomy = local.get(friend.peer)?.autonomy;
@@ -142,9 +146,10 @@ export class ReefFriendManager {
     return listed;
   }
 
-  surfacePairingCandidates(issue: PairingChallenge, signal?: AbortSignal): Promise<void> {
-    return this.#serialize(async () => {
+  surfacePairingCandidates(issue: PairingChallenge, lifecycleSignal?: AbortSignal): Promise<void> {
+    return this.#serialize(async (signal) => {
       const { friendships } = await this.transport.listFriends(signal);
+      signal?.throwIfAborted();
       const approvals = await this.#loadPairingApprovals(friendships);
 
       for (const friend of friendships) {
@@ -173,6 +178,7 @@ export class ReefFriendManager {
         if (!inboundPending && !missingLocalApproval && !needsReapproval) {
           continue;
         }
+        signal?.throwIfAborted();
         await issue({
           peer: friend.peer,
           fingerprint: fingerprint(friend.ed25519_pub, friend.x25519_pub),
@@ -180,16 +186,18 @@ export class ReefFriendManager {
           approvalToken: this.trust.createPairingApproval(friend, snapshot.revision),
         });
       }
-    });
+    }, lifecycleSignal);
   }
 
-  reconcile(signal?: AbortSignal): Promise<string[]> {
-    return this.#serialize(async () => {
+  reconcile(lifecycleSignal?: AbortSignal): Promise<string[]> {
+    return this.#serialize(async (signal) => {
       const { friendships } = await this.transport.listFriends(signal);
+      signal?.throwIfAborted();
       const approvals = await this.#loadPairingApprovals(friendships);
       const changed = new Set<string>();
 
       for (const friend of friendships) {
+        signal?.throwIfAborted();
         if (friend.status === "blocked") {
           continue;
         }
@@ -251,9 +259,11 @@ export class ReefFriendManager {
         if (approvalEntry && !(await this.pairing.remove(approvalEntry))) {
           continue;
         }
+        signal?.throwIfAborted();
 
         if (friend.status === "pending" || friend.status === "reapprove_required") {
-          await this.transport.respondFriend(friend, true);
+          await this.transport.respondFriend(friend, true, signal);
+          signal?.throwIfAborted();
         }
 
         const committed = this.trust.commitPeerTrust(friend, {
@@ -280,7 +290,7 @@ export class ReefFriendManager {
       }
 
       return [...changed].toSorted();
-    });
+    }, lifecycleSignal);
   }
 
   async #loadPairingApprovals(
@@ -324,8 +334,20 @@ export class ReefFriendManager {
     this.trust.remove(peer);
   }
 
-  #serialize<T>(operation: () => T | Promise<T>): Promise<T> {
-    const result = this.#mutations.then(operation);
+  #serialize<T>(
+    operation: (signal?: AbortSignal) => T | Promise<T>,
+    lifecycleSignal?: AbortSignal,
+  ): Promise<T> {
+    const signal =
+      lifecycleSignal && this.authoritySignal
+        ? AbortSignal.any([lifecycleSignal, this.authoritySignal])
+        : (lifecycleSignal ?? this.authoritySignal);
+    const result = this.#mutations.then(async () => {
+      signal?.throwIfAborted();
+      const value = await operation(signal);
+      signal?.throwIfAborted();
+      return value;
+    });
     this.#mutations = result.then(
       () => undefined,
       () => undefined,
