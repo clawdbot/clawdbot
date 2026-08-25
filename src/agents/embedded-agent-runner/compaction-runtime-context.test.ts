@@ -114,6 +114,7 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
 describe("buildEmbeddedCompactionRuntimeContext", () => {
   beforeEach(() => {
     resetProcessRegistryForTests();
+    vi.useRealTimers();
   });
 
   it("preserves sender and current message routing for compaction", () => {
