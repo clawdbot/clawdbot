@@ -43,9 +43,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const card = page.locator(".chat-assistant-attachment-card--document");
       expect(await card.getAttribute("class")).toContain("chat-assistant-attachment-card--compact");
-      expect(
-        await card.locator(".chat-assistant-attachment-card__expand").textContent(),
-      ).toBe("Open");
+      expect(await card.locator(".chat-assistant-attachment-card__expand").textContent()).toBe(
+        "Open",
+      );
       expect(await card.locator(".chat-assistant-attachment-card__table").count()).toBe(0);
       expect(await card.locator("iframe").count()).toBe(0);
       const download = card.locator(".chat-assistant-attachment-card__download");

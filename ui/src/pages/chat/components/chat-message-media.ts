@@ -481,12 +481,9 @@ export function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
-  for (const {
-    path: mediaPath,
-    mediaType,
-    fileName,
-    sizeBytes,
-  } of readTranscriptMediaEntries(message)) {
+  for (const { path: mediaPath, mediaType, fileName, sizeBytes } of readTranscriptMediaEntries(
+    message,
+  )) {
     if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }

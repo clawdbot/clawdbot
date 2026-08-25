@@ -5,11 +5,8 @@ import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
+import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import {
-  openAttachmentCardFromClick,
-  renderAttachmentCardHeader,
-} from "./chat-attachment-card.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -480,17 +477,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const bucketWidth = WAVEFORM_MIN_BAR_WIDTH_PX + WAVEFORM_MIN_GAP_PX;
     const count =
       this.waveformWidth > 0
-        ? Math.max(
-            1,
-            Math.min(waveformPeaks.length, Math.floor(this.waveformWidth / bucketWidth)),
-          )
+        ? Math.max(1, Math.min(waveformPeaks.length, Math.floor(this.waveformWidth / bucketWidth)))
         : waveformPeaks.length;
     const displayedPeaks = Array.from({ length: count }, (_, index) => {
       const start = Math.floor((index * waveformPeaks.length) / count);
-      const end = Math.max(
-        start + 1,
-        Math.floor(((index + 1) * waveformPeaks.length) / count),
-      );
+      const end = Math.max(start + 1, Math.floor(((index + 1) * waveformPeaks.length) / count));
       let total = 0;
       for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
         total += waveformPeaks[sourceIndex] ?? 0;
@@ -562,14 +553,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                 </button>
                 <div class="chat-audio-player__time" aria-live="off">
                   <span
-                    >${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(
-                      this.duration,
-                    )}</span
+                    >${formatChatMediaTime(this.currentTime)} /
+                    ${formatChatMediaTime(this.duration)}</span
                   >
                 </div>
-                <div class="chat-audio-player__timeline">
-                  ${this.renderSeek(progress)}
-                </div>
+                <div class="chat-audio-player__timeline">${this.renderSeek(progress)}</div>
                 <button
                   type="button"
                   class="chat-audio-player__volume"

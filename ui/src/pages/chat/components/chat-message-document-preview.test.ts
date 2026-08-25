@@ -6,10 +6,7 @@ import {
   renderAttachmentDocumentPreview,
   resolveDocumentPreviewKind,
 } from "./chat-message-document-preview.ts";
-import {
-  releaseChatMediaResourceSubscriber,
-  type AttachmentItem,
-} from "./chat-message-media.ts";
+import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
 
 const subscribers = new Set<() => void>();
 
@@ -168,12 +165,7 @@ describe("parseDelimitedPreview", () => {
     );
     const rerender = () =>
       render(
-        renderAssistantAttachments(
-          [attachment],
-          { onRequestUpdate: rerender },
-          undefined,
-          vi.fn(),
-        ),
+        renderAssistantAttachments([attachment], { onRequestUpdate: rerender }, undefined, vi.fn()),
         container,
       );
     subscribers.add(rerender);
@@ -219,12 +211,7 @@ describe("parseDelimitedPreview", () => {
     );
     const rerender = () =>
       render(
-        renderAssistantAttachments(
-          [attachment],
-          { onRequestUpdate: rerender },
-          undefined,
-          vi.fn(),
-        ),
+        renderAssistantAttachments([attachment], { onRequestUpdate: rerender }, undefined, vi.fn()),
         container,
       );
     subscribers.add(rerender);

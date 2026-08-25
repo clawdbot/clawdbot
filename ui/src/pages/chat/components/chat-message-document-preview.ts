@@ -287,12 +287,7 @@ export function renderAttachmentDocumentPreview(
               type="button"
               class="chat-assistant-attachment-card__preview-load"
               @click=${(event: Event) =>
-                requestDocumentFramePreview(
-                  event,
-                  attachmentUrl,
-                  attachment.url,
-                  onRequestUpdate,
-                )}
+                requestDocumentFramePreview(event, attachmentUrl, attachment.url, onRequestUpdate)}
             >
               ${t("chat.attachments.loadPreview")}
             </button>`}

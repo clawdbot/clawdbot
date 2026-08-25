@@ -4129,11 +4129,7 @@ describe("grouped chat rendering", () => {
     const card = expectElement(container, ".chat-assistant-attachment-card--document", HTMLElement);
     expect(card.classList.contains("chat-assistant-attachment-card--compact")).toBe(true);
     expect(card.querySelector(".chat-assistant-attachment-card__preview-text")).toBeNull();
-    const open = expectElement(
-      card,
-      ".chat-assistant-attachment-card__expand",
-      HTMLButtonElement,
-    );
+    const open = expectElement(card, ".chat-assistant-attachment-card__expand", HTMLButtonElement);
     expect(open.textContent?.trim()).toBe("Open");
     expect(
       card
@@ -5054,21 +5050,12 @@ describe("grouped chat rendering", () => {
     renderAssistantMessage(
       container,
       createAssistantMessage([
-        createAttachmentBlock(
-          "https://example.com/download/asset",
-          "document",
-          "asset",
-          "",
-        ),
+        createAttachmentBlock("https://example.com/download/asset", "document", "asset", ""),
       ]),
       { showToolCalls: false, onOpenSidebar },
     );
 
-    expectElement(
-      container,
-      ".chat-assistant-attachment-card__expand",
-      HTMLButtonElement,
-    ).click();
+    expectElement(container, ".chat-assistant-attachment-card__expand", HTMLButtonElement).click();
 
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "attachment", attachmentKind: "document" }),

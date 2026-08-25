@@ -29,8 +29,8 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachment-href.ts";
+import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -203,13 +203,13 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
         ? content.title.trim() || t("chat.detailPanel.imagePreview")
         : content?.kind === "attachment"
           ? content.title.trim() || t("chat.detailPanel.file")
-        : content?.kind === "file"
-          ? content.name.trim() || t("chat.detailPanel.file")
-          : content?.kind === "session-diff"
-            ? t("chat.sessionDiff.title")
-            : content?.kind === "markdown"
-              ? t("chat.detailPanel.markdownPreview")
-              : t("chat.detailPanel.toolDetails");
+          : content?.kind === "file"
+            ? content.name.trim() || t("chat.detailPanel.file")
+            : content?.kind === "session-diff"
+              ? t("chat.sessionDiff.title")
+              : content?.kind === "markdown"
+                ? t("chat.detailPanel.markdownPreview")
+                : t("chat.detailPanel.toolDetails");
   return html`
     <div class="sidebar-panel">
       ${props.embedded
@@ -322,38 +322,42 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       ? html`<div class="sidebar-attachment-preview">
                           ${renderSidebarAttachment(content, props.onAttachmentUpdate)}
                         </div>`
-                    : html`
-                        <section class="sidebar-markdown-shell">
-                          <div class="sidebar-markdown-shell__toolbar">
-                            <div class="sidebar-markdown-shell__intro">
-                              <div class="sidebar-markdown-shell__eyebrow">
-                                ${icons.scrollText}
-                                <span>${t("chat.detailPanel.renderedMarkdown")}</span>
-                              </div>
-                              <div class="sidebar-markdown-shell__hint">
-                                ${t("chat.detailPanel.renderedMarkdownHint")}
-                              </div>
-                            </div>
-                            <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
-                              ${t("chat.detailPanel.viewRawText")}
-                            </button>
-                          </div>
-                          ${markdownHtml
-                            ? html`
-                                <article
-                                  class="sidebar-markdown-reader sidebar-markdown"
-                                  dir=${detectTextDirection(content.content)}
-                                >
-                                  ${unsafeHTML(markdownHtml)}
-                                </article>
-                              `
-                            : html`
-                                <div class="sidebar-markdown-empty">
-                                  ${t("chat.detailPanel.noPreviewableMarkdown")}
+                      : html`
+                          <section class="sidebar-markdown-shell">
+                            <div class="sidebar-markdown-shell__toolbar">
+                              <div class="sidebar-markdown-shell__intro">
+                                <div class="sidebar-markdown-shell__eyebrow">
+                                  ${icons.scrollText}
+                                  <span>${t("chat.detailPanel.renderedMarkdown")}</span>
                                 </div>
-                              `}
-                        </section>
-                      `
+                                <div class="sidebar-markdown-shell__hint">
+                                  ${t("chat.detailPanel.renderedMarkdownHint")}
+                                </div>
+                              </div>
+                              <button
+                                @click=${props.onViewRawText}
+                                class="btn btn--sm"
+                                type="button"
+                              >
+                                ${t("chat.detailPanel.viewRawText")}
+                              </button>
+                            </div>
+                            ${markdownHtml
+                              ? html`
+                                  <article
+                                    class="sidebar-markdown-reader sidebar-markdown"
+                                    dir=${detectTextDirection(content.content)}
+                                  >
+                                    ${unsafeHTML(markdownHtml)}
+                                  </article>
+                                `
+                              : html`
+                                  <div class="sidebar-markdown-empty">
+                                    ${t("chat.detailPanel.noPreviewableMarkdown")}
+                                  </div>
+                                `}
+                          </section>
+                        `
             : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `}
       </div>
     </div>

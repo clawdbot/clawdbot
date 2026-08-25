@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { deflateRawSync } from "node:zlib";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { deflateRawSync } from "node:zlib";
 import type { Plugin } from "vite";
 
 export const CHAT_ATTACHMENT_FIXTURE_PATH = "/__fixtures/chat-attachments/";
@@ -171,13 +171,10 @@ const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
   ),
   "notes.txt": textAsset("Plain text attachment.\nSecond line for the preview.\n", "text/plain"),
   "preview.html": textAsset(
-    "<!doctype html><html><body style=\"font:16px system-ui;padding:32px;color:#172033\"><h1>Attachment preview</h1><p>A real HTML attachment rendered inside the card.</p><hr><p>Scroll to see the fade at the end.</p></body></html>",
+    '<!doctype html><html><body style="font:16px system-ui;padding:32px;color:#172033"><h1>Attachment preview</h1><p>A real HTML attachment rendered inside the card.</p><hr><p>Scroll to see the fade at the end.</p></body></html>',
     "text/html",
   ),
-  "styles.css": textAsset(
-    ".attachment-card {\n  display: grid;\n  gap: 12px;\n}\n",
-    "text/css",
-  ),
+  "styles.css": textAsset(".attachment-card {\n  display: grid;\n  gap: 12px;\n}\n", "text/css"),
   "settings.json": textAsset(
     '{\n  "theme": "dark",\n  "attachments": true\n}\n',
     "application/json",
@@ -217,7 +214,7 @@ const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   ),
   "config.xml": textAsset(
-    "<?xml version=\"1.0\"?><attachment><name>fixture</name><ready>true</ready></attachment>\n",
+    '<?xml version="1.0"?><attachment><name>fixture</name><ready>true</ready></attachment>\n',
     "application/xml",
   ),
   "deploy.yaml": textAsset("name: attachment-fixture\nready: true\n", "application/yaml"),
@@ -447,8 +444,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           attachment: {
             kind: "document",
             label: "removed-file.docx",
-            mimeType:
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             url: fixtureUrl("removed-file.docx"),
           },
         },
@@ -463,11 +459,7 @@ function readFixtureAsset(pathname: string): FixtureAsset | undefined {
   return getChatAttachmentAssets()[fileName];
 }
 
-function serveAsset(
-  asset: FixtureAsset,
-  req: IncomingMessage,
-  res: ServerResponse,
-): void {
+function serveAsset(asset: FixtureAsset, req: IncomingMessage, res: ServerResponse): void {
   const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/u);
   const start = range?.[1] ? Number(range[1]) : 0;
   const requestedEnd = range?.[2] ? Number(range[2]) : asset.body.length - 1;
@@ -516,9 +508,10 @@ function serveAssistantMedia(
   const source = requestUrl.searchParams.get("source") ?? "";
   const fileName = decodeURIComponent(source).split("/").pop() ?? "";
   const renewingTicket = source.startsWith(RENEWING_MEDIA_FIXTURE_ROOT);
-  const asset = source.startsWith(CHAT_ATTACHMENT_FIXTURE_PATH) || renewingTicket
-    ? readFixtureAsset(source)
-    : undefined;
+  const asset =
+    source.startsWith(CHAT_ATTACHMENT_FIXTURE_PATH) || renewingTicket
+      ? readFixtureAsset(source)
+      : undefined;
   if (requestUrl.searchParams.get("meta") === "1") {
     res.statusCode = 200;
     res.setHeader("content-type", "application/json");

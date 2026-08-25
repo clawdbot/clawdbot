@@ -1519,8 +1519,8 @@ openclaw-chat-video-player {
 }
 
 .chat-assistant-attachment-card__header:has(
-    .chat-attachment-file-icon[data-mode="large-placeholder"]
-  ) {
+  .chat-attachment-file-icon[data-mode="large-placeholder"]
+) {
   padding-left: 10px;
 }
 
@@ -1949,8 +1949,7 @@ openclaw-chat-video-player {
   background-image: var(--chat-file-icon-shell-dark);
 }
 
-.chat-attachment-file-icon[data-mode="preview-with-favicon"]
-  .chat-attachment-file-icon__compact {
+.chat-attachment-file-icon[data-mode="preview-with-favicon"] .chat-attachment-file-icon__compact {
   display: block;
   background-image: var(--chat-file-icon-compact-dark);
 }
