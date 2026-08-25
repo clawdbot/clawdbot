@@ -3885,7 +3885,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
       "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
       "node scripts/e2e/lib/plugins/npm-registry-server.mjs",
-      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version"',
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version"',
       "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
     ]);
     expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(

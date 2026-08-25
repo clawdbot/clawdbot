@@ -152,7 +152,7 @@ process.stdout.write(
 NODE
   )
   mkdir -p "$registry_root"
-  OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version" \
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version" \
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$registry_root/port" \
