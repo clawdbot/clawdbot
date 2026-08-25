@@ -80,7 +80,9 @@ describe("buildSlackInteractiveBlocks", () => {
     const text = `${"x".repeat(2_998)}  &amp;🚀tail`;
     const blocks = buildSlackInteractiveBlocks({ blocks: [{ type: "text", text }] });
     const sections = blocks.map((block) =>
-      block.type === "section" && block.text?.type === "mrkdwn" ? block.text.text : "",
+      block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+        ? block.text.text
+        : "",
     );
 
     expect(sections.join("")).toBe(text);
@@ -98,7 +100,11 @@ describe("buildSlackInteractiveBlocks", () => {
         { type: "buttons", buttons: [{ label: long, value: long }] },
       ],
     });
-    const sections = blocks.filter((block) => block.type === "section");
+    const sections = blocks.flatMap((block) =>
+      block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+        ? [block.text.text]
+        : [],
+    );
     const selectBlock = blocks.find(
       (block) => block.type === "actions" && block.block_id === "openclaw_reply_select_1",
     ) as {
@@ -110,8 +116,8 @@ describe("buildSlackInteractiveBlocks", () => {
       elements?: Array<{ value?: string }>;
     };
 
-    expect(sections.map((section) => section.text?.text).join("")).toBe("y".repeat(3_100));
-    expect(sections.every((section) => (section.text?.text ?? "").length <= 3_000)).toBe(true);
+    expect(sections.join("")).toBe("y".repeat(3_100));
+    expect(sections.every((section) => section.length <= 3_000)).toBe(true);
     expect((selectBlock.elements?.[0]?.placeholder?.text ?? "").length).toBeLessThanOrEqual(75);
     expect(buttonBlock.elements?.[0]?.value).toBe(long);
   });
@@ -413,10 +419,11 @@ describe("buildSlackPresentationBlocks", () => {
       const presentation: MessagePresentation = { blocks: [{ type, text }] };
       const blocks = buildSlackPresentationBlocks(presentation);
       const chunks = blocks.flatMap((block) => {
-        if (block.type === "section" && block.text?.type === "mrkdwn") {
+        if (block.type === "section" && "text" in block && block.text?.type === "mrkdwn") {
           return [block.text.text];
         }
-        const element = block.type === "context" ? block.elements[0] : undefined;
+        const element =
+          block.type === "context" && "elements" in block ? block.elements[0] : undefined;
         return element?.type === "mrkdwn" ? [element.text] : [];
       });
 

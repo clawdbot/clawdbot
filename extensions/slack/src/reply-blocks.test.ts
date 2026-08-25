@@ -535,7 +535,9 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       );
       const delivered = blockSegments.flatMap((blocks) =>
         blocks.flatMap((block) =>
-          block.type === "section" && block.text?.type === "mrkdwn" ? [block.text.text] : [],
+          block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+            ? [block.text.text]
+            : [],
         ),
       );
 
