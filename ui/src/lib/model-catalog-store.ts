@@ -1,6 +1,6 @@
 // Control UI model metadata boundary.
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ModelCatalogEntry } from "../api/types.ts";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
 // A picker open is an operator signal to revalidate, but full provider discovery can be slow.
@@ -16,6 +16,10 @@ type ModelCatalogCacheEntry = {
 };
 
 const modelCatalogCache = new WeakMap<GatewayBrowserClient, Map<string, ModelCatalogCacheEntry>>();
+
+export function invalidateModelCatalogCache(client: GatewayBrowserClient): void {
+  modelCatalogCache.delete(client);
+}
 
 function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCatalogCacheEntry> {
   let cache = modelCatalogCache.get(client);

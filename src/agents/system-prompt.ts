@@ -94,7 +94,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  /Default heartbeat prompt:\r?\n`(?:Read HEARTBEAT\.md if it exists|Follow the heartbeat monitor scratch context when provided\.)[^`\r\n]*HEARTBEAT_OK\.`/gu;
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -162,9 +162,8 @@ function isBootstrapContextFile(pathValue: string): boolean {
 }
 
 function sanitizeContextFileContentForPrompt(content: string): string {
-  // Claude Code subscription mode rejects this exact prompt-policy quote when it
-  // appears in system context. The live heartbeat user turn still carries the
-  // actual instruction, and the generated heartbeat section below covers behavior.
+  // Old workspace templates otherwise route Claude subscriptions to paid extra
+  // usage; heartbeat behavior remains in the real user turn and generated section.
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
@@ -246,9 +245,8 @@ function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: s
   }
   return [
     "## Heartbeats",
-    "Heartbeat poll; nothing needs attention: reply exactly:",
-    "HEARTBEAT_OK",
-    'Attention needed: alert text only; omit "HEARTBEAT_OK".',
+    `Heartbeat poll; nothing needs attention: reply exactly ${SILENT_REPLY_TOKEN}.`,
+    "Attention needed: alert text only.",
     "",
   ];
 }

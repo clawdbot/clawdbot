@@ -1,7 +1,7 @@
 // Control UI tests cover models behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadModels } from "./models.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { invalidateModelCatalogCache, loadModels } from "./model-catalog-store.ts";
 
 describe("loadModels", () => {
   it("requests the configured model list view", async () => {
@@ -198,6 +198,27 @@ describe("loadModels", () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("retires a picker catalog when its logical Gateway connection changes", async () => {
+    const beforeReconnect = [{ id: "before", name: "Before", provider: "openai" }];
+    const afterReconnect = [{ id: "after", name: "After", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: beforeReconnect })
+      .mockResolvedValueOnce({ models: afterReconnect });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
+      beforeReconnect,
+    );
+
+    invalidateModelCatalogCache(client);
+
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
+      afterReconnect,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a failed account catalog refresh retryable", async () => {

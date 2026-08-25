@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
@@ -11,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { parsePositiveInteger } from "./transport-utils.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
@@ -274,16 +274,6 @@ function resolveOpenAIResponsesPayloadCapabilities(
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
   };
-}
-
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string") {
-    return parseStrictPositiveInteger(value);
-  }
-  return undefined;
 }
 
 function resolveOpenAIResponsesCompactThreshold(model: {

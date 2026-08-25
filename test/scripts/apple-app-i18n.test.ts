@@ -10,6 +10,7 @@ import {
   findAmbiguousRuntimeInterpolations,
   infoPlistTranslationCandidates,
   selectInfoPlistTranslation,
+  serializeAppleCatalog,
   verifyAppleAppI18n,
 } from "../../scripts/apple-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -143,6 +144,49 @@ describe("Apple app i18n catalogs", () => {
         build,
       ),
     ).toThrow("Apple catalog apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings is stale");
+  });
+
+  it("serializes one complete localization key per line without losing nested metadata", () => {
+    const catalog = {
+      sourceLanguage: "en",
+      strings: {
+        Plain: {
+          localizations: {
+            en: { stringUnit: { state: "translated", value: "Plain" } },
+          },
+        },
+        "Rich %@": {
+          comment: "Translator context",
+          extractionState: "manual",
+          shouldTranslate: false,
+          localizations: {
+            en: {
+              substitutions: {
+                count: {
+                  variations: {
+                    plural: {
+                      one: { stringUnit: { state: "translated", value: "One %@" } },
+                      other: { stringUnit: { state: "new", value: "%@ items" } },
+                    },
+                  },
+                },
+              },
+              stringUnit: { state: "translated", value: "Rich %@" },
+            },
+          },
+        },
+      },
+      version: "1.0",
+    };
+
+    const serialized = serializeAppleCatalog(catalog);
+    const lines = serialized.trimEnd().split("\n");
+
+    expect(JSON.parse(serialized)).toEqual(catalog);
+    expect(lines).toHaveLength(Object.keys(catalog.strings).length + 6);
+    expect(lines[3]).toBe(`    "Plain": ${JSON.stringify(catalog.strings.Plain)},`);
+    expect(lines[4]).toBe(`    "Rich %@": ${JSON.stringify(catalog.strings["Rich %@"])}`);
+    expect(serialized.endsWith("\n")).toBe(true);
   });
 
   it("keeps macOS settings literals localized and runtime values verbatim", async () => {

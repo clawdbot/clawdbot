@@ -49,14 +49,15 @@ function createBackupManifest(
 function encodeTarEntry(params: {
   path: string;
   contents?: string;
-  type?: "File" | "Link";
+  type?: "File" | "Link" | "SymbolicLink";
   linkpath?: string;
 }): Buffer {
   const body = Buffer.from(params.contents ?? "", "utf8");
+  const type = params.type ?? "File";
   const header = new tar.Header({
     path: params.path,
-    type: params.type ?? "File",
-    size: params.type === "Link" ? 0 : body.length,
+    type,
+    size: type === "File" ? body.length : 0,
     mode: 0o600,
     uid: 0,
     gid: 0,
@@ -65,7 +66,7 @@ function encodeTarEntry(params: {
   });
   const headerBlock = Buffer.alloc(512);
   header.encode(headerBlock);
-  if (params.type === "Link") {
+  if (type !== "File") {
     return headerBlock;
   }
   const padding = Buffer.alloc((512 - (body.length % 512)) % 512);
@@ -1023,6 +1024,60 @@ describe("backupVerifyCommand", () => {
         },
       );
     }
+  });
+
+  it("validates cross-asset, dangling, and escaping relative symbolic links", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-safe-symlinks-");
+    const archivePath = path.join(tempDir, "backup.tar.gz");
+    const stateAssetRoot = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const workspaceAssetRoot = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/workspace`;
+    const manifest = createBackupManifest(stateAssetRoot);
+    manifest.assets.push({
+      kind: "workspace",
+      sourcePath: "/tmp/workspace",
+      archivePath: workspaceAssetRoot,
+    });
+    const archiveEntries = [
+      encodeTarEntry({
+        path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+        contents: `${JSON.stringify(manifest)}\n`,
+      }),
+      encodeTarEntry({ path: `${stateAssetRoot}/state.txt`, contents: "state\n" }),
+      encodeTarEntry({ path: `${workspaceAssetRoot}/workspace.txt`, contents: "workspace\n" }),
+      encodeTarEntry({
+        path: `${stateAssetRoot}/workspace-link`,
+        type: "SymbolicLink",
+        linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
+      }),
+      encodeTarEntry({
+        path: `${stateAssetRoot}/dangling-link`,
+        type: "SymbolicLink",
+        linkpath: "missing-durable-file.txt",
+      }),
+    ];
+    await fs.writeFile(
+      archivePath,
+      gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
+    );
+
+    await expect(
+      backupVerifyCommand(createBackupVerifyRuntime(), { archive: archivePath }),
+    ).resolves.toMatchObject({ ok: true, assetCount: 2, symlinkCount: 2 });
+
+    archiveEntries.push(
+      encodeTarEntry({
+        path: `${stateAssetRoot}/escaping-link`,
+        type: "SymbolicLink",
+        linkpath: "../outside-declared-assets",
+      }),
+    );
+    await fs.writeFile(
+      archivePath,
+      gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
+    );
+    await expect(
+      backupVerifyCommand(createBackupVerifyRuntime(), { archive: archivePath }),
+    ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
   });
 
   it("rejects unsafe hardlink targets", async () => {

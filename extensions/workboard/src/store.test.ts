@@ -5,7 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type WorkboardCard, WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -198,6 +199,45 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
     frsize: 1024,
     ffree: 0,
   };
+}
+
+const WORKBOARD_CARD_CHILD_INDEXES = [
+  ["workboard_card_events", "workboard_card_events_card_idx"],
+  ["workboard_card_attempts", "workboard_card_attempts_card_idx"],
+  ["workboard_card_comments", "workboard_card_comments_card_idx"],
+  ["workboard_card_links", "workboard_card_links_card_idx"],
+  ["workboard_card_proof", "workboard_card_proof_card_idx"],
+  ["workboard_card_artifacts", "workboard_card_artifacts_card_idx"],
+  ["workboard_card_notifications", "workboard_card_notifications_card_idx"],
+  ["workboard_worker_logs", "workboard_worker_logs_card_idx"],
+] as const;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function explainWorkboardQueryPlan(
+  db: DatabaseSync,
+  sql: string,
+  params: readonly (number | string | null)[] = [],
+): string {
+  const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
+    detail?: unknown;
+  }>;
+  return rows
+    .map((row) => (typeof row.detail === "string" ? row.detail : JSON.stringify(row.detail ?? "")))
+    .join("\n");
+}
+
+function withWorkboardSqliteDatabase(prefix: string, run: (db: DatabaseSync) => void): void {
+  const dir = tempDirs.make(prefix);
+  const dbPath = path.join(dir, "workboard.sqlite");
+  const stores = createWorkboardSqliteStores({ dbPath });
+  stores.close();
+  const db = new DatabaseSync(dbPath);
+  try {
+    run(db);
+  } finally {
+    db.close();
+  }
 }
 
 describe("WorkboardStore", () => {
@@ -540,6 +580,85 @@ describe("WorkboardStore", () => {
     const restored = await store.captureSession({ title: "Restore", sessionKey, boardId: "other" });
     expect([active.id, historical.id]).toContain(restored.id);
     expect(restored.metadata?.archivedAt).toBeUndefined();
+  });
+
+  it("uses card child indexes for per-card ordered reads", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-read-", (db) => {
+      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        const plan = explainWorkboardQueryPlan(
+          db,
+          `SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`,
+          ["card-1"],
+        );
+        expect(plan).toContain(index);
+        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+      }
+    });
+  });
+
+  it("uses card child indexes for whole-board ordered scans", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-scan-", (db) => {
+      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        const plan = explainWorkboardQueryPlan(
+          db,
+          `SELECT * FROM ${table} ORDER BY card_id ASC, ordinal ASC`,
+        );
+        expect(plan).toContain(index);
+        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+      }
+    });
+  });
+
+  it("uses card child indexes for parent-card cascades", () => {
+    withWorkboardSqliteDatabase("openclaw-workboard-index-cascade-", (db) => {
+      db.exec("PRAGMA foreign_keys = ON");
+      const plan = explainWorkboardQueryPlan(db, "DELETE FROM workboard_cards WHERE id = ?", [
+        "card-1",
+      ]);
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        expect(plan).toContain(index);
+      }
+    });
+  });
+
+  it("restores dropped card child indexes without changing the schema version", () => {
+    const dir = tempDirs.make("openclaw-workboard-index-reopen-");
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    initialized.close();
+    const db = new DatabaseSync(dbPath);
+    let initialMigrationIds: Array<{ id: string }>;
+    try {
+      initialMigrationIds = db
+        .prepare("SELECT id FROM workboard_schema_migrations ORDER BY id")
+        .all() as Array<{ id: string }>;
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        db.exec(`DROP INDEX ${index}`);
+      }
+    } finally {
+      db.close();
+    }
+
+    const reopened = createWorkboardSqliteStores({ dbPath });
+    reopened.close();
+    const verified = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const indexes = new Set(
+        (
+          verified.prepare("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Array<{
+            name: string;
+          }>
+        ).map((row) => row.name),
+      );
+      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
+        expect(indexes).toContain(index);
+      }
+      expect(
+        verified.prepare("SELECT id FROM workboard_schema_migrations ORDER BY id").all(),
+      ).toEqual(initialMigrationIds);
+    } finally {
+      verified.close();
+    }
   });
 
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
