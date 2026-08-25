@@ -1,7 +1,7 @@
 // Discord tests cover approval handler plugin behavior.
 import { describe, expect, it } from "vitest";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
-import { serializePayload } from "./internal/discord.js";
+import { DiscordUiContainer } from "./ui.js";
 
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
   const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
@@ -237,8 +237,11 @@ describe("discordApprovalNativeRuntime", () => {
       if (result.kind !== "update") {
         return;
       }
-      const payload = serializePayload({ components: [result.payload] });
-      const [container] = payload.components ?? [];
+      expect(result.payload).toBeInstanceOf(DiscordUiContainer);
+      if (!(result.payload instanceof DiscordUiContainer)) {
+        return;
+      }
+      const container = result.payload.serialize();
       expect(container).toMatchObject({
         accent_color: scenario.accentColor,
         components: expect.arrayContaining([
@@ -259,7 +262,7 @@ describe("discordApprovalNativeRuntime", () => {
           },
         ]),
       });
-      expect(JSON.stringify(payload)).not.toContain("custom_id");
+      expect(JSON.stringify(container)).not.toContain("custom_id");
     },
   );
 
