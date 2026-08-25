@@ -3878,6 +3878,24 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
   });
 
+  it("serves the version-matched Codex candidate during package onboarding", () => {
+    const runner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
+      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
+      "node scripts/e2e/lib/plugins/npm-registry-server.mjs",
+      'OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version"',
+      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+    ]);
+    expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(
+      runner.indexOf("\nconfigure_plugin_registry\n"),
+    );
+    expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
+      runner.indexOf("\nopenclaw onboard --non-interactive"),
+    );
+  });
+
   it("cleans package-backed onboarding and plugin Docker artifacts on every exit path", () => {
     for (const path of [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,
