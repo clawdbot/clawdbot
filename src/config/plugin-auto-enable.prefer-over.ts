@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeOwnedChannelId } from "../channels/ids.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -166,9 +167,9 @@ function resolveExternalCatalogEntry(
   // `feishu`, or a case variant — while callers resolve a contested channel to canonical form
   // before this lookup. A raw comparison silently drops exactly those declarations and channel
   // ownership falls back to ordering, so canonicalize both sides like every other source.
-  const canonicalChannelId = normalizeChatChannelId(channelId) ?? channelId;
+  const canonicalChannelId = normalizeOwnedChannelId(channelId);
   return externalCatalogSnapshot.channels.find(
-    (entry) => (normalizeChatChannelId(entry.id) ?? entry.id) === canonicalChannelId,
+    (entry) => normalizeOwnedChannelId(entry.id) === canonicalChannelId,
   );
 }
 
@@ -306,7 +307,7 @@ function resolvePreferredOverIds(
 function candidateChannelId(candidate: PluginAutoEnableCandidate): string {
   const channelId =
     candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
-  return normalizeChatChannelId(channelId) ?? channelId;
+  return normalizeOwnedChannelId(channelId);
 }
 
 function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
@@ -348,9 +349,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     params.registry.plugins.some(
       (record) =>
         resolveAlias(record.id) === pluginId &&
-        (record.channels ?? []).some(
-          (declared) => (normalizeChatChannelId(declared) ?? declared) === channelId,
-        ),
+        (record.channels ?? []).some((declared) => normalizeOwnedChannelId(declared) === channelId),
     );
 
   // The candidate set's preference graph, for the cycle test below. Nodes are the configured

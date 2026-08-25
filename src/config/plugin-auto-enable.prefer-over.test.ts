@@ -178,6 +178,10 @@ describe("resolveChannelPreferOverIds", () => {
     { name: "an alias the bundled catalog maps", entryId: "lark", lookupId: "feishu" },
     { name: "a case variant of the canonical id", entryId: "Feishu", lookupId: "feishu" },
     { name: "the canonical id looked up by alias", entryId: "feishu", lookupId: "lark" },
+    // The three rows above all name a channel `normalizeChatChannelId` already resolves, so none
+    // of them reaches the unknown-id fallback. A custom channel does, and that fallback kept raw
+    // casing until this row.
+    { name: "a case variant of a custom channel id", entryId: "AcmeChat", lookupId: "acmechat" },
   ])("matches a catalog entry declared under $name", ({ entryId, lookupId }) => {
     const catalogPath = writeCatalog({ id: entryId, preferOver: ["feishu-legacy"] });
 
@@ -311,6 +315,47 @@ describe("shouldSkipPreferredPluginAutoEnable", () => {
   // still drops with it.
   it("still drops the edge of the bundled owner disabled through its channel config", () => {
     expect(shouldSkipPreferredPluginAutoEnable(skipParams("bundled"))).toBe(false);
+  });
+
+  // Codex review P1 on #128904: the manifest claim test kept raw casing, so a predecessor that
+  // spells the contested channel differently from the replacement's `preferOver` read as not
+  // claiming it at all. The replacement was then treated as a plugin-wide successor, and the
+  // predecessor was disabled everywhere — including the second channel it is the only owner of.
+  it("does not disable a predecessor plugin-wide over a case-variant channel claim", () => {
+    const entry = {
+      kind: "channel-configured",
+      pluginId: "acme-core",
+      channelId: "zzother",
+    } as PluginAutoEnableCandidate;
+    const contested = {
+      kind: "channel-configured",
+      pluginId: "acme-plus",
+      channelId: "acmechat",
+    } as PluginAutoEnableCandidate;
+    const registry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "acme-plus",
+          origin: "workspace",
+          channels: ["acmechat"],
+          channelConfigs: { acmechat: { preferOver: ["acme-core"] } },
+        },
+        // Claims the contested channel with different case, plus a channel nothing else serves.
+        { id: "acme-core", origin: "workspace", channels: ["AcmeChat", "zzother"] },
+      ],
+    } as unknown as PluginManifestRegistry;
+
+    expect(
+      shouldSkipPreferredPluginAutoEnable({
+        config: {} as OpenClawConfig,
+        entry,
+        configured: [entry, contested],
+        env: {},
+        registry,
+        preferOverCache: new Map<string, string[]>(),
+      }),
+    ).toBe(false);
   });
 });
 

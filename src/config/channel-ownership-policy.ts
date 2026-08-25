@@ -1,7 +1,7 @@
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import { normalizeOwnedChannelId } from "../channels/ids.js";
 // Assembles the channel ownership policy from operator config so config validation and the
 // operator-facing runtime schema pick the same channel owner plugin activation does.
-import { normalizeChatChannelId } from "../channels/registry.js";
 import { normalizePluginsConfigWithResolver } from "../plugins/config-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
@@ -145,7 +145,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   const channelCandidates = (
     channelId: string,
   ): { ids: Set<string>; narrowedByDeclaration: boolean } | undefined => {
-    const key = normalizeChatChannelId(channelId) ?? channelId;
+    const key = normalizeOwnedChannelId(channelId);
     const cached = candidatesByChannel.get(key);
     if (cached) {
       return cached;
