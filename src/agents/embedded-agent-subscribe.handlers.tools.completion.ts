@@ -3,7 +3,6 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import {
   emitAgentActivityEvent,
   type AgentCommandOutputEventData,
@@ -21,6 +20,10 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
+  isDeliveredCoreCurrentChannelWidgetResult,
+  readEmbeddedMessageDeliveryFact,
+} from "./embedded-agent-message-delivery.js";
+import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   readMessageToolSourceReplyText,
@@ -30,9 +33,11 @@ import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
+  isPluginNativeMessagingTool,
   isMessagingToolSendAction,
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
@@ -57,7 +62,7 @@ import {
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readUpdatePlanResult,
+  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -96,7 +101,7 @@ import {
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import { isToolResultError } from "./tool-result-error.js";
+import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -179,11 +184,18 @@ export async function handleToolExecutionEnd(
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
+  const terminate =
+    result !== null &&
+    typeof result === "object" &&
+    "terminate" in result &&
+    result.terminate === true;
   ctx.state.toolMetas.push({
     toolName,
+    toolCallId,
     meta,
     replaySafe: callSummary.replaySafe,
     isError: observerIsError,
+    ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -234,6 +246,7 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
+  const terminalErrorStatus = terminal.executionStarted ? "failed" : "blocked";
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;
@@ -253,15 +266,21 @@ export async function handleToolExecutionEnd(
   const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
   const hasMessagingTargetEvidence =
     isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const messageDelivery = readEmbeddedMessageDeliveryFact(
+    readToolResultDetails(toolSendReceiptResult)?.messageDelivery,
+  );
   const didDeliverMessagingResult =
     isMessagingInvocation &&
-    isDeliveredMessagingToolResult({
-      toolName,
-      args: startArgs,
-      result,
-      hookResult: toolSendReceiptResult,
-      isError: isToolError,
-    });
+    (messageDelivery
+      ? messageDelivery.status === "settled" && (!isToolError || messageDelivery.partialDelivery)
+      : isPluginNativeMessagingTool(toolName) &&
+        isDeliveredMessagingToolResult({
+          toolName,
+          args: startArgs,
+          result,
+          hookResult: toolSendReceiptResult,
+          isError: isToolError,
+        }));
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
@@ -270,8 +289,7 @@ export async function handleToolExecutionEnd(
         config: ctx.params.config,
         currentChannelId: ctx.params.currentChannelId,
         currentMessagingTarget: ctx.params.currentMessagingTarget,
-        currentThreadId:
-          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentThreadId: ctx.params.currentThreadId,
         currentMessageId: ctx.params.currentMessageId,
         replyToMode: ctx.params.replyToMode,
         hasRepliedRef: startData?.hasRepliedRef,
@@ -281,7 +299,10 @@ export async function handleToolExecutionEnd(
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
-  const deliveredCurrentSourceReply =
+  const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+  const confirmedMessageTarget =
+    messageTarget && extractMessagingToolSendResult(messageTarget, extractionResult);
+  const deliveredMessageToolSourceReply =
     didDeliverMessagingResult &&
     isDeliveredMessageToolOnlySourceReplyResult({
       sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
@@ -289,8 +310,29 @@ export async function handleToolExecutionEnd(
       args: startArgs,
       result,
       isError: isToolError,
+      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+        send: confirmedMessageTarget,
+        config: ctx.params.config,
+        currentProvider: ctx.params.messageChannel,
+        currentAccountId: ctx.params.currentAccountId,
+        currentChannelId: ctx.params.currentChannelId,
+        currentMessagingTarget: ctx.params.currentMessagingTarget,
+        currentThreadId: ctx.params.currentThreadId,
+        sessionKey: ctx.params.sessionKey,
+        deliveredPayload: extractionResult,
+      }),
+      deliveryConfirmed: didDeliverMessagingResult,
     });
-  const sourceReplyFinal = deliveredCurrentSourceReply
+  const deliveredCurrentSourceReply =
+    deliveredMessageToolSourceReply ||
+    isDeliveredCoreCurrentChannelWidgetResult({
+      coreBuiltinToolNames: ctx.params.coreBuiltinToolNames,
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      result,
+      isToolError,
+    });
+  const sourceReplyFinal = deliveredMessageToolSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
     : undefined;
   ctx.state.pendingMessagingTexts.delete(toolCallId);
@@ -302,11 +344,9 @@ export async function handleToolExecutionEnd(
     ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
     ctx.trimMessagingToolSent();
   }
-  if (didDeliverMessagingResult && messageTarget) {
-    const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
-    const confirmedTarget = extractMessagingToolSendResult(messageTarget, extractionResult);
+  if (didDeliverMessagingResult && confirmedMessageTarget) {
     ctx.state.messagingToolSentTargets.push({
-      ...confirmedTarget,
+      ...confirmedMessageTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
@@ -316,13 +356,15 @@ export async function handleToolExecutionEnd(
   }
   if (deliveredCurrentSourceReply) {
     ctx.state.messageToolOnlySourceReplyDelivered = true;
-    const sourceReplyText = readMessageToolSourceReplyText(startArgs);
-    const normalizedSourceReplyText = sourceReplyText
-      ? normalizeTextForComparison(sourceReplyText)
-      : "";
-    if (normalizedSourceReplyText) {
-      ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
-      ctx.trimMessagingToolSent();
+    if (deliveredMessageToolSourceReply) {
+      const sourceReplyText = readMessageToolSourceReplyText(startArgs);
+      const normalizedSourceReplyText = sourceReplyText
+        ? normalizeTextForComparison(sourceReplyText)
+        : "";
+      if (normalizedSourceReplyText) {
+        ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+        ctx.trimMessagingToolSent();
+      }
     }
     ctx.params.onDeliveredMessageToolOnlySourceReply?.();
   }
@@ -366,7 +408,7 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,
@@ -403,7 +445,7 @@ export async function handleToolExecutionEnd(
     phase: "end",
     kind: "tool",
     title: buildToolItemTitle(toolName, meta),
-    status: isToolError ? "failed" : "completed",
+    status: isToolError ? terminalErrorStatus : "completed",
     name: toolName,
     meta,
     commandBearing: callSummary.commandBearing,
@@ -498,7 +540,7 @@ export async function handleToolExecutionEnd(
       const output = extractLiveExecOutput(eventResult);
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
-        execDetails?.status === "failed" || isToolError ? "failed" : "completed";
+        execDetails?.status === "failed" || isToolError ? terminalErrorStatus : "completed";
       emitTrackedItemEvent(ctx, {
         itemId: commandItemId,
         phase: "end",
@@ -524,7 +566,11 @@ export async function handleToolExecutionEnd(
         ...(output ? { output } : {}),
         status: commandStatus,
         ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
-        ...(execDetails && "durationMs" in execDetails
+        ...(execDetails &&
+        "durationMs" in execDetails &&
+        typeof execDetails.durationMs === "number" &&
+        Number.isFinite(execDetails.durationMs) &&
+        execDetails.durationMs >= 0
           ? { durationMs: execDetails.durationMs }
           : {}),
         ...(execDetails && "cwd" in execDetails && typeof execDetails.cwd === "string"
@@ -661,4 +707,5 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
+  return { executionStarted: terminal.executionStarted };
 }

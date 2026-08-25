@@ -75,8 +75,8 @@ env:
   OCM_VERSION: v0.2.32
   OCM_LINUX_X64_SHA256: 5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
-  KOVA_LEGACY_LIST_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
+  KOVA_CANONICAL_CONFIG_REF: dfafaff9dcd49b9c76788c6260f1f72dd2ced593
+  KOVA_LEGACY_LIST_CONFIG_REF: dfafaff9dcd49b9c76788c6260f1f72dd2ced593
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -93,12 +93,24 @@ jobs:
       kova_ref: ${{ steps.resolve.outputs.kova_ref }}
       kova_config_contract: ${{ steps.resolve.outputs.kova_config_contract }}
       kova_ref_trusted_for_live: ${{ steps.resolve.outputs.kova_ref_trusted_for_live }}
+      secret_eligible: ${{ steps.candidate_trust.outputs.secret_eligible }}
+      cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
     steps:
+      - name: Checkout target metadata
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref || github.sha }}
+          path: .artifacts/performance-target
+          sparse-checkout: src/config/zod-schema.agent-defaults.ts
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Resolve OpenClaw target ref
         id: resolve
         env:
-          GH_TOKEN: ${{ github.token }}
           TARGET_REF_INPUT: ${{ inputs.target_ref }}
+          TARGET_CHECKOUT_DIR: ${{ github.workspace }}/.artifacts/performance-target
           KOVA_REF_INPUT: ${{ inputs.kova_ref }}
           KOVA_CONFIG_CONTRACT_INPUT: ${{ inputs.kova_config_contract }}
         shell: bash
@@ -109,17 +121,8 @@ jobs:
             echo "::error::target_ref must be a single line."
             exit 1
           fi
-          if [[ -z "$requested" ]]; then
-            resolved_sha="$GITHUB_SHA"
-            tested_ref="$GITHUB_REF_NAME"
-          else
-            encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
-            if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
-              echo "::error::Unable to resolve OpenClaw target_ref '${requested}'."
-              exit 1
-            fi
-            tested_ref="$requested"
-          fi
+          resolved_sha="$(git -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD)"
+          tested_ref="${requested:-$GITHUB_REF_NAME}"
           if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
             exit 1
@@ -137,11 +140,9 @@ jobs:
           fi
 
           if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
-            if schema_content="$({
-              gh api "repos/${GITHUB_REPOSITORY}/contents/src/config/zod-schema.agent-defaults.ts?ref=${resolved_sha}" --jq '.content' |
-                base64 --decode
-            })"; then
-              :
+            schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
+            if [[ -f "$schema_path" ]]; then
+              schema_content="$(cat "$schema_path")"
             elif [[ -z "$kova_ref" ]]; then
               echo "::error::Unable to inspect the Kova config-fixture contract for target ${resolved_sha}. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
               exit 1
@@ -177,6 +178,34 @@ jobs:
           else
             echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Classify performance candidate trust
+        id: candidate_trust
+        env:
+          CANDIDATE_SHA: ${{ steps.resolve.outputs.tested_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          secret_eligible=false
+          cache_write_allowed=false
+          if [[
+            "$GITHUB_EVENT_NAME" == "schedule" ||
+            "$GITHUB_EVENT_NAME" == "workflow_dispatch"
+          ]] && [[
+            "$GITHUB_REF" == "refs/heads/${DEFAULT_BRANCH}" &&
+            "$CANDIDATE_SHA" == "$WORKFLOW_SHA"
+          ]]; then
+            secret_eligible=true
+            cache_write_allowed=true
+          fi
+
+          {
+            echo "secret_eligible=$secret_eligible"
+            echo "cache_write_allowed=$cache_write_allowed"
+          } >> "$GITHUB_OUTPUT"
 
   kova:
     name: ${{ matrix.title }}
@@ -235,6 +264,7 @@ jobs:
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
       MATRIX_LIVE: ${{ matrix.live }}
       KOVA_REF_TRUSTED_FOR_LIVE: ${{ needs.resolve_target.outputs.kova_ref_trusted_for_live }}
+      SECRET_ELIGIBLE: ${{ needs.resolve_target.outputs.secret_eligible }}
     steps:
       - name: Decide lane
         id: lane
@@ -251,6 +281,10 @@ jobs:
             run_lane=false
             reason="live_openai_candidate input is false"
           fi
+          if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$SECRET_ELIGIBLE" != "true" ]]; then
+            run_lane=false
+            reason="candidate is not eligible for live credentials"
+          fi
           if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$KOVA_REF_TRUSTED_FOR_LIVE" != "true" ]]; then
             echo "::error::The live OpenAI lane only executes a reviewed immutable Kova default. Omit kova_ref or update the pinned workflow defaults after review."
             exit 1
@@ -262,7 +296,7 @@ jobs:
 
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_ref }}
           fetch-depth: 1
@@ -270,9 +304,9 @@ jobs:
 
       - name: Checkout performance workflow helpers
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           path: .artifacts/performance-workflow
           fetch-depth: 1
           persist-credentials: false
@@ -296,10 +330,35 @@ jobs:
             echo "Workflow SHA: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stage trusted setup action graph
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: &stage_trusted_performance_setup |
+          set -euo pipefail
+          github_dir="$GITHUB_WORKSPACE/.github"
+          actions_dir="$github_dir/actions"
+          trusted_action="$PERFORMANCE_HELPER_DIR/.github/actions/setup-pnpm-store-cache"
+
+          test -f "$trusted_action/action.yml"
+          test -f "$trusted_action/ensure-node.sh"
+          if [[ -L "$github_dir" || ( -e "$github_dir" && ! -d "$github_dir" ) ]]; then
+            rm -rf -- "$github_dir"
+          fi
+          mkdir -p "$github_dir"
+          if [[ -L "$actions_dir" || ( -e "$actions_dir" && ! -d "$actions_dir" ) ]]; then
+            rm -rf -- "$actions_dir"
+          fi
+          mkdir -p "$actions_dir"
+          rm -rf -- "$actions_dir/setup-pnpm-store-cache"
+          cp -R -- "$trusted_action" "$actions_dir/setup-pnpm-store-cache"
+          cmp "$trusted_action/action.yml" "$actions_dir/setup-pnpm-store-cache/action.yml"
+          cmp "$trusted_action/ensure-node.sh" "$actions_dir/setup-pnpm-store-cache/ensure-node.sh"
+
       - name: Set up Node environment
         if: steps.lane.outputs.run == 'true'
-        uses: ./.github/actions/setup-node-env
+        uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
           install-bun: "false"
 
       - name: Prepare systemd user session
@@ -448,7 +507,7 @@ jobs:
           echo "KOVA_LANE_REPEAT=$repeat" >> "$GITHUB_ENV"
 
       - name: Configure live OpenAI auth
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -466,8 +525,8 @@ jobs:
         id: kova
         if: steps.lane.outputs.run == 'true'
         env:
-          OPENAI_API_KEY: ${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}
-          OPENAI_BASE_URL: ${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}
+          OPENAI_API_KEY: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_BASE_URL || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -637,16 +696,16 @@ jobs:
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
     steps:
       - name: Checkout OpenClaw source target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_target.outputs.checkout_ref }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Checkout source performance helpers
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           path: .artifacts/performance-workflow
           fetch-depth: 1
           persist-credentials: false
@@ -667,9 +726,14 @@ jobs:
             echo "Workflow SHA: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stage trusted source setup action graph
+        shell: bash
+        run: *stage_trusted_performance_setup
+
       - name: Set up source performance environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
           install-bun: "false"
 
       - name: Fetch previous source performance baseline
@@ -779,6 +843,7 @@ jobs:
           gateway_home="$(mktemp -d)"
           gateway_readiness_home="$(mktemp -d)"
           gateway_port="$(node -e "const net=require('node:net'); const s=net.createServer(); s.listen(0,'127.0.0.1',()=>{ console.log(s.address().port); s.close(); });")"
+          gateway_token="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
           gateway_state="$gateway_home/.openclaw"
           gateway_config="$gateway_state/openclaw.json"
           gateway_readiness_state="$gateway_readiness_home/.openclaw"
@@ -803,7 +868,7 @@ jobs:
               "mode": "local",
               "port": ${gateway_port},
               "bind": "loopback",
-              "auth": { "mode": "none" },
+              "auth": { "mode": "token" },
               "controlUi": { "enabled": false },
               "tailscale": { "mode": "off" }
             },
@@ -823,8 +888,8 @@ jobs:
             rm -rf "$gateway_home" "$gateway_readiness_home"
           }
           trap cleanup_gateway EXIT
-          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \
-            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth none --allow-unconfigured --force \
+          OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \
+            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth token --allow-unconfigured --force \
             >"$gateway_log" 2>&1 &
           gateway_pid="$!"
 
@@ -853,7 +918,7 @@ jobs:
             sleep 1
           done
 
-          # Exercise the real WebSocket handshake and health RPC without warming benchmark device state.
+          # Exercise the same shared-secret WebSocket path without creating benchmark device state.
           while true; do
             gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))
             if (( gateway_ready_remaining <= 0 )); then
@@ -863,7 +928,7 @@ jobs:
               exit 1
             fi
             gateway_ready_remaining_ms=$((gateway_ready_remaining * 1000))
-            if OPENCLAW_HOME="$gateway_readiness_home" OPENCLAW_STATE_DIR="$gateway_readiness_state" OPENCLAW_CONFIG_PATH="$gateway_readiness_config" \
+            if OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_readiness_home" OPENCLAW_STATE_DIR="$gateway_readiness_state" OPENCLAW_CONFIG_PATH="$gateway_readiness_config" \
               node dist/entry.js gateway health \
                 --port "$gateway_port" \
                 --timeout "$gateway_ready_remaining_ms" \
@@ -882,11 +947,11 @@ jobs:
             fi
           done
 
-          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
+          OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
             node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts" \
             --entry "$GITHUB_WORKSPACE/openclaw.mjs" \
-            --case gatewayHealthJsonConnected \
-            --case gatewayHealthJsonFirstDevice \
+            --case gatewayHealthJsonWarmState \
+            --case gatewayHealthJsonFreshState \
             --case configGetGatewayPort \
             --runs "$source_runs" \
             --warmup 1 \
@@ -923,7 +988,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
-    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
+    if: ${{ always() && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -962,9 +1027,9 @@ jobs:
 
       - name: Checkout performance publisher helper
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           path: .artifacts/performance-publisher
           sparse-checkout: |
             scripts/lib/kova-report-publish-files.mjs
@@ -1244,7 +1309,7 @@ jobs:
 
       - name: Create clawgrit reports app token
         id: clawgrit_app_token
-        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
+        if: ${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -1255,7 +1320,7 @@ jobs:
           permission-contents: write
 
       - name: Publish to clawgrit reports
-        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
+        if: ${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         env:
           CLAWGRIT_REPORTS_APP_TOKEN: ${{ steps.clawgrit_app_token.outputs.token }}

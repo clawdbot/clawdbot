@@ -1,6 +1,7 @@
 // Parses and normalizes the persisted exec approval policy.
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -33,7 +34,7 @@ function normalizePersistedAllowlistSource(value: string): "allow-always" | unde
 }
 const persistedExecAllowlistEntrySchema = z
   .union([
-    z.string().refine((value) => value.trim().length > 0),
+    z.string().trim().min(1),
     z.looseObject({
       pattern: z.string().refine((value) => value.trim().length > 0),
       id: z.string().optional(),
@@ -51,6 +52,10 @@ const persistedExecAllowlistEntrySchema = z
 const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
   allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
 });
+const persistedExecApprovalsAgentsSchema = z
+  .unknown()
+  .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
+  .pipe(z.record(z.string(), persistedExecApprovalsAgentSchema));
 const persistedExecApprovalsSchema = z.looseObject({
   version: z.literal(1),
   socket: z
@@ -60,7 +65,7 @@ const persistedExecApprovalsSchema = z.looseObject({
     })
     .optional(),
   defaults: persistedExecApprovalPolicySchema.optional(),
-  agents: z.record(z.string(), persistedExecApprovalsAgentSchema).optional(),
+  agents: persistedExecApprovalsAgentsSchema.optional(),
 });
 
 export const DEFAULT_SECURITY: ExecSecurity = "full";

@@ -1,5 +1,6 @@
 // Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import {
@@ -353,7 +354,7 @@ function describeFeishuMessageTool({
     enabledAccounts.length > 0 ||
     (!accountId &&
       cfg.channels?.feishu?.enabled !== false &&
-      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined)));
+      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined, cfg)));
   if (enabledAccounts.length === 0) {
     return {
       actions: [],
@@ -669,10 +670,7 @@ function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionConte
   if (!configured) {
     return undefined;
   }
-  const agentId = (ctx.agentId?.trim() || "main").toLowerCase();
-  const identityName = ctx.cfg.agents?.list
-    ?.find((agent) => agent.id.trim().toLowerCase() === agentId)
-    ?.identity?.name?.trim();
+  const identityName = resolveAgentConfig(ctx.cfg, ctx.agentId ?? "main")?.identity?.name?.trim();
   const resolved =
     configured === "auto"
       ? identityName
@@ -995,6 +993,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
       },
       conversationBindings: {
+        bindingStore: "adapter",
         defaultTopLevelPlacement: "current",
         buildModelOverrideParentCandidates: ({ parentConversationId }) =>
           buildFeishuModelOverrideParentCandidates(parentConversationId),
@@ -1056,6 +1055,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         collectRuntimeConfigAssignments,
       },
       actions: {
+        providerOwnedReadGates: true,
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {

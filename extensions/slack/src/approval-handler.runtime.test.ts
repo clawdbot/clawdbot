@@ -1,6 +1,7 @@
 // Slack tests cover approval handler plugin behavior.
 import type {
   ApprovalActionView,
+  ChannelApprovalKind,
   ApprovalMetadataView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -66,7 +67,7 @@ const ACTION_PRESENTATION = {
 } as const satisfies Record<ApprovalDecision, Pick<ApprovalActionView, "label" | "style">>;
 
 function buildApprovalAction(
-  approvalKind: "exec" | "plugin",
+  approvalKind: ChannelApprovalKind,
   approvalId: string,
   decision: ApprovalDecision,
 ): ApprovalActionView {
@@ -164,6 +165,25 @@ function buildExecResolvedResult() {
       decision: "allow-once",
       commandText: "echo hi",
       resolvedBy: "U123APPROVER",
+    } as never,
+    entry: APPROVAL_ENTRY,
+  });
+}
+
+function buildExecExpiredResult() {
+  return slackApprovalNativeRuntime.presentation.buildExpiredResult({
+    ...APPROVAL_CONTEXT,
+    request: {
+      id: "req-1",
+      request: { command: "echo hi" },
+      ...APPROVAL_TIMING,
+    },
+    view: {
+      approvalKind: "exec",
+      approvalId: "req-1",
+      phase: "expired",
+      commandText: "echo hi",
+      metadata: [],
     } as never,
     entry: APPROVAL_ENTRY,
   });
@@ -413,6 +433,33 @@ describe("slackApprovalNativeRuntime", () => {
     expect(
       (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
     ).toBe(false);
+  });
+
+  it("renders expired exec approvals without interactive controls", async () => {
+    const result = await buildExecExpiredResult();
+
+    expect(result).toEqual({
+      kind: "update",
+      payload: {
+        text: "*Exec approval expired*\nThis approval request expired before it was resolved.\n\n*Command*\n```\necho hi\n```",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Exec approval expired*\nThis approval request expired before it was resolved.",
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Command*\n```\necho hi\n```",
+            },
+          },
+        ],
+      },
+    });
   });
 
   it("renders plugin resolved and expired updates without command text", async () => {

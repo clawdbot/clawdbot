@@ -3,6 +3,7 @@ summary: "OpenClaw SQLite database locations, schema versions, integrity checks,
 read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
+  - Proposing a SQLite or persistent-store change
   - Recovering a database for an older OpenClaw release
 title: "Database schemas"
 ---
@@ -31,7 +32,44 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+The placement-move table uses this same-version rule for its nullable bare
+`abandon_source INTEGER` column. The feature lazily ensures the column on first
+move use. `NULL` means ordinary reconcile-first movement; `1` records the
+operator's explicit offline-device abandonment decision so restart recovery
+cannot accidentally resume remote reconciliation. Older readers ignore the
+column and can reopen the same database safely.
+
+Conversation associations use the same rule for the nullable bare
+`route_context_json TEXT` column. The database-open repair ensures the column
+for updated binaries. Older readers ignore it and can reopen and update the
+same database safely; their association update invalidates context captured by
+a newer writer so it cannot be replayed after re-upgrade.
+
+User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
+column in state schema 9. Operator-role assignment lazily ensures the column on
+first use. Older readers ignore the column and can reopen the same database
+safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
+
+## Review checkpoint for material changes
+
+Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
+
+Treat a change as material when it introduces or materially changes any of these:
+
+- a table, dedicated database, durable projection, cache, index, or other persisted representation
+- which data is canonical, derived, reconstructible, retained, deleted, exported, or visible after restart
+- user-visible persistence semantics, including a second interpretation of existing durable data
+- migration, backfill, repair, downgrade, rollback, retention, compaction, or corruption recovery
+- transaction boundaries, writer ownership, concurrency, locking, publication fencing, or reader consistency
+- read, write, disk, startup, or maintenance cost enough to affect the store's operating model
+
+The discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link the accepted decision.
+
+The checkpoint normally does not apply to a read-only query that preserves existing semantics, a bounded query-plan improvement with no material write/disk tradeoff, routine maintenance of an existing approved schema, or tests, generated baselines, and documentation that only follow an already accepted design. A mechanical migration or repair still links the decision that approved its persistent contract.
+
+For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
 
 ## Preflight a target release
 

@@ -1737,27 +1737,27 @@ describe("session_status tool", () => {
     expect(text).not.toContain("finished long ago");
   });
 
-  it("shows recent failure context in session_status output when no task is active", async () => {
+  it("shows blocked completion outcomes in session_status output", async () => {
     const text = await renderTaskStatus(
       [
         {
-          taskId: "task-failed",
+          taskId: "task-blocked",
           runtime: "cron",
           requesterSessionKey: "agent:main:main",
-          task: "failing task",
-          status: "failed",
-          deliveryStatus: "pending",
+          task: "blocked task",
+          status: "succeeded",
+          terminalOutcome: "blocked",
           notifyPolicy: "done_only",
           createdAt: Date.now() - 5_000,
-          error: "permission denied",
+          terminalSummary: "Additional input required.",
         },
       ],
-      "tc-failed",
+      "tc-blocked",
     );
 
-    expect(text).toContain("📌 Tasks: 1 recent failure");
-    expect(text).toContain("failing task");
-    expect(text).toContain("permission denied");
+    expect(text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(text).toContain("blocked task");
+    expect(text).toContain("Additional input required.");
   });
 
   it("truncates long task titles and details in session_status output", async () => {
@@ -2671,6 +2671,38 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
+  });
+
+  it("resolves a model alias configured only on the target agent", async () => {
+    resetSessionStore({
+      main: { sessionId: "s1", updatedAt: 10 },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: { "openai/gpt-5.4": { alias: "global" } },
+          modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+        },
+        entries: {
+          main: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "agent-sonnet" },
+            },
+          },
+        },
+      },
+    };
+
+    const result = await getSessionStatusTool().execute("agent-alias", {
+      model: "agent-sonnet",
+    });
+
+    expect(result.details).toMatchObject({
+      modelOverride: "anthropic/claude-sonnet-4-6",
+      modelProvider: "anthropic",
+    });
   });
 
   it("preserves a compatible auth profile when changing the session model", async () => {

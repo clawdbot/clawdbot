@@ -2,14 +2,26 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
+import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import {
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../../../test-helpers/native-gateways.ts";
+import { createTestChatPane } from "../chat-pane.test-support.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import "./chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
+  HeaderMenuStatusAction,
 } from "./chat-header-session-menu.ts";
+import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -20,6 +32,8 @@ afterEach(() => {
   for (const container of containers.splice(0)) {
     container.remove();
   }
+  clearNativeGatewayTestState();
+  vi.restoreAllMocks();
 });
 
 function settings(): UiSettings {
@@ -49,12 +63,17 @@ async function mountMenu(
     settings?: UiSettings;
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
+    statusActions?: HeaderMenuStatusAction[];
+    ownerOptions?: SessionOwnerOption[];
+    selfOwner?: SessionOwnerOption | null;
+    currentOwnerId?: string | null;
     actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
     forkFromLastCompleted?: boolean;
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     onOpen?: () => void;
+    onOpenCommandPalette?: () => void;
     onSettingsChange?: (patch: Partial<UiSettings>) => void;
     onAction?: (action: HeaderMenuAction) => void;
   } = {},
@@ -73,12 +92,17 @@ async function mountMenu(
       .settings=${options.settings ?? settings()}
       .panelActions=${options.panelActions ?? []}
       .layoutActions=${options.layoutActions ?? []}
+      .statusActions=${options.statusActions ?? []}
+      .ownerOptions=${options.ownerOptions ?? []}
+      .selfOwner=${options.selfOwner ?? null}
+      .currentOwnerId=${options.currentOwnerId ?? null}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ?? true}
       .onOpen=${options.onOpen ?? (() => {})}
+      .onOpenCommandPalette=${options.onOpenCommandPalette ?? (() => {})}
       .onSettingsChange=${options.onSettingsChange ?? (() => {})}
       .onAction=${options.onAction ?? (() => {})}
     ></openclaw-chat-header-session-menu>`,
@@ -92,7 +116,7 @@ async function mountMenu(
   return menu;
 }
 
-function itemLabel(menuItem: HTMLElement): string {
+function itemLabel(menuItem: Element): string {
   return menuItem.querySelector(":scope > .session-menu__text")?.textContent?.trim() ?? "";
 }
 
@@ -118,6 +142,62 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it.each([
+    { name: "plain browser", nativeGateway: null, offered: false },
+    { name: "native local gateway", nativeGateway: "local", offered: true },
+    { name: "native remote gateway", nativeGateway: "remote", offered: false },
+    {
+      name: "SSH-tunneled remote native gateway",
+      nativeGateway: "remote",
+      gatewayUrl: "ws://127.0.0.1:18789",
+      offered: false,
+    },
+    {
+      name: "remote execution node",
+      nativeGateway: "local",
+      execNode: "build-mac",
+      offered: false,
+    },
+  ] as const)(
+    "offers session editors only for native-local workspaces: $name",
+    async (testCase) => {
+      setNativeGatewayTestState(testCase.nativeGateway);
+      const client = {
+        gatewayUrl: "gatewayUrl" in testCase ? testCase.gatewayUrl : "ws://localhost:18789",
+      } as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const session = {
+        key: state.sessionKey,
+        kind: "direct" as const,
+        updatedAt: 0,
+        spawnedWorkspaceDir: "/workspace",
+        ...("execNode" in testCase
+          ? { execNode: testCase.execNode, execCwd: "/remote/workspace" }
+          : {}),
+      };
+      state.settings = {} as ChatPageHost["settings"];
+      const container = document.createElement("div");
+      document.body.append(container);
+      containers.push(container);
+      render(
+        pane.renderPaneHeader(
+          createSessionWorkspaceProps(state),
+          createBackgroundTasksProps(state),
+          session,
+          false,
+          undefined,
+          false,
+        ),
+        container,
+      );
+      const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+      await menu?.updateComplete;
+
+      expect(menu?.textContent?.includes("Open in")).toBe(testCase.offered);
+      expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
+    },
+  );
+
   it("renders the curated session actions in order", async () => {
     const menu = await mountMenu();
     const labels = Array.from(
@@ -236,10 +316,47 @@ describe("chat header session menu", () => {
     expect(splitRight).toHaveBeenCalledOnce();
   });
 
-  it("renders quick actions directly in the compact menu", async () => {
+  it("offers direct and submenu owner assignment", async () => {
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+    const research = { type: "agent", id: "research:one", label: "Research" } as const;
+    const menu = await mountMenu({
+      ownerOptions: [ada, research],
+      selfOwner: ada,
+      currentOwnerId: research.id,
+      onAction,
+    });
+
+    expect(item(menu, "Assign to me").disabled).toBe(false);
+    const submenu = item(menu, "Assign to…");
+    expect(
+      Array.from(submenu.querySelectorAll("wa-dropdown-item[slot='submenu']")).map(itemLabel),
+    ).toEqual(["Ada", "Research"]);
+    const selected = item(menu, "Research");
+    expect(selected.getAttribute("role")).toBe("menuitemradio");
+    expect(selected.getAttribute("aria-checked")).toBe("true");
+    expect(selected.disabled).toBe(true);
+    expect(selected.querySelector("[slot='details']")).not.toBeNull();
+
+    select(menu, item(menu, "Assign to me").getAttribute("value") ?? "");
+    select(menu, "assign-owner:agent:research%3Aone");
+    expect(onAction.mock.calls).toEqual([
+      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
+      [{ kind: "assign-owner", owner: { type: "agent", id: "research:one" } }],
+    ]);
+  });
+
+  it("drills into compact menu groups without rendering side flyouts", async () => {
     const showTasks = vi.fn();
+    const showAccess = vi.fn();
+    const onOpenCommandPalette = vi.fn();
+    const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+    const research = { type: "agent", id: "research:one", label: "Research" } as const;
     const menu = await mountMenu({
       compact: true,
+      worktreePath: "/work/openclaw",
       panelActions: [
         {
           id: "background-tasks",
@@ -249,15 +366,96 @@ describe("chat header session menu", () => {
           onActivate: showTasks,
         },
       ],
+      layoutActions: [
+        {
+          id: "split-right",
+          label: "Split right",
+          icon: icons.panelRightOpen,
+          onActivate: vi.fn(),
+        },
+      ],
+      statusActions: [
+        {
+          id: "access",
+          label: "Limited access",
+          icon: icons.shieldQuestion,
+          tone: "warn",
+          onActivate: showAccess,
+        },
+      ],
+      ownerOptions: [ada, research],
+      selfOwner: ada,
+      currentOwnerId: research.id,
+      onOpenCommandPalette,
+      onSettingsChange,
+      onAction,
     });
 
-    expect(menu.querySelector(".session-menu__section-label")?.textContent?.trim()).toBe("Panels");
+    const rootLabels = Array.from(
+      menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+    ).map(itemLabel);
+    expect(rootLabels).toEqual([
+      "Open command palette",
+      "Limited access",
+      "Open in",
+      "Panels",
+      "Layout",
+      "Rename…",
+      "Assign to…",
+      "View",
+      "Fork",
+      "Continue in terminal…",
+      "Archive session",
+      "Delete…",
+    ]);
+    expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    expect(
+      menu.querySelector('.chat-header-session-menu__status-dot[data-tone="warn"]'),
+    ).not.toBeNull();
+
+    select(menu, "open-command-palette");
+    expect(onOpenCommandPalette).toHaveBeenCalledOnce();
+    const dropdown = menu.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
+    if (dropdown) {
+      dropdown.open = true;
+    }
+    select(menu, "status:access");
+    expect(showAccess).toHaveBeenCalledOnce();
+    expect(dropdown?.open).toBe(false);
+
+    select(menu, "compact:open-view");
+    await menu.updateComplete;
+    expect(
+      Array.from(
+        menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+      ).map(itemLabel),
+    ).toEqual(["Back", "Reasoning", "Tool calls", "Keep commentary"]);
+    expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    select(menu, "view:reasoning");
+    expect(onSettingsChange).toHaveBeenCalledWith({ chatShowThinking: false });
+
+    select(menu, "compact:back");
+    await menu.updateComplete;
+    select(menu, "compact:open-panels");
+    await menu.updateComplete;
     const action = item(menu, "Show background tasks");
-    expect(action.getAttribute("slot")).toBeNull();
     expect(action.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
 
     select(menu, "quick:panels:background-tasks");
     expect(showTasks).toHaveBeenCalledOnce();
+
+    select(menu, "compact:open-assign-owner");
+    await menu.updateComplete;
+    expect(
+      Array.from(
+        menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
+      ).map(itemLabel),
+    ).toEqual(["Back", "Ada", "Research"]);
+    select(menu, "assign-owner:human:profile-ada");
+    expect(onAction).toHaveBeenCalledWith({
+      kind: "assign-owner",
+      owner: { type: "human", id: "profile-ada" },
+    });
   });
 
   it("pins and disables onboarding view preferences", async () => {

@@ -90,7 +90,7 @@ function createStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
-    basePath?: string;
+    resourceBasePath?: string;
   } = {},
 ) {
   const clients: FakeGatewayClient[] = [];
@@ -105,7 +105,7 @@ function createStore(
     },
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      basePath: params.basePath,
+      resourceBasePath: params.resourceBasePath,
     },
   );
   const current = () => {
@@ -141,9 +141,9 @@ describe("createApplicationGateway connection phase", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes the explicit same-origin base path to avatar resolution", () => {
+  it("passes the explicit same-origin resource base to avatar resolution", () => {
     const settings = { ...loadSettings(), gatewayUrl: "ws://127.0.0.1:18789/ws" };
-    const { gateway } = createStore({ settings, basePath: "/wilfred" });
+    const { gateway } = createStore({ settings, resourceBasePath: "/wilfred" });
 
     gateway.start();
 

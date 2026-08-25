@@ -1,5 +1,5 @@
 // Node daemon tests cover node daemon command runtime behavior and errors.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
@@ -10,6 +10,8 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
+
+const TLS_FINGERPRINT = "ab".repeat(32);
 
 const mocks = vi.hoisted(() => {
   const service = {
@@ -127,6 +129,14 @@ vi.mock("../daemon-cli/shared.js", async () => {
   };
 });
 
+function useLinuxPlatform(): void {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("runNodeDaemonInstall", () => {
   beforeEach(() => {
     mocks.runtime.log.mockClear();
@@ -147,7 +157,7 @@ describe("runNodeDaemonInstall", () => {
         port: 18789,
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       },
     });
     mocks.isSystemdUserServiceAvailable.mockReset().mockResolvedValue(true);
@@ -182,7 +192,7 @@ describe("runNodeDaemonInstall", () => {
         port: 18789,
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       }),
     );
   });
@@ -197,7 +207,7 @@ describe("runNodeDaemonInstall", () => {
       expect.objectContaining({
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       }),
     );
   });
@@ -217,11 +227,41 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("rejects a TLS fingerprint when installing an explicitly plaintext node", async () => {
-    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: "new-fingerprint" });
+    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: TLS_FINGERPRINT });
 
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
+    );
+  });
+
+  it("rejects an invalid TLS fingerprint before building an install plan", async () => {
+    await runNodeDaemonInstall({ force: true, tlsFingerprint: "sha256:abc123" });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid TLS fingerprint"),
+    );
+  });
+
+  it("rejects Access credentials before installing a plaintext node service", async () => {
+    mocks.loadNodeHostConfig.mockResolvedValue({
+      gateway: {
+        host: "saved-gateway.local",
+        port: 18789,
+        tls: false,
+        cloudflareAccess: {
+          clientId: "$CF_ACCESS_CLIENT_ID",
+          clientSecret: "$CF_ACCESS_CLIENT_SECRET",
+        },
+      },
+    });
+
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Cloudflare Access credentials require --tls for the node Gateway connection",
     );
   });
 
@@ -246,6 +286,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("warns about disabled systemd lingering after a fresh install (text mode)", async () => {
+    useLinuxPlatform();
     // isLoaded=true so the service-load verification passes and the linger
     // diagnostic runs on the verified-success path.
     mocks.service.isLoaded.mockResolvedValue(true);
@@ -258,6 +299,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("checks lingering for the same sudo target user as the systemd service", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.resolveSystemdUserServiceAccount.mockReturnValue("debian");
     mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "debian", linger: "no" });
@@ -275,6 +317,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("includes the linger warning in JSON warnings after a fresh install", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     await runNodeDaemonInstall({ force: true, json: true });
 
@@ -286,6 +329,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("warns about disabled lingering on the already-installed short-circuit path", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     await runNodeDaemonInstall({ force: false });
 
@@ -296,6 +340,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("does not warn when systemd lingering is already enabled", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "pi", linger: "yes" });
     await runNodeDaemonInstall({ force: true });
@@ -304,6 +349,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("does not pollute the failure output when service.install throws", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.service.install.mockRejectedValue(new Error("disk full"));
     await runNodeDaemonInstall({ force: true, json: true });
@@ -322,6 +368,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("does not warn when service-load verification fails (regression for #107033 review)", async () => {
+    useLinuxPlatform();
     // install() succeeded but the service is not loaded: the linger diagnostic
     // must NOT run, so a failed verification never tells the operator to fix
     // lingering for a service that was not successfully installed.
@@ -341,6 +388,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("skips the linger check when systemd user services are unavailable", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.isSystemdUserServiceAvailable.mockResolvedValue(false);
     await runNodeDaemonInstall({ force: true });
@@ -496,6 +544,11 @@ describe("runNodeDaemonStatus", () => {
         OPENCLAW_GATEWAY_TOKEN: "gateway-token",
         OPENCLAW_GATEWAY_PASSWORD: "gateway-password",
       },
+      managedDefinition: {
+        programArguments: ["node", "node-host"],
+        environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-token" },
+      },
+      managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
     });
 
     await runNodeDaemonStatus({ json: true });
@@ -510,5 +563,8 @@ describe("runNodeDaemonStatus", () => {
     const payload = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
     expect(payload).not.toContain("gateway-token");
     expect(payload).not.toContain("gateway-password");
+    expect(payload).not.toContain("managed-base-token");
+    expect(payload).not.toContain("managedDefinition");
+    expect(payload).not.toContain("managedOverrides");
   });
 });

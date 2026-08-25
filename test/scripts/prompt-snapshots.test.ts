@@ -3,10 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  createFormattedPromptSnapshotFiles,
-  materializeCodexDynamicToolSnapshot,
-} from "../../scripts/generate-prompt-snapshots.js";
+import { materializeCodexDynamicToolSnapshot } from "../../scripts/generate-prompt-snapshots.js";
 import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR as SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR,
@@ -36,10 +33,6 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
 }
 
 describe("happy path prompt snapshots", () => {
-  it("loads the generator entrypoint used by the prompt snapshot check", () => {
-    expect(createFormattedPromptSnapshotFiles).toEqual(expect.any(Function));
-  });
-
   it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
     const generated = await createHappyPathPromptSnapshotFiles();
     const scenarios = [

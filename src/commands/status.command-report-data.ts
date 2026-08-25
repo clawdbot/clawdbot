@@ -163,6 +163,9 @@ export async function buildStatusCommandReportData(
     overviewRows,
     showTaskMaintenanceHint: params.summary.taskAudit.errors > 0,
     taskMaintenanceHint: `Task maintenance: ${params.formatCliCommand("openclaw tasks maintenance --apply")}`,
+    taskRegistryMigrationHint: params.summary.tasks.warning
+      ? params.theme.warn(params.summary.tasks.warning)
+      : null,
     retainedLostTaskLine: retainedLostLine,
     pluginCompatibilityLines: buildStatusPluginCompatibilityLines({
       notices: params.pluginCompatibility,

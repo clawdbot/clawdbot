@@ -52,6 +52,7 @@ const {
 
 beforeEach(() => {
   setup();
+  logSpy.clearLogEntries();
 });
 
 afterEach(() => {
@@ -80,6 +81,7 @@ describe("processEvent (functional)", () => {
         transcript: [],
         processedEventIds: [],
       };
+      const terminalLog = `[voice-call] Call finalized callId=${call.callId} providerCallId=provider-before endReason=hangup-user`;
       ctx.activeCalls.set(call.callId, call);
       ctx.providerCallIdMap.set("provider-before", call.callId);
       const resolve = vi.fn();
@@ -114,6 +116,7 @@ describe("processEvent (functional)", () => {
       expect(resolve).not.toHaveBeenCalled();
       expect(reject).not.toHaveBeenCalled();
       expect(ctx.maxDurationTimers.has(call.callId)).toBe(kind === "terminal");
+      expect(logSpy.logEntries).not.toContain(terminalLog);
 
       failPersistence = false;
       processEvent(ctx, event);
@@ -122,6 +125,11 @@ describe("processEvent (functional)", () => {
       expect(reject).toHaveBeenCalledTimes(kind === "terminal" ? 1 : 0);
       expect(onCallAnswered).toHaveBeenCalledTimes(kind === "answered" ? 1 : 0);
       expect(ctx.activeCalls.has(call.callId)).toBe(kind !== "terminal");
+      if (kind === "terminal") {
+        expect(logSpy.logEntries.filter((entry) => entry === terminalLog)).toHaveLength(1);
+      } else {
+        expect(logSpy.logEntries).not.toContain(terminalLog);
+      }
     },
   );
 
@@ -502,6 +510,55 @@ describe("processEvent (functional)", () => {
       waiterResolved: false,
     });
     expect(replayResult).toEqual({ kind: "ignored" });
+  });
+
+  it.each([
+    { label: "empty", transcript: "", withWaiter: false },
+    { label: "whitespace", transcript: " \t\n", withWaiter: false },
+    { label: "empty with a waiter", transcript: "", withWaiter: true },
+    { label: "whitespace with a waiter", transcript: " \t\n", withWaiter: true },
+  ])("records $label final speech as a processed non-turn", ({ transcript, withWaiter }) => {
+    const now = Date.now();
+    const ctx = createContext();
+    const callId = `call-blank-${withWaiter ? "waiter" : "direct"}-${transcript.length}`;
+    ctx.activeCalls.set(callId, {
+      callId,
+      providerCallId: `provider-${callId}`,
+      provider: "telnyx",
+      direction: "inbound",
+      state: "active",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    const resolve = vi.fn();
+    const reject = vi.fn();
+    const timeout = setTimeout(() => {}, 60_000);
+    if (withWaiter) {
+      ctx.transcriptWaiters.set(callId, { resolve, reject, timeout });
+    }
+
+    const result = processEvent(ctx, {
+      id: `evt-${callId}`,
+      dedupeKey: `dedupe-${callId}`,
+      type: "call.speech",
+      callId,
+      timestamp: now + 1,
+      transcript,
+      isFinal: true,
+    });
+
+    clearTimeout(timeout);
+    expect(result).toEqual({ kind: "processed" });
+    expect(ctx.activeCalls.get(callId)?.transcript).toEqual([]);
+    expect(ctx.activeCalls.get(callId)?.state).toBe("listening");
+    expect(ctx.processedEventIds.has(`dedupe-${callId}`)).toBe(true);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(reject).not.toHaveBeenCalled();
+    expect(ctx.transcriptWaiters.has(callId)).toBe(withWaiter);
   });
 
   it("bounds committed replay keys in both manager and persisted call owners", () => {

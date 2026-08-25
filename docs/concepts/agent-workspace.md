@@ -95,9 +95,6 @@ Standard files OpenClaw expects inside the workspace:
   <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace, ahead of project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
   </Accordion>
-  <Accordion title="canvas/ - Canvas UI files (optional)">
-    Canvas UI files for node displays (for example `canvas/index.html`).
-  </Accordion>
 </AccordionGroup>
 
 <Note>

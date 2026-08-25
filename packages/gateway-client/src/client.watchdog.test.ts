@@ -1105,7 +1105,7 @@ r1USnb+wUdA7Zoj/mQ==
       client = new GatewayClient({
         url: `wss://127.0.0.1:${port}`,
         connectChallengeTimeoutMs: 0,
-        tlsFingerprint: "deadbeef",
+        tlsFingerprint: "ab".repeat(32),
         onConnectError: (err) => {
           clearTimeout(timeout);
           client?.stop();

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type {
@@ -18,8 +19,9 @@ function createReplyDispatchRuntime(
 ): PreparedReplyDispatchRuntime {
   const snapshot = runtimeOwner.snapshot!;
   const owner = resolvePublishedModelCatalogOwner(snapshot);
-  const inboundPluginRegistry = runtimeOwner.pluginGeneration?.inboundPluginRegistry;
-  if (!inboundPluginRegistry) {
+  const pluginGeneration = runtimeOwner.pluginGeneration;
+  const inboundPluginRegistry = pluginGeneration?.inboundPluginRegistry;
+  if (!pluginGeneration || !inboundPluginRegistry) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared inbound plugin registry was not published for ${snapshot.agentDir}`,
     );
@@ -31,6 +33,7 @@ function createReplyDispatchRuntime(
     config: owner.config,
     modelCatalog: owner.modelCatalog,
     inboundPluginRegistry,
+    pluginGeneration,
   });
 }
 
@@ -83,6 +86,14 @@ export class PreparedReplyDispatchPublicationOwner {
 
   clear(): void {
     this.#publication = EMPTY_REPLY_DISPATCH_PUBLICATION;
+  }
+
+  advanceConfig(config: OpenClawConfig): void {
+    this.#publication = Object.freeze({
+      runtimes: Object.freeze(
+        this.#publication.runtimes.map((runtime) => Object.freeze({ ...runtime, config })),
+      ),
+    });
   }
 
   rebuild(owners: Iterable<PreparedModelRuntimeOwner>): void {

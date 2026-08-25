@@ -102,6 +102,7 @@ const mocks = vi.hoisted(() => ({
   })),
   rootWrite: vi.fn(async (_params?: unknown) => {}),
   migrateLegacyMainSessionKeys: vi.fn(),
+  purgeAgentSessionStoreEntries: vi.fn(async () => false),
 }));
 
 const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
@@ -188,6 +189,11 @@ vi.mock("../../agents/auth-profiles/path-resolve.js", async () => ({
 
 vi.mock("../../config/sessions/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
+}));
+
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
+  purgeAgentSessionStoreEntries: mocks.purgeAgentSessionStoreEntries,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -1335,6 +1341,7 @@ describe("agents.delete", () => {
       removedBindings: 2,
     });
     mocks.movePathToTrash.mockReset().mockResolvedValue("/trashed");
+    mocks.purgeAgentSessionStoreEntries.mockReset().mockResolvedValue(false);
   });
 
   it("rejects deleting the auth-inheritance owner before starting cleanup", async () => {
@@ -2816,6 +2823,7 @@ describe("agents.delete", () => {
       removedBindings: 2,
       failed: [],
     });
+    expect(result).not.toHaveProperty("purgeFailed");
     expect(result.removed).toEqual(
       expect.arrayContaining([
         { path: "/workspace/test-agent", method: "trash" },
@@ -2828,6 +2836,15 @@ describe("agents.delete", () => {
       allowedAgentRosterRemovals: ["test-agent"],
     });
     expect(mocks.movePathToTrash).toHaveBeenCalled();
+  });
+
+  it("reports a session purge failure without failing committed deletion", async () => {
+    mocks.purgeAgentSessionStoreEntries.mockResolvedValueOnce(true);
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+
+    await promise;
+
+    expectRespondOk(respond, { ok: true, purgeFailed: true });
   });
 
   it("sweeps WAL sidecars recreated between deletion preparation and cleanup", async () => {

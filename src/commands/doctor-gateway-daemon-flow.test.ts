@@ -22,6 +22,7 @@ const service = vi.hoisted(() => ({
 const note = vi.hoisted(() => vi.fn());
 const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const formatGatewayClosedDiagnostic = vi.hoisted(() => vi.fn((): string | undefined => undefined));
 const inspectPortConnections = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
@@ -35,7 +36,9 @@ const findSystemGatewayServices = vi.hoisted(() =>
 );
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
 const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
+const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
+const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
 const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
 vi.mock("../config/config.js", async () => {
@@ -85,17 +88,8 @@ vi.mock("../daemon/service.js", async () => {
 });
 
 vi.mock("../daemon/systemd-hints.js", () => ({
-  renderSystemdUnavailableHints: vi.fn(() => []),
+  renderSystemdUnavailableHints,
 }));
-
-vi.mock("../daemon/systemd.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../daemon/systemd.js")>("../daemon/systemd.js");
-  return {
-    ...actual,
-    isSystemdUserServiceAvailable: vi.fn(async () => true),
-  };
-});
 
 vi.mock("../gateway/net.js", () => ({
   resolveGatewayBindHost,
@@ -107,6 +101,8 @@ vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortConnections,
   inspectPortUsage,
 }));
+
+vi.mock("../infra/container-environment.js", () => ({ isContainerEnvironment }));
 
 vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics,
@@ -154,12 +150,12 @@ vi.mock("./gateway-install-token.js", () => ({
 }));
 
 vi.mock("./health-format.js", () => ({
-  formatGatewayClosedDiagnostic: vi.fn(() => undefined),
+  formatGatewayClosedDiagnostic,
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
 
 vi.mock("./health.js", () => ({
-  healthCommand,
+  healthCommandNonExiting: healthCommand,
 }));
 
 describe("maybeRepairGatewayDaemon", () => {
@@ -173,11 +169,14 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    formatGatewayClosedDiagnostic.mockReset();
+    formatGatewayClosedDiagnostic.mockReturnValue(undefined);
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
     service.restart.mockResolvedValue({ outcome: "completed" });
     isDefaultInstallIdentity.mockReturnValue(true);
+    isContainerEnvironment.mockReturnValue(false);
     readGatewayRestartHandoffSync.mockReturnValue(null);
     findSystemGatewayServices.mockResolvedValue([]);
     resolveGatewayBindHost.mockResolvedValue("127.0.0.1");
@@ -200,6 +199,7 @@ describe("maybeRepairGatewayDaemon", () => {
     });
     buildGatewayRuntimeHints.mockReturnValue([]);
     formatGatewayRuntimeSummary.mockReturnValue(null);
+    renderSystemdUnavailableHints.mockReset().mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -340,6 +340,44 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.readRuntime).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { environment: "detected container", detected: true, kubernetes: false },
+    { environment: "Kubernetes pod without container markers", detected: false, kubernetes: true },
+  ])(
+    "keeps port diagnostics but never probes host services in a $environment",
+    async (scenario) => {
+      setPlatform("linux");
+      isContainerEnvironment.mockReturnValue(scenario.detected);
+      inspectPortUsage.mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 1234, command: "other-process" }],
+        hints: [],
+      });
+
+      await withEnvAsync(
+        {
+          KUBERNETES_SERVICE_HOST: scenario.kubernetes ? "10.96.0.1" : undefined,
+          KUBERNETES_SERVICE_PORT: scenario.kubernetes ? "443" : undefined,
+        },
+        runNonInteractiveRepair,
+      );
+
+      expect(inspectPortUsage).toHaveBeenCalledOnce();
+      expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
+      expect(note).toHaveBeenCalledWith(
+        "Container lifecycle is externally managed; skipping host service installation.",
+        "Gateway",
+      );
+      expect(service.isLoaded).not.toHaveBeenCalled();
+      expect(service.readRuntime).not.toHaveBeenCalled();
+      expect(service.readCommand).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+      expect(findSystemGatewayServices).not.toHaveBeenCalled();
+    },
+  );
+
   it("reports recent restart handoffs during deep doctor", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(40_000);
@@ -416,6 +454,41 @@ describe("maybeRepairGatewayDaemon", () => {
     });
 
     expect(note).toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("reports unknown service inspection without offering or executing repair", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus: No medium found"),
+    );
+    renderSystemdUnavailableHints.mockReturnValueOnce(["restore the systemd user bus"]);
+    const prompter = createPrompter(() => true);
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter,
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(renderSystemdUnavailableHints).toHaveBeenCalledWith({
+      wsl: false,
+      kind: "user_bus_unavailable",
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service status could not be determined"),
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("restore the systemd user bus"),
+      "Gateway",
+    );
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(findSystemGatewayServices).not.toHaveBeenCalled();
   });
 
   it("does not audit local services when skipped gateway health is remote", async () => {
@@ -622,6 +695,25 @@ describe("maybeRepairGatewayDaemon", () => {
     await runAutoRepair();
 
     expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a typed close after restart without depending on error wording", async () => {
+    setPlatform("linux");
+    const error = new Error("transport closed after restart");
+    healthCommand.mockRejectedValueOnce(error);
+    formatGatewayClosedDiagnostic.mockReturnValueOnce(
+      "Gateway connect failed: transport closed after restart",
+    );
+
+    const runtime = await runAutoRepair();
+
+    expect(formatGatewayClosedDiagnostic).toHaveBeenCalledWith(error);
+    expect(note).toHaveBeenCalledWith(
+      "Gateway connect failed: transport closed after restart",
+      "Gateway",
+    );
+    expect(note).toHaveBeenCalledWith("details", "Gateway connection");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("restarts running service when --yes explicitly approves repairs", async () => {

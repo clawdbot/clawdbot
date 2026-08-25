@@ -22,13 +22,8 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -69,28 +64,38 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 async function writeFakePromptCli(root: string, descendantPidPath: string): Promise<string> {
-  const fakeCli = path.join(root, "fake-prompt-cli.mjs");
-  const descendantScript = [
-    "process.on('SIGINT', () => {});",
-    "process.on('SIGTERM', () => {});",
-    "setInterval(() => {}, 1000);",
-  ].join("");
+  const descendantPath = path.join(root, "fake-prompt-descendant.sh");
+  await fs.writeFile(
+    descendantPath,
+    ["#!/bin/sh", "trap '' INT TERM", "while :; do sleep 1; done", ""].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const fakeCli = path.join(root, "fake-prompt-cli.sh");
   await fs.writeFile(
     fakeCli,
     [
-      "#!/usr/bin/env node",
-      "import childProcess from 'node:child_process';",
-      "import fs from 'node:fs';",
-      "const descendant = childProcess.spawn(process.execPath, [",
-      "  '--input-type=module',",
-      `  '--eval', ${JSON.stringify(descendantScript)},`,
-      "], { stdio: 'ignore' });",
-      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-      "setInterval(() => {}, 1000);",
+      "#!/bin/sh",
+      `${quotePosixShellArg(descendantPath)} &`,
+      `printf '%s' "$!" > ${quotePosixShellArg(descendantPidPath)}`,
+      "while :; do sleep 1; done",
+      "",
     ].join("\n"),
     { mode: 0o755 },
   );
+  return fakeCli;
+}
+
+async function writeBlockingPromptCli(root: string): Promise<string> {
+  const fakeCli = path.join(root, "blocking-prompt-cli.sh");
+  await fs.writeFile(fakeCli, ["#!/bin/sh", "while :; do sleep 1; done", ""].join("\n"), {
+    mode: 0o755,
+  });
   return fakeCli;
 }
 
@@ -501,95 +506,6 @@ describe("script-specific dev tooling hardening", () => {
     expect(retained.toString("utf8")).toBe("89abcdef");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "signals the TUI PTY watch process group before falling back to the child",
-    () => {
-      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-      const childKill = vi.fn(() => true);
-
-      try {
-        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
-        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
-        expect(childKill).not.toHaveBeenCalled();
-      } finally {
-        kill.mockRestore();
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "falls back to direct TUI PTY watch child signaling when the process group is gone",
-    () => {
-      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-        const error = new Error("missing process group") as NodeJS.ErrnoException;
-        error.code = "ESRCH";
-        throw error;
-      });
-      const childKill = vi.fn(() => true);
-
-      try {
-        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
-        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
-        expect(childKill).toHaveBeenCalledWith("SIGTERM");
-      } finally {
-        kill.mockRestore();
-      }
-    },
-  );
-
-  it("signals Windows TUI PTY watch process trees with taskkill", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows TUI PTY watch process trees when graceful taskkill fails", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
@@ -833,34 +749,22 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "cleans Anthropic direct prompt descendants after timeout",
+    "returns a terminal result after an Anthropic direct prompt timeout",
     async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-tree-"));
       tempDirs.push(tempRoot);
-      const descendantPidPath = path.join(tempRoot, "descendant.pid");
-      let descendantPid = 0;
-      const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
-      const probe = promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
-        claudeBin: fakeClaudeBin,
-        timeoutMs: 500,
+      const fakeClaudeBin = await writeBlockingPromptCli(tempRoot);
+
+      await expect(
+        promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
+          claudeBin: fakeClaudeBin,
+          timeoutMs: 500,
+        }),
+      ).resolves.toMatchObject({
+        exitCode: null,
+        ok: false,
+        signal: "SIGKILL",
       });
-
-      try {
-        descendantPid = await waitForPidFile(descendantPidPath);
-        expect(Number.isInteger(descendantPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
-
-        await expect(probe).resolves.toMatchObject({
-          exitCode: null,
-          ok: false,
-          signal: "SIGKILL",
-        });
-        await waitForCondition(() => !isProcessAlive(descendantPid));
-      } finally {
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-      }
     },
   );
 

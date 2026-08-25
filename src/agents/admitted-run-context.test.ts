@@ -12,6 +12,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   retainAdmittedRunBeforeToolCallRecovery,
+  resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
 } from "./admitted-run-context.js";
 
@@ -117,6 +118,38 @@ describe("prepared run admission", () => {
     expect(work).toEqual({ kind: "retry-reference", token });
   });
 
+  it("adopts an original retry token only for its explicitly bound operational run", async () => {
+    const token = createExecutionIdentityAdmissionToken("original-run");
+    let work: ExecutionIdentityAdmissionWork | undefined;
+    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+      work = candidate;
+      return true;
+    });
+    const rejected = createExecutionIdentityRecoveryAdmission({
+      retryOnly: true,
+      token,
+      expectedOperationalRunId: facts.runId,
+    });
+
+    expect(rejected.consume("other-operational-run")).toEqual({ accepted: false });
+    expect(rejected.consume(facts.runId)).toEqual({ accepted: false });
+
+    const { runtime, ...admissionFacts } = facts;
+    const admitted = await prepareAgentRunAdmission({
+      cfg: enabledConfig,
+      facts: admissionFacts,
+      operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+      recovery: createExecutionIdentityRecoveryAdmission({
+        retryOnly: true,
+        token,
+        expectedOperationalRunId: facts.runId,
+      }),
+    }).admit(runtime.kind);
+
+    expect(admitted.executionIdentityToken).toBe(token);
+    expect(work).toEqual({ kind: "retry-reference", token });
+  });
+
   it("keeps missing or mismatched recovery identity unbound", async () => {
     const sink = vi.fn((_work: ExecutionIdentityAdmissionWork) => true);
     cleanupSink = configureExecutionIdentityAdmissionSink(sink);
@@ -207,6 +240,25 @@ describe("prepared run admission", () => {
     expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
     expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
+  });
+
+  it("invalidates an admitted-run assertion on abort and outer close", async () => {
+    const { runtime, ...admissionFacts } = facts;
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...admissionFacts, runId: "run-assertion" },
+      operationalRunInstance: createOperationalRunInstanceRef("run-assertion"),
+    });
+    const admitted = await prepared.admit(runtime.kind);
+    const abort = new AbortController();
+    const assertActive = resolveAdmittedRunActiveAssertion(admitted, abort.signal);
+
+    expect(assertActive).toBeDefined();
+    expect(() => assertActive?.()).not.toThrow();
+    abort.abort();
+    expect(() => assertActive?.()).toThrow("no longer active");
+    prepared.close();
+    expect(() => assertActive?.()).toThrow("no longer active");
   });
 
   it("closes generic authority while keeping a recovery-only lease active", async () => {

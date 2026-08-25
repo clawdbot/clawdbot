@@ -11,26 +11,18 @@ export {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
-export {
-  dropPreSessionStartAnnouncePairs,
-  projectChatDisplayMessages,
-  projectRecentChatDisplayMessages,
-  resolveEffectiveChatHistoryMaxChars,
-} from "../../gateway/chat-display-projection.js";
-export { augmentChatHistoryWithCliSessionImports } from "../../gateway/cli-session-history.js";
+export { resolveEffectiveChatHistoryMaxChars } from "../../gateway/chat-display-projection.js";
 export { getMaxChatHistoryMessagesBytes } from "../../gateway/server-constants.js";
 export {
-  augmentChatHistoryWithCanvasBlocks,
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
 } from "../../gateway/server-methods/chat.js";
 export {
-  capArrayByJsonBytes,
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionMessagesPageWithStatsAsync,
-  readSessionMessagesAsync,
-} from "../../gateway/session-transcript-readers.js";
+  readChatHistoryPage,
+  resolveChatHistoryNextOffset,
+  shouldReplayOldestChatHistoryRecord,
+} from "../../gateway/server-methods/chat-history-pages.js";
+export { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 export {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,

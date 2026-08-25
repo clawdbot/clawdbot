@@ -15,7 +15,6 @@ import {
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
-import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
@@ -107,6 +106,14 @@ const rawOpenClawMetadataSchema = z
   })
   .optional()
   .catch(undefined);
+const rawOpenClawDeliverySchema = z
+  .object({
+    audioAsVoice: z.literal(true).optional(),
+    replyToCurrent: z.literal(true).optional(),
+    replyToId: optionalMessageStringSchema,
+  })
+  .optional()
+  .catch(undefined);
 const rawMessageSchema = z
   .looseObject({
     role: optionalMessageStringSchema,
@@ -122,6 +129,7 @@ const rawMessageSchema = z
     toolName: optionalMessageStringSchema,
     tool_name: optionalMessageStringSchema,
     __openclaw: rawOpenClawMetadataSchema,
+    openclawDelivery: rawOpenClawDeliverySchema,
   })
   .catch({});
 
@@ -448,16 +456,24 @@ function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageConten
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-function expandTextContent(text: string): {
+function expandTextContent(
+  text: string,
+  delivery: z.infer<typeof rawOpenClawDeliverySchema>,
+): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
   replyTarget: NormalizedMessage["replyTarget"];
 } {
   const extracted = extractCanvasShortcodes(text);
-  const parsed = splitMediaFromOutput(extracted.text);
+  const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
   const parts: MessageContentItem[] = [];
-  let audioAsVoice = parsed.audioAsVoice === true;
-  let replyTarget: NormalizedMessage["replyTarget"] = null;
+  const audioAsVoice = delivery?.audioAsVoice === true;
+  const replyToId = delivery?.replyToId?.trim();
+  const replyTarget: NormalizedMessage["replyTarget"] = replyToId
+    ? { kind: "id", id: replyToId }
+    : delivery?.replyToCurrent === true
+      ? { kind: "current" }
+      : null;
   const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
   for (const segment of segments) {
@@ -481,23 +497,19 @@ function expandTextContent(text: string): {
       continue;
     }
 
-    const directives = parseInlineDirectives(segment.text, {
-      stripAudioTag: true,
-      stripReplyTags: true,
-    });
-    audioAsVoice = audioAsVoice || directives.audioAsVoice;
-    if (directives.replyToExplicitId) {
-      replyTarget = { kind: "id", id: directives.replyToExplicitId };
-    } else if (directives.replyToCurrent && replyTarget === null) {
-      replyTarget = { kind: "current" };
-    }
-    if (directives.text) {
-      const normalizedText = directives.text + (segment.text.endsWith("\n") ? "\n" : "");
-      parts.push({ type: "text", text: normalizedText });
+    if (segment.text) {
+      parts.push({ type: "text", text: segment.text });
     }
   }
   for (const preview of extracted.previews) {
-    parts.push({ type: "canvas", preview, rawText: null });
+    if (preview.surface !== "assistant_message") {
+      continue;
+    }
+    parts.push({
+      type: "canvas",
+      preview: { ...preview, surface: "assistant_message" },
+      rawText: null,
+    });
   }
 
   const content = mergeAdjacentTextItems(
@@ -553,6 +565,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     role = "toolResult";
   }
   const isAssistantMessage = role === "assistant";
+  const delivery = isAssistantMessage ? m.openclawDelivery : undefined;
 
   // Extract content
   let content: MessageContentItem[] = [];
@@ -561,7 +574,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   if (typeof m.content === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.content);
+      const expanded = expandTextContent(m.content, delivery);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -638,7 +651,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       }
       if (isTextContentBlock(item, role)) {
         if (isAssistantMessage) {
-          const expanded = expandTextContent(item.text);
+          const expanded = expandTextContent(item.text, delivery);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;
           if (expanded.replyTarget?.kind === "id") {
             replyTarget = expanded.replyTarget;
@@ -671,7 +684,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   } else if (m.text !== undefined) {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.text);
+      const expanded = expandTextContent(m.text, delivery);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;

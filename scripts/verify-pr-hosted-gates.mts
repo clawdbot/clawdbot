@@ -28,7 +28,6 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
 // the existing 1,000-result search window through pagination.
 const WORKFLOW_RUNS_PAGE_SIZE = 30;
 const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
-const COMPARE_COMMITS_PAGE_SIZE = 100;
 export const HOSTED_GATE_MAX_AGE_HOURS = 24;
 const HOSTED_GATE_MAX_AGE_MS = HOSTED_GATE_MAX_AGE_HOURS * 60 * 60 * 1_000;
 const HOSTED_GATE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
@@ -972,55 +971,17 @@ function loadCiReuseCandidateRuns(repo: string, headBranch: string) {
   );
 }
 
-export function compareCommitPageCount(totalCommits: unknown) {
-  if (typeof totalCommits !== "number" || !Number.isSafeInteger(totalCommits) || totalCommits < 0) {
-    throw new Error("Expected comparison total_commits to be a non-negative integer.");
-  }
-  return Math.max(1, Math.ceil(totalCommits / COMPARE_COMMITS_PAGE_SIZE));
-}
-
-function loadPullRequestCommitShas(
-  repo: string,
+export function loadPullRequestCommitShas(
   { baseSha, headSha }: { baseSha: string; headSha: string },
+  execGit: ExecGit = runGit,
 ) {
-  const loadPage = (page: number) => {
-    const comparison = JSON.parse(
-      execGhApiRead(
-        `repos/${repo}/compare/${baseSha}...${headSha}?per_page=${COMPARE_COMMITS_PAGE_SIZE}&page=${page}`,
-        {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      ),
-    ) as unknown;
-    if (!isRecord(comparison)) {
-      throw new Error(`Expected comparison commit page ${page} to be an object.`);
-    }
-    return comparison;
-  };
-
-  // The PR commits endpoint stops at 250. GitHub's paginated comparison is
-  // equivalent to git log BASE..HEAD and keeps the membership proof complete.
-  const firstPage = loadPage(1);
-  const pages = [firstPage];
-  for (let page = 2; page <= compareCommitPageCount(firstPage?.total_commits); page += 1) {
-    pages.push(loadPage(page));
+  const output = execGit(["rev-list", "--reverse", `${baseSha}..${headSha}`]);
+  const shas = output.replace(/\r?\n$/u, "").split(/\r?\n/u);
+  if (shas.length === 0 || shas.some((sha) => !/^[0-9a-f]{40,64}$/u.test(sha))) {
+    throw new Error("Expected pull request commit object ids from git rev-list.");
   }
-  const shas = pages.flatMap((comparison, index) => {
-    if (!Array.isArray(comparison?.commits)) {
-      throw new Error(`Expected comparison commit page ${index + 1} to be an array.`);
-    }
-    if (!comparison.commits.every(isRecord)) {
-      throw new Error(`Expected comparison commit page ${index + 1} entries to be objects.`);
-    }
-    return comparison.commits
-      .map((commit) => commit.sha)
-      .filter((sha: unknown): sha is string => typeof sha === "string");
-  });
-  if (shas.length !== firstPage.total_commits) {
-    throw new Error(
-      `Expected ${firstPage.total_commits} comparison commits, received ${shas.length}.`,
-    );
+  if (!shas.includes(headSha)) {
+    throw new Error(`Expected pull request commit list to contain head ${headSha}.`);
   }
   return shas;
 }
@@ -1125,7 +1086,7 @@ function main(argv = process.argv.slice(2)) {
     sha: args.sha,
     pr: args.pr,
     recentSha: args.recentSha,
-    pullRequestCommitShas: loadPullRequestCommitShas(args.repo, { baseSha, headSha }),
+    pullRequestCommitShas: loadPullRequestCommitShas({ baseSha, headSha }),
     pullRequestHeadBranch: headBranch,
     pullRequestHeadRepository: headRepository,
     workflowRuns,

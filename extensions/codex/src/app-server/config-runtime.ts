@@ -36,6 +36,10 @@ import {
   readCodexPluginConfig,
 } from "./config-parsing.js";
 import {
+  parseAllowedApprovalPoliciesFromCodexRequirements,
+  readCodexRequirementsToml,
+} from "./config-requirements.js";
+import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexConfigEnablesNativeComputerUse,
 } from "./config-reviewer.js";
@@ -87,6 +91,7 @@ export function resolveCodexAppServerRuntimeOptions(
     pluginConfig?: unknown;
     execMode?: OpenClawExecMode;
     execPolicy?: OpenClawExecPolicyForCodexAppServer;
+    sessionPermissionMode?: "read-only" | "guarded" | "workspace" | "full";
     modelProvider?: string;
     model?: string;
     config?: ProviderAuthAliasConfig;
@@ -138,7 +143,10 @@ export function resolveCodexAppServerRuntimeOptions(
     execMode: params.execMode,
     execPolicy: params.execPolicy,
   });
-  assertCodexAppServerAllowedForOpenClawExecMode(execMode);
+  // Session permission tuples delegate containment to Codex; only legacy exec policy preflights.
+  if (!params.sessionPermissionMode) {
+    assertCodexAppServerAllowedForOpenClawExecMode(execMode);
+  }
   const explicitPolicyMode =
     resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
   const configuredSandbox =
@@ -175,6 +183,23 @@ export function resolveCodexAppServerRuntimeOptions(
     params.execPolicy?.touched === true &&
     params.execPolicy.security === "full" &&
     params.execPolicy.ask === "always";
+  const forcePerCommandApprovals = params.execPolicy?.ask === "always";
+  const requirementsToml = forcePerCommandApprovals
+    ? (readCodexRequirementsToml({
+        env,
+        requirementsToml: params.requirementsToml,
+        requirementsPath: params.requirementsPath,
+        readRequirementsFile: params.readRequirementsFile,
+        platform: params.platform,
+      }) ?? null)
+    : params.requirementsToml;
+  if (
+    forcePerCommandApprovals &&
+    requirementsToml &&
+    parseAllowedApprovalPoliciesFromCodexRequirements(requirementsToml)?.has("untrusted") === false
+  ) {
+    throw new Error("tools.exec.ask=always requires Codex app-server per-command approvals");
+  }
   const forceRuntimePolicy =
     forceUserReviewer || forceGuardianReviewer || forceDangerFullAccessSandbox;
   const defaultPolicy =
@@ -186,7 +211,7 @@ export function resolveCodexAppServerRuntimeOptions(
           forceGuardian: normalizedPolicyMode === "guardian",
           forceUserReviewer: forceUserReviewer || !canUseModelBackedReviewer,
           execModeRequiringPromptingApprovals,
-          requirementsToml: params.requirementsToml,
+          requirementsToml,
           requirementsPath: params.requirementsPath,
           readRequirementsFile: params.readRequirementsFile,
           platform: params.platform,
@@ -196,7 +221,11 @@ export function resolveCodexAppServerRuntimeOptions(
   const preserveExplicitAutoSandbox = forceGuardianReviewer && configuredSandbox === "read-only";
   const forcedPolicy = forceRuntimePolicy
     ? {
-        approvalPolicy: defaultPolicy?.approvalPolicy ?? "on-request",
+        // `on-request` lets ordinary commands run without prompting. The native-only
+        // untrusted policy is valid on thread requests and prompts for each command.
+        approvalPolicy: forcePerCommandApprovals
+          ? ("untrusted" as const)
+          : (defaultPolicy?.approvalPolicy ?? "on-request"),
         sandbox: preserveExplicitAutoSandbox
           ? undefined
           : forceDangerFullAccessSandbox

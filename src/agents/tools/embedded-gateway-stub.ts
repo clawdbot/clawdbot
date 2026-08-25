@@ -3,7 +3,6 @@
  *
  * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
  */
-import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
@@ -12,9 +11,10 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type {
-  ReadSessionMessagesAsyncOptions,
-  SessionTranscriptReadScope,
-} from "../../gateway/session-transcript-readers.js";
+  readChatHistoryPage,
+  resolveChatHistoryNextOffset,
+  shouldReplayOldestChatHistoryRecord,
+} from "../../gateway/server-methods/chat-history-pages.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -48,31 +48,13 @@ interface EmbeddedGatewayRuntime {
     indexing: boolean;
     truncated: boolean;
   };
-  augmentChatHistoryWithCliSessionImports: (opts: {
-    entry: unknown;
-    provider: string | undefined;
-    localMessages: unknown[];
-  }) => unknown[];
   getMaxChatHistoryMessagesBytes: () => number;
-  augmentChatHistoryWithCanvasBlocks: (msgs: unknown[]) => unknown[];
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: number;
-  enforceChatHistoryFinalBudget: (opts: { messages: unknown[]; maxBytes: number }) => {
-    messages: unknown[];
-  };
   replaceOversizedChatHistoryMessages: (opts: {
     messages: unknown[];
     maxSingleMessageBytes: number;
   }) => { messages: unknown[] };
   resolveEffectiveChatHistoryMaxChars: (cfg: OpenClawConfig) => number;
-  dropPreSessionStartAnnouncePairs: (
-    messages: unknown[],
-    sessionStartedAt: number | undefined,
-  ) => unknown[];
-  projectChatDisplayMessages: (msgs: unknown[], opts?: { maxChars?: number }) => unknown[];
-  projectRecentChatDisplayMessages: (
-    msgs: unknown[],
-    opts?: { maxChars?: number; maxMessages?: number },
-  ) => unknown[];
   capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
   listSessionsFromStoreAsync: (opts: {
     cfg: OpenClawConfig;
@@ -98,20 +80,12 @@ interface EmbeddedGatewayRuntime {
   ) => {
     cfg: OpenClawConfig;
     storePath: string | undefined;
-    entry: Record<string, unknown> | undefined;
+    entry: Parameters<typeof readChatHistoryPage>[0]["entry"];
+    canonicalKey: string;
   };
-  readSessionMessagesAsync: (
-    scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions,
-  ) => Promise<unknown[]>;
-  readRecentSessionMessagesWithStatsAsync: (
-    scope: SessionTranscriptReadScope,
-    opts: { maxMessages: number; maxBytes?: number; allowResetArchiveFallback?: boolean },
-  ) => Promise<{ messages: unknown[]; totalMessages: number }>;
-  readSessionMessagesPageWithStatsAsync: (
-    scope: SessionTranscriptReadScope,
-    opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
-  ) => Promise<{ messages: unknown[]; totalMessages: number }>;
+  readChatHistoryPage: typeof readChatHistoryPage;
+  resolveChatHistoryNextOffset: typeof resolveChatHistoryNextOffset;
+  shouldReplayOldestChatHistoryRecord: typeof shouldReplayOldestChatHistoryRecord;
   resolveSessionModelRef: (
     cfg: OpenClawConfig,
     entry: unknown,
@@ -135,65 +109,6 @@ function readOffsetParam(params: Record<string, unknown>): number | undefined {
     throw new Error("offset must be a non-negative integer");
   }
   return offset;
-}
-
-function readChatHistoryMessageSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const metadata = (message as Record<string, unknown>)["__openclaw"];
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return undefined;
-  }
-  const seq = (metadata as Record<string, unknown>).seq;
-  return asPositiveSafeInteger(seq);
-}
-
-function resolveChatHistoryNextOffset(params: {
-  messages: unknown[];
-  totalMessages: number;
-  offset: number;
-  rawPageMessages: number;
-}): number {
-  const oldestSeq = params.messages
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  if (oldestSeq !== undefined) {
-    return Math.max(params.offset, params.totalMessages - oldestSeq + 1);
-  }
-  return params.offset + params.rawPageMessages;
-}
-
-function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
-  if (messages.length <= max) {
-    return messages;
-  }
-  const start = Math.max(0, messages.length - max);
-  const boundarySeq = readChatHistoryMessageSeq(messages[start]);
-  if (boundarySeq === undefined) {
-    return messages.slice(start);
-  }
-  // Offset cursors can only resume at transcript-record boundaries.
-  // Keep boundary rows with the same seq together so projection mirrors are not stranded.
-  let safeStart = start;
-  while (safeStart > 0 && readChatHistoryMessageSeq(messages[safeStart - 1]) === boundarySeq) {
-    safeStart--;
-  }
-  return messages.slice(safeStart);
-}
-
-function dropChatHistoryOverreadContextMessage(
-  messages: unknown[],
-  contextMessage: unknown,
-): unknown[] {
-  if (contextMessage === undefined) {
-    return messages;
-  }
-  const index = messages.indexOf(contextMessage);
-  if (index < 0) {
-    return messages;
-  }
-  return [...messages.slice(0, index), ...messages.slice(index + 1)];
 }
 
 async function handleSessionsList(params: Record<string, unknown>) {
@@ -314,8 +229,11 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const offset = readOffsetParam(params) ?? 0;
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, entry } = rt.loadSessionEntry(sessionKey, sessionLoadOptions);
-  const sessionId = entry?.sessionId as string | undefined;
+  const { cfg, storePath, entry, canonicalKey } = rt.loadSessionEntry(
+    sessionKey,
+    sessionLoadOptions,
+  );
+  const sessionId = entry?.sessionId;
   const sessionAgentId = rt.resolveSessionAgentId({
     sessionKey,
     config: cfg,
@@ -326,158 +244,59 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const defaultLimit = 200;
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
-  const rawHistoryWindowMessages = max * 20 + 20;
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
-  const sessionEntry =
-    typeof entry?.sessionId === "string"
-      ? {
-          sessionId: entry.sessionId,
-          ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
-        }
-      : undefined;
-
-  const localMessages =
-    params.offset === undefined && sessionId && storePath
-      ? await rt.readSessionMessagesAsync(
-          {
-            agentId: sessionAgentId,
-            sessionEntry,
-            sessionId,
-            sessionKey,
-            storePath,
-          },
-          params.offset === undefined
-            ? {
-                mode: "recent",
-                maxMessages: max,
-                maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-                allowResetArchiveFallback: true,
-              }
-            : {
-                mode: "full",
-                reason: "chat.history offset pagination",
-                allowResetArchiveFallback: true,
-              },
-        )
-      : [];
-  const offsetPage =
-    params.offset !== undefined && sessionId && storePath
-      ? offset === 0
-        ? await rt.readRecentSessionMessagesWithStatsAsync(
-            {
-              agentId: sessionAgentId,
-              sessionEntry,
-              sessionId,
-              sessionKey,
-              storePath,
-            },
-            {
-              maxMessages: rawHistoryWindowMessages + 1,
-              maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-              allowResetArchiveFallback: true,
-            },
-          )
-        : await rt.readSessionMessagesPageWithStatsAsync(
-            {
-              agentId: sessionAgentId,
-              sessionEntry,
-              sessionId,
-              sessionKey,
-              storePath,
-            },
-            {
-              offset,
-              maxMessages: max + 1,
-              allowResetArchiveFallback: true,
-            },
-          )
-      : undefined;
-
-  const sessionStartedAt =
-    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined;
-  const offsetPageOverreadContextMessage =
-    offsetPage !== undefined
-      ? offset === 0
-        ? offsetPage.messages.length > rawHistoryWindowMessages
-          ? offsetPage.messages[0]
-          : undefined
-        : offsetPage.messages.length > max
-          ? offsetPage.messages[0]
-          : undefined
-      : undefined;
-  const localMessagesForHistory =
-    offsetPage !== undefined
-      ? dropChatHistoryOverreadContextMessage(
-          rt.dropPreSessionStartAnnouncePairs(offsetPage.messages, sessionStartedAt),
-          offsetPageOverreadContextMessage,
-        )
-      : localMessages;
-  const rawMessages =
-    params.offset === undefined
-      ? rt.augmentChatHistoryWithCliSessionImports({
-          entry,
-          provider: resolvedSessionModel.provider,
-          localMessages: localMessagesForHistory,
-        })
-      : localMessagesForHistory;
-  const recencyFilteredMessages = rt.dropPreSessionStartAnnouncePairs(
-    rawMessages,
-    sessionStartedAt,
-  );
-
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
+  const page = await rt.readChatHistoryPage({
+    entry,
+    provider: resolvedSessionModel.provider,
+    sessionId,
+    storePath,
+    sessionAgentId,
+    canonicalKey,
+    max,
+    maxHistoryBytes,
+    effectiveMaxChars,
+    offset: params.offset === undefined ? undefined : offset,
+    messageId: undefined,
+  });
 
-  // Mirror Gateway chat.history trimming so embedded mode has the same byte ceilings.
-  const projected =
-    params.offset === undefined
-      ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
-          maxChars: effectiveMaxChars,
-          maxMessages: max,
-        })
-      : offset === 0
-        ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
-            maxChars: effectiveMaxChars,
-            maxMessages: max,
-          })
-        : rt.projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars });
-  const windowed =
-    params.offset === undefined || offset === 0
-      ? projected
-      : capOffsetChatHistoryProjectedMessages(projected, max);
-  const normalized = rt.augmentChatHistoryWithCanvasBlocks(windowed);
-
+  // Keep transport-level byte limits identical after the shared reader projects the page.
   const perMessageHardCap = Math.min(rt.CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = rt.replaceOversizedChatHistoryMessages({
-    messages: normalized,
+    messages: page.messages,
     maxSingleMessageBytes: perMessageHardCap,
   });
   const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const bounded = rt.enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+  const pagination = params.offset === undefined ? undefined : page.pagination;
   const nextOffset =
-    offsetPage !== undefined
-      ? resolveChatHistoryNextOffset({
-          messages: bounded.messages,
-          totalMessages: offsetPage.totalMessages,
-          offset,
-          rawPageMessages:
-            offset === 0
-              ? offsetPage.messages.length
-              : Math.min(max, Math.max(0, offsetPage.totalMessages - offset)),
+    pagination !== undefined
+      ? rt.resolveChatHistoryNextOffset({
+          messages: capped,
+          totalMessages: pagination.totalMessages,
+          offset: pagination.offset,
+          rawPageMessages: pagination.rawPageMessages,
+          replayOldestRecord: rt.shouldReplayOldestChatHistoryRecord({
+            projected: page.messages,
+            bounded: capped,
+          }),
         })
       : 0;
-  const hasMore = offsetPage !== undefined ? nextOffset < offsetPage.totalMessages : false;
+  const hasMore =
+    pagination !== undefined &&
+    pagination.exhausted !== true &&
+    nextOffset < pagination.totalMessages;
 
   return {
     sessionKey,
     sessionId,
-    messages: bounded.messages,
+    messages: capped,
     ...(params.offset !== undefined
-      ? { offset, hasMore, totalMessages: offsetPage?.totalMessages ?? projected.length }
+      ? { offset, hasMore, totalMessages: pagination?.totalMessages ?? page.messages.length }
       : {}),
-    ...(hasMore && offsetPage !== undefined ? { nextOffset } : {}),
-    thinkingLevel: entry?.thinkingLevel as string | undefined,
+    ...(hasMore ? { nextOffset } : {}),
+    thinkingLevel: entry?.thinkingLevel,
     fastMode: normalizeFastMode(entry?.fastMode),
-    verboseLevel: entry?.verboseLevel as string | undefined,
+    verboseLevel: entry?.verboseLevel,
   };
 }
 

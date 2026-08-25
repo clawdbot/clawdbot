@@ -1,5 +1,6 @@
 // Signal plugin module implements approval reactions behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   addApprovalReactionHintToText,
   createApprovalReactionTargetStore,
@@ -41,14 +42,13 @@ const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
 type SignalApprovalReactionResolution = {
   approvalId: string;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
   route: SignalApprovalReactionRoute;
 };
 
-type ApprovalKind = "exec" | "plugin";
 type SignalApprovalReactionTarget = ApprovalReactionTargetRecord<SignalApprovalReactionRoute> & {
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   targetAuthorKeys: readonly string[];
   route: SignalApprovalReactionRoute;
 };
@@ -222,7 +222,7 @@ export function registerSignalApprovalReactionTarget(params: {
   conversationKey: string;
   messageId: string;
   approvalId: string;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   targetAuthorKeys: readonly string[];
   route: SignalApprovalReactionRoute;

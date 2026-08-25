@@ -8,12 +8,13 @@ import {
   clampPositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
   BrowserOpenResult,
   BrowserStatus,
-  BrowserTab,
+  BrowserTabsResult,
   BrowserTransport,
   SnapshotAriaNode,
 } from "./client.types.js";
@@ -21,7 +22,12 @@ import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 
-export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
+export type {
+  BrowserStatus,
+  BrowserTab,
+  BrowserTabsResult,
+  BrowserTransport,
+} from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
@@ -346,19 +352,29 @@ export async function browserDeleteProfile(
   );
 }
 
-/** List tabs for the selected browser profile. */
+export function normalizeBrowserTabsResult(value: unknown): BrowserTabsResult {
+  const result = asNullableRecord(value);
+  if (result?.running === false) {
+    return { running: false, tabs: [] };
+  }
+  return {
+    running: true,
+    tabs: Array.isArray(result?.tabs) ? result.tabs : [],
+  };
+}
+
 export async function browserTabs(
   baseUrl?: string,
   opts?: BrowserClientProfileOptions,
-): Promise<BrowserTab[]> {
-  const res = await fetchBrowserJson<{ running: boolean; tabs: BrowserTab[] }>(
+): Promise<BrowserTabsResult> {
+  const res = await fetchBrowserJson<BrowserTabsResult>(
     withProfilePath(baseUrl, "/tabs", opts?.profile),
     {
       timeoutMs: resolveBrowserClientTimeoutMs(opts, 3000),
       signal: opts?.signal,
     },
   );
-  return res.tabs ?? [];
+  return normalizeBrowserTabsResult(res);
 }
 
 /** Open a new tab in the selected browser profile. */
@@ -394,9 +410,9 @@ export async function browserCloseTab(
   baseUrl: string | undefined,
   targetId: string,
   opts?: BrowserClientProfileOptions,
-): Promise<void> {
+): Promise<{ ok: true; targetId?: string }> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
-  await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
+  return await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 
 /** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */

@@ -69,6 +69,7 @@ describe("exec approvals node host allowlist check", () => {
   it.each([
     {
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
         resolvedRealPath: "/usr/bin/python3",
@@ -81,6 +82,7 @@ describe("exec approvals node host allowlist check", () => {
       // Simulates symlink resolution:
       // /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "python3",
         resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
         executableName: "python3.14",
@@ -90,6 +92,7 @@ describe("exec approvals node host allowlist check", () => {
     },
     {
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "unknown-tool",
         resolvedPath: "/usr/local/bin/unknown-tool",
         executableName: "unknown-tool",
@@ -107,6 +110,7 @@ describe("exec approvals node host allowlist check", () => {
 
   it("does not treat unknown tools as safe bins", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "unknown-tool",
       resolvedPath: "/usr/local/bin/unknown-tool",
       executableName: "unknown-tool",
@@ -121,6 +125,7 @@ describe("exec approvals node host allowlist check", () => {
 
   it("satisfies via safeBins even when not in allowlist", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "head",
       resolvedPath: "/usr/bin/head",
       executableName: "head",
@@ -179,7 +184,7 @@ describe("persisted exec approvals schema", () => {
     const parsed = tryParsePersistedExecApprovals(
       JSON.stringify({
         version: 1,
-        agents: { main: { allowlist: ["ls", { pattern: "cat", source: "legacy" }] } },
+        agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
       }),
     );
     expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });

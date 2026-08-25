@@ -13,7 +13,6 @@ import { buildModelsProviderData, handleModelsCommand } from "./commands-models.
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
-
 const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
 }));
@@ -70,16 +69,8 @@ const modelProviderAuthMocks = vi.hoisted(() => {
 });
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 const pluginMetadataMocks = vi.hoisted(() => ({
-  snapshot: undefined as
-    | {
-        plugins: unknown[];
-        owners: {
-          cliBackends: Map<string, string>;
-        };
-      }
-    | undefined,
+  getCurrent: vi.fn(),
 }));
-
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
@@ -138,7 +129,7 @@ vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
 }));
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: () => pluginMetadataMocks.snapshot,
+  getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrent,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -218,7 +209,7 @@ beforeEach(() => {
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   normalizeProviderModelIdWithRuntimeMock.mockReset();
-  pluginMetadataMocks.snapshot = undefined;
+  pluginMetadataMocks.getCurrent.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.selectedRoute = undefined;
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
@@ -381,7 +372,7 @@ describe("handleModelsCommand", () => {
         cliBackends: new Map<string, string>(),
       },
     };
-    pluginMetadataMocks.snapshot = metadataSnapshot;
+    pluginMetadataMocks.getCurrent.mockReturnValue(metadataSnapshot);
 
     await handleModelsCommand(buildParams("/models"), true);
 
@@ -501,34 +492,33 @@ describe("handleModelsCommand", () => {
   });
 
   it("shows plugin-normalized allowlist models in browse data", async () => {
-    normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
+    pluginMetadataMocks.getCurrent.mockReturnValue({
+      plugins: [
+        {
+          modelIdNormalization: {
+            providers: {
+              custom: { aliases: { legacy: "modern" } },
+            },
+          },
+        },
+      ],
+      owners: { cliBackends: new Map() },
     });
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      { provider: "custom-provider", id: "custom-modern-model", name: "Custom Modern" },
+      { provider: "custom", id: "modern", name: "Modern" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["custom-provider"]);
-
+    modelProviderAuthMocks.authenticatedProviders = new Set(["custom"]);
     const data = await buildModelsProviderData({
       agents: {
         defaults: {
-          model: { primary: "custom-provider/custom-modern-model" },
-          models: {
-            "custom-provider/custom-legacy-model": {},
-          },
+          model: { primary: "custom/modern" },
+          models: { "custom/legacy": {} },
         },
       },
     } as OpenClawConfig);
 
-    expect(data.byProvider.get("custom-provider")).toEqual(new Set(["custom-modern-model"]));
-    expect(data.modelNames.get("custom-provider/custom-modern-model")).toBe("Custom Modern");
-    expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalled();
+    expect(data.byProvider.get("custom")).toEqual(new Set(["modern"]));
+    expect(pluginMetadataMocks.getCurrent).toHaveBeenCalledTimes(1);
   });
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {
@@ -648,12 +638,12 @@ describe("handleModelsCommand", () => {
         },
       ],
     });
-    pluginMetadataMocks.snapshot = {
+    pluginMetadataMocks.getCurrent.mockReturnValue({
       plugins: [],
       owners: {
         cliBackends: new Map([["acme-cli", "acme"]]),
       },
-    };
+    });
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "acme-cli", id: "acme-model", name: "Acme Model" },

@@ -1,5 +1,5 @@
 // Process coverage for CLI help exits and route-first fallback validation.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -395,6 +395,115 @@ describe("rejected CLI process state isolation", () => {
     await expect(fs.access(path.join(result.root, `.openclaw-${profile}`))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+});
+
+describe("models list JSON failure process output", () => {
+  it.each(
+    [
+      {
+        provider: "Moonshot AI",
+        message:
+          'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
+      },
+      {
+        provider: "autoqa-no-such-provider",
+        message:
+          'Unknown provider filter "autoqa-no-such-provider" for this installation. Run openclaw plugins list --json to see installed providers, or configure it under models.providers.',
+      },
+    ].flatMap(({ provider, message }) => [
+      {
+        name: `routed ${provider}`,
+        provider,
+        message,
+        env: { OPENCLAW_DISABLE_ROUTE_FIRST: undefined },
+      },
+      {
+        name: `Commander ${provider}`,
+        provider,
+        message,
+        env: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" },
+      },
+    ]),
+  )("renders $name as one clean canonical JSON document", async ({ provider, message, env }) => {
+    const result = await runCliProcess({
+      args: ["models", "list", "--provider", provider, "--json"],
+      config: {},
+      env,
+      expectedExitCode: 1,
+    });
+
+    expect(result.stdout).not.toContain("\u001B");
+    expect(result.stdout).not.toContain("\u0007");
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message },
+    });
+    expect(result.stderr).toContain(message);
+  });
+});
+
+describe("message broadcast process exit", () => {
+  it("exits nonzero after a structured target failure", async () => {
+    const root = tempDirs.make("openclaw-message-broadcast-exit-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const entryPath = path.join(root, "run-message-broadcast.mjs");
+    await fs.writeFile(
+      entryPath,
+      `import { registerHooks } from "node:module";
+const messageModule = "data:text/javascript," + encodeURIComponent(\`export async function messageCommand() {
+  return ${JSON.stringify({
+    kind: "broadcast",
+    channel: "fixture",
+    action: "broadcast",
+    handledBy: "core",
+    payload: {
+      results: [
+        { channel: "fixture", to: "ok-target", ok: true },
+        { channel: "fixture", to: "failed-target", ok: false, error: "delivery failed" },
+      ],
+    },
+    dryRun: false,
+  })};
+}\`);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier === "../../../commands/message.js"
+      ? { shortCircuit: true, url: messageModule }
+      : nextResolve(specifier, context);
+  },
+});
+const { createMessageCliHelpers } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/program/message/helpers.ts")).href)});
+const { runMessageAction } = createMessageCliHelpers({}, "fixture");
+await runMessageAction("broadcast", {
+  channel: "fixture",
+  targets: ["ok-target", "failed-target"],
+  message: "hello",
+});
+`,
+    );
+
+    const child = spawnSync(process.execPath, ["--import", "tsx", entryPath], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: root,
+        NODE_ENV: undefined,
+        NODE_OPTIONS: undefined,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+        VITEST: undefined,
+      },
+      timeout: DEFAULT_CHILD_PROCESS_TIMEOUT_MS,
+    });
+
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status, child.stderr).toBe(1);
   });
 });
 

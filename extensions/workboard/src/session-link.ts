@@ -36,7 +36,10 @@ export function workboardCardMatchesLifecycleLink(
       : sessionKeyMatchesCard(source.sessionKey, workboardSessionKeyForCard(card))),
   );
   const linkedRunId = cardRunId(card);
-  if (linkedRunId && source.runId === linkedRunId) {
+  if (linkedRunId && source.runId) {
+    if (source.runId !== linkedRunId && !linkedRunId.startsWith(`workboard:${card.id}:`)) {
+      return false;
+    }
     return linkedSessionKey && source.sessionKey ? sessionMatches : true;
   }
   return sessionMatches;

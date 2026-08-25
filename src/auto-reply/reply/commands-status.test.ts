@@ -496,25 +496,25 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("done a while ago");
   });
 
-  it("shows a recent failure when no active tasks remain", async () => {
+  it("shows blocked completion outcomes when no active tasks remain", async () => {
     createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:acp:status-task-failed",
-      runId: "run-status-task-failed",
-      task: "failed background task",
+      runId: "run-status-task-blocked",
+      task: "blocked background task",
     });
-    failTaskRunByRunIdCore({
-      runId: "run-status-task-failed",
+    completeTaskRunByRunIdCore({
+      runId: "run-status-task-blocked",
       endedAt: Date.now(),
-      error: "approval denied",
+      terminalOutcome: "blocked",
+      terminalSummary: "Additional input required.",
     });
 
     const reply = await buildStatusReplyForTest({});
 
-    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
-    expect(reply?.text).toContain("failed background task");
-    expect(reply?.text).toContain("approval denied");
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(reply?.text).toContain("blocked background task");
+    expect(reply?.text).toContain("Additional input required.");
   });
 
   it("does not leak internal runtime context through the task status line", async () => {
@@ -2327,6 +2327,117 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+  });
+});
+
+describe("buildStatusReply error handling", () => {
+  afterEach(() => {
+    vi.doUnmock("../../logger.js");
+    vi.doUnmock("../../status/status-text.js");
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  async function runStatusReply(fn: typeof buildStatusReply) {
+    const commandParams = buildCommandTestParams("/status", baseCfg);
+    return await fn({
+      cfg: baseCfg,
+      command: commandParams.command,
+      sessionEntry: commandParams.sessionEntry,
+      sessionKey: commandParams.sessionKey,
+      parentSessionKey: commandParams.sessionKey,
+      sessionScope: commandParams.sessionScope,
+      storePath: commandParams.storePath,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 0,
+      resolvedThinkLevel: commandParams.resolvedThinkLevel,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: commandParams.resolvedVerboseLevel,
+      resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+      resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
+      isGroup: commandParams.isGroup,
+      defaultGroupActivation: commandParams.defaultGroupActivation,
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+  }
+
+  it("delivers a fixed generic reply and logs details when status rendering throws", async () => {
+    // commands-status re-exports buildStatusText, so the mock must keep that
+    // binding while prod calls buildStatusReplyParts. logError stays mocked so
+    // containment diagnostics never leak into test stderr.
+    vi.doMock("../../logger.js", async (importOriginal) => ({
+      ...(await importOriginal<object>()),
+      logError: vi.fn(),
+    }));
+    vi.doMock("../../status/status-text.js", () => ({
+      buildStatusReplyParts: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
+      buildStatusText: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
+    }));
+
+    vi.resetModules();
+    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
+    const { logError } = await import("../../logger.js");
+    const reply = await runStatusReply(freshBuildStatusReply);
+
+    // Exact object equality also pins that no stale presentation or internal
+    // error text reaches the channel; diagnostics belong to the log sink only.
+    expect(reply).toEqual({ text: "⚠️ Status: error rendering response" });
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("Unexpected rendering error"));
+  });
+
+  it("keeps the structured rich payload on the success path", async () => {
+    const presentation = {
+      title: "Status",
+      tone: "info" as const,
+      blocks: [{ type: "text" as const, text: "plain status" }, { type: "divider" as const }],
+    };
+    vi.doMock("../../status/status-text.js", () => ({
+      buildStatusReplyParts: vi.fn(() => Promise.resolve({ text: "plain status", presentation })),
+      buildStatusText: vi.fn(() => Promise.resolve("plain status")),
+    }));
+
+    vi.resetModules();
+    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
+    const reply = await runStatusReply(freshBuildStatusReply);
+
+    expect(reply).toMatchObject({
+      text: "plain status",
+      presentation,
+      presentationTextMode: "fallback",
+    });
+  });
+
+  it("returns a generic reply and logs details when plugin health collection fails", async () => {
+    vi.doMock("../../logger.js", async (importOriginal) => ({
+      ...(await importOriginal<object>()),
+      logError: vi.fn(),
+    }));
+
+    vi.resetModules();
+    const { buildStatusPluginsReply: freshBuildStatusPluginsReply } =
+      await import("./commands-status.js");
+    const { logError } = await import("../../logger.js");
+    pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockRejectedValueOnce(
+      new Error("Cannot find module 'internal/path'"),
+    );
+
+    const commandParams = buildCommandTestParams("/status plugins", {
+      ...baseCfg,
+      commands: { text: true, plugins: true },
+    });
+    const reply = await freshBuildStatusPluginsReply({
+      cfg: commandParams.cfg,
+      command: commandParams.command,
+      workspaceDir: commandParams.workspaceDir,
+    });
+
+    expect(reply?.text).toBe("⚠️ Plugins: health unavailable");
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("Cannot find module 'internal/path'"),
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

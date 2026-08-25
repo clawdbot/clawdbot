@@ -3,12 +3,10 @@ import { existsSync, globSync, readdirSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
   createVitestCacheWarmGroups,
   resolvePolicyTestTargets,
-  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -110,40 +108,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ui/src/styles/cursor-policy.node.test.ts",
     ]);
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
-  });
-
-  it("assigns one semantic Vitest cache writer without changing shard order", () => {
-    const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
-    const compact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "push",
-    });
-
-    const expectWriter = (plan: Array<Pick<NodeTestShard, "groups" | "shardName">>) => {
-      const marked = assignVitestFsCacheWriter(plan);
-      expect(marked.map((shard) => shard.shardName)).toEqual(plan.map((shard) => shard.shardName));
-      expect(marked.filter((shard) => shard.saveVitestFsCache)).toHaveLength(1);
-      expect(
-        marked.find((shard) => shard.saveVitestFsCache)?.shardName.startsWith("core-unit-fast") ||
-          marked
-            .find((shard) => shard.saveVitestFsCache)
-            ?.groups?.some((group) => group.shard_name.startsWith("core-unit-fast")),
-      ).toBe(true);
-    };
-    expectWriter(full);
-    expectWriter(compact);
-
-    expect(assignVitestFsCacheWriter([])).toEqual([]);
-    const changedOnly = {
-      checkName: "checks-node-changed-only",
-      configs: ["test/vitest/vitest.unit.config.ts"],
-      requiresDist: false,
-      runner: DEFAULT_NODE_TEST_RUNNER,
-      shardName: "changed-only",
-    };
-    expect(assignVitestFsCacheWriter([changedOnly])).toEqual([
-      { ...changedOnly, saveVitestFsCache: true },
-    ]);
   });
 
   it("projects cache-warm groups from the owned node test plan", () => {
@@ -318,27 +282,27 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         name: "Blacksmith",
         pullRequest: pullRequestCompact,
         pullRequestJobs: 34,
-        pullRequestMax: 204,
+        pullRequestMax: 207,
         push: compact,
         pushJobs: 25,
-        pushMax: 204,
+        pushMax: 207,
       },
       {
         name: "GitHub-hosted",
         pullRequest: githubPullRequestCompact,
-        pullRequestJobs: 79,
+        pullRequestJobs: 80,
         pullRequestMax: 186,
         push: githubCompact,
-        pushJobs: 70,
+        pushJobs: 71,
         pushMax: 149,
       },
       {
         name: "hybrid",
         pullRequest: hybridPullRequestCompact,
-        pullRequestJobs: 55,
+        pullRequestJobs: 57,
         pullRequestMax: 140,
         push: hybridCompact,
-        pushJobs: 47,
+        pushJobs: 49,
         pushMax: 140,
       },
     ]) {
@@ -355,7 +319,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         `${profile.name} pull-request max`,
       ).toBe(profile.pullRequestMax);
     }
-    expect(hybridCompact.filter((shard) => !shard.requiresDist)).toHaveLength(46);
+    expect(hybridCompact.filter((shard) => !shard.requiresDist)).toHaveLength(48);
     expect(githubCompact.length - hybridCompact.length).toBeGreaterThanOrEqual(20);
     expect(githubPullRequestCompact.length).toBeLessThanOrEqual(96);
     // Nondist expanded-profile lanes stay under the 150-second body ceiling;
@@ -370,6 +334,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         plan
           .filter((shard) => !shard.requiresDist)
           .every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
+      ).toBe(true);
+    }
+    for (const plan of [
+      githubCompact,
+      githubPullRequestCompact,
+      hybridCompact,
+      hybridPullRequestCompact,
+    ]) {
+      const agentChatStripes = plan
+        .flatMap((shard) => shard.groups)
+        .filter((group) => group.shard_name.startsWith("agentic-control-plane-agent-chat-hosted-"));
+      expect(agentChatStripes).toHaveLength(2);
+      expect(
+        agentChatStripes.every(
+          (group) =>
+            !group.includePatterns?.includes(
+              "src/gateway/server.chat.gateway-server-chat.test.ts",
+            ) || !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
+        ),
       ).toBe(true);
     }
     // Historical checks-node-compact-large-2 was this gateway-core group. Its
@@ -867,6 +850,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Stripes partition the tooling files: no overlap, nothing dropped.
     const stripeFiles = stripes.flatMap((stripe) => stripe.includePatterns ?? []);
     expect(new Set(stripeFiles).size).toBe(stripeFiles.length);
+    expect(
+      stripes.find((stripe) =>
+        stripe.includePatterns?.includes(
+          "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+        ),
+      )?.pretestBuildMode,
+    ).toBe("runtime");
     expect(
       toolingShards.find((shard) => shard.shardName === "core-tooling-isolated"),
     ).toMatchObject({

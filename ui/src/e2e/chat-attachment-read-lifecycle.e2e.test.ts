@@ -3,11 +3,17 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+  storageTargetForGateway,
+} from "../lib/chat/outbox-store.ts";
+import {
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
@@ -55,7 +61,193 @@ async function pastePng(composer: Locator): Promise<void> {
   }, ONE_PIXEL_PNG_B64);
 }
 
+async function waitForCommittedAttachmentDraft(
+  page: Page,
+  sessionKey: string,
+  text: string,
+): Promise<void> {
+  const gatewayUrl = await page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { gateway: { connection: { gatewayUrl: string } } } };
+    };
+    return app.runtime?.context.gateway.connection.gatewayUrl ?? null;
+  });
+  if (!gatewayUrl) {
+    throw new Error("OpenClaw application Gateway URL is unavailable");
+  }
+  const storedScope = resolveStoredChatOutboxScope({ settings: { gatewayUrl } }, sessionKey);
+  await waitForCommittedState(
+    page,
+    async (expected) => {
+      const { gatewayOwner, recoveryScope, scopeKey, draftText, attachmentCount } = expected;
+      if (
+        typeof gatewayOwner !== "string" ||
+        typeof recoveryScope !== "string" ||
+        typeof scopeKey !== "string" ||
+        typeof draftText !== "string" ||
+        typeof attachmentCount !== "number"
+      ) {
+        return false;
+      }
+      try {
+        const storeUrl = performance
+          .getEntriesByType("resource")
+          .map((entry) => entry.name)
+          .find((name) => /\/composer-draft-store\.runtime-[^/]+\.js$/u.test(name));
+        if (!storeUrl) {
+          return false;
+        }
+        const draftStore = (await import(
+          /* @vite-ignore */ storeUrl
+        )) as typeof import("../lib/chat/composer-draft-store.runtime.ts");
+        const result = await draftStore.readDurableComposerDraft({
+          gatewayOwner,
+          recoveryScope,
+          scopeKey,
+        });
+        return (
+          result.status === "found" &&
+          result.draft.text === draftText &&
+          result.draft.attachments.length === attachmentCount
+        );
+      } catch {
+        return false;
+      }
+    },
+    {
+      gatewayOwner: storageTargetForGateway(gatewayUrl).gatewayOwner,
+      recoveryScope: "e2e-recovery-scope",
+      scopeKey: storedChatOutboxScopeKey(storedScope),
+      draftText: text,
+      attachmentCount: 1,
+    },
+  );
+}
+
 suite.define(() => {
+  it("restores isolated session drafts across fresh pages and retires sent or removed attachments", async () => {
+    const firstSession = "agent:main:restart-session-a";
+    const secondSession = "agent:main:restart-session-b";
+    const sessionsList = {
+      count: 2,
+      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+      path: "",
+      sessions: [
+        { key: firstSession, kind: "direct", updatedAt: 2 },
+        { key: secondSession, kind: "direct", updatedAt: 1 },
+      ],
+      ts: Date.now(),
+    };
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await mkdir(artifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const activeComposer = (page: Page) =>
+      page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox textarea',
+      );
+    const activeAttachments = (page: Page) =>
+      page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-attachment-thumb');
+    try {
+      const firstPage = await context.newPage();
+      await installMockGateway(firstPage, {
+        methodResponses: { "sessions.list": sessionsList },
+        sessionKey: firstSession,
+      });
+      await firstPage.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
+      await activeComposer(firstPage).fill("restart draft A with image");
+      await pastePng(activeComposer(firstPage));
+      await expect.poll(() => activeAttachments(firstPage).count()).toBe(1);
+      await waitForCommittedAttachmentDraft(firstPage, firstSession, "restart draft A with image");
+
+      await navigateToControlUiSession(firstPage, secondSession);
+      await activeComposer(firstPage).fill("restart draft B with removable file");
+      await firstPage
+        .locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__file-input')
+        .setInputFiles({
+          name: "remove-me.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("remove this attachment"),
+        });
+      await expect.poll(() => activeAttachments(firstPage).count()).toBe(1);
+      await waitForCommittedAttachmentDraft(
+        firstPage,
+        secondSession,
+        "restart draft B with removable file",
+      );
+      await firstPage.close();
+
+      const restoredPage = await context.newPage();
+      const restoredGateway = await installMockGateway(restoredPage, {
+        methodResponses: { "sessions.list": sessionsList },
+        sessionKey: firstSession,
+      });
+      await restoredPage.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
+      await expect
+        .poll(() => activeComposer(restoredPage).inputValue())
+        .toBe("restart draft A with image");
+      await activeAttachments(restoredPage).first().waitFor();
+      expect(await activeAttachments(restoredPage).count()).toBe(1);
+      if (artifactDir) {
+        await restoredPage.screenshot({
+          path: path.join(artifactDir, "existing-session-restart-draft-restored.png"),
+        });
+      }
+
+      await navigateToControlUiSession(restoredPage, secondSession);
+      await expect
+        .poll(() => activeComposer(restoredPage).inputValue())
+        .toBe("restart draft B with removable file");
+      await activeAttachments(restoredPage).first().waitFor();
+      expect(await activeAttachments(restoredPage).count()).toBe(1);
+      await restoredPage
+        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-attachment-remove')
+        .click();
+      await expect.poll(() => activeAttachments(restoredPage).count()).toBe(0);
+
+      await navigateToControlUiSession(restoredPage, firstSession);
+      await activeComposer(restoredPage).press("Enter");
+      const send = await restoredGateway.waitForRequest("chat.send");
+      expect(send.params).toMatchObject({
+        sessionKey: firstSession,
+        message: "restart draft A with image",
+        attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png", mimeType: "image/png" }],
+      });
+      await expect.poll(() => activeComposer(restoredPage).inputValue()).toBe("");
+      await expect.poll(() => activeAttachments(restoredPage).count()).toBe(0);
+      await restoredPage.close();
+
+      const clearedPage = await context.newPage();
+      await installMockGateway(clearedPage, {
+        methodResponses: { "sessions.list": sessionsList },
+        sessionKey: firstSession,
+      });
+      await clearedPage.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
+      await expect.poll(() => activeComposer(clearedPage).inputValue()).toBe("");
+      await expect.poll(() => activeAttachments(clearedPage).count()).toBe(0);
+      await navigateToControlUiSession(clearedPage, secondSession);
+      await expect
+        .poll(() => activeComposer(clearedPage).inputValue())
+        .toBe("restart draft B with removable file");
+      await expect.poll(() => activeAttachments(clearedPage).count()).toBe(0);
+      if (artifactDir) {
+        await clearedPage.screenshot({
+          path: path.join(artifactDir, "existing-session-restart-drafts-cleaned.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("rejects a combined attachment frame before the Gateway connection is lost", async () => {
     await suite.withPage(
       {

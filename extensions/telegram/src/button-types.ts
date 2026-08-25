@@ -1,12 +1,12 @@
 // Telegram plugin module implements button types behavior.
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
-  reduceLegacyInteractiveReply,
+  legacyInteractiveReplyToPresentation,
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
   normalizeLegacyInteractiveReply,
+  renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
-  type LegacyInteractiveReply,
   type MessagePresentation,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -56,6 +56,26 @@ export type TelegramButtonBuildOptions = {
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: TelegramQuestionOptionIndices;
 };
+
+export function appendTelegramDroppedControlFallback(
+  text: string,
+  controls: readonly TelegramDroppedControl[],
+): string {
+  const fallback = renderMessagePresentationFallbackText({
+    presentation: {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: controls.map((control) => ({ label: control.label, value: "unavailable" })),
+        },
+      ],
+    },
+  });
+  if (!fallback || text === fallback || text.endsWith(`\n\n${fallback}`)) {
+    return text;
+  }
+  return [text, fallback].filter(Boolean).join("\n\n");
+}
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
 
@@ -207,38 +227,6 @@ function chunkInteractiveButtons(
   }
 }
 
-/**
- * @deprecated Use buildTelegramPresentationButtons with MessagePresentation.
- */
-function buildTelegramInteractiveButtons(
-  interactive?: LegacyInteractiveReply,
-  options?: TelegramButtonBuildOptions,
-): TelegramInlineButtons | undefined {
-  const rows = reduceLegacyInteractiveReply(
-    interactive,
-    [] as TelegramInlineButton[][],
-    (state, block) => {
-      if (block.type === "buttons") {
-        chunkInteractiveButtons(block.buttons, state, options);
-        return state;
-      }
-      if (block.type === "select") {
-        chunkInteractiveButtons(
-          block.options.map((option) => ({
-            label: option.label,
-            action: option.action,
-            value: option.value,
-          })),
-          state,
-          options,
-        );
-      }
-      return state;
-    },
-  );
-  return rows.length > 0 ? rows : undefined;
-}
-
 /** Convert portable presentation controls to Telegram inline keyboard rows. */
 export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
@@ -275,9 +263,16 @@ export function resolveTelegramInlineButtons(
   },
   options?: TelegramButtonBuildOptions,
 ): TelegramInlineButtons | undefined {
+  if (params.buttons) {
+    return params.buttons;
+  }
+
+  const interactive = normalizeLegacyInteractiveReply(params.interactive);
   return (
-    params.buttons ??
-    buildTelegramInteractiveButtons(normalizeLegacyInteractiveReply(params.interactive), options) ??
+    buildTelegramPresentationButtons(
+      interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined,
+      options,
+    ) ??
     buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation), options)
   );
 }

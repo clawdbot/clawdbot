@@ -55,6 +55,7 @@ const wsMockState = vi.hoisted(() => ({
 
 vi.mock("ws", () => ({
   WebSocket: class MockWebSocket {
+    static readonly OPEN = 1;
     on = vi.fn();
     close = vi.fn();
     send = vi.fn();
@@ -183,7 +184,7 @@ describe("GatewayClient", () => {
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
     expectNoGatewayClientAgent({
       url: "wss://gateway.example.com",
-      tlsFingerprint: "SHA256:AA:BB",
+      tlsFingerprint: "ab".repeat(32),
     });
   });
 
@@ -272,6 +273,7 @@ describe("GatewayClient", () => {
 });
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
@@ -291,6 +293,7 @@ type RecordingSocket = TestSocket & {
 function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
   return {
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => {
       sent.push(JSON.parse(payload) as EventFrame);
@@ -530,42 +533,35 @@ describe("gateway broadcaster", () => {
   });
 
   it("filters approval and pairing events by scope", () => {
-    const approvalsSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const pairingSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const readSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
+    const approvalsSocket = makeRecordingSocket();
+    const pairingSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const adminSocket = makeRecordingSocket();
 
     const clients = new Set<GatewayWsClient>([
       makeOperatorWsClient("c-approvals", approvalsSocket, ["operator.approvals"]),
       makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+      makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     broadcast("exec.approval.requested", { id: "1" });
     broadcast("device.pair.requested", { requestId: "r1" });
+    broadcast("device.pair.changed", {});
 
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
     expect(readSocket.send).toHaveBeenCalledTimes(0);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
     broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
     expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
   });
 
   it("requires operator.read for chat-class broadcast events", () => {
@@ -599,8 +595,8 @@ describe("gateway broadcaster", () => {
   });
 
   it("requires operator.questions for question broadcasts", () => {
-    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const questionSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
     const clients = new Set<GatewayWsClient>([
       makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),

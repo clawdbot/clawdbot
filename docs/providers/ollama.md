@@ -437,7 +437,7 @@ timeout and cap `num_ctx`:
 ```
 
 This timeout applies to inbound image understanding and to the explicit
-`image` tool. `models.providers.ollama.timeoutSeconds` still controls the
+`view_image` tool. `models.providers.ollama.timeoutSeconds` still controls the
 underlying Ollama HTTP request guard for normal model calls.
 
 Live verification:

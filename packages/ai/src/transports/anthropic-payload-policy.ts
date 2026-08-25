@@ -1,3 +1,4 @@
+import type { Model } from "@openclaw/llm-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
@@ -79,7 +80,7 @@ export function resolveAnthropicServerCompactionPlan(
 ): { enabled: boolean; threshold?: number } {
   const provider = normalizeOptionalLowercaseString(model.provider);
   const api = normalizeOptionalLowercaseString(model.api);
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
   const enabled =
     extraParams?.anthropicServerCompaction === true &&
     provider === "anthropic" &&
@@ -297,14 +298,18 @@ function countAnthropicCacheControlMarkers(blocks: unknown): number {
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function resolveAnthropicPayloadPolicy(
   input: AnthropicPayloadPolicyInput,
+  model?: Model,
 ): AnthropicPayloadPolicy {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: input.provider,
-    api: input.api,
-    baseUrl: input.baseUrl,
-    capability: "llm",
-    transport: "stream",
-  });
+  const capabilities = resolveProviderRequestCapabilities(
+    {
+      provider: input.provider,
+      api: input.api,
+      baseUrl: input.baseUrl,
+      capability: "llm",
+      transport: "stream",
+    },
+    model,
+  );
   const serverCompactionPlan = resolveAnthropicServerCompactionPlan(input, input.extraParams);
 
   return {

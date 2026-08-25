@@ -1,6 +1,7 @@
 // Channel turn pipeline tests cover orchestration, dispatch, and completion behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { getReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
@@ -25,7 +26,7 @@ import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import type { RecordInboundSession } from "../session.types.js";
 import { runPreparedChannelTurn } from "./execution.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
-import type { ChannelTurnResult } from "./types.js";
+import type { ChannelTurnResult, PreparedChannelTurn } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
@@ -39,6 +40,27 @@ const createMessageSentEmitter = vi.hoisted(() =>
   vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
 );
 const readRecentUserAssistantTextForSession = vi.hoisted(() => vi.fn());
+const subsystemWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  const makeLogger = (subsystem: string): import("../../logging/subsystem.js").SubsystemLogger => ({
+    subsystem,
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: subsystemWarn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: (name: string) => makeLogger(`${subsystem}/${name}`),
+  });
+  return {
+    ...actual,
+    createSubsystemLogger: makeLogger,
+  };
+});
 
 vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
   const actual =
@@ -93,6 +115,32 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 }));
 
 const cfg = {} as OpenClawConfig;
+const visibleFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 1,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: true,
+} as const;
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -124,6 +172,7 @@ function createDispatch(
     return {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
+      settledReceipt: visibleFinalReceipt,
     };
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
@@ -139,6 +188,20 @@ function dispatchTestAssembledTurn(
     agentId: "main",
     storePath: "/tmp/sessions.json",
     ...overrides,
+  });
+}
+
+function runTestPreparedChannelTurn<TDispatchResult>(
+  params: Pick<PreparedChannelTurn<TDispatchResult>, "runDispatch" | "log" | "messageId">,
+) {
+  return runPreparedChannelTurn({
+    channel: "test",
+    routeSessionKey: "agent:main:test:peer",
+    storePath: "/tmp/sessions.json",
+    ctxPayload: createCtx(),
+    recordInboundSession: createRecordInboundSession(),
+    record: { onRecordError: vi.fn() },
+    ...params,
   });
 }
 
@@ -741,6 +804,7 @@ describe("channel turn pipeline", () => {
       return {
         queuedFinal: true,
         counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: visibleFinalReceipt,
       };
     });
 
@@ -883,26 +947,16 @@ describe("channel turn pipeline", () => {
   });
 
   it("logs a warning when a visible prepared dispatch queues no payloads", async () => {
-    const events: string[] = [];
     const log = vi.fn();
-    const recordInboundSession = createRecordInboundSession(events);
     const runDispatch = vi.fn(async () => ({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     }));
 
-    const result = await runPreparedChannelTurn({
-      channel: "test",
-      routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload: createCtx(),
-      recordInboundSession,
+    const result = await runTestPreparedChannelTurn({
       runDispatch,
       log,
       messageId: "msg-zero",
-      record: {
-        onRecordError: vi.fn(),
-      },
     });
 
     expectDispatched(result);
@@ -915,12 +969,74 @@ describe("channel turn pipeline", () => {
         reason: "zero-count-visible-dispatch",
       }),
     ]);
+    // A dispatch that recorded no processed outcome reads as unknown in the
+    // core-owned warn line.
+    expect(subsystemWarn).toHaveBeenCalledWith(expect.stringContaining("cause=unknown"));
+  });
+
+  it("attributes the zero-count warn line with the dispatch's processed outcome", async () => {
+    const log = vi.fn();
+    // The dispatch pipeline records its terminal branch through the kernel's
+    // sink instead of widening the plugin-visible result contract.
+    const runDispatch = vi.fn(async () => {
+      noteDispatchProcessedOutcome({ outcome: "skipped", reason: "duplicate" });
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    });
+
+    const result = await runTestPreparedChannelTurn({
+      runDispatch,
+      log,
+      messageId: "msg-zero-cause",
+    });
+
+    expectDispatched(result);
+    expect(subsystemWarn).toHaveBeenCalledWith(expect.stringContaining("messageId=msg-zero-cause"));
+    expect(subsystemWarn).toHaveBeenCalledWith(expect.stringContaining("cause=skipped:duplicate"));
+    // The channel log event is a plugin contract; the attribution must stay out of it.
+    const warning = log.mock.calls
+      .map(([event]) => event as Record<string, unknown>)
+      .find((event) => event.reason === "zero-count-visible-dispatch");
+    expect(warning).toBeDefined();
+    expect(warning).not.toHaveProperty("cause");
+  });
+
+  it.each([
+    {
+      name: "accepts compatibility counters when no receipt exists",
+      dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+      warns: false,
+    },
+    {
+      name: "keeps a non-visible settled receipt authoritative",
+      dispatchResult: {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: {
+          anyVisibleDelivered: false,
+          counts: { final: { delivered: 0, failedAfterSend: 0 } },
+        },
+      },
+      warns: true,
+    },
+  ])("$name", async ({ dispatchResult, warns }) => {
+    const log = vi.fn();
+
+    await runTestPreparedChannelTurn({
+      runDispatch: vi.fn(async () => dispatchResult),
+      log,
+      messageId: "msg-compat",
+    });
+
+    expect(log.mock.calls.some(([event]) => event.reason === "zero-count-visible-dispatch")).toBe(
+      warns,
+    );
   });
 
   it("does not warn for observed-path deliveries with zero queued counts", async () => {
-    const events: string[] = [];
     const log = vi.fn();
-    const recordInboundSession = createRecordInboundSession(events);
     // Observed-delivery path: queuedFinal false and all counts zero, but the reply was
     // delivered via observedReplyDelivery and must not trip the silent-drop sentinel.
     const runDispatch = vi.fn(async () => ({
@@ -929,18 +1045,10 @@ describe("channel turn pipeline", () => {
       observedReplyDelivery: true,
     }));
 
-    const result = await runPreparedChannelTurn({
-      channel: "test",
-      routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload: createCtx(),
-      recordInboundSession,
+    const result = await runTestPreparedChannelTurn({
       runDispatch,
       log,
       messageId: "msg-observed",
-      record: {
-        onRecordError: vi.fn(),
-      },
     });
 
     expectDispatched(result);
@@ -951,27 +1059,17 @@ describe("channel turn pipeline", () => {
   });
 
   it("does not warn when an active run accepts deferred steer ownership", async () => {
-    const events: string[] = [];
     const log = vi.fn();
-    const recordInboundSession = createRecordInboundSession(events);
     const runDispatch = vi.fn(async () => ({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       deferredToActiveRun: "steer" as const,
     }));
 
-    const result = await runPreparedChannelTurn({
-      channel: "test",
-      routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload: createCtx(),
-      recordInboundSession,
+    const result = await runTestPreparedChannelTurn({
       runDispatch,
       log,
       messageId: "msg-deferred-steer",
-      record: {
-        onRecordError: vi.fn(),
-      },
     });
 
     expectDispatched(result);

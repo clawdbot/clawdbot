@@ -4,6 +4,7 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 // Discord plugin module implements runtime.messaging.shared behavior.
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
   isDiscordGroupAllowedByPolicy,
@@ -28,6 +29,7 @@ type ConversationReadInvocationOrigin = NonNullable<
 >;
 
 export type DiscordMessagingActionOptions = {
+  reply?: ChannelMessageActionContext["reply"];
   mediaAccess?: ChannelMessageActionContext["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -191,8 +193,7 @@ function readDiscordChannelType(value: unknown): number | undefined {
 }
 
 function isDiscordThreadChannel(value: unknown): boolean {
-  const type = readDiscordChannelType(value);
-  return type === 10 || type === 11 || type === 12;
+  return isDiscordThreadChannelType(readDiscordChannelType(value));
 }
 
 function isDiscordReadAncestryAllowed(params: {

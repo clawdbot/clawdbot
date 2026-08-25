@@ -18,6 +18,9 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+const DIFFERENT_TLS_FINGERPRINT = "cd".repeat(32);
+
 function waitForFast<T>(
   callback: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
@@ -803,14 +806,14 @@ describe("GatewayClient close handling", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "wss://127.0.0.1:18789",
-      tlsFingerprint: "expected",
+      tlsFingerprint: TLS_FINGERPRINT,
       onClose,
       onConnectError,
     });
 
     client.start();
     const ws = getLatestWs();
-    ws.setPeerFingerprint("different");
+    ws.setPeerFingerprint(DIFFERENT_TLS_FINGERPRINT);
     ws.emitOpen();
 
     expect(onConnectError).toHaveBeenCalledWith(
@@ -1359,6 +1362,45 @@ describe("GatewayClient connect auth payload", () => {
     },
   );
 
+  it.each([
+    { name: "default operator clients", options: {} },
+    {
+      name: "TUI clients",
+      options: {
+        clientName: GATEWAY_CLIENT_NAMES.TUI,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+      },
+    },
+  ])("pauses $name after a permanent protocol mismatch", async ({ options }) => {
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onReconnectPaused,
+      ...options,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws,
+      connectId: connect.id,
+      failureDetails: {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: PROTOCOL_VERSION + 1,
+      },
+      failureMessage: "incompatible gateway version",
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "PROTOCOL_MISMATCH",
+    });
+  });
+
   it("signs device proof with the emitted node client mode", () => {
     const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
     const client = createClientWithIdentity("device-node-mode", vi.fn(), {
@@ -1412,7 +1454,7 @@ describe("GatewayClient connect auth payload", () => {
       emitConnectFailure(
         currentWs,
         currentConnect.id,
-        { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+        { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
         "protocol mismatch",
       );
       const legacyWs = await advanceToNextReconnect();
@@ -1464,7 +1506,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       currentWs,
       currentConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const v3Ws = await advanceToNextReconnect();
@@ -1486,7 +1528,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       upgradedProbeWs,
       upgradedProbeConnect.id,
-      { expectedProtocol: PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1515,7 +1557,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       rolledBackProbeWs,
       rolledBackProbeConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const rolledBackLegacyWs = await advanceToNextReconnect();
@@ -1566,7 +1608,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       initialWs,
       initialConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const v3Ws = await advanceToNextReconnect();
@@ -1584,7 +1626,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       v3UpgradeProbeWs,
       v3UpgradeProbe.id,
-      { expectedProtocol: PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1595,7 +1637,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       v4Ws,
       v4Connect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1608,6 +1650,48 @@ describe("GatewayClient connect auth payload", () => {
     });
     expect(onHelloOk).toHaveBeenCalledOnce();
     client.stop();
+  });
+
+  it("pauses a node host after an unsupported protocol mismatch following a supported transition", async () => {
+    const onReconnectPaused = vi.fn();
+    const client = createClientWithIdentity("device-unsupported-node-protocol", vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      onReconnectPaused,
+    });
+
+    const { ws: currentWs, connect: currentConnect } = startClientAndConnect({ client });
+    emitConnectFailure(currentWs, currentConnect.id, {
+      code: "PROTOCOL_MISMATCH",
+      expectedProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    const legacyWs = await advanceToNextReconnect();
+    legacyWs.emitOpen();
+    emitConnectChallenge(legacyWs, "nonce-unsupported-node-protocol");
+    const legacyConnect = connectRequestFrom(legacyWs);
+    expect(legacyConnect.params).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    expect(onReconnectPaused).not.toHaveBeenCalled();
+
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: legacyWs,
+      connectId: legacyConnect.id,
+      failureDetails: {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: PROTOCOL_VERSION + 1,
+      },
+      failureMessage: "unsupported gateway protocol",
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "PROTOCOL_MISMATCH",
+    });
   });
 
   it("keeps canonical platform metadata for non-node-host node clients", () => {
@@ -1898,6 +1982,7 @@ describe("GatewayClient connect auth payload", () => {
     failureMessage?: string;
   }) {
     vi.useFakeTimers();
+    const socketCount = wsInstances.length;
     try {
       emitConnectFailure(
         params.firstWs,
@@ -1906,7 +1991,7 @@ describe("GatewayClient connect auth payload", () => {
         params.failureMessage,
       );
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(wsInstances).toHaveLength(1);
+      expect(wsInstances).toHaveLength(socketCount);
     } finally {
       params.client.stop();
       vi.useRealTimers();
@@ -1964,6 +2049,96 @@ describe("GatewayClient connect auth payload", () => {
     expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
     second.stop();
   });
+
+  it("uses prepared device auth without rereading the token store", () => {
+    const client = createClientWithIdentity("device-1", () => {}, {
+      preparedDeviceAuth: {
+        token: "prepared-device-token",
+        role: "operator",
+        scopes: ["operator.read"],
+        updatedAtMs: 123,
+      },
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "prepared-device-token",
+      deviceToken: "prepared-device-token",
+    });
+    expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it.each([
+    { completion: "clear", deviceAuthScope: undefined, store: "device" },
+    { completion: "overwrite", deviceAuthScope: undefined, store: "device" },
+    { completion: "clear", deviceAuthScope: "wss://one.example/rpc", store: "origin" },
+    { completion: "overwrite", deviceAuthScope: "wss://one.example/rpc", store: "origin" },
+  ] as const)(
+    "does not $completion rotated $store auth after the prepared snapshot",
+    async ({ completion, deviceAuthScope }) => {
+      const preparedDeviceAuth = {
+        token: "prepared-device-token",
+        role: "operator",
+        scopes: ["operator.read"],
+        updatedAtMs: 123,
+      };
+      let durableToken: string | undefined = preparedDeviceAuth.token;
+      const clearTokenMock = deviceAuthScope
+        ? clearOriginDeviceTokenMock
+        : clearDeviceAuthTokenMock;
+      const storeTokenMock = deviceAuthScope
+        ? storeOriginDeviceTokenMock
+        : storeDeviceAuthTokenMock;
+      clearTokenMock.mockImplementation(({ expectedToken }: { expectedToken?: string }) => {
+        if (durableToken === expectedToken) {
+          durableToken = undefined;
+        }
+      });
+      storeTokenMock.mockImplementation(
+        ({ expectedToken, token }: { expectedToken?: string; token: string }) => {
+          if (durableToken === expectedToken) {
+            durableToken = token;
+          }
+        },
+      );
+      const client = createClientWithIdentity("device-1", () => {}, {
+        preparedDeviceAuth,
+        ...(deviceAuthScope ? { deviceAuthScope } : {}),
+      });
+
+      const { ws, connect } = startClientAndConnect({ client });
+      durableToken = "rotated-device-token";
+      if (completion === "clear") {
+        emitConnectFailure(ws, connect.id, { code: "AUTH_DEVICE_TOKEN_MISMATCH" });
+        await waitForFast(() => expect(clearTokenMock).toHaveBeenCalledOnce());
+      } else {
+        ws.emitMessage(
+          JSON.stringify({
+            type: "res",
+            id: connect.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              auth: {
+                role: "operator",
+                scopes: ["operator.write"],
+                deviceToken: "stale-request-replacement",
+              },
+            },
+          }),
+        );
+        await waitForFast(() => expect(storeTokenMock).toHaveBeenCalledOnce());
+      }
+
+      expect(durableToken).toBe("rotated-device-token");
+      client.stop();
+    },
+  );
 
   it("keeps read-only origin auth loads and hello tokens off writable host callbacks", async () => {
     loadOriginDeviceTokenReadOnlyMock.mockReturnValue({
@@ -2311,6 +2486,31 @@ describe("GatewayClient connect auth payload", () => {
     const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
     expect(logged).toContain("Authorization: Bearer");
     expect(logged).not.toContain("sk-disabledredaction1234567890abcd");
+    client.stop();
+  });
+
+  it("never logs a registered edge auth header value from connection errors", async () => {
+    const clientSecret = "test-secret";
+    const client = new GatewayClient({
+      url: "wss://gateway.example",
+      edgeAuthHeaders: { "X-Edge-Auth": clientSecret },
+      deviceIdentity: null,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    emitConnectFailure(
+      ws,
+      connect.id,
+      { code: "AUTH_UNAUTHORIZED" },
+      `edge rejected service token ${clientSecret}`,
+    );
+
+    await waitForFast(() => {
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    });
+    const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
+    expect(logged).toContain("edge rejected service token");
+    expect(logged).not.toContain(clientSecret);
     client.stop();
   });
 

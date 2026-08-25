@@ -6,6 +6,37 @@ import org.junit.Test
 
 class SessionsScreenGroupingTest {
   @Test
+  fun sessionPresentationTitlePrefersExplicitNamesAndKeepsDashboardPlaceholdersLocal() {
+    val dashboardKey = "agent:main:dashboard:fresh"
+
+    assertEquals(
+      "Manual name",
+      sessionPresentationTitle(
+        ChatSessionEntry(
+          key = dashboardKey,
+          updatedAtMs = null,
+          label = "Manual name",
+          displayName = "Generated title",
+        ),
+      ) { "Main thread" },
+    )
+    assertEquals(
+      "Generated title",
+      sessionPresentationTitle(
+        ChatSessionEntry(key = dashboardKey, updatedAtMs = null, displayName = "Generated title"),
+      ) { "Main thread" },
+    )
+    assertEquals(
+      "New chat",
+      sessionPresentationTitle(ChatSessionEntry(key = dashboardKey, updatedAtMs = null)) { "Main thread" },
+    )
+    assertEquals(
+      "Main thread",
+      sessionPresentationTitle(ChatSessionEntry(key = "agent:main:main", updatedAtMs = null)) { "Main thread" },
+    )
+  }
+
+  @Test
   fun relativeTimeUsesCatalogBackedCompactLabels() {
     val now = 10_000_000L
 

@@ -10,7 +10,12 @@ import {
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  clearSessionStoreCacheForTest,
+  getSessionEntry,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 // Codex tests cover commands plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -152,6 +157,7 @@ function createThreadResumeResponse(params: {
     thread: {
       id: params.threadId,
       sessionId: params.threadId,
+      projectId: null,
       cliVersion: CODEX_APP_SERVER_VERSION,
       createdAt: 1,
       updatedAt: 1,
@@ -383,6 +389,7 @@ describe("codex command", () => {
     codexDiagnosticsFeedbackState.clear();
     resetSharedCodexAppServerClientForTests();
     clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -515,6 +522,59 @@ describe("codex command", () => {
     expectResultTextContains(denied, "Only an owner or operator.admin");
     expect(codexControlRequest).not.toHaveBeenCalled();
   });
+
+  it.each(["status", "account", "threads", "sessions --host paired-node", "mcp", "skills"])(
+    "keeps host-wide /codex %s inspection owner-only",
+    async (args) => {
+      const codexControlRequest = vi.fn();
+      const safeCodexControlRequest = vi.fn();
+      const readCodexStatusProbes = vi.fn();
+      const listCodexCliSessionsOnNode = vi.fn();
+
+      const result = await runCommand(
+        args,
+        {
+          codexControlRequest,
+          safeCodexControlRequest,
+          readCodexStatusProbes,
+          listCodexCliSessionsOnNode,
+        },
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+      );
+
+      expectResultTextContains(result, "Only an owner or operator.admin");
+      expect(codexControlRequest).not.toHaveBeenCalled();
+      expect(safeCodexControlRequest).not.toHaveBeenCalled();
+      expect(readCodexStatusProbes).not.toHaveBeenCalled();
+      expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows operator.admin to inspect host-wide Codex account state", async () => {
+    const safeCodexControlRequest = vi.fn(async () => ({ ok: true as const, value: {} }));
+
+    const result = await runCommand(
+      "account",
+      { safeCodexControlRequest },
+      { senderIsOwner: false, gatewayClientScopes: ["operator.admin"] },
+    );
+
+    expectResultTextContains(result, "Account: available");
+    expect(safeCodexControlRequest).toHaveBeenCalled();
+  });
+
+  it.each(["help", "models", "binding"])(
+    "preserves safe /codex %s inspection for authorized non-owners",
+    async (args) => {
+      const result = await runCommand(
+        args,
+        { listCodexAppServerModels: vi.fn(async () => ({ models: [] })) },
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+      );
+
+      expect(result.text).not.toContain("Only an owner or operator.admin");
+    },
+  );
 
   it("never sends a paired-node workspace to the gateway Codex app-server", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO({}, { enabled: false });
@@ -1398,6 +1458,16 @@ describe("codex command", () => {
 
   it("allows local Codex binding status forms in sandboxed sessions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    await upsertSessionEntry({
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey: "sandboxed-session",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        model: "gpt-5.6-sol",
+        permissionMode: "full",
+      },
+    });
     await writeTestBinding(
       {
         kind: "session",
@@ -1408,7 +1478,7 @@ describe("codex command", () => {
       {
         threadId: "thread-status",
         cwd: tempDir,
-        model: "gpt-5.5",
+        model: "codex-execution-model",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         serviceTier: "priority",
@@ -1417,7 +1487,7 @@ describe("codex command", () => {
 
     await expect(
       handleCodexCommand(createSandboxedContext("model", sessionFile), { deps: createDeps() }),
-    ).resolves.toEqual({ text: "Codex model: gpt-5.5" });
+    ).resolves.toEqual({ text: "Codex model: gpt-5.6-sol" });
     await expect(
       handleCodexCommand(createSandboxedContext("fast status", sessionFile), {
         deps: createDeps(),
@@ -2725,6 +2795,65 @@ describe("codex command", () => {
     expect(result.text).not.toContain("active now");
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(3);
   });
+
+  it.each([
+    ["auth", "wham_token_expired"],
+    ["auth_permanent", "wham_account_dead"],
+  ] as const)(
+    "shows %s subscription cooldowns classified as %s as sign-in expired",
+    async (cooldownReason, cooldownClassification) => {
+      const config = {};
+      const now = Date.now();
+      installAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:expired@example.com": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: now + 60 * 60 * 1000,
+              email: "expired@example.com",
+            },
+            "openai:api-key": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+          },
+          order: {
+            openai: ["openai:expired@example.com", "openai:api-key"],
+          },
+          usageStats: {
+            "openai:expired@example.com": {
+              cooldownUntil: now + 60 * 60 * 1000,
+              cooldownReason,
+              cooldownClassification,
+            },
+          },
+        },
+        config,
+      );
+
+      const safeCodexControlRequest = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          value: { account: { type: "unknown" }, requiresOpenaiAuth: false },
+        })
+        .mockResolvedValueOnce({ ok: false, error: "rate limits unavailable" })
+        .mockResolvedValueOnce({ ok: false, error: "subscription limits unavailable" });
+
+      const result = await runCommand("account", { safeCodexControlRequest }, { config });
+
+      expect(result.text).toContain(
+        "\n  1. expired@example.com   ChatGPT subscription   — sign-in expired",
+      );
+      expect(result.text).toContain("\n  2. api-key   API key   — active now");
+      expect(result.text).not.toContain("temporarily unavailable");
+    },
+  );
 
   it("escapes successful Codex account fallback summaries before chat display", async () => {
     const unsafe = "<@U123> [trusted](https://evil) @here";
@@ -4191,7 +4320,9 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Codex diagnostics were already sent for this account or channel recently. Try again in 60s.",
+      text: expect.stringMatching(
+        /^Codex diagnostics were already sent for this account or channel recently\. Try again in (?:[1-9]|[1-5]\d|60)s\.$/,
+      ),
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
@@ -5999,7 +6130,13 @@ describe("codex command", () => {
       handleCodexCommand(createContext("fast on", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
     await expect(
-      handleCodexCommand(createContext("permissions yolo", sessionFile), { deps }),
+      handleCodexCommand(
+        createContext("permissions yolo", sessionFile, {
+          gatewayClientScopes: ["operator.admin"],
+          sessionKey: "agent:main:session-1",
+        }),
+        { deps },
+      ),
     ).resolves.toEqual({ text: "Codex permissions set to full access." });
 
     expect(setCodexConversationModel).toHaveBeenCalledWith({
@@ -6016,9 +6153,83 @@ describe("codex command", () => {
       enabled: true,
     });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
-      identity: { kind: "session", agentId: "main", sessionId: "session-1" },
-      bindingStore: testCodexAppServerBindingStore,
       mode: "yolo",
+      config: {},
+      session: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "rejects owner yolo without admin scope",
+      mode: "yolo",
+      senderIsOwner: true,
+      gatewayClientScopes: ["operator.write"],
+      initialPermissionMode: undefined,
+      expectedText:
+        "Full Codex permissions require operator.admin. Choose Admin in the Control UI permission picker, or use an admin-authenticated CLI.",
+      expectedPermissionMode: undefined,
+    },
+    {
+      name: "persists yolo with admin scope",
+      mode: "yolo",
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+      initialPermissionMode: undefined,
+      expectedText: "Codex permissions set to full access.",
+      expectedPermissionMode: "full",
+    },
+    {
+      name: "persists explicit guarded default for an owner without admin scope",
+      mode: "default",
+      senderIsOwner: true,
+      gatewayClientScopes: ["operator.write"],
+      initialPermissionMode: "full",
+      expectedText: "Codex permissions set to default.",
+      expectedPermissionMode: "guarded",
+    },
+  ] as const)("$name", async (testCase) => {
+    const sessionKey = `agent:main:test:permissions-${testCase.mode}`;
+    const storePath = path.join(tempDir, "permission-sessions.json");
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        sessionRoot: tempDir,
+        ...(testCase.initialPermissionMode
+          ? { permissionMode: testCase.initialPermissionMode }
+          : {}),
+      },
+    });
+
+    await expect(
+      handleCodexCommand(
+        createContext(`permissions ${testCase.mode}`, undefined, {
+          config: { session: { store: storePath } },
+          sessionKey,
+          senderIsOwner: testCase.senderIsOwner,
+          gatewayClientScopes: [...testCase.gatewayClientScopes],
+        }),
+        { deps: createDeps() },
+      ),
+    ).resolves.toEqual({ text: testCase.expectedText });
+    expect(
+      getSessionEntry({
+        sessionKey,
+        storePath,
+        readConsistency: "latest",
+      }),
+    ).toMatchObject({
+      ...(testCase.expectedPermissionMode
+        ? { permissionMode: testCase.expectedPermissionMode }
+        : {}),
+      sessionRoot: tempDir,
     });
   });
 
@@ -6116,7 +6327,13 @@ describe("codex command", () => {
       handleCodexCommand(createContext("fast on", undefined, locked), { deps }),
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
     await expect(
-      handleCodexCommand(createContext("permissions yolo", undefined, locked), { deps }),
+      handleCodexCommand(
+        createContext("permissions yolo", undefined, {
+          ...locked,
+          gatewayClientScopes: ["operator.admin"],
+        }),
+        { deps },
+      ),
     ).resolves.toEqual({ text: "Codex permissions set to full access." });
 
     expect(setCodexConversationFastMode).toHaveBeenCalledOnce();
@@ -6325,7 +6542,7 @@ describe("codex command", () => {
         "- Workspace: /repo",
         "- Model: gpt-5.4",
         "- Fast: on",
-        "- Permissions: full access",
+        "- Permissions: default",
         "- Active run: turn-1",
         "- Binding: binding-data-1",
       ].join("\n"),

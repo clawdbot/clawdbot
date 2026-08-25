@@ -175,6 +175,12 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.allCards = snapshot.cards;
     this.cards = snapshot.cards.filter(isActiveWorkboardCard);
     this.statuses = snapshot.statuses;
+    const state = getWorkboardState(this.workboardHost);
+    state.cards = [...snapshot.cards];
+    state.statuses = snapshot.statuses;
+    state.loaded = true;
+    state.loadAttempted = true;
+    state.mutationReadiness = "ready";
     this.loaded = true;
     this.error = "";
     this.requestRender();
@@ -253,6 +259,14 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   protected get loading(): boolean {
     return this.refreshTask.status === TaskStatus.PENDING;
+  }
+
+  protected get workboardClient(): GatewayBrowserClient | null {
+    return this.client;
+  }
+
+  protected get workboardStateHost(): WorkboardHost {
+    return this.workboardHost;
   }
 
   protected async moveCard(card: WorkboardCard, status: WorkboardStatus): Promise<void> {
@@ -336,7 +350,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     await this.refreshTask.run([client, sharedRuntime, force, refreshAfterInflight]);
   }
 
-  private syncFromHost(): void {
+  protected syncFromHost(): void {
     const state = getWorkboardState(this.workboardHost);
     this.allCards = [...state.cards];
     this.cards = this.allCards.filter(isActiveWorkboardCard);

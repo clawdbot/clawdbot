@@ -39,12 +39,16 @@ function startMonitor(
   queue: MattermostIngressQueue,
   dispatch: MattermostIngressDispatch,
   accountId = "default",
+  runtime: Parameters<typeof createMattermostIngressMonitor>[0]["runtime"] = {
+    error: vi.fn(),
+    log: vi.fn(),
+  },
 ) {
   return createMattermostIngressMonitor({
     accountId,
     queue,
     dispatch,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime,
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
   });
@@ -79,6 +83,40 @@ afterEach(() => {
 });
 
 describe("Mattermost durable ingress", () => {
+  it("visibly rejects an authorless event without disconnecting subsequent ingress", async () => {
+    await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const dispatch = vi.fn();
+      const runtime = { error: vi.fn(), log: vi.fn() };
+      const monitor = startMonitor(queue, dispatch, "default", runtime);
+      try {
+        await monitor.receive(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-missing-author",
+                channel_id: "channel-1",
+                message: "hello",
+              }),
+            },
+            broadcast: { channel_id: "channel-1", user_id: "broadcast-user" },
+          }),
+        );
+        expect(enqueue).not.toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Mattermost posted event is missing post.user_id"),
+        );
+
+        await monitor.receive(postedEvent({ postId: "post-after-invalid" }));
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("propagates durable append failure before handler scheduling", async () => {
     await withQueue(async (queue) => {
       const appendError = new Error("sqlite unavailable");
@@ -415,6 +453,41 @@ describe("Mattermost durable ingress", () => {
         expect((await queue.enqueue("post-malformed", {} as MattermostIngressPayload)).kind).toBe(
           "failed",
         );
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("dead-letters a persisted authorless post without using broadcast recipient identity", async () => {
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        "post-missing-author",
+        {
+          version: 1,
+          receivedAt: 1,
+          rawEvent: JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-missing-author",
+                channel_id: "channel-1",
+                message: "hello",
+              }),
+            },
+            broadcast: { channel_id: "channel-1", user_id: "broadcast-user" },
+          }),
+        },
+        { receivedAt: 1, laneKey: "channel:channel-1" },
+      );
+      const dispatch = vi.fn();
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        expect(
+          (await queue.enqueue("post-missing-author", {} as MattermostIngressPayload)).kind,
+        ).toBe("failed");
         expect(dispatch).not.toHaveBeenCalled();
       } finally {
         await monitor.stop();

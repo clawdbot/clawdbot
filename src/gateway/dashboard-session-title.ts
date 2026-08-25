@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
@@ -72,7 +71,7 @@ export function buildDashboardSessionTitleSource(params: {
   message: string;
   attachments?: readonly ChatAttachment[];
 }): string {
-  const visibleMessage = stripInlineDirectiveTagsForDisplay(params.message).text.trim();
+  const visibleMessage = params.message.trim();
   const slashCommand = visibleMessage.startsWith("/");
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
@@ -212,10 +211,14 @@ async function generateDashboardSessionTitle(params: {
 export function prepareWorktreeSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  entry?: DashboardSessionTitleModelEntry | null;
   userMessage: string;
   attachments?: readonly ChatAttachment[];
   onError: (error: unknown) => void;
 }) {
+  if (params.entry === null) {
+    return undefined;
+  }
   const source = buildDashboardSessionTitleSource({
     message: params.userMessage,
     attachments: params.attachments,
@@ -226,6 +229,7 @@ export function prepareWorktreeSessionTitle(params: {
   const generated = withTimeout(
     generateDashboardSessionTitle({
       ...params,
+      entry: params.entry ?? undefined,
       timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS,
     }),
     WORKTREE_SESSION_TITLE_TIMEOUT_MS,
@@ -318,12 +322,8 @@ export async function maybeGenerateSessionTitle(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   }).firstUserMessage;
-  const transcriptText = transcriptSource
-    ? stripInlineDirectiveTagsForDisplay(stripInboundMetadata(transcriptSource)).text.trim()
-    : "";
-  const currentText = params.currentUserMessage
-    ? stripInlineDirectiveTagsForDisplay(params.currentUserMessage).text.trim()
-    : "";
+  const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
+  const currentText = params.currentUserMessage?.trim() ?? "";
   // A first-turn transcript may win the persistence race before title work starts.
   // When it is the current turn, retain the supplied attachment-enriched source.
   const sourceText =

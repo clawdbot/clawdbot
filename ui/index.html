@@ -202,10 +202,7 @@
         margin-top: 24px;
       }
 
-      /* The fallback renders when the bundle fails to load, so it cannot read
-         base.css tokens; it repeats the cursor policy locally for that reason. */
       .mount-fallback__button {
-        cursor: pointer;
         min-height: 42px;
         border: 1px solid rgba(148, 163, 184, 0.36);
         border-radius: 6px;
@@ -214,19 +211,6 @@
         background: transparent;
         font: inherit;
         font-weight: 700;
-      }
-
-      @media (display-mode: standalone),
-        (display-mode: minimal-ui),
-        (display-mode: window-controls-overlay) {
-        .mount-fallback__button {
-          cursor: default;
-        }
-      }
-
-      html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
-        .mount-fallback__button {
-        cursor: default;
       }
 
       .mount-fallback__button--primary {
@@ -371,6 +355,22 @@
           scheduleRecovery();
         }
 
+        function unregisterServiceWorkers() {
+          if (!navigator.serviceWorker?.getRegistrations) return;
+          // Recovery must not depend on a possibly broken worker. Navigations bypass it,
+          // so a reload can self-heal after the registrations are removed.
+          void navigator.serviceWorker
+            .getRegistrations()
+            .then(function (registrations) {
+              return Promise.all(
+                registrations.map(function (registration) {
+                  return registration.unregister();
+                }),
+              );
+            })
+            .catch(function () {});
+        }
+
         function retryCurrentDocument() {
           if (
             appStarted ||
@@ -404,6 +404,7 @@
               if (!appStarted) window.location.replace(documentUrl.href);
             })
             .catch(function () {
+              unregisterServiceWorkers();
               finishRecoveryAttempt();
             })
             .finally(function () {
@@ -445,6 +446,7 @@
 
         if (retry) {
           retry.addEventListener("click", function () {
+            unregisterServiceWorkers();
             window.location.reload();
           });
         }

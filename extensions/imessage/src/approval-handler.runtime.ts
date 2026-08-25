@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
+  type ChannelApprovalKind,
   createChannelApprovalNativeRuntimeAdapter,
   type PendingApprovalView,
   resolvePreparedApprovalAccountId,
@@ -70,7 +71,7 @@ type PreparedIMessageApprovalTarget = {
 };
 type IMessageApprovalPromptBinding = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
 type PendingIMessageApprovalEntry = {
@@ -93,7 +94,7 @@ type IMessageFinalPayload = {
 
 function buildPendingPayload(params: {
   request: ApprovalRequest;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   nowMs: number;
   view: PendingApprovalView;
 }): IMessagePendingDelivery {
@@ -225,7 +226,7 @@ async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   question: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -427,7 +428,7 @@ const eagerlyBoundApprovalEntries = new WeakSet<PendingIMessageApprovalEntry>();
 function bindIMessageApprovalEntry(params: {
   entry: PendingIMessageApprovalEntry;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   expiresAtMs: number;
   pollTargetWasRegisteredDuringDelivery?: boolean;

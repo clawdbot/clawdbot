@@ -1,4 +1,4 @@
-// Maintenance command registration: doctor, dashboard, reset, and uninstall.
+// Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -115,20 +115,36 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true,
         );
       }
+      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
+        return exitDoctorError(
+          "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+          opts.json === true || (opts.lint === true && !process.stdout.isTTY),
+        );
+      }
       const jsonImpliesLint =
         opts.json === true &&
         opts.lint !== true &&
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
-        typeof opts.sessionSqlite !== "string" &&
-        !hasSessionSqliteOnlyDoctorOptions(opts);
-      if (jsonImpliesLint && (opts.repair === true || opts.fix === true || opts.force === true)) {
+        typeof opts.sessionSqlite !== "string";
+      const lintMode = opts.lint === true ? "--lint" : jsonImpliesLint ? "--json" : undefined;
+      const mutationOption =
+        opts.repair === true || opts.fix === true || opts.force === true
+          ? "--repair, --fix, or --force"
+          : opts.yes === true
+            ? "--yes"
+            : opts.generateGatewayToken === true
+              ? "--generate-gateway-token"
+              : typeof opts.sessionSqlite === "string"
+                ? `--session-sqlite ${opts.sessionSqlite}`
+                : undefined;
+      if (lintMode && mutationOption) {
         return exitDoctorError(
-          "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
-          true,
+          `doctor ${lintMode} runs read-only lint checks and cannot be combined with ${mutationOption}.`,
+          opts.json === true || !process.stdout.isTTY,
         );
       }
-      if (opts.lint === true || jsonImpliesLint) {
+      if (lintMode) {
         await runCommandWithRuntime(
           defaultRuntime,
           async () => {
@@ -147,12 +163,6 @@ export function registerMaintenanceCommands(program: Command) {
           (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
         );
         return;
-      }
-      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
-        return exitDoctorError(
-          "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
-          opts.json === true,
-        );
       }
       if (hasLintOnlyDoctorOptions(opts)) {
         return exitDoctorError(
@@ -197,6 +207,35 @@ export function registerMaintenanceCommands(program: Command) {
       );
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
+
+  program
+    .command("triage")
+    .description("Collect sanitized diagnostics and prepare an agent debugging handoff")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/triage", "docs.openclaw.ai/cli/triage")}\n`,
+    )
+    .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
+    .option("--no-export", "Skip the sanitized diagnostics archive")
+    .option("--run", "Run one embedded agent turn after verifying model inference", false)
+    .action(async (opts) => {
+      if (opts.json === true && opts.run === true) {
+        return exitDoctorError("triage --json cannot be combined with --run.", true);
+      }
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const { triageCommand } = await import("../../commands/triage.js");
+          await triageCommand(defaultRuntime, {
+            json: opts.json === true,
+            noExport: opts.export === false,
+            run: opts.run === true,
+          });
+        },
+        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
+      );
+    });
 
   program
     .command("dashboard")

@@ -4,7 +4,7 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { getCommandPathWithRootOptions } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
-import { CliParseError } from "../failure-output.js";
+import { ExpectedCliError } from "../failure-output.js";
 import { formatCliCommandSuggestions } from "./command-suggestions.js";
 
 type FormatCliParseErrorOptions = {
@@ -80,14 +80,14 @@ export function createCliParseError(
   raw: string,
   options: FormatCliParseErrorOptions = {},
   errorOptions: { humanOutputWritten?: boolean } = {},
-): CliParseError {
+): ExpectedCliError {
   const message = stripCommanderErrorPrefix(raw);
   const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
   if (unknownCommand) {
     const command = unknownCommand[1] ?? "";
     const commandPath = options.commandPath ?? [];
     const humanOutput = formatCliUnknownCommandOutput(command, options);
-    return new CliParseError({
+    return new ExpectedCliError({
       message: formatUnknownCommandMessage(command, commandPath),
       humanOutput,
       humanOutputWritten: errorOptions.humanOutputWritten,
@@ -95,7 +95,7 @@ export function createCliParseError(
     });
   }
   const humanOutput = formatCliParseErrorOutput(raw, options);
-  return new CliParseError({
+  return new ExpectedCliError({
     message,
     humanOutput,
     humanOutputWritten: errorOptions.humanOutputWritten,
@@ -106,10 +106,10 @@ export function createCliParseError(
 export function createCliUnknownCommandError(
   command: string,
   options: FormatCliParseErrorOptions = {},
-): CliParseError {
+): ExpectedCliError {
   const commandPath = options.commandPath ?? [];
   const humanOutput = formatCliUnknownCommandOutput(command, options);
-  return new CliParseError({
+  return new ExpectedCliError({
     message: formatUnknownCommandMessage(command, commandPath),
     humanOutput,
     machineOutput: formatCliMachineOutput(humanOutput),

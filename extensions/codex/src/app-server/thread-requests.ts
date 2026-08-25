@@ -11,6 +11,7 @@ import {
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   isJsonObject,
@@ -29,6 +30,7 @@ import {
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { applyCodexManagedShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 export const CODEX_RING_ZERO_BASE_INSTRUCTIONS = "";
@@ -44,12 +46,17 @@ const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.goals": false,
 };
 
+const CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG: JsonObject = {
+  // OpenClaw owns the durable progress card; Codex's native checklist would create a second owner.
+  "tools.update_plan.enabled": false,
+};
+
 const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode": false,
   "features.code_mode_only": false,
 };
 
-const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
+const CODEX_NO_PROJECT_DOCS_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
 };
 
@@ -63,7 +70,7 @@ const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent_v2": false,
 };
 
-// Exact Codex 0.147 registry features that can expose a model-visible tool or
+// Exact Codex 0.149 registry features that can expose a model-visible tool or
 // host capability. One list owns both the thread deny patch and requirement pin rejection.
 const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
   "apps",
@@ -107,7 +114,6 @@ const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
   "skills.bundled.enabled": false,
   "skills.include_instructions": false,
   "tools.experimental_request_user_input.enabled": false,
-  "tools.update_plan.enabled": false,
   hooks: {
     PreToolUse: [],
     PermissionRequest: [],
@@ -120,7 +126,6 @@ const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
     SubagentStop: [],
     Stop: [],
   },
-  project_doc_max_bytes: 0,
   notify: [],
   web_search: "disabled",
 };
@@ -135,6 +140,7 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 ]);
 
 const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
+  "packagedDefaults",
   "mdm",
   "system",
   "enterpriseManaged",
@@ -160,6 +166,8 @@ export function buildThreadStartParams(
     modelProvider?: string | null;
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+    shellEnvironment?: Readonly<Record<string, string>>;
+    disableLoginShell?: boolean;
   },
 ): CodexThreadStartParams {
   const ringZeroActive =
@@ -184,6 +192,9 @@ export function buildThreadStartParams(
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
+    ...(options.appServer.sessionRoot
+      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
+      : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
@@ -203,6 +214,8 @@ export function buildThreadStartParams(
       hostSystemAgentActive: options.hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames:
         options.restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: options.shellEnvironment,
+      disableLoginShell: options.disableLoginShell,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
@@ -222,6 +235,7 @@ export function buildThreadResumeParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
+    cwd?: string;
     authProfileId?: string;
     modelProvider?: string | null;
     appServer: CodexAppServerRuntimeOptions;
@@ -235,6 +249,8 @@ export function buildThreadResumeParams(
     model?: string | null;
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+    shellEnvironment?: Readonly<Record<string, string>>;
+    disableLoginShell?: boolean;
     preserveNativeModel?: boolean;
   },
 ): CodexThreadResumeParams {
@@ -258,6 +274,10 @@ export function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(options.appServer.sessionRoot
+      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
+      : {}),
     // Only the latest turn id/status is needed to preserve active-turn conflict
     // handling; avoid rebuilding and validating the full persisted history.
     excludeTurns: true,
@@ -289,6 +309,8 @@ export function buildThreadResumeParams(
       hostSystemAgentActive: options.hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames:
         options.restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: options.shellEnvironment,
+      disableLoginShell: options.disableLoginShell,
     }),
     developerInstructions:
       options.developerInstructions ??
@@ -304,6 +326,7 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
+  const configured = buildCodexProjectDocThreadConfig(config);
   // Native goal RPCs remain available through app-server, but the Codex goals
   // feature also starts autonomous turns. Keep it disabled until a run owner exists.
   const codeModeConfig: JsonObject = {
@@ -312,11 +335,14 @@ export function buildCodexRuntimeThreadConfig(
   };
   if (options.nativeCodeModeEnabled === false) {
     const disabledConfig = mergeCodexThreadConfigs(
-      config,
+      configured,
       CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
     ) ?? {
       ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
     };
     // Native patch streaming is part of native code mode, so do not send it
     // when runtime policy disables that tool surface.
@@ -326,25 +352,29 @@ export function buildCodexRuntimeThreadConfig(
   if (options.nativeCodeModeOnlyEnabled === true) {
     const merged = mergeCodexThreadConfigs(
       codeModeConfig,
-      config,
+      configured,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
       {
         "features.code_mode_only": true,
       },
     ) ?? {
       ...codeModeConfig,
       ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
       "features.code_mode_only": true,
     };
     return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
   }
   const merged = mergeCodexThreadConfigs(
     codeModeConfig,
-    config,
+    configured,
     CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+    CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
   ) ?? {
     ...codeModeConfig,
     ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+    ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
   };
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
@@ -389,6 +419,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+    shellEnvironment?: Readonly<Record<string, string>>;
+    disableLoginShell?: boolean;
   } = {},
 ): JsonObject {
   const ringZeroActive =
@@ -397,6 +429,10 @@ export function buildCodexRuntimeThreadConfigForRun(
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
   const restrictedToolSurface =
     ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
+  const restrictedTurnDisablesProjectDocs =
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    (params.pluginHarnessToolPolicyRestricted && params.disableTools);
   const configMcpServers = config?.mcp_servers;
   if (restrictedToolSurface && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
     throw new Error("Codex restricted tool surface received invalid thread mcp_servers config");
@@ -436,24 +472,25 @@ export function buildCodexRuntimeThreadConfigForRun(
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
       messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
-        ? buildCodexRestrictedToolThreadConfigPatch(restrictedToolSurfaceMcpServerNames)
+        ? buildRestrictedToolConfigPatch(restrictedToolSurfaceMcpServerNames)
         : buildCodexRingZeroThreadConfigPatch(
             params,
             options.hostSystemAgentActive,
             restrictedToolSurfaceMcpServerNames,
           ),
+      restrictedTurnDisablesProjectDocs ? CODEX_NO_PROJECT_DOCS_CONFIG : undefined,
       params.authoredContextTokenCap === undefined
         ? undefined
         : { model_context_window: params.authoredContextTokenCap },
     ) ?? baseConfig;
-  if (params.bootstrapContextMode !== "lightweight") {
-    return runtimeConfig;
-  }
-  return (
-    mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
-      ...runtimeConfig,
-      ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
-    }
+  const contextConfig = {
+    ...runtimeConfig,
+    ...(params.bootstrapContextMode === "lightweight" ? CODEX_NO_PROJECT_DOCS_CONFIG : {}),
+  };
+  return applyCodexManagedShellEnvironment(
+    contextConfig,
+    options.shellEnvironment,
+    options.disableLoginShell,
   );
 }
 
@@ -465,15 +502,16 @@ export function buildCodexRingZeroThreadConfigPatch(
   if (!hostSystemAgentActive || !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     return undefined;
   }
-  return buildCodexRestrictedToolThreadConfigPatch(inheritedMcpServerNames);
+  return {
+    ...buildRestrictedToolConfigPatch(inheritedMcpServerNames),
+    ...CODEX_NO_PROJECT_DOCS_CONFIG,
+  };
 }
 
-function buildCodexRestrictedToolThreadConfigPatch(
-  inheritedMcpServerNames: readonly string[],
-): JsonObject {
-  // Restricted turns already send environments: [] and disable native code
-  // mode. Remove every other configurable Codex-owned source so
-  // native delegation, installed MCP tools, and utilities cannot escape the cap.
+function buildRestrictedToolConfigPatch(inheritedMcpServerNames: readonly string[]): JsonObject {
+  // Restricted turns already send environments: [] and disable native code mode.
+  // Remove Codex-owned tool sources here; project-document suppression belongs to
+  // ring-zero, message-only, and tool-disabled context policy at the caller.
   const mcpServers = Object.fromEntries(
     [...new Set(inheritedMcpServerNames)].toSorted().map((name) => [name, { enabled: false }]),
   );

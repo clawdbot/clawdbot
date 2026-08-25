@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -108,29 +109,34 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Helper to authenticate with retry logic
   async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
-    for (const attempt of Array.from(
-      { length: Math.max(1, maxAttempts) },
-      (_, index) => index + 1,
-    )) {
-      if (opts.abortSignal?.aborted) {
-        throw new Error("Aborted while waiting to authenticate");
-      }
-      try {
-        runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
-        return await authenticate(accountUrl, accountCode, { ssrfPolicy });
-      } catch (error: unknown) {
-        runtime.error?.(
-          `[tlon] Failed to authenticate (attempt ${attempt}): ${formatErrorMessage(error)}`,
-        );
-        if (attempt >= maxAttempts) {
+    let authAttempt = 0;
+    return await retryAsync(
+      async () => {
+        authAttempt += 1;
+        if (opts.abortSignal?.aborted) {
+          throw new Error("Aborted while waiting to authenticate");
+        }
+        try {
+          runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
+          return await authenticate(accountUrl, accountCode, { ssrfPolicy });
+        } catch (error: unknown) {
+          runtime.error?.(
+            `[tlon] Failed to authenticate (attempt ${authAttempt}): ${formatErrorMessage(error)}`,
+          );
           throw error;
         }
-        const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
-        runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
-        await sleepWithAbort(delay, opts.abortSignal);
-      }
-    }
-    throw new Error("unreachable Tlon authentication retry loop exit");
+      },
+      {
+        attempts: Math.max(1, maxAttempts),
+        minDelayMs: 0,
+        shouldRetry: () => !opts.abortSignal?.aborted,
+        delayMs: ({ attempt }) => Math.min(30_000, 1_000 * 2 ** (attempt - 1)),
+        onRetry: ({ delayMs }) => {
+          runtime.log?.(`[tlon] Retrying authentication in ${delayMs}ms...`);
+        },
+        sleep: (delayMs) => sleepWithAbort(delayMs, opts.abortSignal),
+      },
+    );
   }
 
   let api: UrbitSSEClient | null = null;
@@ -1298,113 +1304,58 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       await api.subscribe({
         app: "groups",
         path: "/groups/ui",
-        event: (event: unknown) => {
-          void (async () => {
-            try {
-              const eventRecord = asRecord(event);
-              // Handle group/channel join events
-              // Event structure: { group: { flag: "~host/group-name", ... }, channels: { ... } }
-              if (eventRecord) {
-                // Check for new channels being added to groups
-                const channels = asRecord(eventRecord.channels);
-                if (channels) {
-                  for (const [channelNest, _channelData] of Object.entries(channels)) {
-                    // Only monitor chat channels
-                    if (!channelNest.startsWith("chat/")) {
-                      continue;
-                    }
-
-                    // If this is a new channel we're not watching yet, add it
-                    if (!watchedChannels.has(channelNest)) {
-                      watchedChannels.add(channelNest);
-                      runtime.log?.(
-                        `[tlon] Auto-detected new channel (invite accepted): ${channelNest}`,
-                      );
-
-                      // Persist to settings store so it survives restarts
-                      if (effectiveAutoAcceptGroupInvites) {
-                        try {
-                          const currentChannels = currentSettings.groupChannels || [];
-                          if (!currentChannels.includes(channelNest)) {
-                            const updatedChannels = [...currentChannels, channelNest];
-                            // Poke settings store to persist
-                            await api.poke({
-                              app: "settings",
-                              mark: "settings-event",
-                              json: {
-                                "put-entry": {
-                                  "bucket-key": "tlon",
-                                  "entry-key": "groupChannels",
-                                  value: updatedChannels,
-                                  desk: "moltbot",
-                                },
-                              },
-                            });
-                            runtime.log?.(`[tlon] Persisted ${channelNest} to settings store`);
-                          }
-                        } catch (err) {
-                          runtime.error?.(
-                            `[tlon] Failed to persist channel to settings: ${String(err)}`,
-                          );
-                        }
-                      }
-                    }
-                  }
-                }
-
-                // Also check for the "join" event structure
-                const join = asRecord(eventRecord.join);
-                if (join) {
-                  const joinChannels = Array.isArray(join.channels) ? join.channels : [];
-                  if (joinChannels.length > 0) {
-                    for (const channelNest of joinChannels) {
-                      if (typeof channelNest !== "string") {
-                        continue;
-                      }
-                      if (!channelNest.startsWith("chat/")) {
-                        continue;
-                      }
-                      if (!watchedChannels.has(channelNest)) {
-                        watchedChannels.add(channelNest);
-                        runtime.log?.(`[tlon] Auto-detected joined channel: ${channelNest}`);
-
-                        // Persist to settings store
-                        if (effectiveAutoAcceptGroupInvites) {
-                          try {
-                            const currentChannels = currentSettings.groupChannels || [];
-                            if (!currentChannels.includes(channelNest)) {
-                              const updatedChannels = [...currentChannels, channelNest];
-                              await api.poke({
-                                app: "settings",
-                                mark: "settings-event",
-                                json: {
-                                  "put-entry": {
-                                    "bucket-key": "tlon",
-                                    "entry-key": "groupChannels",
-                                    value: updatedChannels,
-                                    desk: "moltbot",
-                                  },
-                                },
-                              });
-                              runtime.log?.(`[tlon] Persisted ${channelNest} to settings store`);
-                            }
-                          } catch (err) {
-                            runtime.error?.(
-                              `[tlon] Failed to persist channel to settings: ${String(err)}`,
-                            );
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (error: unknown) {
-              runtime.error?.(
-                `[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`,
-              );
+        event: async (event: unknown) => {
+          try {
+            const eventRecord = asRecord(event);
+            if (!eventRecord) {
+              return;
             }
-          })();
+
+            const join = asRecord(eventRecord.join);
+            const joinedChannels = Array.isArray(join?.channels) ? join.channels : [];
+            const discoveredChannels = mergeUniqueStrings(
+              Object.keys(asRecord(eventRecord.channels) ?? {}),
+              joinedChannels.filter((channel): channel is string => typeof channel === "string"),
+            ).filter((channel) => channel.startsWith("chat/"));
+
+            for (const channelNest of discoveredChannels) {
+              if (!watchedChannels.has(channelNest)) {
+                watchedChannels.add(channelNest);
+                runtime.log?.(`[tlon] Auto-detected new channel: ${channelNest}`);
+              }
+            }
+
+            if (!effectiveAutoAcceptGroupInvites) {
+              return;
+            }
+            const currentChannels = currentSettings.groupChannels ?? [];
+            const unpersistedChannels = discoveredChannels.filter(
+              (channel) => !currentChannels.includes(channel),
+            );
+            if (unpersistedChannels.length === 0) {
+              return;
+            }
+            const updatedChannels = mergeUniqueStrings(currentChannels, unpersistedChannels);
+            await api.poke({
+              app: "settings",
+              mark: "settings-event",
+              json: {
+                "put-entry": {
+                  "bucket-key": "tlon",
+                  "entry-key": "groupChannels",
+                  value: updatedChannels,
+                  desk: "moltbot",
+                },
+              },
+            });
+            // The subscription snapshot lags its poke, so keep back-to-back facts cumulative.
+            currentSettings = { ...currentSettings, groupChannels: updatedChannels };
+            runtime.log?.(`[tlon] Persisted ${unpersistedChannels.join(", ")} to settings store`);
+          } catch (error: unknown) {
+            runtime.error?.(`[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`);
+            // SSE advances its durable ack only after this callback resolves.
+            throw error;
+          }
         },
         err: (error) => {
           runtime.error?.(`[tlon] Groups-ui subscription error: ${String(error)}`);

@@ -8,6 +8,7 @@ import {
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -16,11 +17,13 @@ import {
 import {
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "../embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
+  isPluginNativeMessagingTool,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
@@ -30,7 +33,8 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
-import { closeClaudeSession } from "./claude-live-registry.js";
+import { readToolResultDetails } from "../tool-result-error.js";
+import { closeCliLiveSession } from "./cli-live-session-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
@@ -70,6 +74,7 @@ type ActiveCliTool = {
 export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
   let yielded = false;
+  let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
   let inFlightUnclassifiedMcpRequests = 0;
@@ -228,13 +233,22 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     result?: unknown;
     isError?: boolean;
   }) => {
-    if (!isDeliveredMessagingToolResult(params)) {
+    const deliveryFact = readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(params.result)?.messageDelivery,
+    );
+    const delivered = deliveryFact
+      ? deliveryFact.status === "settled" &&
+        (params.isError !== true || deliveryFact.partialDelivery)
+      : isPluginNativeMessagingTool(params.toolName) && isDeliveredMessagingToolResult(params);
+    if (!delivered) {
       return;
     }
     didSendViaMessagingTool = true;
     const toolArgs = params.args ?? {};
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
+    const confirmedTarget =
+      params.target && extractMessagingToolSendResult(params.target, params.result);
     const deliveredCurrentSourceReply =
       isMessagingSend &&
       isDeliveredMessageToolOnlySourceReplyResult({
@@ -243,6 +257,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         args: params.args,
         result: params.result,
         isError: params.isError,
+        allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+          send: confirmedTarget,
+          config: context.params.config,
+          currentProvider: context.params.messageChannel ?? context.params.messageProvider,
+          currentAccountId: context.params.agentAccountId,
+          currentChannelId: context.params.currentChannelId,
+          currentThreadId: context.params.currentThreadTs,
+          sessionKey: context.params.sessionKey,
+          deliveredPayload: params.result,
+        }),
+        deliveryConfirmed: true,
       });
     const sourceReplyFinal = deliveredCurrentSourceReply
       ? resolveMessageToolSourceReplyFinal(toolArgs)
@@ -274,11 +299,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
       }
     }
-    if (!params.target) {
+    if (!confirmedTarget) {
       return;
     }
     const targetWithContent = {
-      ...extractMessagingToolSendResult(params.target, params.result),
+      ...confirmedTarget,
       ...content,
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
@@ -315,6 +340,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           currentChannelId: context.params.currentChannelId,
           currentThreadTs: context.params.currentThreadTs,
           currentMessageId: context.params.currentMessageId,
+          replyToMode: context.params.replyToMode,
         },
       },
       call.args,
@@ -336,8 +362,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       isMessagingToolDeliveryAction(normalizeCliMessagingToolName(toolName), toolArgs);
     beginMcpLoopbackToolCallCapture({
       captureKey,
-      onYield: () => {
+      onYield: (_message, acknowledgment) => {
         yielded = true;
+        yieldAcknowledgment = acknowledgment;
       },
       onRequestStart: () => {
         inFlightUnclassifiedMcpRequests += 1;
@@ -559,7 +586,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         return;
       }
       if (params.useManagedClaudeLiveSession) {
-        await closeClaudeSession(context, "mcp-capture-rotation");
+        // The child still holds the process-env capture key. If drain cannot
+        // prove idle, kill it so a stale key cannot admit later sends.
+        await closeCliLiveSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
         Array.from(inFlightPreparedMessagingCalls).map(isPreparedInternalSourceReply),
@@ -585,7 +614,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
 
   const finalizeCapture = (finalizeParsedTools: () => void) => {
-    // Captured MCP calls may settle after the CLI process exits. Drain first so
+    // Captured MCP calls may settle after the attempt returns. Drain first so
     // finalization can use their trusted terminal outcomes.
     try {
       finalizeParsedTools();
@@ -625,6 +654,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       return {
         ...output,
         ...(yielded ? { yielded: true as const } : {}),
+        ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
         ...(current.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
         ...(current.didDeliverSourceReplyViaMessageTool
           ? { didDeliverSourceReplyViaMessageTool: true }

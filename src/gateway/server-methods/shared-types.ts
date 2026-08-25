@@ -30,11 +30,14 @@ import type {
 } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
+import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
@@ -56,6 +59,7 @@ import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type {
   WorkerPlacementDiskSpaceReader,
+  WorkerPlacementRunnerAvailabilityReader,
   WorkerSessionPlacementReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
@@ -80,6 +84,23 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
     must never get a second row. */
 export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 
+/** Host-minted role authority; leaf contract re-exported for method handlers. */
+export type { GatewayOperatorRoleActor };
+
+/** Caller identity captured by a built-in agent tool before trusted in-process dispatch. */
+export type TrustedAgentToolCaller = Readonly<{
+  agentId: string;
+  sessionKey: string;
+}>;
+
+/** Closure-bound streaming hooks attached only to trusted plugin-owned synthetic clients. */
+export type GatewayNodeInvokeStream = {
+  onProgress: (chunk: string) => void;
+  onDispatchReady: (invokeId: string) => void;
+  idleTimeoutMs?: number;
+  isRuntimeCurrent: () => boolean;
+};
+
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
@@ -91,6 +112,7 @@ export type GatewayClient = {
   authenticatedUserId?: string;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
+  authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -107,15 +129,21 @@ export type GatewayClient = {
     isLocalClient?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
+    /** Host-owned role authority retained separately from an autonomous run principal. */
+    operatorRoleActor?: GatewayOperatorRoleActor;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
     sessionCreation?: TrustedSessionCreation;
+    /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */
+    agentToolCaller?: TrustedAgentToolCaller;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
+    /** Plugin-owned in-process invoke hooks; never accepted from Gateway wire params. */
+    nodeInvokeStream?: GatewayNodeInvokeStream;
     agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
@@ -124,6 +152,8 @@ export type GatewayClient = {
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
+    /** Host-owned exact tool cap for a tracked plugin subagent run. */
+    pluginSubagentToolsAllow?: string[];
     /** Opaque in-process subagent-completion capability; never accepted from wire params. */
     delegatedToolPolicyHandoffId?: string;
   };
@@ -171,6 +201,14 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      sensitive?: boolean;
+      wizardInputPending?: boolean;
+      question?: SystemAgentChatQuestion;
+      step?: import("../../wizard/session.js").WizardStep;
+    };
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -193,6 +231,7 @@ type GatewaySystemAgentSession = {
 /** Kernel-owned services and state that can be constructed without binding sockets. */
 type GatewayKernelContext = {
   deps: CliDeps;
+  configRevisionProjector: GatewayConfigRevisionProjector;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
@@ -242,7 +281,7 @@ type GatewayKernelContext = {
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readChatStartupProjection?: (
     params: ChatStartupProjectionReadParams,
-  ) => Promise<ChatStartupProjectionResult>;
+  ) => Promise<ChatStartupProjectionResult | undefined>;
   getHealthCache: () => HealthSummary | null;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
@@ -300,6 +339,7 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  disconnectClientsForUserProfile?: (profileId: string) => void;
   invalidateClientsForDevice?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
@@ -331,6 +371,7 @@ type GatewayTransportContext = {
 
 /** Resident-owned services bridged into request handling by the server lifecycle. */
 type GatewayResidentBridgeContext = {
+  getGatewayMethodRegistry?: () => import("../methods/registry.js").GatewayMethodRegistry;
   controlUiSessionPullRequests?: ReturnType<
     typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
   >;
@@ -351,10 +392,16 @@ type GatewayResidentBridgeContext = {
     Partial<WorkerSessionPlacementRetirementService>;
   /** Process-local health samples fenced to the exact active placement owner. */
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
+  /** Process-current paired-device runner proof for active placement projection. */
+  workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
   workerPlacementDispatchService?: WorkerPlacementDispatchContract;
+  githubPublicationService?: import("../github-publication.js").GitHubPublicationCoordinator;
+  githubOAuthService?: ReturnType<
+    typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle
+  >;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
@@ -379,9 +426,13 @@ type GatewayResidentBridgeContext = {
 };
 
 /** Complete runtime context available to gateway request handlers. */
+export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
-  GatewayResidentBridgeContext;
+  GatewayResidentBridgeContext & {
+    /** Live instance routing only; never authorization or wire state. */
+    resolveGatewayContext?: GatewayContextResolver;
+  };
 
 /** Full dispatch context for raw request frames before params are normalized. */
 export type GatewayRequestOptions = {

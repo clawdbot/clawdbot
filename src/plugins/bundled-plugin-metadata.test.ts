@@ -45,8 +45,8 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diffs",
   "diffs-language-pack",
   "file-transfer",
+  "geolocation",
   "google-meet",
-  "linux-canvas",
   "linux-node",
   "llm-task",
   "lobster",
@@ -71,8 +71,8 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "geolocation",
   "google-meet",
-  "linux-canvas",
   "linux-node",
   "memory-core",
   "ollama",
@@ -428,6 +428,15 @@ describe("bundled plugin metadata", () => {
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
       contains: ["doctor-contract-api.js"],
+    });
+  });
+
+  it("keeps Memory Core's health checks on a narrow public surface", () => {
+    const memoryCore = listRepoBundledPluginMetadata().find(
+      (entry) => entry.dirName === "memory-core",
+    );
+    expectArtifactPresence(memoryCore?.publicSurfaceArtifacts, {
+      contains: ["doctor-health-api.js"],
     });
   });
 

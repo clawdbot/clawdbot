@@ -34,6 +34,8 @@ export function renderReadOnlyTranscript(params: {
       userId: chat.userId,
       userName: chat.userName,
       userAvatar: chat.userAvatar,
+      // Peer authors link to their Activity feed here exactly as in the live transcript.
+      personActivity: chat.personActivity,
       basePath: chat.basePath,
       fullMessageAgentId: chat.fullMessageAgentId,
       loadFullAssistantMessage: chat.loadFullAssistantMessage,
@@ -43,6 +45,7 @@ export function renderReadOnlyTranscript(params: {
       canvasPluginSurfaceUrl: chat.canvasPluginSurfaceUrl,
       embedSandboxMode: chat.embedSandboxMode,
       allowExternalEmbedUrls: chat.allowExternalEmbedUrls,
+      fetchLinkFavicon: chat.fetchLinkFavicon,
       autoExpandToolCalls: chat.autoExpandToolCalls,
       onRequestUpdate: chat.onRequestUpdate ?? (() => {}),
       onDraftChange: () => undefined,

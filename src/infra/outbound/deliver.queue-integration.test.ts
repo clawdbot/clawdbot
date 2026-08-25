@@ -9,7 +9,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { isOutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -503,9 +503,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -532,9 +530,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -575,9 +571,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledOnce();
     resolveSend({ messageId: "concurrent-stable-message" });
     await expect(first).resolves.toMatchObject([{ messageId: "concurrent-stable-message" }]);
-    await expect(concurrentReplay).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(concurrentReplay).resolves.toEqual([]);
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
@@ -622,9 +616,9 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledTimes(2);
   });
 
-  it("never acknowledges a platform send that returns no message identity", async () => {
+  it("never acknowledges route-only metadata as a platform message identity", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const sendMatrix = vi.fn().mockResolvedValue({});
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "", toJid: "!route-only:example" });
     const deliveryIntentId = "cron-direct-delivery:v1:no-platform-identity";
     const params = {
       cfg: {} as OpenClawConfig,
@@ -879,7 +873,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     await expect(deliverOutboundPayloads(params)).rejects.toThrow("provider result was lost");
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
-      recoveryState: "send_attempt_started",
+      recoveryState: "unknown_after_send",
     });
     await expect(deliverOutboundPayloads(params)).rejects.toThrow(
       `Stable delivery intent is already queued: ${deliveryIntentId}`,
@@ -903,7 +897,6 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
 
     expect(stateBeforeSecondSend).toBe("unknown_after_send");
     const entries = await loadPendingDeliveries(tmpDir);
-    expect(entries).toHaveLength(1);
     const entry = expectDefined(entries[0], "entries[0] test invariant");
     expect(entry.recoveryState).toBe("unknown_after_send");
     expect(entry.retryCount).toBe(1);
@@ -955,7 +948,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
 
     const beforeDrain = await loadPendingDeliveries(tmpDir);
     expect(beforeDrain).toHaveLength(1);
-    expect(beforeDrain[0]?.recoveryState).toBe("send_attempt_started");
+    expect(beforeDrain[0]?.recoveryState).toBe("unknown_after_send");
 
     const deliver = vi.fn<DeliverFn>(async () => {});
     await drainMatrixReconnect({ deliver, stateDir: tmpDir });
@@ -972,120 +965,97 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(auditEvents.slice(-2).map((event) => event.resultCount)).toEqual([0, 0]);
   });
 
-  it("retains retryable send-attempt state when an adapter fails before returning a result", async () => {
+  const attemptProvenNotSentSend = async (
+    error: Error,
+    thrown: string,
+    extra: Partial<Parameters<typeof deliverOutboundPayloads>[0]>,
+  ) => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("first payload send failed"));
+    const failure = await deliverOutboundPayloads({
+      cfg: {} as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "first" }],
+      deps: { matrix: vi.fn().mockRejectedValueOnce(error) },
+      queuePolicy: "required",
+      ...extra,
+    }).catch((caught: unknown) => caught);
+    expect(failure).toMatchObject({ message: expect.stringContaining(thrown) });
+    return failure;
+  };
 
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "first" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("first payload send failed");
-
-    const entries = await import("./delivery-queue-storage.js").then((m) =>
-      m.loadPendingDeliveries(tmpDir),
-    );
-    expect(entries).toHaveLength(1);
-    const entry = expectDefined(entries[0], "entries[0] test invariant");
-    expect(entry.retryCount).toBe(1);
-    expect(entry.recoveryState).toBe("send_attempt_started");
-    expect(entry.lastError).toContain("first payload send failed");
-  });
-
-  it("replays an entry after a proven pre-connect failure clears send evidence", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const connectError = Object.assign(new Error("connect ECONNREFUSED"), {
+  const connectRefusedError = () =>
+    Object.assign(new Error("connect ECONNREFUSED"), {
       code: "ECONNREFUSED",
       syscall: "connect",
     });
-    const sendMatrix = vi.fn().mockRejectedValueOnce(connectError);
 
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "first" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
+  it.each([
+    ["a proven pre-connect failure", connectRefusedError(), "ECONNREFUSED"],
+    [
+      "a provider proof that no message was dispatched",
+      new PlatformMessageNotDispatchedError("upload timed out before completion dispatch", {
+        cause: new Error("request timed out"),
       }),
-    ).rejects.toThrow("ECONNREFUSED");
-
-    const beforeDrain = await loadPendingDeliveries(tmpDir);
-    expect(beforeDrain).toHaveLength(1);
-    expect(beforeDrain[0]).toMatchObject({
-      retryCount: 1,
-      lastError: expect.stringContaining("ECONNREFUSED"),
-    });
-    expect(beforeDrain[0]?.recoveryState).toBeUndefined();
-    expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
-
-    const recoverySendMatrix = vi
-      .fn()
-      .mockRejectedValueOnce(connectError)
-      .mockResolvedValueOnce({ messageId: "recovered" });
-    const deliver = vi.fn<DeliverFn>(async (params) =>
-      deliverOutboundPayloads({
-        ...params,
-        deps: { matrix: recoverySendMatrix },
-      }),
-    );
-    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const afterRepeatedFailure = await loadPendingDeliveries(tmpDir);
-    expect(afterRepeatedFailure).toHaveLength(1);
-    expect(afterRepeatedFailure[0]?.retryCount).toBe(2);
-    expect(afterRepeatedFailure[0]?.recoveryState).toBeUndefined();
-    expect(afterRepeatedFailure[0]?.platformSendStartedAt).toBeUndefined();
-
-    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(2);
-    expect(recoverySendMatrix).toHaveBeenCalledTimes(2);
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-  });
-
-  it("replays an entry after the provider proves no platform message was dispatched", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const notDispatchedError = new PlatformMessageNotDispatchedError(
       "upload timed out before completion dispatch",
-      { cause: new Error("request timed out") },
-    );
-    const sendMatrix = vi.fn().mockRejectedValueOnce(notDispatchedError);
+    ],
+  ])("dead-letters a caller-owned entry after %s", async (_label, error, thrown) => {
+    const failure = await attemptProvenNotSentSend(error, thrown, {
+      deliveryRetryOwner: "caller",
+    });
+    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
 
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "first" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("upload timed out before completion dispatch");
+    // The caller received the proven-not-sent error and owns the retry; a
+    // pending row here is what produced duplicate sends (#124279).
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
 
-    const beforeDrain = await loadPendingDeliveries(tmpDir);
-    expect(beforeDrain).toHaveLength(1);
-    expect(beforeDrain[0]?.recoveryState).toBeUndefined();
-    expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
-
-    const recoverySendMatrix = vi.fn().mockResolvedValueOnce({ messageId: "recovered" });
+    const recoverySendMatrix = vi.fn();
     const deliver = vi.fn<DeliverFn>(async (params) =>
-      deliverOutboundPayloads({
-        ...params,
-        deps: { matrix: recoverySendMatrix },
-      }),
+      deliverOutboundPayloads({ ...params, deps: { matrix: recoverySendMatrix } }),
     );
     await drainMatrixReconnect({ deliver, stateDir: tmpDir });
 
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(recoverySendMatrix).toHaveBeenCalledOnce();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(recoverySendMatrix).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "a reusable producer intent",
+      {
+        deliveryIntentId: "cron-direct-delivery:v1:reusable-proven-not-sent",
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+      },
+    ],
+    ["a caller that only reports the failure", {}],
+  ])(
+    "replays %s after a proven pre-connect failure clears send evidence",
+    async (_label, extra) => {
+      const failure = await attemptProvenNotSentSend(connectRefusedError(), "ECONNREFUSED", extra);
+      expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).toBe(true);
+
+      // Neither entry has a caller that resends: reusable intents belong to the
+      // queue, and CLI/RPC callers only report the error. Both must stay pending
+      // with cleared send evidence so recovery can replay them (#100979).
+      const beforeDrain = await loadPendingDeliveries(tmpDir);
+      expect(beforeDrain).toHaveLength(1);
+      expect(beforeDrain[0]).toMatchObject({
+        retryCount: 1,
+        lastError: expect.stringContaining("ECONNREFUSED"),
+      });
+      expect(beforeDrain[0]?.recoveryState).toBeUndefined();
+      expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
+
+      const recoverySendMatrix = vi.fn().mockResolvedValueOnce({ messageId: "recovered" });
+      const deliver = vi.fn<DeliverFn>(async (params) =>
+        deliverOutboundPayloads({ ...params, deps: { matrix: recoverySendMatrix } }),
+      );
+      await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(recoverySendMatrix).toHaveBeenCalledOnce();
+      expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+    },
+  );
 });

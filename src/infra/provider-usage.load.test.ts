@@ -216,6 +216,54 @@ describe("provider-usage.load", () => {
     ]);
   });
 
+  it("returns live siblings when one provider never resolves before the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
+        if (provider === "anthropic") {
+          return await new Promise<ProviderUsageSnapshot>(() => {});
+        }
+        return {
+          provider,
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        };
+      });
+      const summaryPromise = loadProviderUsageSummary({
+        auth: [
+          { provider: "anthropic", token: "token-a" },
+          { provider: "openai", token: "token-codex" },
+        ],
+        config: {},
+        env: {},
+        timeoutMs: 5_000,
+      });
+      let settled = false;
+      void summaryPromise.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      const settledAtDeadline = settled;
+      if (!settledAtDeadline) {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      const summary = await summaryPromise;
+
+      expect(settledAtDeadline).toBe(true);
+      expect(summary.providers).toEqual([
+        { provider: "anthropic", displayName: "Claude", windows: [], error: "Timeout" },
+        {
+          provider: "openai",
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps successful provider usage when a sibling auth hook rejects", async () => {
     resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ provider }) => {
       if (provider === "anthropic") {
@@ -232,7 +280,9 @@ describe("provider-usage.load", () => {
     const summary = await loadProviderUsageSummary({
       providers: ["anthropic", "openai"],
       config: {},
-      env: {},
+      // Credential sources keep both providers past the plugin-auth gate so the
+      // sibling-isolation behavior under test is actually exercised.
+      env: { ANTHROPIC_API_KEY: "sk-ant-test", OPENAI_API_KEY: "sk-openai-test" },
     });
 
     expect(summary.providers).toEqual([

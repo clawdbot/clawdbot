@@ -1,6 +1,6 @@
 // UI presenter next-run tests cover presenter scheduling output.
 import { describe, expect, it } from "vitest";
-import { t } from "../ui/src/i18n/index.ts";
+import { i18n, t } from "../ui/src/i18n/index.ts";
 import { formatNextRun } from "../ui/src/lib/presenter.ts";
 
 describe("formatNextRun", () => {
@@ -12,7 +12,10 @@ describe("formatNextRun", () => {
   it("includes weekday and relative time", () => {
     const ts = Date.UTC(2026, 1, 23, 15, 0, 0);
     const out = formatNextRun(ts);
-    const weekday = new Date(ts).toLocaleDateString(undefined, { weekday: "short" });
+    // formatNextRun formats the weekday through i18n.getLocale(); mirror that
+    // locale here instead of the ambient host locale so the assertion holds on
+    // non-en hosts (e.g. LANG=zh_CN.UTF-8).
+    const weekday = new Date(ts).toLocaleDateString(i18n.getLocale(), { weekday: "short" });
     expect(out.slice(0, weekday.length + 2)).toBe(`${weekday}, `);
     expect(out).toContain("(");
     expect(out).toContain(")");

@@ -5,6 +5,7 @@ import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
+  listRuntimeVisibleChannelPlugins: vi.fn(),
   resolveOutboundChannelPlugin: vi.fn(),
   missingOfficialExternalChannels: new Set<string>(),
 }));
@@ -37,6 +38,12 @@ vi.mock("./channel-resolution.js", () => ({
     return normalized && deliverableChannelIds.includes(normalized) ? normalized : undefined;
   },
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
+vi.mock("./runtime-visible-channels.js", () => ({
+  // Defaults to the process-root list; scoped-registry tests override it.
+  listRuntimeVisibleChannelPlugins: (...args: unknown[]) =>
+    mocks.listRuntimeVisibleChannelPlugins(...args) ?? mocks.listChannelPlugins(...args),
 }));
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
@@ -426,5 +433,35 @@ describe("resolveMessageChannelSelection", () => {
   ])("rejects invalid channel selection for %j", async ({ setup, params, expectedMessage }) => {
     setup?.();
     await expect(expectResolvedSelection(params)).rejects.toThrow(expectedMessage);
+  });
+});
+
+describe("resolveMessageChannelSelection (registry-scoped channel plugins)", () => {
+  beforeEach(() => {
+    mocks.listChannelPlugins.mockReset();
+    mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.listRuntimeVisibleChannelPlugins.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
+  });
+
+  it("defaults to the single configured channel seen only through the runtime-visible list", async () => {
+    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([
+      makePlugin({ id: "delta", resolveAccount: () => ({ enabled: true }) }),
+    ]);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never });
+    expect(selection.channel).toBe("delta");
+    expect(selection.source).toBe("single-configured");
+  });
+
+  it("still reports no configured channels when the visible list is empty", async () => {
+    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([]);
+
+    await expect(expectResolvedSelection({ cfg: {} as never })).rejects.toThrow(
+      "Channel is required (no configured channels detected).",
+    );
   });
 });

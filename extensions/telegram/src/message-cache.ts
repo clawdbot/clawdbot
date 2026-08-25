@@ -69,7 +69,7 @@ type TelegramMessageCache = {
     botUserId?: number;
     chatId: string | number;
     messageId: string;
-    media: TelegramResolvedMedia;
+    media: TelegramResolvedMedia & { path?: string; fileName?: string };
   }) => Promise<void>;
   get: (params: {
     accountId: string;
@@ -720,7 +720,9 @@ export function createTelegramMessageCache(params?: {
       if (fileUniqueId !== media.fileUniqueId) {
         throw new Error(`Telegram message ${messageId} media changed during resolution`);
       }
-      const resolvedNode = { ...node, resolvedMedia: media };
+      // Runtime downloads carry private paths/names; cache only the existing persisted projection.
+      const { path: _path, fileName: _fileName, ...resolvedMedia } = media;
+      const resolvedNode = { ...node, resolvedMedia };
       messages.delete(key);
       messages.set(key, resolvedNode);
       await persistCachedNode({

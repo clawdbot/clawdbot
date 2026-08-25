@@ -100,7 +100,7 @@ struct ChannelsSettingsSmokeTests {
                 now: Date(timeInterval: 1.5, since: startedAt)) == nil)
     }
 
-    @Test func `cached config loads return without clearing dirty draft`() async {
+    @Test func `cached config loads return without clearing dirty draft`() {
         let store = makeChannelsStore(channels: [:])
         store.configSchema = ConfigSchemaNode(raw: ["type": "object"])
         store.configSchemaSourceKey = "source-a"
@@ -194,14 +194,21 @@ struct ChannelsSettingsSmokeTests {
         store.configLoadingSourceKey = "source-a"
 
         #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false) == true)
-        #expect(store.configForceReloadPending == false)
+        #expect(store.configReloadPending == .none)
+
+        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false, refresh: true) == true)
+        #expect(store.configReloadPending == .refresh)
 
         #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: true) == true)
-        #expect(store.configForceReloadPending == true)
+        #expect(store.configReloadPending == .force)
 
-        store.configForceReloadPending = false
+        // Force is sticky: a queued refresh must not downgrade a pending force reload.
+        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false, refresh: true) == true)
+        #expect(store.configReloadPending == .force)
+
+        store.configReloadPending = .none
         #expect(store.queueConfigReloadIfLoading(sourceKey: "source-b", force: false) == true)
-        #expect(store.configForceReloadPending == true)
+        #expect(store.configReloadPending == .force)
     }
 
     @Test func `schema reload queues behind background load after source changes`() {

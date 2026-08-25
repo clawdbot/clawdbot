@@ -1530,7 +1530,9 @@ extension OnboardingWizardView {
 
         switch GatewaySettingsStore.activeGatewayEntry()?.kind {
         case .discovered:
-            await self.gatewayController.connectActiveGateway()
+            if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
+                self.setConnectionFailure(message)
+            }
         case .manual, .none:
             // connectActiveGateway() replays the persisted endpoint and credentials,
             // so token/host/port edits made on this screen would be ignored and

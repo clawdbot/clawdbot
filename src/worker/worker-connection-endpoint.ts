@@ -1,6 +1,11 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ClientOptions, WebSocket } from "ws";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
+import {
+  buildCloudflareAccessHeaders,
+  type CloudflareAccessCredentials,
+} from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   GatewayWebSocketTransportConfigurationError,
   resolveGatewayWebSocketTransport,
@@ -17,7 +22,12 @@ export class WorkerConnectionEndpointError extends Error {
 
 export type WorkerConnectionEndpoint =
   | { kind: "unix"; socketPath: string }
-  | { kind: "websocket"; url: string; tlsFingerprint?: string };
+  | {
+      kind: "websocket";
+      url: string;
+      tlsFingerprint?: string;
+      cloudflareAccess?: CloudflareAccessCredentials;
+    };
 
 function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
   const allowed = new Set([...required, ...optional]);
@@ -43,16 +53,21 @@ function parseUnixEndpoint(value: Record<string, unknown>): WorkerConnectionEndp
 function parseWebSocketEndpoint(
   value: Record<string, unknown>,
 ): WorkerConnectionEndpoint | undefined {
+  const tlsFingerprint =
+    typeof value.tlsFingerprint === "string"
+      ? normalizeTlsFingerprint(value.tlsFingerprint)
+      : undefined;
   if (
-    !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint"]) ||
+    !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint", "cloudflareAccess"]) ||
     value.kind !== "websocket" ||
     typeof value.url !== "string" ||
     value.url.length > 4_096 ||
-    (value.tlsFingerprint !== undefined &&
-      (typeof value.tlsFingerprint !== "string" ||
-        value.tlsFingerprint.trim().length === 0 ||
-        value.tlsFingerprint.length > 256))
+    (value.tlsFingerprint !== undefined && !tlsFingerprint)
   ) {
+    return undefined;
+  }
+  const cloudflareAccess = parseCloudflareAccessCredentials(value.cloudflareAccess);
+  if (value.cloudflareAccess !== undefined && !cloudflareAccess) {
     return undefined;
   }
   let url: URL;
@@ -68,15 +83,36 @@ function parseWebSocketEndpoint(
     url.search !== "" ||
     url.hash !== "" ||
     !url.pathname.endsWith(WORKER_PUBLIC_INGRESS_PATH) ||
-    (value.tlsFingerprint !== undefined && url.protocol !== "wss:")
+    (value.tlsFingerprint !== undefined && url.protocol !== "wss:") ||
+    (cloudflareAccess !== undefined && url.protocol !== "wss:")
   ) {
     return undefined;
   }
   return {
     kind: "websocket",
     url: value.url,
-    ...(value.tlsFingerprint === undefined ? {} : { tlsFingerprint: value.tlsFingerprint }),
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
+    ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
+}
+
+function parseCloudflareAccessCredentials(value: unknown): CloudflareAccessCredentials | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["clientId", "clientSecret"]) ||
+    typeof value.clientId !== "string" ||
+    value.clientId.trim().length === 0 ||
+    value.clientId.length > 4_096 ||
+    typeof value.clientSecret !== "string" ||
+    value.clientSecret.trim().length === 0 ||
+    value.clientSecret.length > 4_096
+  ) {
+    return undefined;
+  }
+  return { clientId: value.clientId, clientSecret: value.clientSecret };
 }
 
 export function parseWorkerConnectionEndpoint(
@@ -105,12 +141,22 @@ export function resolveWorkerConnectionTarget(
       validateSocket: () => null,
     };
   }
+  if (endpoint.cloudflareAccess && new URL(endpoint.url).protocol !== "wss:") {
+    throw new WorkerConnectionEndpointError(
+      "Cloudflare Access credentials require a wss:// worker endpoint",
+    );
+  }
   try {
     const transport = resolveGatewayWebSocketTransport({
       url: endpoint.url,
       tlsFingerprint: endpoint.tlsFingerprint,
       env,
-      options: {},
+      options: endpoint.cloudflareAccess
+        ? {
+            followRedirects: false,
+            headers: buildCloudflareAccessHeaders(endpoint.cloudflareAccess),
+          }
+        : {},
     });
     return { url: endpoint.url, ...transport };
   } catch (error) {

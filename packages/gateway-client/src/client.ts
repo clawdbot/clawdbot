@@ -18,10 +18,12 @@ import {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket } from "ws";
 import {
   isSensitiveUrlQueryParamName,
-  normalizeFingerprint,
+  normalizeTlsFingerprint,
   normalizeGatewayErrorText,
 } from "./client-address-utils.js";
 import {
@@ -116,7 +118,7 @@ const DEFAULT_HOST_DEPS: Required<GatewayClientHostDeps> = {
   logDebug: () => {},
   logError: () => {},
   redactForLog: (message) => message,
-  normalizeTlsFingerprint: normalizeFingerprint,
+  normalizeTlsFingerprint,
 };
 
 function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayClientHostDeps> {
@@ -237,6 +239,8 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   origin?: string;
+  /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
   connectChallengeTimeoutMs?: number;
   /**
    * Server-side pre-auth handshake budget. Config-derived local clients use
@@ -495,6 +499,16 @@ export class GatewayClient {
 
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
+    const configuredEdgeAuthHeaders = this.opts.edgeAuthHeaders;
+    const edgeAuthHeaders =
+      configuredEdgeAuthHeaders && Object.keys(configuredEdgeAuthHeaders).length > 0
+        ? configuredEdgeAuthHeaders
+        : undefined;
+    if (edgeAuthHeaders && new URL(url).protocol !== "wss:") {
+      throw new GatewayWebSocketTransportConfigurationError(
+        "edge auth headers require a wss:// Gateway URL",
+      );
+    }
     // Block plaintext before device-token lookup. Credentials may be loaded from
     // host storage later in sendConnect(), and chat payloads are sensitive too.
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
@@ -512,6 +526,12 @@ export class GatewayClient {
         maxPayload: 25 * 1024 * 1024,
         handshakeTimeout: handshakeTimeoutMs,
         ...(this.opts.origin ? { origin: this.opts.origin } : {}),
+        ...(edgeAuthHeaders
+          ? {
+              followRedirects: false,
+              headers: edgeAuthHeaders,
+            }
+          : {}),
       },
     });
     this.deps.beforeConnect();
@@ -559,6 +579,20 @@ export class GatewayClient {
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
       void readUpgradeErrorBody(response).then((body) => {
         const statusCode = response.statusCode;
+        let gatewayError: { type?: unknown; message?: unknown } | undefined;
+        try {
+          const parsed: unknown = JSON.parse(body);
+          const parsedError = isRecord(parsed) ? parsed.error : undefined;
+          gatewayError = isRecord(parsedError) ? parsedError : undefined;
+        } catch {
+          // Plain-text and truncated rejections remain visible in the original error message.
+        }
+        const rawLocation = response.headers.location;
+        const location = rawLocation
+          ? redactSensitiveUrlLikeString(
+              Array.isArray(rawLocation) ? (rawLocation[0] ?? "") : rawLocation,
+            )
+          : undefined;
         const message = `gateway rejected websocket upgrade (HTTP ${statusCode ?? "unknown"})${body ? `: ${body}` : ""}`;
         upgradeError = new GatewayClientRequestError({
           code: "UNAVAILABLE",
@@ -567,6 +601,15 @@ export class GatewayClient {
           details: {
             reason: "websocket-upgrade-rejected",
             ...(statusCode === undefined ? {} : { httpStatus: statusCode }),
+            ...(location ? { location } : {}),
+            ...(typeof gatewayError?.type === "string"
+              ? {
+                  gatewayErrorType: gatewayError.type,
+                  ...(typeof gatewayError.message === "string"
+                    ? { gatewayErrorMessage: gatewayError.message }
+                    : {}),
+                }
+              : {}),
           },
         });
         handlers.error(upgradeError);
@@ -966,6 +1009,7 @@ export class GatewayClient {
       this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
       return { closeCode: 1008, closeReason: "connect retry" };
     }
+    this.nodeProtocolTransitionPending = false;
     const role = this.opts.role ?? "operator";
     const detailCode =
       error instanceof GatewayClientRequestError ? readConnectErrorDetailCode(error.details) : null;
@@ -1091,6 +1135,7 @@ export class GatewayClient {
         details,
         deviceTokenRetryPending: this.pendingDeviceTokenRetry,
         tokenMismatchIsTerminal: true,
+        protocolMismatchIsTerminal: !this.nodeProtocolTransitionPending,
         clientVersionMismatchIsTerminal: true,
       })
     ) {

@@ -45,6 +45,7 @@ type CodexAttemptResultInput = {
   aborted: boolean;
   tokenUsage: EmbeddedRunAttemptResult["attemptUsage"];
   contextTokens: number | undefined;
+  contextTokensSource: EmbeddedRunAttemptResult["contextTokensSource"];
   completedCompactionCount: number;
   activeItemCount: number;
   completedItemCount: number;
@@ -55,6 +56,7 @@ type CodexAttemptResultInput = {
   assistantProjection: Pick<
     CodexAssistantProjection,
     | "collectAssistantTexts"
+    | "collectAsyncMessages"
     | "collectCommentaryMessages"
     | "createAssistantMessage"
     | "createAssistantMirrorMessage"
@@ -84,6 +86,7 @@ export function buildCodexAttemptResult(
   // tool lacking a terminal item so audit consumers never retain an open action.
   input.nativeToolLifecycleProjection.finalizeActive();
   const assistantTexts = input.assistantProjection.collectAssistantTexts();
+  const asyncMessages = input.assistantProjection.collectAsyncMessages();
   const commentaryMessages = input.assistantProjection.collectCommentaryMessages();
   const reasoningText = input.reasoningProjection.reasoningText();
   const planText = input.reasoningProjection.planText();
@@ -152,6 +155,7 @@ export function buildCodexAttemptResult(
     upstreamUserText: input.upstreamUserText,
     reasoningText,
     planText,
+    asyncMessages,
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
@@ -217,6 +221,7 @@ export function buildCodexAttemptResult(
     acceptedSessionSpawns: input.toolTelemetry.acceptedSessionSpawns,
     cloudCodeAssistFormatError: false,
     contextTokens: input.contextTokens,
+    contextTokensSource: input.contextTokensSource,
     attemptUsage: projectedUsage,
     ...(input.completedCompactionCount > 0
       ? { compactionCount: input.completedCompactionCount }

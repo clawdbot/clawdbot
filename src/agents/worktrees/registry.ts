@@ -398,6 +398,7 @@ export function updateRegistryWorktree(
   patch: Partial<
     Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
   > & {
+    repositoryIdentity?: Pick<ManagedWorktreeRecord, "repoRoot" | "repoFingerprint">;
     provisionedPaths?: readonly string[];
     provisionedState?: readonly ProvisionedFileState[];
   },
@@ -417,6 +418,10 @@ export function updateRegistryWorktree(
   if ("runEndCleanup" in patch) {
     values.run_end_cleanup_json =
       patch.runEndCleanup === undefined ? null : JSON.stringify(patch.runEndCleanup);
+  }
+  if (patch.repositoryIdentity) {
+    values.repo_root = patch.repositoryIdentity.repoRoot;
+    values.repo_fingerprint = patch.repositoryIdentity.repoFingerprint;
   }
   if (patch.provisionedState !== undefined) {
     values.provisioned_paths_json = JSON.stringify(patch.provisionedState);
@@ -599,7 +604,6 @@ export function claimWorktreeRemovalRow(
   params: {
     worktreeId: string;
     token: string;
-    force: boolean;
     pid: number;
     startTime: number | null;
     now: number;
@@ -625,7 +629,7 @@ export function claimWorktreeRemovalRow(
         );
       }
       const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
-      if (!params.force && livePids.length > 0) {
+      if (livePids.length > 0) {
         throw new WorktreeRemovalContentionError(
           "busy",
           `worktree is busy: locked by live pid ${livePids[0]}`,

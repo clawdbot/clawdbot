@@ -27,6 +27,8 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
+  "openai-responses-retained-compaction";
 export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
   "openai-responses",
   "azure-openai-responses",
@@ -125,10 +127,15 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
   id?: string;
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
-export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
-  type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE;
-  baseUrlHash: string;
-};
+export type OpenAIResponsesCompactionReplayState = ProviderReplayState &
+  (
+    | { type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE; baseUrlHash: string }
+    | {
+        type: typeof OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;
+        baseUrlHash: string;
+        replayIndex?: never;
+      }
+  );
 
 export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
   reasoning?: OpenAIReasoningEffort;

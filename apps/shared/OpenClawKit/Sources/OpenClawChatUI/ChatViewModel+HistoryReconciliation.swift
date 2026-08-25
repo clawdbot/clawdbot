@@ -850,6 +850,7 @@ extension OpenClawChatViewModel {
         // Wholesale history replacement drops local-only queued bubbles;
         // re-adopt or re-append them from the durable outbox.
         restoreOutboxMessages(session: request.session)
+        self.scheduleProgressCardFetch(for: request.session)
         self.applyDeferredExternalStateIfReady()
         return true
     }

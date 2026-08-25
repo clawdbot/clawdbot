@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectHoverMarqueeAfterActionsAppear } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Codex native session catalog",
@@ -357,7 +358,7 @@ suite.define(() => {
                   sessions: [
                     {
                       threadId: "thread-local",
-                      name: "Local planning session",
+                      name: "Title fits until menu appears",
                       cwd: "/Users/dev/openclaw",
                       status: "idle",
                       archived: false,
@@ -464,6 +465,7 @@ suite.define(() => {
         await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
       ).toBe("2");
       const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
+      const localCatalogRow = section.locator('[data-session-key$=":thread-local"]');
       await expect.poll(() => projectRows.count()).toBe(3);
       expect(
         await openclawProjectList
@@ -479,6 +481,7 @@ suite.define(() => {
         '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
       );
       await expect.poll(() => threadRows.count()).toBe(4);
+      expect(await threadRows.locator(".sidebar-recent-session__link[title]").count()).toBe(0);
       const threadRowMetrics = await threadRows.evaluateAll((rows) =>
         rows.map((row) => {
           const link = row.querySelector(".sidebar-recent-session__link");
@@ -492,20 +495,48 @@ suite.define(() => {
             nameFontSize: nameStyle?.fontSize ?? "",
             paddingBottom: linkStyle?.paddingBottom ?? "",
             paddingTop: linkStyle?.paddingTop ?? "",
+            singleLine: row.classList.contains("sidebar-recent-session--single-line"),
           };
         }),
       );
       expect(threadRowMetrics).toHaveLength(4);
-      expect(new Set(threadRowMetrics.map((metric) => metric.height)).size).toBe(1);
-      expect(threadRowMetrics[0]?.height).toBeGreaterThan(30);
+      // Gateway threads and native catalog children must stay density-identical.
+      // Catalog children never carry preview text, so every subtitle-less row —
+      // whichever source it came from — collapses to the same one-line height
+      // instead of reserving a phantom second line.
+      for (const metric of threadRowMetrics) {
+        expect(metric.singleLine).toBe(true);
+      }
+      const collapsedHeight = threadRowMetrics.at(0)?.height ?? Number.NaN;
+      for (const metric of threadRowMetrics) {
+        expect(metric.height).toBeCloseTo(collapsedHeight, 3);
+      }
+      // Collapsed rows sit on the 30px min-height floor; renderer sub-pixels vary.
+      expect(collapsedHeight).toBeCloseTo(30, 1);
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
           minHeight: "30px",
           nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
+          paddingBottom: "4px",
+          paddingTop: "4px",
         });
       }
+      const catalogRow = projectRows.first();
+      await expectHoverMarqueeAfterActionsAppear(catalogRow);
+      const catalogActionReservation = await catalogRow.evaluate((row) => {
+        const text = row.querySelector<HTMLElement>(".sidebar-recent-session__text");
+        const menu = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
+        return {
+          actionCount: row.getAttribute("data-session-row-action-count"),
+          menuWidth: menu?.getBoundingClientRect().width ?? 0,
+          paddingRight: text ? Number.parseFloat(getComputedStyle(text).paddingRight) : 0,
+        };
+      });
+      expect(catalogActionReservation.actionCount).toBe("1");
+      expect(catalogActionReservation.paddingRight).toBeCloseTo(
+        catalogActionReservation.menuWidth + 3,
+        0,
+      );
       const projectLabelTone = await openclawProject
         .locator(".sidebar-session-catalog-project__label")
         .evaluate((label) => {
@@ -615,7 +646,7 @@ suite.define(() => {
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("false");
-      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(0);
+      expect(await localCatalogRow.count()).toBe(0);
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(0);
       expect(await section.getByText("Other project session", { exact: true }).count()).toBe(1);
       expect(await openclawProject.count()).toBe(1);
@@ -631,7 +662,7 @@ suite.define(() => {
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("true");
-      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(1);
+      expect(await localCatalogRow.count()).toBe(1);
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       expect(
         await page.evaluate(

@@ -150,21 +150,26 @@ describe("telegram message cache", () => {
     const { bucketKey, entries, store } = createMemoryStore();
     const cache = cacheFor(bucketKey, store);
     await record(cache, message(9000, "Kesava", { photo: photo("photo-1") }));
+    const downloadedMedia = {
+      id: "saved-photo.png",
+      fileUniqueId: "photo-1-unique",
+      size: 4,
+      savedAt: 1_736_380_700_000,
+      kind: "image" as const,
+      contentType: "image/png",
+      path: "/private/user/photos/holiday.png",
+      fileName: "holiday photo.png",
+    };
     await cache.recordResolvedMedia({
       accountId: "default",
       chatId: 7,
       messageId: "9000",
-      media: {
-        id: "saved-photo.png",
-        fileUniqueId: "photo-1-unique",
-        size: 4,
-        savedAt: 1_736_380_700_000,
-        kind: "image",
-        contentType: "image/png",
-      },
+      media: downloadedMedia,
     });
 
     expect(onlyEntry(entries)[1].resolvedMedia?.id).toBe("saved-photo.png");
+    expect(onlyEntry(entries)[1].resolvedMedia).not.toHaveProperty("path");
+    expect(onlyEntry(entries)[1].resolvedMedia).not.toHaveProperty("fileName");
     const reloaded = await reloadGet(bucketKey, store, "9000");
     expect(reloaded?.resolvedMedia).toMatchObject({
       id: "saved-photo.png",

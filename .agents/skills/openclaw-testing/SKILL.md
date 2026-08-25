@@ -18,33 +18,23 @@ or validating a change without wasting hours.
 
 Prove the touched surface first. Do not reflexively run the whole suite.
 
-Route by source trust first, execution host second, then proof size and required
-capabilities. Only trusted source may run on the current host; never execute
-untrusted repository tooling there, regardless of proof size. Run focused tests
-and cheap static checks wherever dependencies are ready. If the current host is
-a dedicated Linux worker, run suitable heavy Linux proof there too: larger
-suites, changed gates, builds, Docker, packaging, E2E/live work, and
-typecheck/lint fan-out. Do not nest a remote Linux box only to replace an
-existing dedicated Linux worker. On a developer workstation, or when proof
-requires another OS, device, browser/desktop, trust boundary, credentials, or
-prepared release environment, use the matching remote backend. Trusted
-maintainer remote proof defaults to Blacksmith Testbox. Untrusted contributor
-or fork code must use secretless fork CI or sanitized direct AWS Crabbox; never
-sync or run it on the credential-hydrated Blacksmith workflow.
+Route by source trust first, then required environment. Only trusted source may
+run locally; never execute untrusted repository tooling locally. Trusted
+development tests, changed gates, typecheck/lint, and builds run locally by
+default, including broad suites when they are the proportional proof. Use a
+remote backend only when the environment is part of the proof: clean-machine,
+install/package, Docker, E2E, live, desktop, or cross-platform work, or when the
+operator explicitly requests remote proof. Do not use Crabbox merely as
+generic compute offload. Untrusted contributor or fork code must use secretless
+fork CI or sanitized direct AWS Crabbox; never sync or run it on the
+credential-hydrated Blacksmith workflow.
 
-Detect host role from generic properties, never session-provider or agent-product
-names. A dedicated worker is Linux, isolated/disposable, headless, and assigned
-to the current task. `check:changed` auto-detects a headless noninteractive
-virtualized/containerized Linux host. Set `AGENT_HOST_ROLE=worker` for an
-equivalent bare-metal or otherwise undetectable host, or
-`AGENT_HOST_ROLE=workstation` to opt out. Treat ambiguity as a workstation.
+Do not pre-warm for anticipated work. Acquire the backend lazily when the
+first environment-sensitive command is ready to run, save its id, reuse it for
+later remote commands, and stop it before handoff. A single late remote command
+can remain a one-shot.
 
-Do not pre-warm for anticipated work. When a remote backend is actually needed,
-acquire it lazily when the first remote command is ready, save its id, reuse it
-for later remote commands, and stop it before handoff. A single late remote
-command can remain a one-shot.
-
-For untrusted heavy proof, switch to a clean trusted `main` checkout and lazily
+For untrusted proof, switch to a clean trusted `main` checkout and lazily
 warm direct AWS with an installed trusted Crabbox binary. Do not execute the
 untrusted checkout's wrapper or config locally:
 
@@ -100,22 +90,16 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox stop --provider aws <cbx_id>
 ```
 
-Once heavy proof starts, save the returned id, reuse it for later heavy gates,
+Once remote proof starts, save the returned id, reuse it for later remote work,
 sync the current checkout on every run, and stop it before handoff.
 
 1. Inspect the diff and classify the touched surface:
-   - trusted source, one/few focused tests with ready local dependencies:
-     `node scripts/run-vitest.mjs <path-or-filter>`
-   - on a dedicated Linux worker, install missing dependencies in a normal
-     checkout and run suitable heavy Linux proof directly
-   - on a workstation, if focused proof fans out, becomes expensive, or lacks
-     ready dependencies: acquire the safe remote backend selected by source trust
-   - changed gates, builds, typechecks, lint fan-out, Docker, package, E2E, or
-     live work: run on the dedicated worker when it has the required capability;
-     otherwise use the matching remote workflow
-   - `check:changed` classifies first; docs-only, no-change, and small metadata
-     plans stay on the current host; heavy or dependency-missing plans stay on a
-     dedicated worker but delegate from a workstation
+   - trusted development: run the smallest proportional local test, changed
+     gate, typecheck/lint, or build; broaden locally when the contract requires it
+   - clean-machine, install/package, Docker, E2E, live, desktop, or cross-OS
+     proof: acquire the safe remote backend selected by source trust
+   - `check:changed` classifies and runs the required local typecheck/lint/guard
+     plan when dependencies are ready
    - direct AWS Crabbox proof: pass `--provider aws`; untrusted code also
      requires the sanitized invocation above
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
@@ -128,24 +112,20 @@ sync the current checkout on every run, and stop it before handoff.
 ## Guardrails
 
 - Do not kill unrelated processes or tests. If something is running elsewhere, treat it as owned by the user or another agent.
-- Keep trusted-source workstation proof bounded to one/few focused tests and
-  cheap static checks with ready dependencies. A dedicated worker may run full
-  suites and computationally intensive commands directly. Untrusted repository
-  tooling never runs on either host class.
+- Run trusted development tests, checks, and builds locally with scope
+  proportional to the touched contract. Untrusted repository tooling never runs
+  locally. Remote proof requires a remote-environment or isolation reason.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use standard Git commands when committing; stage only your files.
-- If dependencies are missing on the selected execution host, run `pnpm install`
-  there when it is a normal checkout, retry once, then report the first
-  actionable error. Do not reconcile or reinstall a linked/sparse worktree
-  merely to run validation.
-- In a Codex worktree or linked/sparse checkout, do not run direct local
-  `pnpm test*`, `pnpm check*`, or `pnpm crabbox:run`. Use
-  `node scripts/crabbox-wrapper.mjs` for remote proof and
-  `node scripts/check-changed.mjs` for classify-first changed checks. Use
-  `node scripts/run-vitest.mjs` for bounded focused local proof when the
-  dependency install is ready. Use `git commit --no-verify` only after the
-  relevant proof is already clean.
-- When remote proof is required, use the Crabbox wrapper first, but name the actual backend.
+- If dependencies are missing on the selected host, run `pnpm install`, retry
+  once, then report the first actionable error.
+- Codex and other linked/sparse worktrees may run local `pnpm test*` and
+  `pnpm check*` when the dependency install is ready. If pnpm would reconcile a
+  shared install, use `node scripts/run-vitest.mjs` or
+  `node scripts/check-changed.mjs` to bypass that package-manager preflight.
+  For actual remote proof, invoke `node scripts/crabbox-wrapper.mjs` directly
+  rather than local `pnpm crabbox:run`.
+- For remote proof, use the Crabbox wrapper first, but name the actual backend.
   Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
   Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
   `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
@@ -178,24 +158,23 @@ sync the current checkout on every run, and stop it before handoff.
 <tbx_id>` (id is not positional) before reporting cloud state.
 - Reuse only an id/slug created in this operator session unless explicitly
   coordinating with another lane. If Testbox queues, fails capacity, or cannot
-  allocate, switch to direct AWS Crabbox when that still proves the requested
-  surface. If the whole remote backend is unavailable (broker/DNS/network/
-  lease), trusted-source proof falls back to local execution — including heavy
-  suites and gates — instead of blocking; note the fallback and reason in the
-  proof summary. Untrusted source never falls back to local.
+  allocate, report the blocker or switch to direct AWS Crabbox only when that
+  still proves the requested surface.
 - Reuse does not mean stale source: omit `--no-sync` so every run uploads the
   current checkout. Use `--no-sync` only to rerun an unchanged, already-synced
   tree intentionally.
 
-## Local Focused Proof
+## Local Development Proof
 
-Use these commands only while the dependency install is ready and the proof
-remains bounded. If it fans out or becomes expensive, acquire a remote backend.
+Use the smallest command that proves the touched contract, then broaden locally
+when the risk requires it. Select a remote backend only for environment or
+isolation proof.
 
 ```bash
 pnpm changed:lanes --json
-pnpm check:changed       # local small plan or delegated heavy plan; no Vitest
+pnpm check:changed       # local changed typecheck/lint/guard plan; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
+pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
 pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
@@ -208,7 +187,8 @@ Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
 Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
 mode and will not exit on its own.
-When the checkout is a Codex worktree, prefer the direct node harness instead:
+In a linked worktree, use the direct Node harness when avoiding pnpm dependency
+reconciliation is useful:
 
 ```bash
 node scripts/run-vitest.mjs <path-or-filter>
@@ -330,9 +310,11 @@ package with `run_release_soak=true` or explicit focused groups.
 Stable-publish uses `release_profile=stable`.
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 That helper is for regular releases. Extended-stable dispatches Full Release
@@ -341,11 +323,15 @@ Validation directly from and against `extended-stable/YYYY.M.33` with
 replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
 classification and run-identity rules.
 
-The helper pins the Tooling SHA on trusted `main`, passes the resolved Code SHA
-as `expected_sha`, and records the canonical release branch as context. It
-infers `beta` for alpha/beta package versions and `stable` for
-stable/correction versions. Pass `-f release_profile=full` only for the broad
-advisory provider/media sweep. Do not make `full` faster by silently dropping
+The helper verifies and pins the recorded Tooling SHA on trusted `main`, passes
+the resolved Code SHA as `expected_sha`, and records the canonical release
+branch as context. Reuse that SHA for the release; never refresh it from moving
+`main`. Regular release branches accept only their final package version or a
+matching beta prerelease. Tideclaw alpha validation uses its matching alpha
+branch and exact alpha tag. The helper infers `beta` for beta candidates and
+exact alpha tags, and `stable` for stable/correction versions. Pass
+`-f release_profile=full` only for the broad advisory provider/media sweep. Do
+not make `full` faster by silently dropping
 suites; use the bounded phase that matches the release decision.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
@@ -354,16 +340,35 @@ lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
-Use one operator, one transition-only watcher, and at most one investigator for
-the current failed surface. Parent timeout or cancellation leaves adopted exact
-children running; cancel an exact child only by explicit operator action or the
-workflow's identity-mismatch/fail-fast path.
+Use one operator, one foreground owner, and at most one investigator for the
+current failed surface. Do not start `release-ci-summary --watch` while the
+SHA-pinned helper is already watching the same parent. Parent timeout or
+cancellation leaves adopted exact children running; cancel an exact child only
+by explicit operator action or by `fail_fast=true` after Release Decision binds
+the failure to that exact active run.
 
-The child-dispatch jobs record child run ids, and `Verify full validation`
-re-queries them during that parent attempt. A later narrow green run is useful
-recovery evidence but is not publish authorization by itself and there is no
-standalone finalizer. The release owner must reassess the recorded evidence and
-current publish gate.
+The child-dispatch jobs record run ID, run attempt, and URL, then finish. The
+parent seals those tuples, original dispatch titles, gate coverage, reuse
+policy, and original parent attempt in one immutable
+`full-release-execution-plan-<run-id>` artifact and exact run-ID cache entry.
+Collector retries restore the cached bytes, validate them, and re-upload the
+artifact for their attempt before adopting its children; they never reconstruct
+the plan or redispatch tests.
+`Release Decision` polls those exact identities and can report
+`blocked_diagnostics_running` before unrelated children finish.
+For reused evidence, it also repeats the canonical target, policy, changed-path,
+selected-run, root-run, and exact-child validation before it can pass.
+`Diagnostic Drain` continues every selected child to terminal with
+`fail_fast=false` unless the collector itself is cancelled or loses API
+access. `orchestration_error` permits collector recovery against the same
+exact children, never test redispatch. Diagnose `blocked_diagnostics_running`
+immediately, but wait for a terminal drain before retrying the failed surface.
+The final `Verify full validation` job consumes and validates the immutable
+execution plan plus the exact Decision and Drain artifacts instead of
+reclassifying child results. A
+later narrow green run is useful recovery evidence but is not publish
+authorization by itself and there is no standalone finalizer. The release owner
+must reassess the recorded evidence and current publish gate.
 
 Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
 **Release SHA** is eligible for product-evidence reuse only when GitHub proves
@@ -380,10 +385,12 @@ editing. Only a confirmed product failure changes the Code SHA. Use one
 diagnosis, one fix when needed, and one narrow retry with
 `-f rerun_group=<group>`, then reassess.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
-`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
-`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box. Do not automatically dispatch `all` after a narrow retry. For a
-single failed live/E2E shard, use
+`install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`,
+`npm-telegram`, and `performance`. The old `release-checks` aggregate retry
+handle is invalid because it silently selected every release-check lane. `qa`
+is a direct-child manual aggregate, not an umbrella/controller retry API. Use
+the narrowest concrete group that covers the failed box. Do not automatically
+dispatch `all` after a narrow retry. For a single failed live/E2E shard, use
 `-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
 workflow only spends setup and queue time on that suite.
 
@@ -440,11 +447,16 @@ gh workflow run openclaw-release-checks.yml \
   -f provider=openai \
   -f mode=both \
   -f release_profile=stable \
-  -f rerun_group=all
+  -f rerun_group=<concrete-group>
 ```
 
-Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
-`package`, `qa`, `qa-parity`, and `qa-live`.
+Concrete release-check rerun groups are `install-smoke`, `cross-os`,
+`live-e2e`, `package`, `qa-parity`, and `qa-live`. Direct manual dispatch may
+use `qa` to aggregate parity and live QA, but controllers must select one of
+those two concrete groups. Reserve `all` for an intentional whole-child
+validation, never automatic recovery. Non-empty live or cross-OS filters must
+match their owning group; mismatches fail before scheduling and never widen to
+an unfiltered run.
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once as `release-package-under-test` and passes that artifact into cross-OS
 release checks, release-path Docker live/E2E checks, and Package Acceptance.

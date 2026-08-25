@@ -426,7 +426,10 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
-  it("updates tracked hook packs through plugins update", async () => {
+  it.each([
+    ["demo-hooks", undefined],
+    ["@acme/demo-hooks", "@acme/demo-hooks"],
+  ])("updates tracked hook packs through plugins update (%s)", async (target, specOverride) => {
     const cfg = {} as OpenClawConfig;
     const nextConfig = cfg;
 
@@ -452,16 +455,14 @@ describe("plugins cli update", () => {
       ],
     });
 
-    await runPluginsCommand([
-      "plugins",
-      "update",
-      "demo-hooks",
-      "--dangerously-force-unsafe-install",
-    ]);
+    await runPluginsCommand(["plugins", "update", target, "--dangerously-force-unsafe-install"]);
 
     const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacksMock);
     expect(hookUpdateParams.config).toEqual({ ...cfg, plugins: { installs: {} } });
     expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
+    expect(hookUpdateParams.specOverrides).toEqual(
+      specOverride ? { "demo-hooks": specOverride } : undefined,
+    );
     expect(hookUpdateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
     expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
@@ -895,6 +896,7 @@ describe("plugins cli update", () => {
     expect(notifyGatewayPluginMetadataChangedMock).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(commit).not.toHaveBeenCalled();
+    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("Updated");
   });
 
   it("rolls back persisted install records when included config changes during a records-only update", async () => {
@@ -1595,24 +1597,23 @@ describe("plugins cli update", () => {
   it("keeps durable state when transaction cleanup fails after the write", async () => {
     const cfg = {
       plugins: {
-        installs: {
-          alpha: {
-            source: "npm",
-            spec: "@openclaw/alpha@1.0.0",
-          },
+        entries: {
+          alpha: { enabled: true },
         },
       },
     } as OpenClawConfig;
-    const nextConfig = {
-      plugins: {
-        installs: {
-          alpha: {
-            source: "npm",
-            spec: "@openclaw/alpha@1.1.0",
-          },
-        },
+    const previousRecords = {
+      alpha: {
+        source: "npm" as const,
+        spec: "@openclaw/alpha@1.0.0",
       },
-    } as OpenClawConfig;
+    };
+    const nextRecords = {
+      alpha: {
+        source: "npm" as const,
+        spec: "@openclaw/alpha@1.1.0",
+      },
+    };
     const runtimeConfig = {
       ...cfg,
       messages: {
@@ -1620,7 +1621,11 @@ describe("plugins cli update", () => {
       },
     } as OpenClawConfig;
     const nextRuntimeConfig = {
-      ...nextConfig,
+      ...runtimeConfig,
+      plugins: {
+        ...runtimeConfig.plugins,
+        installs: nextRecords,
+      },
       messages: runtimeConfig.messages,
     } as OpenClawConfig;
     primeUpdateConfigSnapshot({
@@ -1630,7 +1635,7 @@ describe("plugins cli update", () => {
         "/tmp/plugins.json5": "plugins-start-hash",
       },
     });
-    setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
+    setInstalledPluginIndexInstallRecords(previousRecords);
     const rollback = vi.fn(async () => undefined);
     const failedCommit = vi.fn(async () => {
       throw new Error("cleanup failed");
@@ -1651,30 +1656,35 @@ describe("plugins cli update", () => {
       config: nextRuntimeConfig,
     });
 
-    await expect(runPluginsCommand(["plugins", "update", "alpha"])).rejects.toThrow(
-      "Plugin install transaction commit failed",
-    );
+    await runPluginsCommand(["plugins", "update", "alpha"]);
 
     const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
-    expect(updateParams.config).toEqual(runtimeConfig);
+    expect(updateParams.config).toEqual({
+      ...runtimeConfig,
+      plugins: {
+        ...runtimeConfig.plugins,
+        installs: previousRecords,
+      },
+    });
     expect(updateParams.pluginIds).toEqual(["alpha"]);
     expect(updateParams.dryRun).toBe(false);
-    expectInstallRecordsWrittenWithLease(nextConfig.plugins?.installs, {});
+    expectInstallRecordsWrittenWithLease(nextRecords, cfg);
     expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
-    expect(configWriteMock).toHaveBeenCalledWith({});
-    expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig: {},
-      baseHash: "update-config",
-      writeOptions: expect.objectContaining({
-        includeFileHashesForWrite: {
-          "/tmp/plugins.json5": "plugins-start-hash",
-        },
-      }),
-    });
+    expect(configWriteMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(failedCommit).toHaveBeenCalledOnce();
     expect(remainingCommit).toHaveBeenCalledOnce();
     expect(rollback).not.toHaveBeenCalled();
-    expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
+      config: cfg,
+      installRecords: nextRecords,
+      reason: "source-changed",
+    });
+    expect(notifyGatewayPluginMetadataChangedMock).toHaveBeenCalledWith(runtimeConfig);
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin update committed");
+    expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Restart is required");
+    expectRestartNoticeLogged();
   });
 
   it("exits non-zero when a plugin update reports an error after persisting successes", async () => {
@@ -1712,7 +1722,19 @@ describe("plugins cli update", () => {
       nextConfig,
       [
         { pluginId: "alpha", status: "updated", message: "Updated alpha -> 1.1.0" },
-        { pluginId: "beta", status: "error", message: "Failed to update beta: registry timeout" },
+        {
+          pluginId: "beta",
+          status: "error",
+          message: "Failed to update beta: registry timeout",
+          channelFallback: {
+            requestedSpec: "@openclaw/beta@beta",
+            usedSpec: "@openclaw/beta@latest",
+            requestedLabel: "beta",
+            usedLabel: "latest",
+            reason: "failed",
+            message: "Beta channel unavailable; tried latest.",
+          },
+        },
       ],
       true,
     );
@@ -1730,7 +1752,10 @@ describe("plugins cli update", () => {
       installRecords: nextConfig.plugins?.installs,
       reason: "source-changed",
     });
-    expect(pluginsCliRuntimeLogs).toContain("Failed to update beta: registry timeout");
+    expect(runtimeErrors).toContain("Failed to update beta: registry timeout");
+    expect(pluginsCliRuntimeLogs).toContain("Updated alpha -> 1.1.0");
+    expect(pluginsCliRuntimeLogs).toContain("Beta channel unavailable; tried latest.");
+    expect(pluginsCliRuntimeLogs).not.toContain("Failed to update beta: registry timeout");
   });
 
   it("exits non-zero when a ClawHub update is skipped for missing risk acknowledgement", async () => {
@@ -1790,7 +1815,8 @@ describe("plugins cli update", () => {
     );
 
     expect(configWriteMock).not.toHaveBeenCalled();
-    expect(pluginsCliRuntimeLogs).toContain(
+    expect(runtimeErrors).toContain('Failed to update hook pack "demo-hooks": registry timeout');
+    expect(pluginsCliRuntimeLogs).not.toContain(
       'Failed to update hook pack "demo-hooks": registry timeout',
     );
   });

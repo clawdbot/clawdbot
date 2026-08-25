@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { SessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -12,6 +13,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
@@ -23,7 +25,10 @@ import { createAgentRunRestartAbortError } from "./run-termination.js";
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
 type RunAgentAttempt = typeof runAgentAttempt;
+type CaptureSessionDiffBaseline =
+  (typeof import("../sessions/session-diff.js"))["captureSessionDiffBaseline"];
 type CliCompactionParams = {
+  pluginGeneration?: unknown;
   sessionId: string;
   sessionEntry?: SessionEntry;
   sessionKey: string;
@@ -50,6 +55,13 @@ const state = vi.hoisted(() => ({
   deliverAgentCommandResultMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
+  captureSessionDiffBaselineMock: vi.fn<CaptureSessionDiffBaseline>(),
+}));
+
+vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sessions/session-diff.js")>()),
+  captureSessionDiffBaseline: (params: Parameters<CaptureSessionDiffBaseline>[0]) =>
+    state.captureSessionDiffBaselineMock(params),
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -213,9 +225,7 @@ let agentCommand: typeof import("./agent-command.js").agentCommand;
 let agentCommandFromGatewayIngress: typeof import("./agent-command.js").agentCommandFromGatewayIngress;
 
 beforeAll(async () => {
-  const command = await import("./agent-command.js");
-  agentCommand = command.agentCommand;
-  agentCommandFromGatewayIngress = command.agentCommandFromGatewayIngress;
+  ({ agentCommand, agentCommandFromGatewayIngress } = await import("./agent-command.js"));
 });
 
 beforeEach(async () => {
@@ -334,8 +344,49 @@ function readLifecyclePhases(): Array<string | undefined> {
 
 const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
+const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
 
 describe("agentCommand compaction transcript rotation", () => {
+  it.each([
+    ["settles a precreated baseline claim before embedded execution", false],
+    ["does not execute after baseline work-start invalidation", true],
+  ] as const)("%s", async (_name, invalidated) => {
+    const sessionId = invalidated ? "invalidated-agent-command" : "precreated-agent-command",
+      sessionKey = `agent:main:explicit:${sessionId}`;
+    await replaceSessionEntry({ sessionKey, storePath: requireStorePath() }, {
+      sessionId,
+      sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+      updatedAt: Date.now(),
+    } as InternalSessionEntry);
+    if (invalidated) {
+      const error = new SessionWorkStartInvalidatedError(
+        "session changed during baseline settlement",
+      );
+      state.captureSessionDiffBaselineMock.mockRejectedValueOnce(error);
+      await expect(
+        agentCommand({ message: "must not execute", sessionId, sessionKey }),
+      ).rejects.toBe(error);
+      expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+      return;
+    }
+    state.captureSessionDiffBaselineMock.mockResolvedValueOnce({
+      version: 1,
+      sessionId,
+      root: "/workspace",
+      files: [],
+    });
+    state.runAgentAttemptMock.mockImplementationOnce(async () => {
+      expect(findStoredSessionEntry(sessionKey)?.sessionDiffBaseline).toMatchObject({
+        version: 1,
+        sessionId,
+      });
+      return makeResult({ sessionId, text: "captured before execution" });
+    });
+
+    await agentCommand({ message: "write after capture", sessionId, sessionKey });
+    expect(state.captureSessionDiffBaselineMock).toHaveBeenCalledOnce();
+  });
+
   it("does not re-normalize an exact configured custom provider through plugin runtime", async () => {
     state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(
       ({ provider }: ProviderModelNormalizationParams) => {
@@ -532,9 +583,7 @@ describe("agentCommand compaction transcript rotation", () => {
         cwd: state.workspaceDir,
         allowModelOverride: false,
       },
-      defaultRuntime,
-      undefined,
-      {},
+      ...GATEWAY_INGRESS_ARGS,
     );
 
     const events = (await loadTranscriptEvents({
@@ -563,41 +612,37 @@ describe("agentCommand compaction transcript rotation", () => {
     );
   });
 
-  it("persists the pending final before CLI compaction failure and still delivers", async () => {
+  it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
     const sessionId = "cli-compaction-failure";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const text = "cli reply generated before compaction";
-    let compactionSessionEntry: SessionEntry | undefined;
+    const pluginGeneration = {
+      pluginMetadataSnapshot: { workspaceDir: state.workspaceDir },
+    } as never;
     let storedEntryBeforeCompaction: SessionEntry | undefined;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text, runner: "cli" }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      compactionSessionEntry = params.sessionEntry;
+      expect(params.pluginGeneration).toBe(pluginGeneration);
       storedEntryBeforeCompaction = findStoredSessionEntry(sessionKey);
       throw new Error(COMPACTION_ERROR);
     });
 
-    const result = await agentCommand({
-      message: "room message",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      deliver: true,
-    });
-
-    expect(compactionSessionEntry).toMatchObject({
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text,
-        context: {
-          channel: "discord",
-          to: "discord:dm:123",
-          accountId: "main",
-        },
+    const result = await agentCommandFromGatewayIngress(
+      {
+        message: "room message",
+        sessionId,
+        sessionKey,
+        cwd: state.workspaceDir,
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: true,
+        allowModelOverride: false,
       },
-    });
+      ...GATEWAY_INGRESS_ARGS,
+      { config: state.cfg ?? {}, pluginGeneration },
+    );
+
     expect(storedEntryBeforeCompaction).toMatchObject({
       pendingFinalDelivery: { kind: "replayable", text },
     });
@@ -776,17 +821,27 @@ describe("agentCommand compaction transcript rotation", () => {
     });
   });
 
-  it("does not deliver or clear the pending final when restart aborts compaction", async () => {
-    const sessionId = "restart-during-compaction";
+  it.each([
+    ["restart-during-compaction", "reply owned by restart recovery"],
+    ["restart-after-successful-compaction", "reply owned by restart recovery after compaction"],
+    ["stale-during-compaction", "reply owned by the next gateway lifecycle"],
+  ] as const)("does not deliver or clear the pending final for %s", async (sessionId, text) => {
+    const restart = sessionId !== "stale-during-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
-    const text = "reply owned by restart recovery";
     const abortController = new AbortController();
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
       expect(params.sessionEntry).toMatchObject({
         pendingFinalDelivery: { kind: "replayable", text },
       });
-      abortController.abort(createAgentRunRestartAbortError());
+      if (restart) {
+        abortController.abort(createAgentRunRestartAbortError());
+      } else {
+        rotateAgentEventLifecycleGeneration();
+      }
+      if (sessionId === "restart-after-successful-compaction") {
+        return params.sessionEntry;
+      }
       throw new Error(COMPACTION_ERROR);
     });
 
@@ -802,73 +857,9 @@ describe("agentCommand compaction transcript rotation", () => {
         deliver: true,
         abortSignal: abortController.signal,
       }),
-    ).rejects.toThrow("agent run aborted for restart");
-
-    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: { kind: "replayable", text },
-    });
-  });
-
-  it("does not deliver or clear the pending final when restart wins after successful compaction", async () => {
-    const sessionId = "restart-after-successful-compaction";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    const text = "reply owned by restart recovery after compaction";
-    const abortController = new AbortController();
-    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
-    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: { kind: "replayable", text },
-      });
-      abortController.abort(createAgentRunRestartAbortError());
-      return params.sessionEntry;
-    });
-
-    await expect(
-      agentCommand({
-        message: "room message",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        deliver: true,
-        abortSignal: abortController.signal,
-      }),
-    ).rejects.toThrow("agent run aborted for restart");
-
-    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: { kind: "replayable", text },
-    });
-  });
-
-  it("does not deliver or clear the pending final after lifecycle ownership turns stale", async () => {
-    const sessionId = "stale-during-compaction";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    const text = "reply owned by the next gateway lifecycle";
-    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
-    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: { kind: "replayable", text },
-      });
-      rotateAgentEventLifecycleGeneration();
-      throw new Error(COMPACTION_ERROR);
-    });
-
-    await expect(
-      agentCommand({
-        message: "room message",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        deliver: true,
-      }),
-    ).rejects.toThrow("Agent run belongs to a stale gateway lifecycle");
+    ).rejects.toThrow(
+      restart ? "agent run aborted for restart" : "Agent run belongs to a stale gateway lifecycle",
+    );
 
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({

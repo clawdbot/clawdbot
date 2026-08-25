@@ -94,6 +94,7 @@ const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
   "reaction",
   "react",
   "typing",
+  "progress_card",
   "update_plan",
 ]);
 
@@ -582,7 +583,7 @@ export function buildChannelProgressDraftLine(
       }
       return buildNamedProgressLine(
         input.event,
-        "update_plan",
+        "progress_card",
         [
           input.explanation,
           normalizeAgentPlanSteps(input.steps)?.[0]?.step,

@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import { defineConfig, defineProject } from "vitest/config";
 import {
   jsdomOptimizedDeps,
+  nonIsolatedRunnerPath,
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
@@ -158,6 +159,12 @@ export default defineConfig({
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
           name: "unit",
+          // isolate:false shares one worker module graph and jsdom window across
+          // files, so the first file to evaluate a component owns it for the rest
+          // of the worker and a later file's vi.mock never reaches production.
+          // The cleanup runner retires that state per file; without it the lane
+          // fails whichever sibling the size sequencer happens to pack together.
+          runner: nonIsolatedRunnerPath,
           include: ["src/**/*.test.ts"],
           exclude: [
             "src/**/*.browser.test.ts",
@@ -195,6 +202,9 @@ export default defineConfig({
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
           name: "unit-node",
+          // No cleanup runner: this project also carries the Playwright-driven
+          // layout tests, whose browser lives in module scope. Resetting the
+          // module graph between files churns that browser and flakes them.
           include: ["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests],
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
@@ -208,6 +218,8 @@ export default defineConfig({
         test: {
           ...sharedUiTestConfig,
           name: "browser",
+          // No cleanup runner: it imports node:fs and repo server modules, which
+          // cannot load in browser mode. Browser files own their own teardown.
           include: ["src/**/*.browser.test.ts"],
           exclude: [...nodeDrivenBrowserLayoutTests],
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],

@@ -66,6 +66,8 @@ type PendingSupervisionMaterializationParams = {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;
@@ -184,6 +186,8 @@ export async function materializePendingSupervisionBranch(
       hostSystemAgentActive: params.hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames:
         params.restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: params.shellEnvironment,
+      disableLoginShell: params.disableLoginShell,
     });
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
@@ -433,6 +437,8 @@ function buildPendingSupervisionProbeForkParams(
     hostSystemAgentActive: params.hostSystemAgentActive,
     restrictedToolSurfaceInheritedMcpServerNames:
       params.restrictedToolSurfaceInheritedMcpServerNames,
+    shellEnvironment: params.shellEnvironment,
+    disableLoginShell: params.disableLoginShell,
   });
   return {
     threadId: pending.sourceThreadId,

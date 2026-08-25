@@ -1,12 +1,14 @@
 // Plugin npm release tests validate plugin npm release artifacts.
-import { mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
   collectPluginReleaseDependencyFreshnessErrors,
+  collectPluginNpmGitRangeSelection,
   collectPluginReleasePlan,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
@@ -21,9 +23,10 @@ import {
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
-type ExecFileSync = typeof import("node:child_process").execFileSync;
+type ExecFileSync = typeof execFileSync;
 
 const childProcessMock = vi.hoisted(() => ({
   execFileSyncOverride: undefined as ExecFileSync | undefined,
@@ -31,13 +34,13 @@ const childProcessMock = vi.hoisted(() => ({
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  const execFileSync = ((...args: unknown[]) => {
+  const mockedExecFileSync = ((...args: unknown[]) => {
     const implementation = (childProcessMock.execFileSyncOverride ?? actual.execFileSync) as (
       ...args: unknown[]
     ) => unknown;
     return implementation(...args);
   }) as ExecFileSync;
-  return { ...actual, execFileSync };
+  return { ...actual, execFileSync: mockedExecFileSync };
 });
 
 const tempDirs: string[] = [];
@@ -518,6 +521,22 @@ describe("collectPluginReleasePlan", () => {
 });
 
 describe("collectPublishablePluginPackages", () => {
+  it("rejects duplicate npm package names from different plugin directories", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    for (const extensionId of ["demo-one", "demo-two"]) {
+      writePublishablePluginFixture(repoDir, {
+        extensionId,
+        packageName: "@openclaw/shared-plugin",
+        version: "2026.4.10",
+        publishTo: "npm",
+      });
+    }
+
+    expect(() => collectPublishablePluginPackages(repoDir)).toThrow(
+      "package @openclaw/shared-plugin is declared by multiple plugin sources: demo-one (extensions/demo-one), demo-two (extensions/demo-two).",
+    );
+  });
+
   it("defers explicitly bundled plugins from npm and ClawHub release plans", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writePublishablePluginFixture(repoDir, {
@@ -772,6 +791,26 @@ describe("resolveSelectedPublishablePluginPackages", () => {
       }),
     ).toThrowError("Unknown or non-publishable plugin package selection: @openclaw/missing.");
   });
+
+  it("rejects duplicate selected package provenance instead of choosing the last entry", () => {
+    const firstPlugin = publishablePlugins[0];
+    if (!firstPlugin) {
+      throw new Error("publishable plugin fixture is missing");
+    }
+    expect(() =>
+      resolveSelectedPublishablePluginPackages({
+        plugins: [
+          firstPlugin,
+          {
+            ...firstPlugin,
+            extensionId: "feishu-shadow",
+            packageDir: "extensions/feishu-shadow",
+          },
+        ],
+        selection: ["@openclaw/feishu"],
+      }),
+    ).toThrow("Plugin selection has conflicting plugin package provenance");
+  });
 });
 
 describe("collectChangedExtensionIdsFromPaths", () => {
@@ -784,6 +823,71 @@ describe("collectChangedExtensionIdsFromPaths", () => {
         "docs/reference/RELEASING.md",
       ]),
     ).toEqual(["feishu", "zalo"]);
+  });
+});
+
+describe("collectPluginNpmGitRangeSelection", () => {
+  it.each([
+    ".github/actions/setup-node-env/action.yml",
+    "packages/normalization-core/src/record-coerce.ts",
+    "packages/plugin-package-contract/src/schema.ts",
+    "scripts/lib/plugin-publication-candidates.ts",
+    "scripts/lib/plugin-publication-collector.ts",
+    "scripts/plugin-npm-release-plan.ts",
+  ])("selects all publishable plugins for an authority-only %s change", (changedPath) => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-range-");
+    const absolutePath = join(repoDir, changedPath);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, "// before\n");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoDir });
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=tests@openclaw.invalid",
+        "commit",
+        "-qm",
+        "base",
+      ],
+      { cwd: repoDir },
+    );
+    const baseRef = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+
+    writeFileSync(absolutePath, "// after\n");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=tests@openclaw.invalid",
+        "commit",
+        "-qm",
+        "change",
+      ],
+      { cwd: repoDir },
+    );
+    const headRef = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+
+    expect(
+      collectPluginNpmGitRangeSelection({
+        rootDir: repoDir,
+        gitRange: { baseRef, headRef },
+      }),
+    ).toEqual({
+      authorityChanged: true,
+      changedExtensionIds: [],
+    });
   });
 });
 

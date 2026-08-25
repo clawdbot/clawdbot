@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
@@ -26,6 +27,8 @@ type HistoryMessage = {
 let createSessionsHistoryTool: typeof import("./sessions-history-tool.js").createSessionsHistoryTool;
 let previousConfigPath: string | undefined;
 let tempDir: string | undefined;
+const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
+const SESSION_LINK_RULE = describeSessionLinkRule(SESSION_LINK_BASE);
 
 function useLoggingConfig(name: string, logging: Record<string, unknown>): void {
   if (!tempDir) {
@@ -58,9 +61,10 @@ async function writeSessionStore(
   return storePath;
 }
 
-function createHistoryToolWithMessage(content: unknown) {
+function createHistoryToolWithMessage(content: unknown, sessionLinkBase?: string) {
   return createSessionsHistoryTool({
     config: {},
+    sessionLinkBase,
     callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
       if (request.method === "chat.history") {
         return {
@@ -134,15 +138,21 @@ describe("sessions_history redaction", () => {
   it("declares complete success and closed error contracts", async () => {
     const tool = createHistoryToolWithMessage("hello");
     const result = await tool.execute("contract", { sessionKey: "main" });
+    const linkedResult = await createHistoryToolWithMessage("hello", SESSION_LINK_BASE).execute(
+      "linked-contract",
+      { sessionKey: "main" },
+    );
 
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(result.details).not.toHaveProperty("sessionLinkRule");
+    expect(linkedResult.details).toHaveProperty("sessionLinkRule", SESSION_LINK_RULE);
     expect(Value.Check(tool.outputSchema!, { status: "error", error: "missing" })).toBe(true);
     expect(
       Value.Check(tool.outputSchema!, { status: "forbidden", error: "hidden", extra: true }),
     ).toBe(false);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
@@ -466,6 +476,55 @@ describe("sessions_history redaction", () => {
     expect(details).toMatchObject({
       offset: 0,
       nextOffset: 4,
+      hasMore: true,
+      totalMessages: 10,
+    });
+  });
+
+  it("preserves the Gateway replay cursor for projected siblings from the same row", async () => {
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({
+          messages: [
+            { role: "assistant", content: "projected sibling", __openclaw: { seq: 8 } },
+            { role: "assistant", content: "latest", __openclaw: { seq: 9 } },
+          ],
+          offset: 0,
+          nextOffset: 2,
+          hasMore: true,
+          totalMessages: 10,
+        }) as T,
+    });
+
+    const result = await tool.execute("projected-replay", { sessionKey: "main", offset: 0 });
+
+    expect(result.details).toMatchObject({
+      offset: 0,
+      nextOffset: 2,
+      hasMore: true,
+      totalMessages: 10,
+    });
+  });
+
+  it("keeps history pagination advancing past an already-returned row", async () => {
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({
+          messages: [{ role: "assistant", content: "visible", __openclaw: { seq: 7 } }],
+          offset: 4,
+          nextOffset: 5,
+          hasMore: true,
+          totalMessages: 10,
+        }) as T,
+    });
+
+    const result = await tool.execute("cursor-progress", { sessionKey: "main", offset: 4 });
+
+    expect(result.details).toMatchObject({
+      offset: 4,
+      nextOffset: 5,
       hasMore: true,
       totalMessages: 10,
     });

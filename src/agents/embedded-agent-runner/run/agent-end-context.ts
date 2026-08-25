@@ -24,6 +24,7 @@ export function buildEmbeddedAgentEndContext(params: {
     workspaceDir: run.workspaceDir,
     modelProviderId: run.provider,
     modelId: run.modelId,
+    modelContextWindowTokens: run.contextTokenBudget ?? run.model.contextWindow,
     authProfileId: run.authProfileId,
     skillWorkshopAvailable: params.skillWorkshopAvailable,
     compacted: params.compacted,

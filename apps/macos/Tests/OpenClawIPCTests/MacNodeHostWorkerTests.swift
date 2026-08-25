@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
+import os
 import Testing
 @testable import OpenClaw
 
@@ -211,12 +212,33 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test(arguments: [
-        (
-            MacNodeCodexThreadCatalogContract.listCommand,
-            "UNAVAILABLE: Codex session catalog is disabled"),
-        (
-            MacNodeCodexThreadCatalogContract.turnsCommand,
-            "UNAVAILABLE: Codex session catalog is disabled"),
+        MacNodeCodexThreadCatalogContract.listCommand,
+        MacNodeCodexThreadCatalogContract.turnsCommand,
+    ])
+    func `worker owns Codex catalog commands when native catalog is disabled`(command: String) async {
+        let worker = StubMacNodeHostWorker(commands: [command])
+        let nativeCatalogEnabledReads = OSAllocatedUnfairLock(initialState: 0)
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            codexThreadCatalogEnabled: {
+                nativeCatalogEnabledReads.withLock {
+                    $0 += 1
+                    return false
+                }
+            })
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "worker-codex-catalog",
+            command: command,
+            paramsJSON: #"{"limit":1}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == #"{"owner":"cli"}"#)
+        #expect(await worker.invokedCommands() == [command])
+        #expect(nativeCatalogEnabledReads.withLock { $0 } == 1)
+    }
+
+    @Test(arguments: [
         (
             MacNodeClaudeSessionCatalogContract.listCommand,
             "UNAVAILABLE: Claude session catalog is disabled"),
@@ -245,8 +267,12 @@ struct MacNodeHostWorkerTests {
         #expect(await worker.invokedCommands().isEmpty)
     }
 
-    @Test(arguments: [OpenClawCanvasCommand.present.rawValue, "canvas.plugin.render"])
-    func `worker cannot bypass the canvas namespace consent gate`(command: String) async {
+    @Test(arguments: [
+        OpenClawCanvasCommand.present.rawValue,
+        OpenClawCanvasCommand.hide.rawValue,
+        OpenClawCanvasCommand.navigate.rawValue,
+    ])
+    func `worker cannot bypass the canvas presenter consent gate`(command: String) async {
         await TestIsolation.withUserDefaultsValues([canvasEnabledKey: false]) {
             let worker = StubMacNodeHostWorker(commands: [command])
             let runtime = MacNodeRuntime(nodeHostWorker: worker)
@@ -258,6 +284,23 @@ struct MacNodeHostWorkerTests {
             #expect(!response.ok)
             #expect(response.error?.code == .unavailable)
             #expect(response.error?.message == "CANVAS_DISABLED: enable Canvas in Settings")
+            #expect(await worker.invokedCommands().isEmpty)
+        }
+    }
+
+    @Test func `worker cannot claim commands in the retired canvas namespace`() async {
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: true]) {
+            let command = "canvas.plugin.render"
+            let worker = StubMacNodeHostWorker(commands: [command])
+            let runtime = MacNodeRuntime(nodeHostWorker: worker)
+
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "canvas-retired",
+                command: command))
+
+            #expect(!response.ok)
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message == "INVALID_REQUEST: unknown command")
             #expect(await worker.invokedCommands().isEmpty)
         }
     }
@@ -309,6 +352,36 @@ struct MacNodeHostWorkerTests {
             provider: .cua,
             commands: cua.commands,
             workerManifest: cua) == descriptor)
+    }
+
+    @Test func `elevation host never advertises a persisted CUA provider`() throws {
+        let suiteName = "MacNodeElevationHostProviderTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: computerControlEnabledKey)
+        defaults.set(ComputerControlProvider.cua.rawValue, forKey: computerControlProviderKey)
+        let provider = ComputerControlProvider.current(
+            defaults: defaults,
+            cuaAvailable: true,
+            launchPlan: AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"]))
+        #expect(provider == .peekaboo)
+
+        let cuaDescriptor = OpenClawProtocol.AnyCodable(["provider": "cua"])
+        let manifest = MacNodeHostManifest(
+            version: "test",
+            caps: ["screen", "computer"],
+            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            computerUse: cuaDescriptor,
+            pathEnv: "/usr/bin:/bin")
+        let workerManifest = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))
+        #expect(workerManifest.computerUse == nil)
+        let advertised = try #require(MacNodeModeCoordinator.computerUseDescriptor(
+            provider: provider,
+            commands: manifest.commands,
+            workerManifest: workerManifest))
+        let data = try JSONEncoder().encode(advertised)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect((object["provider"] as? [String: Any])?["id"] as? String == "peekaboo")
     }
 
     @Test func `stale route updates cannot replace newer worker authority`() {

@@ -7,6 +7,8 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 export type TrustedSessionCreation = {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
+  /** Exact spawning session retained separately from the stable actor identity. */
+  requesterSessionKey?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
@@ -41,7 +43,8 @@ export function resolveOperatorSessionCreation(
   if (options.allowTrustedHint && agentRuntimeIdentity?.sessionSpawnContext) {
     return {
       via: "spawn",
-      actor: { type: "agent", id: agentRuntimeIdentity.sessionKey },
+      actor: { type: "agent", id: agentRuntimeIdentity.agentId },
+      requesterSessionKey: agentRuntimeIdentity.sessionKey,
       ...(agentRuntimeIdentity.sessionSpawnContext.completionOwnerSessionKey
         ? {
             completionOwnerSessionKey:

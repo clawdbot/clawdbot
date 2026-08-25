@@ -94,6 +94,8 @@ export const zh_TW = {
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
+      tokenStoreProvisioned:
+        "已產生 Gateway 權杖並以 {name} 存入 OpenClaw 祕密儲存。設定中只保留參照；可用 `openclaw secrets store list` 檢視。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -112,6 +114,8 @@ export const zh_TW = {
       cacheFailed: "產生 completion 快取失敗。稍後執行 `{command}`。",
       enable: "為 {cli} 啟用 {shell} shell completion？",
       installed: "Shell completion 已安裝。{reloadHint}",
+      profileNotWritable:
+        "Shell completion 未變更：{profile} 無法寫入。請對可寫入的 profile 檔案執行 `{command}`。",
       reloadPowerShell: "重新啟動 shell 或執行：{command}",
       reloadShell: "重新啟動 shell 或執行：source {profile}",
       title: "Shell completion",
@@ -123,6 +127,7 @@ export const zh_TW = {
       complete: "遷移完成。下一步執行 `openclaw doctor`。",
       continuing: "遷移完成。繼續設定。",
       importFrom: "從 {source} 匯入",
+      importFromAnotherAgent: "從其他 agent 匯入",
       includeCredentials: "也匯入支援的認證憑證？",
       previewTitle: "遷移預覽",
       setupModelSeparately: "另外設定模型",
@@ -444,6 +449,13 @@ export const zh_TW = {
         "如果多個使用者能向同一個啟用工具的 agent 傳訊息，他們都能影響它如何使用工具。",
       title: "安全免責聲明",
       toolAccess: "如果啟用了工具，這個 bot 可以讀取檔案並執行操作。",
+    },
+    telemetry: {
+      accept: "是，分享功能使用統計",
+      decline: "不用，謝謝",
+      description:
+        "在每日更新檢查中分享你使用的功能（頻道、提供者、插件數量）。絕不包含訊息或識別碼。查看實際傳送的內容：`openclaw telemetry show`。隨時變更：`openclaw telemetry on|off`。",
+      title: "幫助 OpenClaw 變得更好？",
     },
     skills: {
       configure: "現在設定技能？（建議）",
@@ -1066,14 +1078,9 @@ export const zh_TW = {
       controlUiTitle: "Control UI",
       controlUiDocs: "文件：https://docs.openclaw.ai/web/control-ui",
       dashboardCopyPaste: "在本機瀏覽器中複製/貼上這個 URL 來控制 OpenClaw。",
-      dashboardLinkWithToken: "Dashboard 連結（含權杖）：{url}",
       dashboardOpened: "已在瀏覽器中開啟。保留該分頁以控制 OpenClaw。",
       dashboardOpenAnytime: "隨時開啟 dashboard：{command}",
       dashboardReady: "Dashboard 已就緒",
-      dashboardTokenMemory:
-        "Web UI 會把 dashboard URL 中的權杖保存在目前分頁記憶體中，並在載入後從 URL 中移除。",
-      dashboardTokenPrompt:
-        "如果被提示：把權杖貼到 Control UI 設定中（或使用帶權杖的 dashboard URL）。",
       dashboardWhenReady: "準備好後執行：{command}",
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
@@ -1109,6 +1116,10 @@ export const zh_TW = {
       healthCheckHelp: "健康檢查說明",
       installGateway: "安裝 Gateway 服務（建議）",
       laterTitle: "稍後",
+      managedGatewaySetupFailed:
+        "受管理的 {service} 設定失敗：{error}\n檢查服務狀態和日誌：{statusCommand}\n重試受管理服務安裝：{recoveryCommand}",
+      managedGatewayUnreachable:
+        "受管理的 {service} 在設定後仍無法存取。\n檢查服務狀態和日誌：{statusCommand}\n重試受管理服務：{recoveryCommand}",
       managedWebSearchSkipped: "已略過託管 web search provider。",
       noBackgroundGatewayExpected: "本次設定未安裝 Gateway 服務，因此不會有背景 Gateway。",
       noModelAuth: "提供商「{provider}」尚未設定憑證，聊天將失敗，直到新增認證。",
@@ -1120,6 +1131,8 @@ export const zh_TW = {
       optionalApps: "可選應用",
       outroDashboardLink: "Onboarding 完成。使用上面的 dashboard 連結控制 OpenClaw。",
       outroDashboardOpened: "Onboarding 完成。Dashboard 已開啟；保留該分頁以控制 OpenClaw。",
+      outroHealthCheckFailed:
+        "Onboarding 完成，但閘道健康檢查失敗。請先解決上面的問題，再用 {command} 驗證。",
       outroSeeded: "Onboarding 完成。Web UI 已在背景初始化，可隨時用上面的 dashboard 連結開啟。",
       quickstartNodeRuntime: "QuickStart 使用 Node 執行 Gateway 服務（穩定且受支援）。",
       reinstall: "重新安裝",
@@ -1165,7 +1178,6 @@ export const zh_TW = {
       webSearchUnavailableAction:
         "重新啟用該 provider 或選擇其他 provider 前，web_search 無法運作。",
       webUiUrl: "Web UI：{url}",
-      webUiWithTokenUrl: "Web UI（含權杖）：{url}",
       whatNow: '下一步：https://openclaw.ai/showcase（"What People Are Building"）。',
       whatNowTitle: "下一步",
       workspaceBackupTitle: "工作區備份",

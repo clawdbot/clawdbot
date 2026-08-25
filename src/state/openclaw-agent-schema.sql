@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   created_via TEXT CHECK (created_via IS NULL OR created_via IN ('operator', 'spawn', 'channel', 'cron', 'talk', 'run', 'plugin', 'internal')),
   created_actor_type TEXT CHECK (created_actor_type IS NULL OR created_actor_type IN ('human', 'agent', 'system')),
   created_actor_id TEXT,
+  owner_actor_type TEXT,
+  owner_actor_id TEXT,
+  owner_assigned_by_type TEXT,
+  owner_assigned_by_id TEXT,
+  owner_assigned_at INTEGER,
   project_id TEXT,
   parent_session_key TEXT,
   spawned_by TEXT,
@@ -66,6 +71,18 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
   ON session_nodes(session_key)
   WHERE entry_valid = 0;
+
+CREATE TABLE IF NOT EXISTS session_participants (
+  session_key TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  actor_source TEXT,
+  contribution_count INTEGER,
+  first_prompted_at INTEGER NOT NULL,
+  last_prompted_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, actor_type, actor_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_key_contract (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
@@ -203,12 +220,25 @@ CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'participant', 'related')),
+  route_context_json TEXT,
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, conversation_id, role),
   FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE,
   FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
 ) STRICT;
+
+-- Older same-version writers preserve the envelope while updating the association.
+CREATE TRIGGER IF NOT EXISTS session_conversations_route_context_invalidate_after_update
+AFTER UPDATE OF role, last_seen_at ON session_conversations
+WHEN NEW.route_context_json IS OLD.route_context_json
+BEGIN
+  UPDATE session_conversations
+  SET route_context_json = NULL
+  WHERE session_id = NEW.session_id
+    AND conversation_id = NEW.conversation_id
+    AND role = NEW.role;
+END;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation
   ON session_conversations(conversation_id, last_seen_at DESC, session_id);
@@ -296,6 +326,16 @@ CREATE TABLE IF NOT EXISTS board_widgets (
 
 CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position
   ON board_widgets(session_key, tab_id, position);
+
+CREATE TABLE IF NOT EXISTS session_progress_cards (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  markdown TEXT,
+  steps_json TEXT,
+  revision INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
   session_key TEXT NOT NULL PRIMARY KEY,

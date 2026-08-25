@@ -25,7 +25,7 @@ import {
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
+import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 export {
   resolveSessionWorkerPlacementMutationError,
@@ -61,11 +61,20 @@ export function resolveSessionWorkerPlacementPatchError(params: {
     return undefined;
   }
   if (params.patch.archived === false) {
-    if (!isWorkerPlacementSafeForArchive(params.context, placement)) {
-      return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+    const restoreError = resolveWorkerPlacementArchiveRestoreError({
+      context: params.context,
+      key: params.key,
+      placement,
+    });
+    if (restoreError) {
+      return restoreError;
     }
   }
-  if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
+  if (
+    !params.validateModelRuntime ||
+    params.patch.model === undefined ||
+    !params.entry?.sessionId
+  ) {
     return undefined;
   }
   const runtime = resolveWorkerPlacementSessionRuntime({

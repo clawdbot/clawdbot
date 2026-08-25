@@ -9,7 +9,7 @@ type RunManagedCheck = (options: { args: string[]; bin: string }) => Promise<num
 
 export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "conflict markers", args: ["check:no-conflict-markers"] },
-  { name: "environment variable count ratchet", args: ["check:env-var-count"] },
+  { name: "script TypeScript erasability", args: ["check:script-erasability"] },
   { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
   { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"] },
   { name: "changelog attributions", args: ["check:changelog-attributions"] },

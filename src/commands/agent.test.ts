@@ -1,4 +1,5 @@
 // Agent command tests cover local agent runs, session routing, and command runtime behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -8,6 +9,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
+import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
@@ -18,6 +20,7 @@ import * as modelSelectionModule from "../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -43,6 +46,7 @@ import {
   loadVisibleSkills,
   loadWorkspaceSkills,
 } from "../skills/loading/workspace-skill-loader.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
 import type { SkillEntry } from "../skills/types.js";
 import {
   createDirectOutboundTestAdapter,
@@ -59,6 +63,10 @@ import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
+}));
+
+const attemptExecutionMocks = vi.hoisted(() => ({
+  useRealRunAgentAttempt: false,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -134,6 +142,19 @@ vi.mock("../agents/thinking-runtime.js", () => ({
         entry.id === params.model &&
         entry.reasoning !== undefined,
     ) ?? false,
+  needsThinkHydration: (
+    catalog: Array<{ id: string; provider: string; reasoning?: boolean }> | undefined,
+    provider: string,
+    model: string,
+    agentRuntime: string,
+  ) =>
+    agentRuntime !== "openclaw" ||
+    !catalog?.some(
+      (entry) =>
+        entry.provider.toLowerCase() === provider.toLowerCase() &&
+        entry.id === model &&
+        entry.reasoning !== undefined,
+    ),
   normalizeThinkingCatalogProviders: <T extends { provider: string }>(catalog: T[]) =>
     catalog.map((entry) => ({ ...entry, provider: entry.provider.toLowerCase() })),
   resolveCandidateThinkingLevel: ({ level }: { level?: string }) => level,
@@ -218,6 +239,12 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
       sessionEntry: params.sessionEntry,
     })),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
+      if (attemptExecutionMocks.useRealRunAgentAttempt) {
+        const actual = await vi.importActual<
+          typeof import("../agents/command/attempt-execution.js")
+        >("../agents/command/attempt-execution.js");
+        return await actual.runAgentAttempt(params as never);
+      }
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;
       const sessionEntry = params.sessionEntry as
@@ -547,6 +574,7 @@ function createOutboundSessionRouteFixture(params: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  attemptExecutionMocks.useRealRunAgentAttempt = false;
   resetPluginRuntimeStateForTest();
   installThinkingTestProviders();
   clearSessionStoreCacheForTest();
@@ -565,6 +593,84 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("carries an external cwd into the direct agent session skill snapshot", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const executionWorkspace = path.join(home, "external-repo");
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "inspect this repo",
+          agentId: "main",
+          cwd: executionWorkspace,
+        },
+        runtime,
+      );
+
+      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionSkillsDir: path.join(executionWorkspace, "skills"),
+        }),
+      );
+    });
+  });
+
+  it("uses the recorded canonical workspace for a managed-worktree skill snapshot", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:dashboard:managed-worktree";
+      const canonicalWorkspace = path.join(home, "project");
+      fs.mkdirSync(canonicalWorkspace, { recursive: true });
+      execFileSync("git", ["-C", canonicalWorkspace, "init", "-b", "main"]);
+      execFileSync("git", ["-C", canonicalWorkspace, "config", "user.name", "OpenClaw Test"]);
+      execFileSync("git", [
+        "-C",
+        canonicalWorkspace,
+        "config",
+        "user.email",
+        "openclaw-test@example.invalid",
+      ]);
+      fs.writeFileSync(path.join(canonicalWorkspace, "README.md"), "base\n");
+      execFileSync("git", ["-C", canonicalWorkspace, "add", "README.md"]);
+      execFileSync("git", ["-C", canonicalWorkspace, "commit", "-m", "initial"]);
+      mockConfig(home, store);
+      const worktree = await managedWorktrees.create({
+        repoRoot: canonicalWorkspace,
+        name: "managed",
+        ownerKind: "session",
+        ownerId: sessionKey,
+      });
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "managed-worktree-session",
+          spawnedCwd: worktree.path,
+          worktree: {
+            id: worktree.id,
+            branch: worktree.branch,
+            repoRoot: worktree.repoRoot,
+            canonicalWorkspaceDir: canonicalWorkspace,
+          },
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "inspect this repo",
+          sessionKey,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionSkillsDir: path.join(canonicalWorkspace, "skills"),
+        }),
+      );
+    });
+  });
+
   it.each(["Echo $PATH exactly.", String.raw`Keep \$release_notes literal.`])(
     "does not discover skills for literal dollar input: %s",
     async (message) => {
@@ -860,6 +966,64 @@ describe("agentCommand", () => {
 
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(getLastEmbeddedCall()?.sessionId).toBe("existing-harness-session");
+    });
+  });
+
+  it("enforces stored workspace permissions through public agent ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:dashboard:workspace-permission";
+      const sessionRoot = path.join(home, "worktree");
+      const outsidePath = path.join(home, "outside.txt");
+      const insidePath = path.join(sessionRoot, "inside.txt");
+      fs.mkdirSync(sessionRoot, { recursive: true });
+      mockConfig(home, store);
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "workspace-permission-session",
+          updatedAt: Date.now(),
+          spawnedCwd: sessionRoot,
+          permissionMode: "workspace",
+          sessionRoot,
+        },
+      });
+      attemptExecutionMocks.useRealRunAgentAttempt = true;
+
+      let outsideWriteError: unknown;
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (opts) => {
+        const codingRoot = opts.cwd ?? opts.workspaceDir;
+        const writeTool = createHostWorkspaceWriteTool(codingRoot, {
+          containmentRoot: opts.sessionRoot ?? codingRoot,
+          workspaceOnly: opts.permissionMode !== undefined && opts.permissionMode !== "full",
+        });
+        try {
+          await writeTool.execute("outside-write", {
+            path: outsidePath,
+            content: "outside",
+          });
+        } catch (error) {
+          outsideWriteError = error;
+        }
+        await writeTool.execute("inside-write", {
+          path: insidePath,
+          content: "inside",
+        });
+        return createDefaultAgentResult();
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "write inside the session worktree",
+          sessionKey,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(outsideWriteError).toBeInstanceOf(Error);
+      expect(String(outsideWriteError)).toMatch(/(?:sandbox|workspace) root/i);
+      expect(fs.existsSync(outsidePath)).toBe(false);
+      expect(fs.readFileSync(insidePath, "utf8")).toBe("inside");
     });
   });
 

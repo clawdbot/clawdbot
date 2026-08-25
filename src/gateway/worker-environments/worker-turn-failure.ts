@@ -48,8 +48,20 @@ export async function failHandedOffTurn(params: {
       expectedGeneration: params.placement.generation,
     });
   } catch {
-    // Exact drain ownership failed. Do not tear down an environment that may
-    // now belong to a newer placement generation.
+    const current = params.placements.get(params.placement.sessionId);
+    const exactDrainOwner =
+      current?.state === "draining" &&
+      current.generation === params.placement.generation + 1 &&
+      current.environmentId === params.placement.environmentId &&
+      current.activeOwnerEpoch === params.placement.activeOwnerEpoch &&
+      params.placements.validateTurnClaim(params.turnClaim);
+    if (exactDrainOwner) {
+      // Another lifecycle owner already closed admission for this exact turn.
+      // Release its claim without stealing that owner's reconciliation or teardown.
+      await releaseClaimIfOwned(params.placements, params.turnClaim);
+    }
+    // A different drain owner may belong to a replacement placement. Never
+    // tear down an environment after losing the exact source-generation CAS.
     return;
   }
   if (draining.state !== "draining") {

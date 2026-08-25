@@ -8,10 +8,10 @@ import {
 } from "./workspace-manifest.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 import {
-  createGitTransferList,
+  createWorkspaceGitTransferList,
   readWorkspaceTransferPaths,
-  runLocalCommandToFile,
-} from "./workspace-sync-local.js";
+  runWorkspaceInventoryCommandToFile,
+} from "./workspace-sync-inventory.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 
@@ -59,7 +59,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit)) {
       throw new Error("Worker workspace Git base is not a commit id");
     }
-    const transferList = await createGitTransferList({
+    const transferList = await createWorkspaceGitTransferList({
       gitRoot: root,
       temporaryDirectory: path.join(params.temporaryRoot, "inventory"),
       signal: params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
@@ -81,7 +81,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     const signal = params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS);
     const objectListPath = path.join(params.temporaryRoot, "base-objects");
     packPath = path.join(params.temporaryRoot, "base.pack");
-    await runLocalCommandToFile({
+    await runWorkspaceInventoryCommandToFile({
       argv: [
         "git",
         "-C",
@@ -96,7 +96,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
       timeoutMs: TRANSFER_TIMEOUT_MS,
     });
     await fsp.appendFile(objectListPath, `${baseCommit}\n`);
-    await runLocalCommandToFile({
+    await runWorkspaceInventoryCommandToFile({
       argv: ["git", "-C", root, "pack-objects", "--stdout"],
       inputPath: objectListPath,
       outputPath: packPath,

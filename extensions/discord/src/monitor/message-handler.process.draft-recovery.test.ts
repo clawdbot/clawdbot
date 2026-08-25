@@ -256,7 +256,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     });
   });
 
-  it("does not flush draft previews for error finals before normal delivery", async () => {
+  it("retains draft previews after error finals are delivered", async () => {
     const draftStream = await runFinalReplyScenario({
       text: "Something failed",
       isError: true,
@@ -264,7 +264,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });

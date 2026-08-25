@@ -6,6 +6,7 @@ import {
   createAuthRateLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
+  resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
@@ -144,7 +145,10 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         return;
       }
 
-      const clientIp = req.socket.remoteAddress ?? "unknown";
+      const clientIp =
+        resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback) ??
+        req.socket.remoteAddress ??
+        "unknown";
       if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
         res.writeHead(429);
         res.end("Too Many Requests");
@@ -226,6 +230,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const stop = async () => {
     stopRequested = true;
     await closeIfListening();
+    webhookAuthRateLimiter.dispose();
   };
 
   const start = (): Promise<void> => {

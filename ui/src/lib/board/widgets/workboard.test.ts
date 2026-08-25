@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import type { BoardWidget } from "../types.ts";
+import "./workboard-board.ts";
 import "./workboard-card.ts";
 import "./workboard-mini.ts";
 
@@ -356,6 +357,67 @@ describe("Workboard plugin widgets", () => {
       select.value = "running";
       select.dispatchEvent(new Event("change"));
     }
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+  });
+
+  it.each([
+    {
+      name: "scopes to boardId",
+      props: { boardId: "ops" },
+      expectedTitles: ["Ready card", "Running card", "Done card"],
+      omittedTitle: "Product card",
+    },
+    {
+      name: "shows all boards by default",
+      props: {},
+      expectedTitles: ["Ready card", "Running card", "Done card", "Product card"],
+      omittedTitle: null,
+    },
+  ])("renders real board columns and $name", async ({ props, expectedTitles, omittedTitle }) => {
+    const productCard = {
+      ...cards[0],
+      id: "card-product",
+      title: "Product card",
+      metadata: { automation: { boardId: "product" } },
+    };
+    const request = vi.fn(async () => ({
+      cards: [...cards, productCard],
+      statuses: ["ready", "running", "done"],
+    }));
+    const element = document.createElement("openclaw-workboard-board-widget");
+    element.widget = pluginWidget("workboard:board", props);
+    element.sessionKey = "agent:main:test";
+
+    await mount(element, createContext(request), request);
+
+    expect(element.querySelectorAll(".workboard-column")).toHaveLength(3);
+    for (const title of expectedTitles) {
+      expect(element.textContent).toContain(title);
+    }
+    if (omittedTitle) {
+      expect(element.textContent).not.toContain(omittedTitle);
+    }
+  });
+
+  it("keeps every board status control read-only without mutation access", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["ready", "running", "done"] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const element = document.createElement("openclaw-workboard-board-widget");
+    element.widget = pluginWidget("workboard:board", { boardId: "ops" });
+    element.sessionKey = "agent:main:test";
+    element.canMutate = false;
+
+    await mount(element, createContext(request), request);
+
+    const selects = [...element.querySelectorAll("select")];
+    expect(selects).toHaveLength(cards.length);
+    expect(selects.every((select) => select.disabled)).toBe(true);
+    selects[0]!.value = "running";
+    selects[0]!.dispatchEvent(new Event("change"));
     expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
   });
 

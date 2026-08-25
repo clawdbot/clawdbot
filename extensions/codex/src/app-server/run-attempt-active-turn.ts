@@ -14,6 +14,7 @@ import {
 } from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
+import { canonicalizeNativeProgressCardInput } from "./plan-compaction-state.js";
 import { isJsonObject, type CodexTurnStartResponse } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
@@ -22,6 +23,7 @@ import type { CodexAttemptNotificationController } from "./run-attempt-notificat
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
+  codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
@@ -54,6 +56,7 @@ export async function activateCodexAttemptTurn(
     bindingIdentity,
     sessionAgentId,
     sandboxSessionKey,
+    contextSessionKey,
     effectiveCwd,
   } = connection;
   const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
@@ -62,6 +65,8 @@ export async function activateCodexAttemptTurn(
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
+  const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
+  let nativePlanUpdateOrdinal = 0;
   const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
@@ -99,6 +104,19 @@ export async function activateCodexAttemptTurn(
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      asyncUserMessageAllowed:
+        params.disableTools !== true &&
+        (params.toolsAllow === undefined ||
+          toolBridge.availableTools.some((tool) => tool.name === "message")),
+      onAsyncDelivery: async (delivery) => {
+        return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
+          params: dynamicToolParams,
+          cwd: effectiveCwd,
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          ...delivery,
+        });
+      },
       readRecentRateLimits: () => readRecentCodexRateLimits(resourceState.client),
       runAbortSignal: runAbortController.signal,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
@@ -114,6 +132,33 @@ export async function activateCodexAttemptTurn(
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      ...(progressCardTool
+        ? {
+            onNativePlanUpdate: async (update: {
+              markdown?: string;
+              steps: Array<{
+                step: string;
+                status: "pending" | "in_progress" | "completed";
+              }>;
+            }) => {
+              nativePlanUpdateOrdinal += 1;
+              try {
+                const input = canonicalizeNativeProgressCardInput(update);
+                await progressCardTool.execute(
+                  `codex-native-plan:${activeTurnId}:${nativePlanUpdateOrdinal}`,
+                  input,
+                  runAbortController.signal,
+                );
+              } catch (error) {
+                embeddedAgentLog.warn("failed to persist native Codex plan to progress card", {
+                  runId: params.runId,
+                  threadId: resourceState.thread.threadId,
+                  error: formatErrorMessage(error),
+                });
+              }
+            },
+          }
+        : {}),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: async () => {
@@ -149,6 +194,20 @@ export async function activateCodexAttemptTurn(
   for (const failure of pendingNativePreToolUseFailures.splice(0)) {
     activeProjector.recordNativeToolPreToolUseFailure(failure);
   }
+  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+  // Buffered async items can persist immediately when the route opens. Commit
+  // their owning user admission first so durable history stays chronological.
+  const promptMirrorPromise = mirrorPromptAtTurnStartBestEffort({
+    params,
+    agentId: sessionAgentId,
+    notifyUserMessagePersisted,
+    sessionKey: sandboxSessionKey,
+    cwd: effectiveCwd,
+    threadId: resourceState.thread.threadId,
+    turnId: activeTurnId,
+    upstreamUserText: turnState.codexTurnPromptText,
+  });
+  await promptMirrorPromise;
   // The route buffers early events. Publish full turn context, then release in wire order.
   if (resourceState.turnRoute) {
     try {
@@ -185,8 +244,39 @@ export async function activateCodexAttemptTurn(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
-    claimPendingUserInput: () => userInputBridgeRef.current?.claimPendingRequest(),
     signal: runAbortController.signal,
+    beforeConfirmConsumed: async (items) => {
+      const inboundItems = items.filter((item) => item.isInboundUserMessage === true);
+      if (inboundItems.length === 0) {
+        return;
+      }
+      await promptMirrorPromise;
+      const messages = activeProjector.buildSteeringTranscriptPrefix();
+      if (params.sessionTarget && messages.length > 0) {
+        await codexTranscriptMirrorRuntime.mirror({
+          agentId: sessionAgentId,
+          sessionKey: contextSessionKey,
+          sessionId: params.sessionId,
+          storePath: params.sessionTarget.storePath,
+          cwd: effectiveCwd,
+          messages,
+          idempotencyScope: `codex-app-server:${resourceState.thread.threadId}`,
+          runId: params.runId,
+          runMirrorIdentityPrefix: `${activeTurnId}:`,
+          config: params.config,
+        });
+      }
+      for (const item of inboundItems) {
+        const recorder = item.userTurnTranscriptRecorder;
+        if (!recorder) {
+          continue;
+        }
+        await recorder.persistApproved();
+        if (!recorder.hasPersisted()) {
+          throw new Error("Codex consumed steering before its user turn was persisted");
+        }
+      }
+    },
   });
   steeringQueueRef.current = activeSteeringQueue;
   const claimPendingUserInputAnswer = async (
@@ -279,17 +369,6 @@ export async function activateCodexAttemptTurn(
     terminalState.terminalOutcomeFrozen = true;
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
   };
-  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
-  void mirrorPromptAtTurnStartBestEffort({
-    params,
-    agentId: sessionAgentId,
-    notifyUserMessagePersisted,
-    sessionKey: sandboxSessionKey,
-    cwd: effectiveCwd,
-    threadId: resourceState.thread.threadId,
-    turnId: activeTurnId,
-    upstreamUserText: turnState.codexTurnPromptText,
-  });
   const abortListener = () => {
     if (state.timedOut) {
       void (async () => {

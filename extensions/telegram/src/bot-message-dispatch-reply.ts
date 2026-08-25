@@ -14,8 +14,9 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   applyTextToPayload,
   deliverFinalAnswerText,
-  emitPreviewFinalizedHook,
+  handlePreviewFinalizedResult,
   normalizeDeliveryPayload,
+  registerTelegramQuestionDeliveryForMessage,
   sendPayload,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -41,8 +42,10 @@ import type {
   TelegramReplyStateSlice,
 } from "./bot-message-dispatch.types.js";
 import {
+  appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
   resolveTelegramQuestionOptionIndices,
+  type TelegramDroppedControl,
   type TelegramInlineButtons,
 } from "./button-types.js";
 import {
@@ -53,6 +56,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
+import { resolveTelegramTargetChatType } from "./targets.js";
 
 type BufferedDispatchParams = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -87,20 +91,31 @@ function toTelegramVisiblePartialDeliveryError(error: unknown): unknown {
     : createChannelPartialDeliveryError(error, { visibleReplySent: true });
 }
 
-function resolvePayloadTelegramInlineButtons(
+function resolvePayloadTelegramControls(
+  turn: Turn,
   payload: ReplyPayload,
-): TelegramInlineButtons | undefined {
+): { payload: ReplyPayload; buttons: TelegramInlineButtons | undefined } {
   const telegramData = payload.channelData?.telegram as
     | { buttons?: TelegramInlineButtons }
     | undefined;
-  return resolveTelegramInlineButtons(
+  const droppedControls: TelegramDroppedControl[] = [];
+  const buttons = resolveTelegramInlineButtons(
     {
       buttons: telegramData?.buttons,
       presentation: normalizeMessagePresentation(payload.presentation),
       interactive: payload.interactive,
     },
-    { questionOptionIndices: resolveTelegramQuestionOptionIndices(payload) },
+    {
+      allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
+      onDroppedControl: (control) => droppedControls.push(control),
+      questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+    },
   );
+  const text = appendTelegramDroppedControlFallback(payload.text ?? "", droppedControls);
+  return {
+    payload: text === (payload.text ?? "") ? payload : { ...payload, text },
+    buttons,
+  };
 }
 
 function hasExecApprovalPayload(payload: ReplyPayload): boolean {
@@ -140,11 +155,12 @@ async function flushBufferedFinalAnswer(turn: Turn, currentPayloadVisible = fals
     return;
   }
   try {
+    const controls = resolvePayloadTelegramControls(turn, buffered);
     const result = await deliverFinalAnswerText(
       turn,
-      buffered.payload,
-      buffered.text,
-      resolvePayloadTelegramInlineButtons(buffered.payload),
+      controls.payload,
+      controls.payload.text ?? "",
+      controls.buttons,
       settlement?.onPlatformSendDispatch,
       settlement?.bindPendingFinalDelivery,
     );
@@ -218,7 +234,8 @@ export async function deliverReply(
   if (!deduped) {
     return await settleTerminalNoVisibleDelivery(turn, info);
   }
-  const effectivePayload = deduped;
+  const controls = resolvePayloadTelegramControls(turn, deduped);
+  const effectivePayload = controls.payload;
   if (
     shouldSuppressLocalTelegramExecApprovalPrompt({
       cfg: turn.cfg,
@@ -229,7 +246,7 @@ export async function deliverReply(
     turn.queuedFinal = true;
     return await settleTerminalNoVisibleDelivery(turn, info);
   }
-  const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
+  const telegramButtons = controls.buttons;
   const lanePayload =
     info.kind === "block" &&
     typeof payload.text === "string" &&
@@ -294,10 +311,9 @@ export async function deliverReply(
         resolve: resolveFinalization,
         reject: rejectFinalization,
       };
-      turn.reasoningStepState.bufferFinalAnswer({
-        payload: effectivePayload,
-        text: segment.update.text,
-      });
+      turn.reasoningStepState.bufferFinalAnswer(
+        applyTextToPayload(effectivePayload, segment.update.text),
+      );
       continue;
     }
     if (segment.lane === "reasoning") {
@@ -356,8 +372,7 @@ export async function deliverReply(
       turn.streamMode === "progress" &&
       info.kind === "block" &&
       effectivePayload.isCommentary === true;
-    // CLI finals exclude separately classified commentary. Send that block outside
-    // the disposable progress stream or its collapse summary erases the text.
+    // CLI finals exclude separately classified commentary, so it must outlive the progress draft.
     const suppressProgressAnswerBlock =
       turn.streamMode === "progress" &&
       info.kind === "block" &&
@@ -412,8 +427,19 @@ export async function deliverReply(
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
-    if (segment.lane === "answer" && info.kind !== "final" && result.kind === "preview-finalized") {
-      await emitPreviewFinalizedHook(turn, result);
+    const finalizedPreview =
+      segment.lane === "answer" &&
+      info.kind !== "final" &&
+      (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
+    if (finalizedPreview) {
+      await handlePreviewFinalizedResult(turn, result);
+    }
+    if (segment.lane === "answer" && info.kind === "tool" && result.kind === "preview-updated") {
+      const messageId = turn.answerLane.stream?.messageId();
+      const text = turn.answerLane.stream?.lastDeliveredText?.();
+      if (typeof messageId === "number" && text) {
+        registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, { messageId, text });
+      }
     }
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {
@@ -524,7 +550,7 @@ export function handleReplyError(
       scopeKey: buildTelegramErrorScopeKey({
         accountId: turn.context.route.accountId,
         chatId: turn.context.chatId,
-        threadId: turn.context.threadSpec.id,
+        threadSpec: turn.context.threadSpec,
       }),
       cooldownMs: errorPolicy.cooldownMs,
       errorMessage: String(err),

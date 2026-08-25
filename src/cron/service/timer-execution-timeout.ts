@@ -8,9 +8,11 @@ import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
+  CronCompletionStatus,
   CronDeliveryTrace,
   CronJob,
   CronNextCheckProposal,
+  CronResolvedDeliveryState,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -42,6 +44,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     job: CronJob;
     taskRunId?: string;
+    completionStatus: CronCompletionStatus;
+    deliveryState: CronResolvedDeliveryState;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
@@ -61,6 +65,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
 
 export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
+    completionStatus?: CronCompletionStatus;
+    deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -119,6 +125,7 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
   assertRunCurrent?: () => void;
   streamBatch?: string;

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
@@ -69,13 +70,14 @@ import {
   isOpenAICodexResponsesModel,
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
-import { createOpenAIResponseHook, log } from "./openai-transport-shared.js";
+import { createOpenAIProviderAcceptanceHook, log } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportMetadata,
+  notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
@@ -177,12 +179,38 @@ async function postOpenAIResponsesCompaction(params: {
     body: { model: params.request.model, input: params.request.input },
   });
   const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
-  const item = output[0];
+  const item = output.at(-1);
+  const retainedItems = output.slice(0, -1);
+  const retainedMessagesAreValid = retainedItems.every(
+    (candidate) =>
+      isRecord(candidate) &&
+      candidate.type === "message" &&
+      (candidate.role === "user" ||
+        candidate.role === "developer" ||
+        candidate.role === "system") &&
+      Array.isArray(candidate.content),
+  );
+  const retainedUserMessageCount = retainedItems.filter(
+    (candidate) =>
+      isRecord(candidate) &&
+      candidate.type === "message" &&
+      candidate.role === "user" &&
+      Array.isArray(candidate.content),
+  ).length;
+  const inputUserMessageCount = Array.isArray(params.request.input)
+    ? params.request.input.filter(
+        (candidate) =>
+          isRecord(candidate) && candidate.type === "message" && candidate.role === "user",
+      ).length
+    : 0;
+  const retainedMessagePrefixSupported = supportsNativeOpenAIResponsesEndpoint(params.model);
   const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
   if (
     !isRecord(response) ||
     response.object !== "response.compaction" ||
-    output.length !== 1 ||
+    !retainedMessagesAreValid ||
+    (retainedItems.length > 0 &&
+      (!retainedMessagePrefixSupported || retainedUserMessageCount !== inputUserMessageCount)) ||
     !isRecord(item) ||
     item.type !== "compaction" ||
     typeof item.encrypted_content !== "string" ||
@@ -191,10 +219,11 @@ async function postOpenAIResponsesCompaction(params: {
     typeof usage.input_tokens !== "number" ||
     typeof usage.output_tokens !== "number"
   ) {
-    throw new Error("Responses compact endpoint did not return exactly one compaction item");
+    throw new Error("Responses compact endpoint did not return one trailing compaction item");
   }
   return {
     item,
+    historyMode: retainedUserMessageCount > 0 ? "retained-users" : "compacted-prefix",
     usage,
     model: params.model,
     replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {
@@ -303,7 +332,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           ) {
             const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
             const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
-            enforceCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
+            enforceCodeModeResponsesToolSurface(
+              params,
+              visibleToolNames,
+              allowedHostedToolTypes,
+              codeModeToolSurfaceObserver.get(options),
+            );
             assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
           }
           return params;
@@ -415,7 +449,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
             signal: firstEvent.signal,
             abort: firstEvent.abort,
-            hook: createOpenAIResponseHook(options?.onResponse, response, model),
+            hook: createOpenAIProviderAcceptanceHook(options, response, model),
             onReady: () => {
               emitModelTransportDebug(
                 log,
@@ -470,8 +504,16 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             );
             responseStream = {
               async *[Symbol.asyncIterator]() {
+                let providerAccepted = false;
                 try {
                   for await (const event of websocket.stream) {
+                    if (!providerAccepted) {
+                      providerAccepted = true;
+                      await notifyProviderStreamOpened({
+                        options,
+                        cancelStream: () => websocket.finish({ keep: false }),
+                      });
+                    }
                     startStream();
                     yield event;
                   }

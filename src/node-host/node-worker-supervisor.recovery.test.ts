@@ -194,6 +194,42 @@ async function waitForIdentityDeath(identity: NodeWorkerProcessIdentity) {
 }
 
 describe("node worker supervisor recovery", () => {
+  it("coalesces failed initialization and retries reconciliation on the next attempt", async () => {
+    const { bundleRoot, env } = fixture("node-worker-initialization-retry-");
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
+    const supervisor = createNodeWorkerSupervisor({
+      bundleRoot,
+      env,
+      capacity: 2,
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
+    });
+    const reconciliation = vi
+      .spyOn(NodeWorkerLaunchStore.prototype, "listNonterminal")
+      .mockImplementationOnce(() => {
+        throw new Error("temporary launch journal failure");
+      });
+
+    try {
+      const first = supervisor.initialize();
+      const concurrent = supervisor.initialize();
+
+      expect(concurrent).toBe(first);
+      await expect(first).rejects.toThrow("temporary launch journal failure");
+      await expect(supervisor.initialize()).resolves.toBeUndefined();
+      expect(reconciliation).toHaveBeenCalledTimes(2);
+      expect(capacitySnapshots).toEqual([
+        { total: 2, available: 0 },
+        { total: 2, available: 0 },
+        { total: 2, available: 2 },
+      ]);
+      await expect(supervisor.initialize()).resolves.toBeUndefined();
+      expect(reconciliation).toHaveBeenCalledTimes(2);
+    } finally {
+      reconciliation.mockRestore();
+      await supervisor.close().catch(() => undefined);
+    }
+  });
+
   it("atomically adopts pending work only after the previous supervisor is stale", async () => {
     const { bundleRoot, env, workspaceDir } = fixture("node-worker-stale-pending-");
     const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
@@ -226,12 +262,12 @@ describe("node worker supervisor recovery", () => {
       state: "pending",
       supervisor: { pid: 2_147_483_647, startTime: 1 },
     });
-    const availability: boolean[] = [];
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const supervisor = createNodeWorkerSupervisor({
       bundleRoot,
       env,
       capacity: 1,
-      onAvailabilityChanged: (available) => availability.push(available),
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
 
     await supervisor.initialize();
@@ -240,7 +276,10 @@ describe("node worker supervisor recovery", () => {
       state: "interrupted",
       worker: null,
     });
-    expect(availability).toEqual([false, true]);
+    expect(capacitySnapshots).toEqual([
+      { total: 1, available: 0 },
+      { total: 1, available: 1 },
+    ]);
     await supervisor.close();
   });
 
@@ -266,7 +305,7 @@ describe("node worker supervisor recovery", () => {
       spawned.add(workerProcess);
       const worker = requireNodeWorkerProcessIdentity(workerProcess.pid!);
       ownedProcessGroups.push(worker);
-      await vi.waitFor(() => expect(fs.existsSync(marker)).toBe(true));
+      await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toMatch(/^[1-9]\d*$/u));
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
       const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
@@ -348,7 +387,9 @@ describe("node worker supervisor recovery", () => {
       const owned = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
       ownedProcessGroups.push(owned.worker!);
       const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-      await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+      await vi.waitFor(() =>
+        expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u),
+      );
       const grandchild = requireNodeWorkerProcessIdentity(
         Number(fs.readFileSync(grandchildPath, "utf8")),
       );

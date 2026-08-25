@@ -66,6 +66,10 @@ describe("acpStatefulBindingTargetDriver", () => {
       key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       reason: "new",
       commandSource: "discord:native",
+      armSessionDiffBaselineCapture: true,
+      // Channel-native resets are host-owned dispatch and carry system authority
+      // so operator role boundaries never silently block them.
+      operatorRoleActor: { kind: "system" },
     });
   });
 

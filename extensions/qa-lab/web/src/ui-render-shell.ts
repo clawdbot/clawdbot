@@ -72,7 +72,7 @@ function renderModelSelect(params: {
   }
   return `
     <div class="config-field">
-      <span class="config-label">${esc(params.label)}</span>
+      <label class="config-label" for="${esc(params.id)}">${esc(params.label)}</label>
       <select id="${esc(params.id)}"${params.disabled ? " disabled" : ""}>
         ${options
           .map(
@@ -117,7 +117,7 @@ export function renderSidebar(state: UiState): string {
           ? `<div class="sidebar-section sidebar-panel-body">
               <div class="sidebar-section-title"><h3>Configuration</h3></div>
               <div class="config-field">
-                <span class="config-label">Profile</span>
+                <label class="config-label" for="run-profile">Profile</label>
                 <select id="run-profile"${isRunning ? " disabled" : ""}>
                   ${profiles
                     .map(
@@ -128,14 +128,14 @@ export function renderSidebar(state: UiState): string {
                 </select>
               </div>
               <div class="config-field">
-                <span class="config-label">Provider lane</span>
+                <label class="config-label" for="provider-mode">Provider lane</label>
                 <select id="provider-mode"${isRunning ? " disabled" : ""}>
                   <option value="mock-openai"${selection?.providerMode === "mock-openai" ? " selected" : ""}>Synthetic (mock)</option>
                   <option value="live-frontier"${selection?.providerMode === "live-frontier" ? " selected" : ""}>Real frontier providers</option>
                 </select>
               </div>
               <div class="config-field">
-                <span class="config-label">Channel driver</span>
+                <label class="config-label" for="channel-driver">Channel driver</label>
                 <select id="channel-driver"${isRunning ? " disabled" : ""}>
                   <option value="qa-channel"${selection?.channelDriver === "qa-channel" ? " selected" : ""}>Synthetic QA channel</option>
                   <option value="crabline"${selection?.channelDriver === "crabline" ? " selected" : ""}>Crabline channel driver</option>
@@ -143,7 +143,7 @@ export function renderSidebar(state: UiState): string {
                 </select>
               </div>
               <div class="config-field">
-                <span class="config-label">Execution channel</span>
+                <label class="config-label" for="execution-channel">Execution channel</label>
                 <select id="execution-channel"${isRunning ? " disabled" : ""}>
                   <option value=""${selection?.channel ? "" : " selected"}>Catalog/default</option>
                   ${channels
@@ -155,21 +155,21 @@ export function renderSidebar(state: UiState): string {
                 </select>
               </div>
               <div class="config-field">
-                <span class="config-label">Evidence mode</span>
+                <label class="config-label" for="evidence-mode">Evidence mode</label>
                 <select id="evidence-mode"${isRunning ? " disabled" : ""}>
                   <option value="full"${selection?.evidenceMode === "full" ? " selected" : ""}>Full</option>
                   <option value="slim"${selection?.evidenceMode === "slim" ? " selected" : ""}>Slim</option>
                 </select>
               </div>
               <div class="config-field">
-                <span class="config-label">Runtime pair</span>
+                <label class="config-label" for="runtime-pair">Runtime pair</label>
                 <select id="runtime-pair"${isRunning ? " disabled" : ""}>
                   <option value=""${selection?.runtimePair ? "" : " selected"}>Single runtime</option>
                   <option value="openclaw,codex"${selection?.runtimePair ? " selected" : ""}>OpenClaw × Codex</option>
                 </select>
               </div>
               <div class="config-field">
-                <span class="config-label">Runtime-pair lane</span>
+                <label class="config-label" for="runtime-pair-lane">Runtime-pair lane</label>
                 <select id="runtime-pair-lane"${isRunning ? " disabled" : ""}>
                   <option value=""${selection?.runtimePairLane ? "" : " selected"}>Profile/default</option>
                   ${(["core", "extended", "soak"] as const)

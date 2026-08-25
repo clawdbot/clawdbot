@@ -12,6 +12,7 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
   config: TConfig;
   commandName: string;
   targetIds: Set<string>;
+  agentId?: string;
   mode?: CommandSecretResolutionMode;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
@@ -30,6 +31,7 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
     config: params.config,
     commandName: params.commandName,
     targetIds: params.targetIds,
+    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.mode ? { mode: params.mode } : {}),
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),

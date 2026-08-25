@@ -61,6 +61,7 @@ type BenchmarkReport = {
     deliveryQueueEntries: number;
     pluginStateEntries: number;
     stateRows: number;
+    transcriptEvents: number;
   };
   timingsMs: {
     checkpoint: number;
@@ -107,6 +108,9 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
     queryRuns: 40,
   },
 };
+
+const SQLITE_PERF_TRANSCRIPT_EVENTS = 128;
+const SQLITE_PERF_TRANSCRIPT_SESSION_ID = "perf-history";
 
 function applyScale(config: ProfileConfig): ProfileConfig {
   const scale = parseStrictIntegerOption({
@@ -368,11 +372,60 @@ function seedAgentDatabase(db: DatabaseSync, count: number, agentIndex: number):
         1_700_000_000_000 + i,
       );
     }
+    if (agentIndex === 0) {
+      seedTranscriptHistory(db);
+    }
     db.exec("COMMIT;");
   } catch (err) {
     db.exec("ROLLBACK;");
     throw err;
   }
+}
+
+function seedTranscriptHistory(db: DatabaseSync): void {
+  const sessionKey = "agent:perf-agent-0:history";
+  db.prepare(
+    `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(sessionKey, SQLITE_PERF_TRANSCRIPT_SESSION_ID, "{}", 1_700_000_000_000);
+  db.prepare(
+    `INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, sessionKey, 1_700_000_000_000, 1_700_000_000_000);
+
+  const insertEvent = db.prepare(
+    `INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+     VALUES (?, ?, ?, ?)`,
+  );
+  const insertIdentity = db.prepare(
+    `INSERT INTO transcript_event_identities
+       (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
+     VALUES (?, ?, ?, 'message', NULL, NULL, ?)`,
+  );
+  const insertActive = db.prepare(
+    `INSERT INTO session_transcript_active_events
+       (session_id, active_position, event_seq, message_position)
+     VALUES (?, ?, ?, ?)`,
+  );
+  for (let seq = 1; seq <= SQLITE_PERF_TRANSCRIPT_EVENTS; seq += 1) {
+    const eventId = `history-${seq}`;
+    const message = { type: "message", id: eventId, message: { role: "user", content: eventId } };
+    insertEvent.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq, JSON.stringify(message), seq);
+    insertIdentity.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, eventId, seq, seq);
+    insertActive.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq - 1, seq, seq - 1);
+  }
+  db.prepare(
+    `INSERT INTO session_transcript_index_state
+       (session_id, indexed_seq, leaf_event_id, active_event_count, active_message_count, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    SQLITE_PERF_TRANSCRIPT_SESSION_ID,
+    SQLITE_PERF_TRANSCRIPT_EVENTS,
+    `history-${SQLITE_PERF_TRANSCRIPT_EVENTS}`,
+    SQLITE_PERF_TRANSCRIPT_EVENTS,
+    SQLITE_PERF_TRANSCRIPT_EVENTS,
+    1_700_000_000_000,
+  );
 }
 
 function readIntegrity(db: DatabaseSync): string {
@@ -413,6 +466,21 @@ function runTimedQuery(
     query,
     rows,
   };
+}
+
+function runTimedTranscriptPage(db: DatabaseSync, start: number, runs: number): TimedQuery {
+  return runTimedQuery(
+    db,
+    `SELECT active.message_position, event.event_json
+       FROM session_transcript_active_events AS active
+       JOIN transcript_events AS event
+         ON event.session_id = active.session_id AND event.seq = active.event_seq
+      WHERE active.session_id = ?
+        AND active.message_position >= ? AND active.message_position < ?
+      ORDER BY active.message_position ASC`,
+    [SQLITE_PERF_TRANSCRIPT_SESSION_ID, start, start + 32],
+    runs,
+  );
 }
 
 function runHotQueries(params: {
@@ -481,6 +549,16 @@ function runHotQueries(params: {
       ["session_entries"],
       params.config.queryRuns,
     ),
+    runTimedTranscriptPage(
+      params.agentDb,
+      SQLITE_PERF_TRANSCRIPT_EVENTS - 32,
+      params.config.queryRuns,
+    ),
+    runTimedTranscriptPage(
+      params.agentDb,
+      Math.floor(SQLITE_PERF_TRANSCRIPT_EVENTS / 2),
+      params.config.queryRuns,
+    ),
   ];
 }
 
@@ -489,6 +567,7 @@ function printProofLines(report: BenchmarkReport): void {
   console.log(`SQLITE_PERF_PROFILE=${report.profile}`);
   console.log(`SQLITE_PERF_STATE_ROWS=${report.rows.stateRows}`);
   console.log(`SQLITE_PERF_AGENT_ROWS=${report.rows.agentCacheEntries}`);
+  console.log(`SQLITE_PERF_TRANSCRIPT_ROWS=${report.rows.transcriptEvents}`);
   console.log(`SQLITE_PERF_INTEGRITY=${report.integrity.state}`);
   console.log(`SQLITE_PERF_WAL_BYTES_BEFORE=${report.walBytes.stateBefore}`);
   console.log(`SQLITE_PERF_WAL_BYTES_AFTER=${report.walBytes.stateAfter}`);
@@ -563,6 +642,7 @@ function main(): void {
         deliveryQueueEntries: config.deliveryQueueEntries,
         pluginStateEntries: config.pluginStateEntries,
         stateRows: stateRowCount(config),
+        transcriptEvents: SQLITE_PERF_TRANSCRIPT_EVENTS,
       },
       timingsMs: {
         checkpoint: Number(checkpointMs.toFixed(3)),

@@ -2,6 +2,8 @@ import type {
   ExecutionIdentityAdmissionFacts,
   ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
+import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
+import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,6 +16,11 @@ import {
   attachAgentCommandAdmissionFacts,
   getAgentCommandAdmissionFacts,
 } from "./agent-command-admission-facts.js";
+import {
+  type AgentCommandExecutionIdentitySpawnFacts,
+  readAgentCommandExecutionIdentitySpawnFacts,
+  withoutAgentCommandExecutionIdentitySpawnFacts,
+} from "./agent-command-execution-identity-spawn.js";
 import type {
   AgentCommandGatewayIngressOpts,
   AgentCommandIngressOpts,
@@ -44,17 +51,35 @@ function prepareAgentCommandRunAdmission(params: {
   runId: string;
   onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
 }) {
+  return prepareAgentCommandRunAdmissionWithSpawnFacts(params);
+}
+
+function prepareAgentCommandRunAdmissionWithSpawnFacts(
+  params: Parameters<typeof prepareAgentCommandRunAdmission>[0],
+  spawnFacts?: AgentCommandExecutionIdentitySpawnFacts,
+) {
   const admissionFacts = getAgentCommandAdmissionFacts(params.operationalRunInstance) ?? {
     ingress: params.ingress,
   };
+  const applicableGrants = spawnFacts?.applicableGrants;
+  const assurance = spawnFacts?.assurance ?? admissionFacts.assurance;
   return prepareAgentRunAdmission({
     cfg: params.cfg,
     operationalRunInstance: params.operationalRunInstance,
-    facts: {
-      runId: params.runId,
-      agentId: params.agentId,
-      ...admissionFacts,
-    },
+    facts: executionIdentitySpawnAdmission({
+      operation: "attach",
+      value: {
+        runId: params.runId,
+        agentId: params.agentId,
+        ingress: spawnFacts?.ingress ?? admissionFacts.ingress,
+        ...((spawnFacts?.invoker ?? admissionFacts.invoker)
+          ? { invoker: spawnFacts?.invoker ?? admissionFacts.invoker }
+          : {}),
+        ...(applicableGrants ? { applicableGrants } : {}),
+        ...(assurance ? { assurance } : {}),
+      },
+      extra: spawnFacts?.spawnAdmission,
+    }),
     ...(params.admission ? { recovery: params.admission } : {}),
     ...(params.onAdmitted ? { onAdmitted: params.onAdmitted } : {}),
   });
@@ -111,7 +136,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
   if (admissionFacts) {
     attachAgentCommandAdmissionFacts(operationalRunInstance, admissionFacts);
   }
-  return executionIdentity.prepare({
+  const admissionParams: Parameters<typeof prepareAgentCommandRunAdmission>[0] = {
     admission: opts.executionIdentityAdmission,
     agentId: prepared.sessionAgentId,
     cfg: prepared.cfg,
@@ -144,13 +169,20 @@ export function prepareAgentCommandExecutionIdentity(params: {
         log.warn(`failed to bind restart recovery execution identity: ${bindingFailure}`);
       }
     },
-  });
+  };
+  const spawnFacts = readAgentCommandExecutionIdentitySpawnFacts(opts);
+  const preparedAdmission = spawnFacts
+    ? prepareAgentCommandRunAdmissionWithSpawnFacts(admissionParams, spawnFacts)
+    : executionIdentity.prepare(admissionParams);
+  return opts.onPostAdmittedRunContext
+    ? withPostAdmissionExecutionOwnerBinding(preparedAdmission, opts.onPostAdmittedRunContext)
+    : preparedAdmission;
 }
 
 export function sanitizePublicAgentCommandIngressOpts(
   opts: AgentCommandIngressOpts,
 ): AgentCommandGatewayIngressOpts {
-  return {
+  return withoutAgentCommandExecutionIdentitySpawnFacts({
     ...opts,
     mainRestartRecoveryOwnerLease: undefined,
     mainRestartRecoveryAdmitted: undefined,
@@ -159,7 +191,8 @@ export function sanitizePublicAgentCommandIngressOpts(
     operationalRunInstance: undefined,
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
-  };
+    onPostAdmittedRunContext: undefined,
+  });
 }
 
 export const executionIdentity = {

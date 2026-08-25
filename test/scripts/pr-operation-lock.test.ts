@@ -240,6 +240,14 @@ function installPrCliFixture(repoDir: string) {
   return { binDir, cli };
 }
 
+function installRequiredPrCommandStubs(binDir: string) {
+  for (const command of ["gh", "jq", "pnpm", "rg"]) {
+    const stub = join(binDir, command);
+    writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+    chmodSync(stub, 0o755);
+  }
+}
+
 interface SupervisedFixtureOptions {
   accelerateTimeouts?: boolean;
   cwd?: string;
@@ -884,11 +892,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const { binDir, cli } = installPrCliFixture(repoDir);
     const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
     writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\nreview_init() { :; }\n`);
-    for (const command of ["gh", "jq", "pnpm", "rg"]) {
-      const stub = join(binDir, command);
-      writeFileSync(stub, "#!/bin/sh\nexit 0\n");
-      chmodSync(stub, 0o755);
-    }
+    installRequiredPrCommandStubs(binDir);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
@@ -912,11 +916,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       reviewScript,
       `${readFileSync(reviewScript, "utf8")}\nreview_init() { printf 'review ran\\n'; }\n`,
     );
-    for (const command of ["gh", "jq", "pnpm", "rg"]) {
-      const stub = join(binDir, command);
-      writeFileSync(stub, "#!/bin/sh\nexit 0\n");
-      chmodSync(stub, 0o755);
-    }
+    installRequiredPrCommandStubs(binDir);
     const mktempStub = join(binDir, "mktemp");
     writeFileSync(mktempStub, "#!/bin/sh\necho 'mktemp: No space left on device' >&2\nexit 1\n");
     chmodSync(mktempStub, 0o755);
@@ -935,6 +935,29 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.stderr).not.toContain("scripts/pr lock-recover");
     expect(result.stdout).not.toContain("review ran");
     expect(refExists(repoDir)).toBe(false);
+  });
+  it("releases a validation-phase lock when review-init metadata fails", () => {
+    const repoDir = createRepo();
+    const { binDir, cli } = installPrCliFixture(repoDir);
+    const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
+    writeFileSync(
+      reviewScript,
+      `${readFileSync(reviewScript, "utf8")}\nenter_worktree() { printf 'entered-worktree\\n'; }\npr_meta_json() { echo 'fixture metadata failure' >&2; return 1; }\n`,
+    );
+    installRequiredPrCommandStubs(binDir);
+
+    const result = spawnSync(cli, ["review-init", "42"], {
+      cwd: repoDir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(refExists(repoDir), result.stderr).toBe(false);
+    expect(result.stderr).toContain("fixture metadata failure");
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+    expect(result.stderr).not.toContain("scripts/pr lock-recover");
+    expect(result.stdout).not.toContain("entered-worktree");
   });
   it.each([["--dryrun"], ["--dry-run", "extra"]])(
     "rejects invalid gc arguments before cleanup: %s",

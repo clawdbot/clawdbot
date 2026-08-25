@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredInternalHookNames } from "../hooks/configured.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
+import { ExpectedCliError } from "./failure-output.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   requestExitAfterOneShotOutput: vi.fn(),
   listAgentIds: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
+  resolveConfiguredAgentId: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   tryResolveLegacyCompatibilityAgentId: vi.fn(),
 }));
@@ -30,6 +32,7 @@ vi.mock("../state/config-machine-state.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId: mocks.resolveConfiguredAgentId,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId: mocks.tryResolveLegacyCompatibilityAgentId,
 }));
@@ -163,6 +166,14 @@ describe("hooks CLI metadata config keys", () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue(report);
     mocks.getRuntimeConfig.mockReturnValue(sourceConfig);
     mocks.listAgentIds.mockReturnValue(["main"]);
+    mocks.resolveConfiguredAgentId.mockImplementation(
+      (_config: OpenClawConfig, agentId: string) => {
+        if (!mocks.listAgentIds().includes(agentId)) {
+          throw new Error(`Unknown agent id "${agentId}"`);
+        }
+        return agentId;
+      },
+    );
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-hook-workspace");
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue("main");
@@ -275,8 +286,73 @@ describe("hooks CLI metadata config keys", () => {
       }),
     ).rejects.toThrow("__exit__:1");
 
-    expect(capture.runtimeErrors.at(-1)).toContain(
-      `Hook "${testCase.identifier}" is ambiguous; use a unique hook name or hook key`,
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      `Error: Hook "${testCase.identifier}" is ambiguous; matches: ${testCase.hooks
+        .map((candidate) => `${candidate.name} (${candidate.hookKey})`)
+        .join(", ")}. Use a unique hook name or hook key.`,
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("bounds ambiguous hook candidates", async () => {
+    const hooks = Array.from({ length: 7 }, (_, index) => ({
+      ...hook,
+      name: "shared-name",
+      hookKey: `key-${index + 1}`,
+    }));
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks });
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "disable", "shared-name"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      'Error: Hook "shared-name" is ambiguous; matches: shared-name (key-1), shared-name (key-2), shared-name (key-3), shared-name (key-4), shared-name (key-5) (+2). Use a unique hook name or hook key.',
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["enable", "disable"])(
+    "gives the recovery command for an unknown hook on %s",
+    async (action) => {
+      mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [] });
+
+      await expect(
+        createHooksProgram().parseAsync(["hooks", action, "missing-hook"], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(capture.runtimeErrors.at(-1)).toBe(
+        'Error: Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("names missing requirements and the available install route", async () => {
+    const ineligibleHook: HookStatusEntry = {
+      ...hook,
+      requirementsSatisfied: false,
+      loadable: false,
+      blockedReason: "missing requirements",
+      missing: {
+        bins: ["missing-bin"],
+        anyBins: ["missing-any-a", "missing-any-b"],
+        env: ["MISSING_ENV"],
+        config: ["hooks.demo.enabled"],
+        os: ["linux"],
+      },
+      install: [
+        { id: "demo-npm", kind: "npm", label: "Install @openclaw/demo-hook (npm)", bins: [] },
+      ],
+    };
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [ineligibleHook] });
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "enable", "display-name"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      'Error: Hook "display-name" is not eligible; missing bins: missing-bin; anyBins: missing-any-a, missing-any-b; env: MISSING_ENV; config: hooks.demo.enabled; os: linux. Install options: Install @openclaw/demo-hook (npm). Run `openclaw hooks info display-name` for details.',
     );
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
@@ -286,11 +362,149 @@ describe("hooks CLI metadata config keys", () => {
       from: "user",
     });
 
-    expect(capture.defaultRuntime.writeStdout).toHaveBeenCalledWith(
-      expect.stringContaining('"error": "not found"'),
-    );
+    expect(JSON.parse(capture.runtimeLogs.at(-1) ?? "{}")).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
+      hook: "missing-hook",
+    });
     expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 1);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "bare report with parent JSON",
+      argv: ["hooks", "--agent", "retired", "--json"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "list with leaf JSON",
+      argv: ["hooks", "list", "--agent", "retired", "--json"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "list with parent JSON",
+      argv: ["hooks", "--json", "list", "--agent", "retired"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "info report",
+      argv: ["hooks", "info", "display-name", "--agent", "retired", "--json"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "info report with parent JSON",
+      argv: ["hooks", "--json", "info", "display-name", "--agent", "retired"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "check report",
+      argv: ["hooks", "check", "--agent", "retired", "--json"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "check report with parent JSON",
+      argv: ["hooks", "--json", "check", "--agent", "retired"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "blank leaf agent",
+      argv: ["hooks", "list", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+      phase: "agent",
+    },
+    {
+      label: "human report",
+      argv: ["hooks", "list", "--agent", "retired"],
+      message: 'Unknown agent id "retired"',
+      phase: "agent",
+    },
+    {
+      label: "config loading",
+      argv: ["hooks", "list", "--json"],
+      message: "injected config loading failure",
+      phase: "config",
+    },
+    {
+      label: "authoritative Gateway report",
+      argv: ["hooks", "check", "--json"],
+      message: "injected Gateway report failure",
+      phase: "gateway",
+    },
+    {
+      label: "local report fallback",
+      argv: ["hooks", "info", "display-name", "--json"],
+      message: "injected local hook report failure",
+      phase: "report",
+    },
+  ])("propagates $label failures to the root CLI renderer", async (testCase) => {
+    if (testCase.phase === "config") {
+      mocks.getRuntimeConfig.mockImplementation(() => {
+        throw new Error(testCase.message);
+      });
+    }
+    if (testCase.phase === "gateway") {
+      mocks.callGateway.mockRejectedValue(
+        Object.assign(new Error(testCase.message), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      );
+    }
+    if (testCase.phase === "report") {
+      mocks.buildWorkspaceHookStatus.mockImplementation(() => {
+        throw new Error(testCase.message);
+      });
+    }
+
+    const execution = createHooksProgram().parseAsync(testCase.argv, { from: "user" });
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({
+      message: testCase.message,
+      humanOutput: `Error: ${testCase.message}`,
+      machineOutput: testCase.message,
+    });
+
+    expect(capture.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(capture.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
+    expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    if (testCase.phase === "agent" || testCase.phase === "config") {
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
+    }
+    if (testCase.phase === "agent") {
+      expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    }
+    if (testCase.phase === "gateway") {
+      expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
+    }
+  });
+
+  it("preserves an existing expected read failure for root rendering", async () => {
+    const failure = new ExpectedCliError({
+      message: "existing root failure",
+      humanOutput: "already styled failure",
+      machineOutput: "machine failure",
+    });
+    mocks.getRuntimeConfig.mockImplementation(() => {
+      throw failure;
+    });
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "list", "--json"], { from: "user" }),
+    ).rejects.toBe(failure);
+    expect(capture.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(capture.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("emits the default hooks report as JSON", async () => {
@@ -414,6 +628,14 @@ describe("hooks CLI metadata config keys", () => {
     expect(explicitFleet).toEqual(initialConfig);
   });
 
+  it("rejects a blank parent hook agent before dispatching a subcommand", async () => {
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "--agent", "", "list"], { from: "user" }),
+    ).rejects.toThrow("--agent must not be blank");
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("keeps the explicit owner in the offline hooks fallback", async () => {
     const explicitFleet = configureExplicitFleet();
 
@@ -438,9 +660,12 @@ describe("hooks CLI metadata config keys", () => {
 
     await expect(
       createHooksProgram().parseAsync(["hooks", "list", "--json"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: 'unknown agent id "retired"',
+    });
 
-    expect(capture.runtimeErrors.at(-1)).toContain('unknown agent id "retired"');
+    expect(capture.runtimeErrors).toEqual([]);
     expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
   });
 

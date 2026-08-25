@@ -37,12 +37,13 @@ import type {
 import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
-} from "../../../src/gateway/control-ui-contract.js";
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
 } from "../../../src/shared/device-bootstrap-profile.js";
 import { formatUiError } from "../lib/format-error.ts";
+import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -77,26 +78,13 @@ function browserSecureContext(): boolean {
   return win?.isSecureContext === true;
 }
 
-function isLoopbackIPv4Host(host: string): boolean {
-  const octets = host.split(".");
-  return (
-    octets.length === 4 &&
-    octets[0] === "127" &&
-    octets.every((octet) => /^\d+$/.test(octet) && Number(octet) <= 255)
-  );
-}
-
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
-    const host = gatewayUrl.hostname.trim().toLowerCase();
-    const isLoopbackHost = host === "localhost" || host === "::1" || host === "[::1]";
-    const isLoopbackIPv4 = isLoopbackIPv4Host(host);
-    if (isLoopbackHost || isLoopbackIPv4) {
-      return true;
-    }
-    const pageUrl = new URL(window.location.href);
-    return gatewayUrl.host === pageUrl.host;
+    return (
+      isLoopbackHostname(gatewayUrl.hostname) ||
+      gatewayUrl.host === new URL(window.location.href).host
+    );
   } catch {
     return false;
   }
@@ -290,16 +278,28 @@ export class GatewayBrowserClient {
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
-  // Older shipped Gateways used a closed client schema. Downgrade once per
-  // browser client; a document reload creates a fresh exact-identity attempt.
-  private clientBuildIdCompatibilityDisabled = false;
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
-      createSocket: (handlers) => createBrowserGatewaySocket(this.opts.url, handlers),
+      createSocket: (handlers) => {
+        this.maxPayloadBytes = undefined;
+        const socket = createBrowserGatewaySocket(this.opts.url, handlers);
+        return {
+          ...socket,
+          send: (data) => {
+            if (
+              this.maxPayloadBytes !== undefined &&
+              new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
+            ) {
+              throw new GatewayPayloadLimitError();
+            }
+            socket.send(data);
+          },
+        };
+      },
       createRequestId: generateUUID,
       createRequestError: (error) =>
         new GatewayRequestError({
@@ -383,7 +383,6 @@ export class GatewayBrowserClient {
     this.scopeUpgradeBinding = null;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    this.clientBuildIdCompatibilityDisabled = false;
   }
 
   get connected() {
@@ -423,13 +422,19 @@ export class GatewayBrowserClient {
   ): Promise<ConnectPlan> {
     this.recovery = { ...this.recovery, generation, resolved: false };
     const role = CONTROL_UI_OPERATOR_ROLE;
+    // Gateway Coupling makes the connect handshake the only version-skew gate.
+    // A configured build identity must never be omitted or downgraded.
+    // Browsers know their own zone, so presence gets a location hint that survives
+    // proxies, tunnels, and CGNAT ranges where the connecting IP tells us nothing.
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
     const client: ConnectParams["client"] = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
       version: this.opts.clientVersion ?? "control-ui",
-      buildId: this.clientBuildIdCompatibilityDisabled ? undefined : this.opts.clientBuildId,
+      buildId: this.opts.clientBuildId,
       platform: this.opts.platform ?? navigator.platform ?? "web",
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
+      ...(timeZone ? { timeZone } : {}),
     };
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
@@ -539,7 +544,7 @@ export class GatewayBrowserClient {
     );
     const migrateRecoveryScope =
       serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
-        ? (await import("../lib/sessions/cloud-recovery-migration.runtime.ts")).default
+        ? (await import("../lib/sessions/session-placement-recovery-migration.runtime.ts")).default
         : undefined;
     if (plan.generation !== this.recovery.generation || !this.client.connected) {
       return;
@@ -585,15 +590,6 @@ export class GatewayBrowserClient {
   private handleConnectFailure(err: GatewayProtocolRequestError, plan: ConnectPlan) {
     const connectErrorCode =
       err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
-    if (
-      !this.clientBuildIdCompatibilityDisabled &&
-      plan.params.client.buildId &&
-      /invalid connect params.*unexpected property.*buildid/iu.test(err.message)
-    ) {
-      this.clientBuildIdCompatibilityDisabled = true;
-      this.client.resetReconnectBackoff(250);
-      return { closeCode: CONNECT_FAILED_CLOSE_CODE, closeReason: "connect retry" };
-    }
     if (
       shouldRetryGatewayWithDeviceToken({
         retryBudgetUsed: this.deviceTokenRetryBudgetUsed,
@@ -665,15 +661,6 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    // The UUID request envelope adds 75 bytes with params, 61 when params is omitted.
-    const requestBytes =
-      new TextEncoder().encode(JSON.stringify([method, params])).byteLength +
-      (params === undefined ? 61 : 75);
-    if (this.maxPayloadBytes !== undefined && requestBytes > this.maxPayloadBytes) {
-      throw new Error(
-        "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-      );
-    }
     return await this.client.request<T>(method, params, options);
   }
 
@@ -756,5 +743,14 @@ export class GatewayBrowserClient {
     } catch (callbackError) {
       console.error("[gateway] close handler error:", callbackError);
     }
+  }
+}
+
+export class GatewayPayloadLimitError extends Error {
+  constructor() {
+    super(
+      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+    );
+    this.name = "GatewayPayloadLimitError";
   }
 }

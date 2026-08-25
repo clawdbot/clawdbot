@@ -2,6 +2,10 @@ import { Type, type Static, type TProperties } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import { closedObject } from "./closed-object.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
+import {
+  GitHubPublicationBodySchema,
+  GitHubPublicationTitleSchema,
+} from "./session-github-publication.js";
 import { withSince } from "./since.js";
 import {
   LiveIntegerSchema,
@@ -37,12 +41,14 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.live-event",
   "worker.sessions.spawn",
   "worker.sessions.send",
+  "worker.github.publish",
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
 export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
-export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v1";
+export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
+export const WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE = "worker-github-publication-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
@@ -51,6 +57,7 @@ export const WORKER_PROTOCOL_FEATURES = [
   // launch V2: an older gateway would adopt this worker and send the old shape.
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
@@ -217,6 +224,12 @@ export const WorkerSessionsSendParamsSchema = closedObject({
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
 });
 
+export const WorkerGitHubPublishParamsSchema = closedObject({
+  toolCallId: WorkerSessionToolCallIdSchema,
+  title: Type.Optional(GitHubPublicationTitleSchema),
+  body: Type.Optional(GitHubPublicationBodySchema),
+});
+
 export const WorkerSessionToolResultSchema = closedObject({
   resultJson: Type.String({ minLength: 2, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
 });
@@ -232,6 +245,16 @@ export const WorkerSessionsSpawnResponseFrameSchema = Type.Union([
 ]);
 
 export const WorkerSessionsSendResponseFrameSchema = Type.Union([
+  closedObject({
+    type: Type.Literal("res"),
+    id: WorkerFrameIdSchema,
+    ok: Type.Literal(true),
+    payload: WorkerSessionToolResultSchema,
+  }),
+  WorkerErrorResponseFrameSchema,
+]);
+
+export const WorkerGitHubPublishResponseFrameSchema = Type.Union([
   closedObject({
     type: Type.Literal("res"),
     id: WorkerFrameIdSchema,
@@ -704,11 +727,15 @@ export type WorkerHeartbeatRequestFrame = Static<typeof WorkerHeartbeatRequestFr
 export type WorkerHeartbeatResponseFrame = Static<typeof WorkerHeartbeatResponseFrameSchema>;
 export type WorkerSessionsSpawnParams = Static<typeof WorkerSessionsSpawnParamsSchema>;
 export type WorkerSessionsSendParams = Static<typeof WorkerSessionsSendParamsSchema>;
+export type WorkerGitHubPublishParams = Static<typeof WorkerGitHubPublishParamsSchema>;
 export type WorkerSessionToolResult = Static<typeof WorkerSessionToolResultSchema>;
 export type WorkerSessionsSpawnResponseFrame = Static<
   typeof WorkerSessionsSpawnResponseFrameSchema
 >;
 export type WorkerSessionsSendResponseFrame = Static<typeof WorkerSessionsSendResponseFrameSchema>;
+export type WorkerGitHubPublishResponseFrame = Static<
+  typeof WorkerGitHubPublishResponseFrameSchema
+>;
 export type WorkerTranscriptMessage = Static<typeof WorkerTranscriptMessageSchema>;
 export type WorkerProviderReplayState = Static<typeof WorkerProviderReplayStateSchema>;
 export type WorkerTranscriptCommitParams = Static<typeof WorkerTranscriptCommitParamsSchema>;

@@ -49,19 +49,27 @@ export type CodexStartOrResumeThreadParams = {
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
   params: EmbeddedRunAttemptParams;
+  /** Private execution identity resolved by this harness's catalog generation. */
+  runtimeModelId?: string;
   agentId?: string;
+  agentDir?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
   ) => CodexThreadFinalConfigPatchResult;
   nativeHookRelayGeneration?: string;
+  /** Session-layer PreToolUse hooks must survive authoritative managed hook requirements. */
+  nativeHookRelayRequired?: boolean;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;

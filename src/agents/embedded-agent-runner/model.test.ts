@@ -191,7 +191,14 @@ vi.mock("../prepared-model-runtime.js", async () => {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
     const snapshot = {
+      agentDir: input.agentDir,
       ...(workspaceDir ? { workspaceDir } : {}),
+      activeProjectKeys: [],
+      config: input.config ?? {},
+      authModes: {},
+      metadataSnapshot: { plugins: [] },
+      allowGatewaySubagentBinding: false,
+      modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
       inlineProviderModels: preparedSnapshotState.inlineProviderModels,
       createStores: () => ({ authStorage, modelRegistry }),
@@ -575,6 +582,127 @@ function makeVllmQwenConfig(
 }
 
 describe("resolveModel", () => {
+  it("consumes a directly prepared model through configured overrides and normalization", async () => {
+    const preparedModel = {
+      ...makeModel("prepared-model"),
+      provider: "acme",
+      name: "Prepared Model",
+      api: "openai-completions" as const,
+      baseUrl: "https://discovered.example/v1",
+      input: ["text" as const],
+      contextWindow: 65_536,
+      maxTokens: 8_192,
+    };
+    const prepareProviderDynamicModel = vi.fn(async () => preparedModel);
+    const runProviderDynamicModel = vi.fn(() => undefined);
+    const normalizeProviderResolvedModelWithPlugin = vi.fn(
+      ({ context }: { context: { model: Model } }) => ({
+        ...context.model,
+        name: "Normalized Prepared Model",
+      }),
+    );
+    const cfg = makeProviderConfig("acme", {
+      api: "openai-responses",
+      baseUrl: "https://configured.example/v1",
+      headers: { "X-Tenant": "tenant-a" },
+    });
+
+    const result = await resolveModelAsync("acme", "prepared-model", "/tmp/agent", cfg, {
+      runtimeHooks: {
+        ...createRuntimeHooks(),
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+        normalizeProviderResolvedModelWithPlugin,
+      },
+      skipAgentDiscovery: true,
+    });
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "acme",
+      id: "prepared-model",
+      name: "Normalized Prepared Model",
+      api: "openai-responses",
+      baseUrl: "https://configured.example/v1",
+      contextWindow: 65_536,
+      maxTokens: 8_192,
+    });
+    expect(expectResolvedModel(result).headers).toEqual(
+      expect.objectContaining({ "X-Tenant": "tenant-a" }),
+    );
+    expect(prepareProviderDynamicModel).toHaveBeenCalledOnce();
+    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
+    expect(runProviderDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      description: "keeps explicit configured models ahead of prepared models",
+      preferRuntime: false,
+      expectedName: "Configured Model",
+      expectedPreparationCount: 0,
+    },
+    {
+      description: "preserves manually configured limits during runtime comparison",
+      preferRuntime: true,
+      expectedName: "Prepared Model",
+      expectedPreparationCount: 1,
+    },
+    {
+      description: "replaces models-add metadata with a preferred prepared model",
+      preferRuntime: true,
+      metadataSource: "models-add" as const,
+      expectedName: "Prepared Model",
+      expectedPreparationCount: 1,
+    },
+  ])(
+    "$description",
+    async ({ preferRuntime, metadataSource, expectedName, expectedPreparationCount }) => {
+      const prepareProviderDynamicModel = vi.fn(async () => ({
+        ...makeModel("prepared-model"),
+        provider: "acme",
+        name: "Prepared Model",
+        api: "openai-completions" as const,
+        baseUrl: "https://discovered.example/v1",
+        input: ["text" as const],
+        contextWindow: 65_536,
+        maxTokens: 8_192,
+      }));
+      const runProviderDynamicModel = vi.fn(() => undefined);
+      const cfg = makeProviderConfig("acme", {
+        api: "openai-responses",
+        baseUrl: "https://configured.example/v1",
+        models: [
+          {
+            ...makeModel("prepared-model"),
+            name: "Configured Model",
+            contextWindow: 32_768,
+            maxTokens: 4_096,
+            ...(metadataSource ? { metadataSource } : {}),
+          },
+        ],
+      });
+
+      const result = await resolveModelAsync("acme", "prepared-model", "/tmp/agent", cfg, {
+        runtimeHooks: {
+          ...createRuntimeHooks(),
+          prepareProviderDynamicModel,
+          runProviderDynamicModel,
+          shouldPreferProviderRuntimeResolvedModel: () => preferRuntime,
+        },
+        skipAgentDiscovery: true,
+      });
+
+      expectRecordFields(expectResolvedModel(result), {
+        name: expectedName,
+        api: "openai-responses",
+        baseUrl: "https://configured.example/v1",
+        contextWindow: metadataSource ? 65_536 : 32_768,
+      });
+      expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(expectedPreparationCount);
+      expect(runProviderDynamicModel).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses agent discovery stores while the agent model files are unchanged", async () => {
     mockModelDiscovery();
 
@@ -1009,6 +1137,18 @@ describe("resolveModel", () => {
       makeMistralCatalogModel({ input: ["text"] }),
     );
 
+    const preparedModelRuntime = {
+      agentDir: "/tmp/agent",
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config: {},
+      authModes: {},
+      metadataSnapshot: { plugins: [] } as never,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+    } satisfies PreparedModelRuntimeSnapshot;
     const result = await resolveModelAsync(
       "mistral",
       "mistral-medium-3-5",
@@ -1018,7 +1158,7 @@ describe("resolveModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: { mocked: true } as never,
         modelRegistry: { find: vi.fn(() => null) } as never,
-        preparedModelRuntime: {} as PreparedModelRuntimeSnapshot,
+        preparedModelRuntime,
         runtimeHooks: createRuntimeHooks(),
         skipAgentDiscovery: true,
       },
@@ -1033,6 +1173,19 @@ describe("resolveModel", () => {
   });
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
+    const metadataSnapshot = { plugins: [] } as never;
+    const preparedModelRuntime = {
+      agentDir: "/tmp/agent",
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config: {},
+      authModes: {},
+      metadataSnapshot,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+    } satisfies PreparedModelRuntimeSnapshot;
     resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
       provider: "google",
       id: "gemini-3.1-pro-preview",
@@ -1053,6 +1206,7 @@ describe("resolveModel", () => {
       undefined,
       {
         allowBundledStaticCatalogFallback: true,
+        preparedModelRuntime,
         runtimeHooks: createRuntimeHooks(),
         skipAgentDiscovery: true,
       },
@@ -1073,12 +1227,14 @@ describe("resolveModel", () => {
       cfg: undefined,
       workspaceDir: undefined,
       includeRuntimeDiscovery: true,
+      metadataSnapshot,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
+      metadataSnapshot,
     });
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
@@ -1578,7 +1734,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("does not use bundled static catalog rows unless the caller opts in", async () => {
+  it("does not read manifest or provider static rows when bundled fallback is disabled", async () => {
     const result = await resolveModelAsync(
       "mistral",
       "mistral-medium-3-5",
@@ -1593,6 +1749,7 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: mistral/mistral-medium-3-5");
     expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
@@ -3040,6 +3197,8 @@ describe("resolveModel", () => {
 
       expect(result.model).toBeUndefined();
       expect(result.error).toBe("Unknown model: azure-openai-responses/gpt-5.5");
+      expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+      expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     },
   );
 

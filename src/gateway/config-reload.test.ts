@@ -159,6 +159,97 @@ describe("diffConfigPaths", () => {
     expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
+
+  it.each(["speech", "realtime"] as const)("reloads only changed Talk %s owners", (surface) => {
+    const configure = (provider: string, model?: string) => ({
+      talk:
+        surface === "speech"
+          ? { providers: { [provider]: { model } } }
+          : { realtime: { providers: { [provider]: { model } } } },
+    });
+    for (const [prev, next, reload] of [
+      [{}, configure("first"), true],
+      [configure("first"), configure("second"), true],
+      [configure("first", "before"), configure("first", "after"), false],
+    ] as const) {
+      expect(buildGatewayReloadPlan(diffGatewayReloadPaths(prev, next)).reloadPlugins).toBe(reload);
+    }
+  });
+
+  it.each([
+    {
+      name: "adds agents",
+      prev: {},
+      next: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      expectedPaths: ["agents.ownership", "agents.defaults.sessionStore", "agents.entries"],
+    },
+    {
+      name: "removes agents",
+      prev: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      next: {},
+      expectedPaths: ["agents.ownership", "agents.defaults.sessionStore", "agents.entries"],
+    },
+    {
+      name: "adds agent defaults",
+      prev: { agents: { ownership: "explicit", entries: { ops: {} } } },
+      next: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      expectedPaths: ["agents.defaults.sessionStore"],
+    },
+    {
+      name: "removes agent defaults",
+      prev: {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {} },
+        },
+      },
+      next: { agents: { ownership: "explicit", entries: { ops: {} } } },
+      expectedPaths: ["agents.defaults.sessionStore"],
+    },
+    {
+      name: "adds session config",
+      prev: {},
+      next: { session: { scope: "global", store: "/tmp/fixed.sqlite" } },
+      expectedPaths: ["session.scope", "session.store"],
+    },
+    {
+      name: "removes session config",
+      prev: { session: { scope: "global", store: "/tmp/fixed.sqlite" } },
+      next: {},
+      expectedPaths: ["session.scope", "session.store"],
+    },
+  ])("preserves hook policy dependencies when it $name", ({ prev, next, expectedPaths }) => {
+    const changedPaths = diffGatewayReloadPaths(prev as OpenClawConfig, next as OpenClawConfig);
+
+    for (const expectedPath of expectedPaths) {
+      expect(changedPaths).toContain(expectedPath);
+    }
+    expect(buildGatewayReloadPlan(changedPaths)).toMatchObject({
+      restartGateway: false,
+      refreshHooksPolicy: true,
+      reloadHooks: false,
+      restartGmailWatcher: false,
+    });
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {
@@ -331,6 +422,8 @@ describe("buildGatewayReloadPlan", () => {
       path: "plugins.entries.lossless-claw.config.mode",
       expected: { reloadPlugins: true, disposeMcpRuntimes: true },
     },
+    { path: "talk.provider", expected: { reloadPlugins: true } },
+    { path: "talk.realtime.provider", expected: { reloadPlugins: true } },
   ])("keeps hot-reload actions for $path", ({ path, expected }) => {
     const plan = buildGatewayReloadPlan([path]);
 
@@ -341,6 +434,37 @@ describe("buildGatewayReloadPlan", () => {
       noopPaths: [],
       ...expected,
     });
+  });
+
+  it.each([
+    { path: "agents.entries", restartHeartbeat: true },
+    { path: "agents.ownership", restartHeartbeat: false },
+    { path: "agents.defaults.sessionStore", restartHeartbeat: false },
+    { path: "agents.defaults.sessionStore.agentId", restartHeartbeat: false },
+    { path: "session.scope", restartHeartbeat: false },
+    { path: "session.store", restartHeartbeat: false },
+  ])("refreshes only hook target policy for $path", ({ path, restartHeartbeat }) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      refreshHooksPolicy: true,
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartHeartbeat,
+    });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+  });
+
+  it.each([
+    "agents",
+    "agents.defaults",
+    "agents.defaults.systemAgent.agentId",
+    "agents.list",
+    "session",
+    "session.mainKey",
+  ])("does not broadly refresh hook target policy for %s", (path) => {
+    expect(buildGatewayReloadPlan([path]).refreshHooksPolicy).not.toBe(true);
   });
 
   it.each([
@@ -4397,6 +4521,54 @@ describe("startGatewayConfigReloader", () => {
     expect(plan.changedPaths).toEqual(["plugins.installs.brave"]);
     expect(plan.restartReasons).toEqual(["plugins.installs.brave"]);
     expect(nextConfig).toBe(activeConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("forces a plugin reload when signaled metadata leaves config and install records identical", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: {} },
+    };
+    const installRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave",
+        installPath: "/tmp/openclaw/plugins/brave",
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        sourceConfig: activeConfig,
+        runtimeConfig: activeConfig,
+        config: activeConfig,
+        hash: "unchanged-config",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn(async () => ({ ...installRecords }));
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: activeConfig,
+      initialCompareConfig: activeConfig,
+      initialPluginInstallRecords: installRecords,
+      readPluginInstallRecords,
+    });
+
+    harness.reloader.notifyPluginMetadataChanged();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, nextConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.changedPaths).toEqual([]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(nextConfig).toBe(activeConfig);
+
+    // The refresh is consumed by the committed reload: a later watcher echo of
+    // identical bytes must not replace the plugin runtime generation again.
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).not.toHaveBeenCalled();
 
     await harness.reloader.stop();
   });

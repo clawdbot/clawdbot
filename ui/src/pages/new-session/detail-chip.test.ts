@@ -5,47 +5,41 @@ import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
 describe("Detail chip state", () => {
   it.each([
     {
-      name: "shows a node cwd decision",
+      name: "hides the detail chip for remote destinations",
       params: {
-        execNode: "macbook",
-        cloudProfileId: "",
+        destination: "remote" as const,
         worktree: false,
-        repository: { kind: "idle" as const },
+        worktreeAvailable: true,
       },
-      expected: { mode: "node", label: "Node path", worktreeLocked: false },
+      expected: null,
     },
     {
-      name: "keeps cloud worktrees visibly locked",
+      name: "hides the detail chip when local isolation is unavailable",
       params: {
-        execNode: "",
-        cloudProfileId: "fleet",
-        worktree: true,
-        repository: { kind: "git" as const, repoRoot: "/repo", branches: [] },
+        destination: "local" as const,
+        worktree: false,
+        worktreeAvailable: false,
       },
-      expected: { mode: "cloud", label: "Worktree", worktreeLocked: true },
+      expected: null,
     },
     {
-      name: "explains plain-folder execution",
+      name: "shows the local isolation choice when it is available",
       params: {
-        execNode: "",
-        cloudProfileId: "",
+        destination: "local" as const,
         worktree: false,
-        repository: { kind: "direct" as const, repoRoot: "/folder" },
+        worktreeAvailable: true,
       },
-      expected: { mode: "direct", label: "Runs directly", worktreeLocked: false },
+      expected: { label: "Runs directly" },
     },
   ])("$name", ({ params, expected }) => {
     expect(resolveDetailChip(params)).toEqual(expected);
   });
 
-  it("renders the cloud lock reason as visible text", () => {
+  it("keeps local isolation terminology as Worktree", () => {
     const container = document.createElement("div");
     render(
       renderDetailChip({
-        state: { mode: "cloud", label: "Worktree", worktreeLocked: true },
-        syncLabel: "OpenClaw",
-        folder: "/repo",
-        execNode: "",
+        state: { label: "Worktree" },
         worktree: true,
         worktreeAvailable: true,
         branches: { repoRoot: "/repo", branches: [] },
@@ -53,7 +47,7 @@ describe("Detail chip state", () => {
         baseRef: "main",
         worktreeName: "",
         submitting: false,
-        pendingCloud: false,
+        pendingPlacement: false,
         popoverOpen: true,
         popoverHiding: false,
         onGuardTransition: () => undefined,
@@ -63,14 +57,12 @@ describe("Detail chip state", () => {
         onToggleWorktree: () => undefined,
         onBaseRefInput: () => undefined,
         onWorktreeNameInput: () => undefined,
-        onNodeFolderInput: () => undefined,
       }),
       container,
     );
 
     const worktree = container.querySelector<HTMLButtonElement>('[data-value="worktree"]');
-    expect(worktree?.disabled).toBe(true);
-    expect(container.textContent).toContain("Cloud workers require a managed worktree");
-    expect(container.textContent).toContain("Syncs OpenClaw to the cloud worker");
+    expect(worktree?.disabled).toBe(false);
+    expect(container.textContent).toContain("Worktree name");
   });
 });

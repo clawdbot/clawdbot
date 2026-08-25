@@ -121,12 +121,15 @@ Tailscale's rewritten source address selects a normal non-exempt, resettable
 per-client bucket. Serve tokenless identity auth additionally requires a
 matching WhoIs result; Funnel requires its marker and password authentication.
 
-An externally preserved Funnel route that still targets the ordinary Gateway
-listener cannot establish this request provenance. OpenClaw leaves that route
-unchanged and logs migration guidance. Plugin-authenticated webhook routes
-remain available under the rule above; Gateway-authenticated routes reject the
-unattributable ingress. Use `gateway.tailscale.mode: "funnel"` so OpenClaw can
-point the full Gateway route at its dedicated ingress.
+An externally managed Serve or Funnel route targeting the ordinary Gateway
+listener can establish generic proxy attribution only when its immediate source
+is explicitly configured in `gateway.trustedProxies` and it supplies a valid
+non-loopback forwarded client address. OpenClaw then uses that client address
+for rate limits and applies normal gateway auth; Tailscale headers do not grant
+managed-ingress or tokenless-auth semantics. Without that trust configuration,
+Gateway-authenticated routes reject the unattributable ingress. Prefer
+`gateway.tailscale.mode: "serve"` or `"funnel"` when OpenClaw should own the
+route and its dedicated listener.
 
 ### Webhooks
 

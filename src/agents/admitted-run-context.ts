@@ -7,6 +7,7 @@ import {
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
+import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -62,6 +63,27 @@ export function getAdmittedRunDelegatedAuthority(
   return lease && !lease.foregroundClosed && validateAgentRunDelegatedAuthority(lease.authority)
     ? lease.authority
     : undefined;
+}
+
+/** Captures an exact admitted-run assertion for work that may cross an await boundary. */
+export function resolveAdmittedRunActiveAssertion(
+  context: AdmittedRunContext,
+  signal?: AbortSignal,
+): (() => void) | undefined {
+  const operationalRunInstance = context.operationalRunInstance;
+  const authority = getAdmittedRunDelegatedAuthority(context);
+  if (!authority) {
+    return undefined;
+  }
+  return () => {
+    if (
+      signal?.aborted ||
+      context.operationalRunInstance !== operationalRunInstance ||
+      getAdmittedRunDelegatedAuthority(context) !== authority
+    ) {
+      throw new Error("admitted run authority is no longer active");
+    }
+  };
 }
 
 /** Idempotently compare-releases the authority captured by this admission. */
@@ -126,6 +148,7 @@ type ExecutionIdentityRecoveryAdmission = Readonly<{
 export function createExecutionIdentityRecoveryAdmission(params: {
   retryOnly: boolean;
   token?: ExecutionIdentityAdmissionToken;
+  expectedOperationalRunId?: string;
 }): ExecutionIdentityRecoveryAdmission {
   let consumed = false;
   return Object.freeze({
@@ -135,7 +158,18 @@ export function createExecutionIdentityRecoveryAdmission(params: {
         return Object.freeze({ accepted: false });
       }
       consumed = true;
-      const token = params.token?.runId === runId ? params.token : undefined;
+      if (
+        params.expectedOperationalRunId !== undefined &&
+        params.expectedOperationalRunId !== runId
+      ) {
+        return Object.freeze({ accepted: false });
+      }
+      // The trusted recovery resolver binds the current operational owner separately.
+      // Without that explicit binding, only the token's original run may redeem it.
+      const token =
+        params.expectedOperationalRunId !== undefined || params.token?.runId === runId
+          ? params.token
+          : undefined;
       return Object.freeze({ accepted: true, ...(token ? { token } : {}) });
     },
   });
@@ -202,9 +236,14 @@ export function prepareAgentRunAdmission(params: {
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
       admitted ??= (async () => {
+        const facts = executionIdentitySpawnAdmission({
+          operation: "attach",
+          value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+          extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
+        });
         const context = admitPreparedAgentRun({
           cfg: params.cfg,
-          facts: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+          facts,
           operationalRunInstance,
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),

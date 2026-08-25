@@ -53,6 +53,7 @@ type FakeEngine = {
   loadOverview: ReturnType<typeof vi.fn>;
   noteAssistantMessage: ReturnType<typeof vi.fn>;
   planGreeting: ReturnType<typeof vi.fn>;
+  decorateRejoinReply: ReturnType<typeof vi.fn>;
 };
 
 function makeEngine(): FakeEngine {
@@ -72,6 +73,7 @@ function makeEngine(): FakeEngine {
       history.push({ role: "assistant", text });
     }),
     planGreeting: vi.fn(),
+    decorateRejoinReply: vi.fn((reply: unknown) => reply),
   };
 }
 

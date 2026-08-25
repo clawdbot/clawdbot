@@ -4,6 +4,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.ps1";
@@ -169,7 +171,105 @@ describe("install.ps1 failure handling", () => {
           "$output = @(Run-Doctor *>&1 | ForEach-Object { $_.ToString() })",
           '$text = $output -join "`n"',
           "if ($text -match 'Migration complete') { throw 'doctor failure reported success' }",
-          "if ($text -notmatch 'Migration failed') { throw \"missing warning: $text\" }",
+          "if ($text -notmatch 'Migration failed') { throw \"missing error: $text\" }",
+          "if ($output[-1] -ne $false) { throw 'doctor failure did not propagate' }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "npm-lifecycle-policy",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$script:NpmVersion = ''",
+          "function Invoke-NpmCommand {",
+          "  param([string[]]$Arguments = @(), [string]$CommandPath, [string]$WorkingDirectory)",
+          "  if ($Arguments[0] -eq '--version') { Write-Output $script:NpmVersion; $global:LASTEXITCODE = 0; return }",
+          "  throw 'unexpected npm mutation'",
+          "}",
+          "$cases = @{ '11.15.0' = $null; '11.16.0' = '--allow-scripts=openclaw'; '12.0.0' = '--allow-scripts=openclaw' }",
+          "foreach ($entry in $cases.GetEnumerator()) {",
+          "  $script:NpmVersion = $entry.Key",
+          "  $actual = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@latest'",
+          '  if ($actual -ne $entry.Value) { throw "version=$($entry.Key) actual=$actual" }',
+          "}",
+          "$script:NpmVersion = '12.0.0'",
+          "$alias = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@npm:@scope/candidate@1.0.0'",
+          "if ($alias -ne '--allow-scripts=@scope/candidate') { throw \"alias=$alias\" }",
+          "$tarball = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'https://example.invalid/openclaw.tgz'",
+          "if ($tarball -ne '--allow-scripts=https://example.invalid/openclaw.tgz') { throw \"tarball=$tarball\" }",
+          '$commaRoot = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw,identity"',
+          '$safeCwd = Join-Path $commaRoot "safe"',
+          '$candidate = Join-Path $commaRoot "candidate.tgz"',
+          "$relative = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec $candidate -NpmCwd $safeCwd",
+          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\.\.[\\/]candidate\.tgz$') { throw \"relative=$relative\" }",
+          "foreach ($invalidVersion in @('invalid', 'npm 12.0.0 warning')) {",
+          "  $script:NpmVersion = $invalidVersion",
+          "  $caught = $false",
+          "  try { Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@latest' } catch { $caught = $true }",
+          '  if (-not $caught) { throw "invalid npm version was accepted: $invalidVersion" }',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "npm-candidate-validation",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$root = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-missing-candidate-" + [guid]::NewGuid().ToString("N"))',
+          "New-Item -ItemType Directory -Path $root | Out-Null",
+          "function Check-ExistingOpenClaw { return $true }",
+          "function Check-Node { return $true }",
+          "function Ensure-Git { return $true }",
+          "function Test-PreviousGitWrapper { return $false }",
+          "function Get-NpmCommandPath { return 'npm.cmd' }",
+          "function Get-WindowsCommandSafeDirectory { return $root }",
+          "function Resolve-NpmOpenClawInstallSpec { return 'openclaw@latest' }",
+          "function Test-NpmConfigRawKey { return $true }",
+          "function Get-NpmDebugLogRootCandidates { return @() }",
+          "function Invoke-NpmCommand {",
+          "  param([string[]]$Arguments = @(), [string]$CommandPath, [string]$WorkingDirectory)",
+          "  $global:LASTEXITCODE = 0",
+          "  if ($Arguments[0] -eq '--version') { return '12.0.0' }",
+          "  if ($Arguments[0] -eq 'root') { return $root }",
+          "  if ($Arguments[0] -eq 'config') { return $root }",
+          "  if ($Arguments[0] -eq 'install') { return }",
+          "  throw \"unexpected npm command: $($Arguments -join ' ')\"",
+          "}",
+          "function Ensure-OpenClawOnPath { throw 'old PATH command was accepted after missing candidate' }",
+          "$InstallMethod = 'npm'",
+          "$NoOnboard = $true",
+          "$Tag = 'latest'",
+          "try {",
+          "  $null = Main",
+          '  if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
+          "} finally {",
+          "  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "method-switch-preservation",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$script:OldOwnerRemoved = $false",
+          "function Check-ExistingOpenClaw { return $true }",
+          "function Check-Node { return $true }",
+          "function Get-NpmCommandPath { return 'npm.cmd' }",
+          "function Invoke-NpmCommand {",
+          "  param([string[]]$Arguments = @(), [string]$CommandPath, [string]$WorkingDirectory)",
+          "  if ($Arguments[0] -eq 'list') { $global:LASTEXITCODE = 0; return }",
+          "  if ($Arguments[0] -eq 'uninstall') { $script:OldOwnerRemoved = $true; $global:LASTEXITCODE = 0; return }",
+          "  throw 'unexpected npm command'",
+          "}",
+          "function Install-OpenClawFromGit { return $false }",
+          "$InstallMethod = 'git'",
+          "$NoOnboard = $true",
+          "$null = Main",
+          "if ($script:OldOwnerRemoved) { throw 'failed candidate retired the working npm owner' }",
           "",
         ].join("\n"),
       },
@@ -179,19 +279,48 @@ describe("install.ps1 failure handling", () => {
           scriptWithoutEntryPoint,
           "",
           "$cases = @{",
-          "  '22.22.2' = $false",
-          "  '22.22.3' = $true",
-          "  '23.11.0' = $false",
-          "  '24.14.1' = $false",
-          "  '24.15.0' = $true",
-          "  '25.8.1' = $false",
-          "  '25.9.0' = $true",
-          "  '26.0.0' = $true",
+          ...NODE_RELEASE_VERSION_CASES.map(
+            (version) =>
+              `  ${toPowerShellSingleQuotedLiteral(version)} = $${isSupportedOpenClawNodeVersion(version)}`,
+          ),
           "}",
           "foreach ($entry in $cases.GetEnumerator()) {",
           "  $actual = Test-NodeVersionSupported -Version $entry.Key",
           '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
           "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "same-prefix-shim-transaction",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$root = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-shim-transaction-" + [guid]::NewGuid().ToString("N"))',
+          '$target = Join-Path $root "openclaw.cmd"',
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $root | Out-Null",
+          '  $old = "@echo off`r`nnode `"C:\\old\\dist\\entry.js`" %*`r`n"',
+          '  $launcher = Join-Path $root "node_modules\\openclaw\\openclaw.mjs"',
+          '  $candidate = "@ECHO off`r`nGOTO start`r`n:find_dp0`r`nSET dp0=%~dp0`r`nEXIT /b`r`n:start`r`nSETLOCAL`r`nCALL :find_dp0`r`nnode `"%dp0%\\node_modules\\openclaw\\openclaw.mjs`" %*`r`n"',
+          "  [System.IO.File]::WriteAllText($target, $old)",
+          "  $backup = Start-NpmShimBackup -Path $target -ExpectedLauncher $launcher",
+          "  [System.IO.File]::WriteAllText($target, $candidate)",
+          "  Restore-NpmShimBackup -Backup $backup",
+          "  if ([System.IO.File]::ReadAllText($target) -ne $old) { throw 'failure did not restore old wrapper' }",
+          "  $backup = Start-NpmShimBackup -Path $target -ExpectedLauncher $launcher",
+          "  [System.IO.File]::WriteAllText($target, $candidate)",
+          "  Complete-NpmShimBackup -Backup $backup",
+          "  if ([System.IO.File]::ReadAllText($target) -ne $candidate) { throw 'success did not retain npm shim' }",
+          "  if (Test-Path -LiteralPath $backup.BackupPath) { throw 'committed backup remains' }",
+          "  [System.IO.File]::WriteAllText($target, $old)",
+          "  $backup = Start-NpmShimBackup -Path $target -ExpectedLauncher $launcher",
+          '  [System.IO.File]::WriteAllText($target, "@echo off`r`necho unrelated`r`n")',
+          "  $refused = $false",
+          "  try { Restore-NpmShimBackup -Backup $backup } catch { $refused = $true }",
+          "  if (-not $refused) { throw 'unrelated replacement was deleted' }",
+          "  if ([System.IO.File]::ReadAllText($target) -notmatch 'unrelated') { throw 'unrelated replacement changed' }",
+          "} finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }",
           "",
         ].join("\n"),
       },
@@ -578,6 +707,76 @@ describe("install.ps1 failure handling", () => {
           "",
         ].join("\n"),
       },
+      {
+        name: "transactional-git-clone",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-transactional-clone-" + [guid]::NewGuid().ToString("N"))',
+          "New-Item -ItemType Directory -Path $sandbox | Out-Null",
+          "$script:CloneMode = 'success'",
+          "$script:ConcurrentRepo = $null",
+          "$script:AliasPath = $null",
+          "$script:AliasReplacement = $null",
+          "function git {",
+          "  $target = $args[-1]",
+          "  New-Item -ItemType Directory -Force -Path (Join-Path $target '.git') | Out-Null",
+          "  Set-Content -LiteralPath (Join-Path $target 'checkout.marker') -Value 'complete'",
+          "  if ($script:CloneMode -eq 'failure') { $global:LASTEXITCODE = 42; return }",
+          "  if ($script:CloneMode -eq 'concurrent') {",
+          "    New-Item -ItemType Directory -Path $script:ConcurrentRepo | Out-Null",
+          "    Set-Content -LiteralPath (Join-Path $script:ConcurrentRepo 'user.marker') -Value 'keep'",
+          "  }",
+          "  if ($script:CloneMode -eq 'retarget-alias') {",
+          "    Remove-Item -LiteralPath $script:AliasPath -Force",
+          "    $linkType = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }",
+          "    New-Item -ItemType $linkType -Path $script:AliasPath -Target $script:AliasReplacement | Out-Null",
+          "  }",
+          "  $global:LASTEXITCODE = 0",
+          "}",
+          "try {",
+          "  $successRepo = Join-Path $sandbox 'success'",
+          "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $successRepo",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $successRepo 'checkout.marker'))) { throw 'complete checkout was not published' }",
+          "",
+          "  $emptyRepo = Join-Path $sandbox 'empty'",
+          "  New-Item -ItemType Directory -Path $emptyRepo | Out-Null",
+          "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $emptyRepo",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $emptyRepo 'checkout.marker'))) { throw 'empty destination was not populated' }",
+          "",
+          "  $aliasTarget = Join-Path $sandbox 'alias-target'",
+          "  $script:AliasReplacement = Join-Path $sandbox 'alias-replacement'",
+          "  $script:AliasPath = Join-Path $sandbox 'alias'",
+          "  New-Item -ItemType Directory -Path $aliasTarget | Out-Null",
+          "  New-Item -ItemType Directory -Path $script:AliasReplacement | Out-Null",
+          "  $linkType = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }",
+          "  New-Item -ItemType $linkType -Path $script:AliasPath -Target $aliasTarget | Out-Null",
+          "  $script:CloneMode = 'retarget-alias'",
+          "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $script:AliasPath",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $aliasTarget 'checkout.marker'))) { throw 'original alias target was not populated' }",
+          "  if (@(Get-ChildItem -LiteralPath $script:AliasReplacement -Force).Count -ne 0) { throw 'replacement alias target was modified' }",
+          "",
+          "  $script:CloneMode = 'failure'",
+          "  $failedRepo = Join-Path $sandbox 'failure'",
+          "  $cloneFailed = $false",
+          "  try { New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $failedRepo } catch { $cloneFailed = $true }",
+          "  if (-not $cloneFailed) { throw 'failed clone was accepted' }",
+          "  if (Test-Path -LiteralPath $failedRepo) { throw 'failed clone published its destination' }",
+          "",
+          "  $script:CloneMode = 'concurrent'",
+          "  $script:ConcurrentRepo = Join-Path $sandbox 'concurrent'",
+          "  $publicationFailed = $false",
+          "  try { New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $script:ConcurrentRepo } catch { $publicationFailed = $true }",
+          "  if (-not $publicationFailed) { throw 'concurrent destination was replaced' }",
+          "  if ((Get-Content -LiteralPath (Join-Path $script:ConcurrentRepo 'user.marker') -Raw).Trim() -ne 'keep') { throw 'concurrent destination changed' }",
+          "  if (Test-Path -LiteralPath (Join-Path $script:ConcurrentRepo 'checkout.marker')) { throw 'clone leaked into concurrent destination' }",
+          "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter '.openclaw-clone-*' -Force).Count -ne 0) { throw 'staging directories remain' }",
+          "} finally {",
+          "  Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue",
+          "}",
+          "",
+        ].join("\n"),
+      },
     ];
     const tempDir = harness.createTempDir("openclaw-install-ps1-batch-");
     const fixtures = cases.map((testCase, index) => {
@@ -735,6 +934,22 @@ describe("install.ps1 failure handling", () => {
     expectBatchedPowerShellCase("canonical-temp-root");
   });
 
+  runIfPowerShell("applies the canonical npm lifecycle version policy", () => {
+    expectBatchedPowerShellCase("npm-lifecycle-policy");
+  });
+
+  runIfPowerShell("rejects npm success without a usable candidate package", () => {
+    expectBatchedPowerShellCase("npm-candidate-validation");
+  });
+
+  runIfPowerShell("preserves the npm owner when a git replacement fails", () => {
+    expectBatchedPowerShellCase("method-switch-preservation");
+  });
+
+  runIfPowerShell("restores or commits the same-prefix npm shim transaction", () => {
+    expectBatchedPowerShellCase("same-prefix-shim-transaction");
+  });
+
   runIfPowerShell("installs portable Git from multiple archive roots without collisions", () => {
     expectBatchedPowerShellCase("portable-git-layout");
   });
@@ -758,12 +973,16 @@ describe("install.ps1 failure handling", () => {
 
   it("runs npm install through the resolved command with quiet CI defaults", () => {
     const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
-    expect(npmInstallBody).toContain("$npmOutput = Invoke-NpmCommand -Arguments");
+    expect(npmInstallBody).toContain(
+      "$npmOutput = Invoke-NpmCommand -CommandPath $npmCommand -WorkingDirectory $npmCwd -Arguments",
+    );
     expect(npmInstallBody).toContain("$npmDebugLogRoots = @(Get-NpmDebugLogRootCandidates)");
     expect(npmInstallBody).toContain('$npmInstallArguments = @("install", "-g")');
     expect(npmInstallBody).toContain('Write-Host "[!] npm install failed; retrying once"');
     expect(
-      npmInstallBody.match(/Invoke-NpmCommand -Arguments \$npmInstallArguments/g),
+      npmInstallBody.match(
+        /Invoke-NpmCommand -CommandPath \$npmCommand -WorkingDirectory \$npmCwd -Arguments \$npmInstallArguments/g,
+      ),
     ).toHaveLength(2);
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_LOGLEVEL = "error"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_UPDATE_NOTIFIER = "false"');
@@ -805,6 +1024,10 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain("Assert-GitCheckoutHasCommit -RepoDir $RepoDir");
   });
 
+  runIfPowerShell("publishes fresh Git clones transactionally", () => {
+    expectBatchedPowerShellCase("transactional-git-clone");
+  });
+
   it("runs Windows command shims from a Windows-local cwd", () => {
     const commandSafeBody = extractFunctionBody(source, "Invoke-CommandFromWindowsSafeDirectory");
     const npmCommandBody = extractFunctionBody(source, "Invoke-NpmCommand");
@@ -814,6 +1037,7 @@ describe("install.ps1 failure handling", () => {
     const mainBody = extractFunctionBody(source, "Main");
 
     expect(commandSafeBody).toContain("Get-WindowsCommandSafeDirectory");
+    expect(commandSafeBody).toContain("$WorkingDirectory");
     expect(commandSafeBody).toContain("Push-Location -LiteralPath $safeDir");
     expect(commandSafeBody).toContain("& $CommandPath @Arguments");
     expect(commandSafeBody).toContain("Pop-Location");
@@ -824,7 +1048,11 @@ describe("install.ps1 failure handling", () => {
       'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
     );
     expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
-    expect(mainBody).toContain('Invoke-NpmCommand -Arguments @("uninstall", "-g", "openclaw")');
+    expect(mainBody).toContain("Remove-PreviousNpmOwner");
+    expect(mainBody).toContain("Remove-PreviousGitWrapper");
+    expect(mainBody).toContain("Start-NpmShimBackup");
+    expect(mainBody).toContain("Restore-NpmShimBackup");
+    expect(mainBody).toContain("Complete-NpmShimBackup");
     expect(mainBody).toContain(
       'Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json")',
     );
@@ -881,10 +1109,10 @@ describe("install.ps1 failure handling", () => {
       "} elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge",
     );
     expect(npmInstallBody).toContain(
-      'Invoke-NpmCommand -Arguments @("config", "get", "min-release-age", "--global")',
+      'Invoke-NpmCommand -CommandPath $npmCommand -WorkingDirectory $npmCwd -Arguments @("config", "get", "min-release-age", "--global")',
     );
     expect(npmInstallBody).toContain(
-      'Invoke-NpmCommand -Arguments @("config", "get", "before", "--global")',
+      'Invoke-NpmCommand -CommandPath $npmCommand -WorkingDirectory $npmCwd -Arguments @("config", "get", "before", "--global")',
     );
   });
 
@@ -1016,6 +1244,7 @@ describe("install.ps1 failure handling", () => {
     const pnpmVersionBody = extractFunctionBody(source, "Get-RepoPnpmVersion");
     const pnpmVersionMatchBody = extractFunctionBody(source, "Test-PnpmCommandMatchesVersion");
     const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const transactionalCloneBody = extractFunctionBody(source, "New-TransactionalGitCheckout");
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const nodeOptionsBody = extractFunctionBody(source, "Resolve-NodeOptionsWithMinOldSpace");
     const mainBody = extractFunctionBody(source, "Main");
@@ -1042,7 +1271,8 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
     );
-    expect(gitInstallBody.indexOf("git clone $repoUrl $RepoDir")).toBeLessThan(
+    expect(transactionalCloneBody).toContain("git clone $RepoUrl $stagingDir");
+    expect(gitInstallBody.indexOf("New-TransactionalGitCheckout")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );
     expect(gitInstallBody.indexOf("git -C $RepoDir pull --rebase")).toBeLessThan(
@@ -1100,9 +1330,9 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');
     expect(gitInstallBody).toContain("Test-Path $entryPath");
     expect(gitInstallBody).toContain('Write-Host "[!] OpenClaw build did not produce $entryPath"');
-    expect(gitInstallBody).toContain('node ""$entryPath"" %*');
+    expect(gitInstallBody).toContain("node $entryPath --version");
+    expect(gitInstallBody).toContain("Format-OpenClawGitWrapper -EntryPath $entryPath");
     expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
-    expect(gitInstallBody).not.toContain('node ""$RepoDir\\\\dist\\\\entry.js"" %*');
   });
 
   it("cleans legacy git submodules only from the selected git checkout", () => {
@@ -1142,6 +1372,11 @@ describe("install.ps1 failure handling", () => {
             "function Check-Node { return $true }",
             "function Check-ExistingOpenClaw { return $false }",
             "function Get-NpmCommandPath { return 'npm.cmd' }",
+            "function Invoke-NpmCommand {",
+            "  param([string[]]$Arguments = @(), [string]$CommandPath, [string]$WorkingDirectory)",
+            "  if ($Arguments[0] -eq 'config' -and $Arguments[2] -eq 'prefix') { Write-Output $env:USERPROFILE; $global:LASTEXITCODE = 0; return }",
+            "  throw 'unexpected npm command'",
+            "}",
             "function Install-OpenClaw { return $true }",
             "function Ensure-OpenClawOnPath { return $true }",
             "function Add-ToUserPath { param([string]$Path) }",

@@ -93,7 +93,7 @@ function workerRecoverySessionsList(includeError: boolean) {
           ...(includeError
             ? {
                 recoveryError: "cloud worker disappeared: provider reported lease destroyed",
-                terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+                terminalReason: "stale terminal worker failure",
                 terminalAtMs: now,
               }
             : {}),
@@ -196,6 +196,42 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
     }
   });
 
+  it("renders historical workspace recovery failures from transcript history", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "custom",
+          customType: "cloud-workspace-recovery-failed",
+          content:
+            "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
+          timestamp: Date.now() - 500,
+        },
+      ],
+      methodResponses: { "sessions.list": workerRecoverySessionsList(false) },
+      sessionKey,
+    });
+
+    try {
+      const response = await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+      expect(response?.status()).toBe(200);
+      await page
+        .getByText("OpenClaw preserved the result and will retry.", { exact: false })
+        .waitFor({
+          timeout: 10_000,
+        });
+      await capture(page, "04-workspace-recovery-failed-history.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows a durable selected-chat alert while workspace recovery is pending", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
@@ -225,9 +261,10 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
 
       await gateway.setMethodResponse("sessions.list", workerRecoverySessionsList(true));
       await page.reload();
-      const alert = page.getByRole("alert").filter({ hasText: "Cloud worker failed" });
+      const alert = page.getByRole("alert").filter({ hasText: "Runner failed" });
       await alert.waitFor({ timeout: 10_000 });
       expect(await alert.textContent()).toContain("provider reported lease destroyed");
+      expect(await alert.textContent()).not.toContain("stale terminal worker failure");
       await capture(page, "05-after-workspace-recovery-error.png");
     } finally {
       await context.close();

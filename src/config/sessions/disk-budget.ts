@@ -317,7 +317,7 @@ export async function hasRetainedSessionTranscriptArchives(storePath: string): P
   return files.some((file) => isRetainedSessionTranscriptArchiveName(file.name));
 }
 
-/** Removes oldest retained reset/delete archives, remeasuring physical usage after each file. */
+/** Removes oldest retained archives and legacy compact backups, remeasuring after each file. */
 export async function pruneSessionTranscriptArchivesToHighWater(params: {
   excludeNames?: ReadonlySet<string>;
   highWaterBytes: number;

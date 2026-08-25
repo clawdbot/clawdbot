@@ -1,4 +1,3 @@
-import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
@@ -8,6 +7,7 @@ import type {
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -21,7 +21,10 @@ import type {
   MainSessionRecoveryTransitionResult,
   MainSessionRecoveryView,
 } from "./main-session-recovery-types.js";
-import { MAX_RECOVERY_RETRIES } from "./main-session-restart-recovery-shared.js";
+import {
+  MAX_RECOVERY_RETRIES,
+  resolveRestartRecoveryTerminalClientRunId,
+} from "./main-session-restart-recovery-shared.js";
 
 export type {
   MainSessionRecoveryCommand,
@@ -181,16 +184,39 @@ export function inspectMainRestartRecoveryRolloverEligibility(
   return { eligible: true };
 }
 
+// A recovery aggregate stops owning work once every recorded run has a durable
+// terminal fact and no reservation, foreground claim, tombstone, or delivery
+// claim remains. Such terminal-only residue previously stayed authoritative
+// forever, failing every later admission with "changed while starting work"
+// (#118873). A live admitted recovery run always holds
+// restartRecoveryDeliveryRunId, so that gate keeps active work authoritative.
+export function isMainRestartRecoveryAggregateTerminalOnly(entry: SessionEntry): boolean {
+  const state = entry.mainRestartRecovery;
+  if (!state || state.tombstone || state.reservation || state.foregroundClaims) {
+    return false;
+  }
+  if (entry.restartRecoveryDeliveryRunId !== undefined) {
+    return false;
+  }
+  const runs = entry.restartRecoveryRuns;
+  return (
+    runs !== undefined &&
+    runs.length > 0 &&
+    runs.every((run) => hasRestartRecoveryTerminalRun(entry, run.runId))
+  );
+}
+
 // A healthy session can retain lifecycle fences after its final recovery owner
 // clears. With no active delivery or aggregate, those fences no longer own work.
 function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
   return (
     (entry.status === "running" &&
       entry.abortedLastRun !== true &&
-      entry.restartRecoveryRuns !== undefined &&
-      entry.mainRestartRecovery === undefined &&
       entry.restartRecoveryDeliveryRunId === undefined &&
-      isMainRestartRecoveryCandidate(entry, sessionKey)) ||
+      isMainRestartRecoveryCandidate(entry, sessionKey) &&
+      ((entry.restartRecoveryRuns !== undefined && entry.mainRestartRecovery === undefined) ||
+        // Terminal-only aggregate: every run settled, nothing owns work (#118873).
+        isMainRestartRecoveryAggregateTerminalOnly(entry))) ||
     // Sessions that are not running were permanently unadmittable while holding
     // recovery residue, returning "changed while starting work" forever
     // (production incident 2026-07-26). A row whose status is absent never
@@ -270,10 +296,13 @@ function inspectMainSessionRecoveryForAdmission(params: {
     params.entry.status === "running" &&
     params.entry.abortedLastRun !== true &&
     params.entry.mainRestartRecovery &&
-    params.entry.restartRecoveryRuns?.length
+    params.entry.restartRecoveryRuns?.length &&
+    !isMainRestartRecoveryAggregateTerminalOnly(params.entry)
   ) {
-    // Standalone callers may use another process generation. Any admitted
-    // recovery fence remains authoritative until Gateway lifecycle settlement.
+    // Standalone callers may use another process generation. An admitted
+    // recovery fence remains authoritative until Gateway lifecycle settlement —
+    // but a terminal-only aggregate owns nothing and must not wedge standalone
+    // admission forever (#118873); the Gateway scan retires it durably.
     return { status: "blocked" };
   }
   if (
@@ -295,11 +324,20 @@ export function transitionMainSessionRecovery(
 ): MainSessionRecoveryTransitionResult {
   switch (command.kind) {
     case "mark_interrupted": {
-      if (!entry.mainRestartRecovery) {
+      const state = entry.mainRestartRecovery;
+      if (!state) {
         entry.mainRestartRecovery = createCycle(command.cycleId);
+      } else if (state.foregroundClaims || state.reservation) {
+        // Restart owns continuation now. Process-bound foreground and reservation
+        // leases cannot authorize the old lifecycle after this durable handoff.
+        updateRecoveryState(entry, state, {
+          foregroundClaims: undefined,
+          reservation: undefined,
+        });
       }
       entry.status = "running";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = undefined;
       entry.abortedLastRun = true;
       if (command.resetRuntime) {
         entry.startedAt = undefined;
@@ -354,6 +392,12 @@ export function transitionMainSessionRecovery(
         // but release the stale slot so the next bounded attempt can proceed.
         updateRecoveryState(entry, state, { reservation: undefined });
       }
+      if (entry.abortedLastRun !== true && isMainRestartRecoveryAggregateTerminalOnly(entry)) {
+        // The scan owns retiring dead residue: heal the row durably here so
+        // later admissions — including standalone inspect-only callers — never
+        // meet the stale aggregate (#118873).
+        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+      }
       return {
         kind: "observed",
         view: inspectMainSessionRecovery({
@@ -383,13 +427,7 @@ export function transitionMainSessionRecovery(
       }
       const retryExecutionIdentity =
         command.executionIdentity.state === "enabled" && state.executionIdentity
-          ? state.executionIdentity.runId === command.runId
-            ? state.executionIdentity
-            : createExecutionIdentityAdmissionToken(command.runId, {
-                contextId: state.executionIdentity.contextId,
-                executionId: state.executionIdentity.executionId,
-                now: state.executionIdentity.createdAt,
-              })
+          ? state.executionIdentity
           : undefined;
       const executionIdentityAdmission = retryExecutionIdentity
         ? ({ kind: "retry-reference", token: retryExecutionIdentity } as const)
@@ -429,8 +467,7 @@ export function transitionMainSessionRecovery(
         !entry.restartRecoveryRuns?.some(
           (run) =>
             run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        ) ||
-        command.token.runId !== command.runId
+        )
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
@@ -438,6 +475,9 @@ export function transitionMainSessionRecovery(
         return JSON.stringify(state.executionIdentity) === JSON.stringify(command.token)
           ? { kind: "no_change" }
           : { kind: "rejected", reason: "stale_reservation" };
+      }
+      if (command.token.runId !== command.runId) {
+        return { kind: "rejected", reason: "stale_reservation" };
       }
       updateRecoveryState(entry, state, { executionIdentity: command.token });
       return { kind: "applied" };
@@ -481,6 +521,7 @@ export function transitionMainSessionRecovery(
       });
       entry.abortedLastRun = false;
       entry.lifecycleRunId = command.runId;
+      entry.lastRunId = undefined;
       recordLifecycleFence(entry, {
         runId: command.runId,
         lifecycleGeneration: command.lifecycleGeneration,
@@ -512,6 +553,7 @@ export function transitionMainSessionRecovery(
       }
       entry.status = "running";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = undefined;
       entry.abortedLastRun = true;
       entry.startedAt = undefined;
       entry.endedAt = undefined;
@@ -663,6 +705,7 @@ export function transitionMainSessionRecovery(
       entry.abortedLastRun = false;
       entry.status = "failed";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = resolveRestartRecoveryTerminalClientRunId(entry);
       entry.endedAt = command.now;
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
       entry.updatedAt = command.now;

@@ -1,13 +1,18 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/index.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v3";
-export const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
-export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
+const RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES = [
+  "node-worker-supervisor-v1",
+  "node-worker-supervisor-v2",
+  "node-worker-supervisor-v3",
+  "node-worker-supervisor-v4",
+  "node-worker-supervisor-v5",
+] as const;
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
+export const NODE_WORKER_CAPACITY_MAX = 1_024;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -17,12 +22,16 @@ export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
 } as const;
 
 export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
+export type NodeWorkerCapacitySnapshot = Readonly<{
+  total: number;
+  available: number;
+}>;
 
 export type NodeWorkerHostDeclaration =
   | { enabled: false }
   | {
       enabled: true;
-      capacity: "available" | "full";
+      capacity: NodeWorkerCapacitySnapshot;
       bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
       bundleRetention?: typeof NODE_WORKER_BUNDLE_RETENTION_VERSION;
       bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
@@ -32,14 +41,35 @@ export type NodeRunnerInventoryDeclaration =
   | { protocolFeatures: readonly [] }
   | {
       protocolFeatures: readonly [
-        | typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+        (typeof RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES)[number],
       ];
     }
   | {
       protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
       workerHost: NodeWorkerHostDeclaration;
     };
+
+function parseCapacitySnapshot(value: unknown): NodeWorkerCapacitySnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const keys = Object.keys(value);
+  const total = value.total;
+  const available = value.available;
+  return keys.length === 2 &&
+    keys.includes("total") &&
+    keys.includes("available") &&
+    typeof total === "number" &&
+    typeof available === "number" &&
+    Number.isSafeInteger(total) &&
+    Number.isSafeInteger(available) &&
+    total >= 1 &&
+    total <= NODE_WORKER_CAPACITY_MAX &&
+    available >= 0 &&
+    available <= total
+    ? { total, available }
+    : null;
+}
 
 function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration | null {
   if (!isRecord(value) || typeof value.enabled !== "boolean") {
@@ -49,7 +79,9 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   if (!value.enabled) {
     return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
   }
+  const capacity = parseCapacitySnapshot(value.capacity);
   if (
+    !capacity ||
     keys.length < 2 ||
     keys.length > 5 ||
     !keys.includes("enabled") ||
@@ -62,7 +94,6 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
         key !== "bundleRetention" &&
         key !== "bundleStatus",
     ) ||
-    (value.capacity !== "available" && value.capacity !== "full") ||
     (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
     (value.bundleRetention !== undefined &&
       value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION) ||
@@ -74,7 +105,7 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   }
   return {
     enabled: true,
-    capacity: value.capacity,
+    capacity,
     ...(value.bundlePrewarm === WORKER_BUNDLE_PREWARM_VERSION
       ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION }
       : {}),
@@ -102,21 +133,17 @@ export function parseNodeRunnerInventoryDeclaration(
     return null;
   }
   const feature = value.protocolFeatures[0];
-  if (
-    feature === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
-    feature === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
-  ) {
-    if (
-      keys.length < 1 ||
-      keys.length > 2 ||
-      keys.some((key) => key !== "protocolFeatures" && key !== "workerRuns") ||
-      (value.workerRuns !== undefined && !validateWorkerAdmissionHandshake(value.workerRuns))
-    ) {
-      return null;
-    }
-    // v1/v2 carried the node-local package build in inventory. Keep wire
-    // validation only so shipped nodes receive the explicit update path.
-    return { protocolFeatures: [feature] };
+  const retiredFeature = RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES.find(
+    (candidate) => candidate === feature,
+  );
+  if (retiredFeature) {
+    // Retired payloads never become consent or launch authority; only their marker drives recovery.
+    return keys.length <= 2 &&
+      keys.every(
+        (key) => key === "protocolFeatures" || key === "workerRuns" || key === "workerHost",
+      )
+      ? { protocolFeatures: [retiredFeature] }
+      : null;
   }
   if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {
     return null;

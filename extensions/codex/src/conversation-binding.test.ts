@@ -122,6 +122,10 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
   };
 });
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
+vi.mock("openclaw/plugin-sdk/agent-scope-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-scope-runtime")>()),
+  resolveSessionAgentIds: agentRuntimeMocks.resolveSessionAgentIds,
+}));
 
 import {
   consumeCodexAppServerLiveThread,
@@ -364,7 +368,8 @@ function conversationThreadStartResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.147.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -737,6 +742,7 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params.ephemeral).toBe(true);
+    expect(requests[0]?.params.config).toMatchObject({ project_doc_max_bytes: 131_072 });
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       authProfileId: "openai:default",
@@ -784,6 +790,13 @@ describe("codex conversation binding", () => {
     async ({ sourceSessionKey, destinationSessionKey, ephemeral, turnFails }) => {
       const sessionFile = path.join(tempDir, "mixed-source-lifecycle.jsonl");
       const bindingId = "binding-mixed-source-lifecycle";
+      const storePath = path.join(tempDir, "mixed-source-lifecycle.sqlite");
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: sourceSessionKey ?? "agent:main:source-without-key",
+        storePath,
+        entry: { sessionId: "source-mixed-lifecycle", updatedAt: Date.now() },
+      });
       const operations: Array<{ method: string; params: Record<string, unknown> }> = [];
       const notificationHandlers = new Set<(notification: unknown) => void>();
       const client = {
@@ -848,7 +861,11 @@ describe("codex conversation binding", () => {
       };
       ctx.pluginBinding.data = data;
 
-      await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toMatchObject({
+      await expect(
+        handleCodexConversationInboundClaim(event, ctx, {
+          config: { session: { store: storePath } },
+        }),
+      ).resolves.toMatchObject({
         handled: true,
         reply: {
           text: turnFails
@@ -918,6 +935,56 @@ describe("codex conversation binding", () => {
       await expect(
         testCodexAppServerBindingStore.read({ kind: "conversation", bindingId }),
       ).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(["missing", "rebound"] as const)(
+    "fails closed before client startup when the source session is %s",
+    async (sourceState) => {
+      const bindingId = `binding-${sourceState}-source`;
+      const sessionFile = path.join(tempDir, `${sourceState}-source.jsonl`);
+      const storePath = path.join(tempDir, `${sourceState}-source.sqlite`);
+      const source = {
+        agentId: "main",
+        sessionId: "source-session",
+        sessionKey: "agent:main:source-session",
+        threadId: "thread-source",
+      };
+      if (sourceState === "rebound") {
+        await upsertSessionEntry({
+          agentId: source.agentId,
+          sessionKey: source.sessionKey,
+          storePath,
+          entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+        });
+      }
+      await testCodexAppServerBindingStore.mutate(
+        { kind: "conversation", bindingId },
+        { kind: "set", binding: { threadId: "thread-bound", cwd: tempDir } },
+      );
+      const { event, ctx } = boundConversationClaim(sessionFile);
+      ctx.pluginBinding.data = {
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId,
+        workspaceDir: tempDir,
+        source,
+      };
+      sharedClientMocks.getSharedCodexAppServerClient.mockRejectedValue(
+        new Error("Codex client must not start"),
+      );
+
+      await expect(
+        handleCodexConversationInboundClaim(event, ctx, {
+          config: { session: { store: storePath } },
+        }),
+      ).resolves.toMatchObject({
+        handled: true,
+        reply: {
+          text: expect.stringContaining("source session is missing or no longer current"),
+        },
+      });
+      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
     },
   );
 
@@ -1005,10 +1072,10 @@ describe("codex conversation binding", () => {
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
 
     await startCodexConversationThread({
+      pluginConfig: { appServer: { sandbox: "read-only" } },
       sessionFile,
       threadId: "thread-native-child",
       workspaceDir: tempDir,
-      sandbox: "read-only",
     });
 
     expect(requests.map(({ method }) => method)).toEqual(["thread/unsubscribe", "thread/resume"]);
@@ -1016,7 +1083,11 @@ describe("codex conversation binding", () => {
     expect(requests[1]?.params).toMatchObject({
       threadId: "thread-native-child",
       sandbox: "read-only",
-      config: { apps: { _default: { enabled: false } }, "features.apps": false },
+      config: {
+        project_doc_max_bytes: 131_072,
+        apps: { _default: { enabled: false } },
+        "features.apps": false,
+      },
     });
     await expect(consumeCodexAppServerLiveThread(client, "thread-native-child")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
@@ -1935,12 +2006,59 @@ describe("codex conversation binding", () => {
         config: {
           tools: { exec: { host: "gateway" } },
           agents: {
-            list: [
-              {
-                id: "bot-a",
-                tools: { exec: { host: "node", node: "worker-1" } },
-              },
-            ],
+            entries: {
+              "bot-a": { tools: { exec: { host: "node", node: "worker-1" } } },
+            },
+          },
+        } as never,
+      },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain("OpenClaw exec host=node is active");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("does not infer an unscoped session owner from an explicit multi-agent roster", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "node-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "node-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentId: "alpha",
+          },
+        },
+      },
+      {
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: {
+            entries: {
+              alpha: { tools: { exec: { host: "node", node: "worker-1" } } },
+              beta: {},
+            },
           },
         } as never,
       },
@@ -2085,7 +2203,7 @@ describe("codex conversation binding", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("keeps bound agent approval policy ahead of different-agent session overrides", async () => {
+  it("ignores legacy session exec overlays when no canonical permission mode exists", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const storePath = path.join(tempDir, "sessions.json");
     await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
@@ -2132,7 +2250,7 @@ describe("codex conversation binding", () => {
             version: 1,
             sessionFile,
             workspaceDir: tempDir,
-            agentId: "bot-a",
+            agentId: "main",
           },
         },
       },
@@ -2140,23 +2258,7 @@ describe("codex conversation binding", () => {
         timeoutMs: 50,
         config: {
           session: { store: storePath },
-          tools: {
-            exec: {
-              mode: "full",
-            },
-          },
-          agents: {
-            list: [
-              {
-                id: "bot-a",
-                tools: {
-                  exec: {
-                    mode: "auto",
-                  },
-                },
-              },
-            ],
-          },
+          tools: { exec: { mode: "ask" } },
         } as never,
       },
     );
@@ -2216,8 +2318,33 @@ describe("codex conversation binding", () => {
     expect(resumeCodexCliSessionOnNode).not.toHaveBeenCalled();
   });
 
-  it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
+  it("re-reads source-owned permission roots while recovering a missing bound thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const storePath = path.join(tempDir, "recovery.sqlite");
+    const source = {
+      agentId: "main",
+      sessionId: "recovery-source",
+      sessionKey: "agent:main:recovery-source",
+      threadId: "thread-source",
+    };
+    const recoveredRoot = path.join(tempDir, "recovered-root");
+    await upsertSessionEntry({
+      ...source,
+      storePath,
+      entry: {
+        sessionId: source.sessionId,
+        updatedAt: Date.now(),
+        permissionMode: "full",
+        sessionRoot: tempDir,
+      },
+    });
+    codexRequirementsTomlMock.mockReturnValue(
+      [
+        'allowed_sandbox_modes = ["workspace-write"]',
+        'allowed_approval_policies = ["on-request"]',
+        'allowed_approvals_reviewers = ["auto_review"]',
+      ].join("\n"),
+    );
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
@@ -2234,8 +2361,8 @@ describe("codex conversation binding", () => {
       authProfileId: "work",
       model: "gpt-5.4-mini",
       modelProvider: "openai",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
       serviceTier: "fast",
     });
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -2244,6 +2371,16 @@ describe("codex conversation binding", () => {
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
         if (method === "turn/start" && requestParams.threadId === "thread-old") {
+          await upsertSessionEntry({
+            ...source,
+            storePath,
+            entry: {
+              sessionId: source.sessionId,
+              updatedAt: Date.now(),
+              permissionMode: "workspace",
+              sessionRoot: recoveredRoot,
+            },
+          });
           throw new Error("thread not found: thread-old");
         }
         if (method === "thread/start") {
@@ -2305,13 +2442,18 @@ describe("codex conversation binding", () => {
           boundAt: Date.now(),
           data: {
             kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
+            version: 2,
+            bindingId: legacyCodexConversationBindingId(sessionFile),
             workspaceDir: tempDir,
+            source: {
+              agentId: source.agentId,
+              sessionId: source.sessionId,
+              threadId: source.threadId,
+            },
           },
         },
       },
-      { timeoutMs: 500 },
+      { config: { session: { store: storePath } }, timeoutMs: 500 },
     );
 
     expect(result).toEqual({ handled: true, reply: { text: "Recovered" } });
@@ -2324,19 +2466,36 @@ describe("codex conversation binding", () => {
       authProfileId?: unknown;
     };
     expect(sharedClientParams?.authProfileId).toBe("work");
+    expect(requests[0]?.params).toMatchObject({
+      cwd: tempDir,
+      runtimeWorkspaceRoots: [tempDir],
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    });
     expect(requests[1]?.params.model).toBe("gpt-5.4-mini");
-    expect(requests[1]?.params.approvalPolicy).toBe("on-request");
-    expect(requests[1]?.params.sandbox).toBe("workspace-write");
+    expect(requests[1]?.params).toMatchObject({
+      cwd: recoveredRoot,
+      runtimeWorkspaceRoots: [recoveredRoot],
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+      sandbox: "workspace-write",
+    });
     expect(requests[1]?.params.serviceTier).toBe("priority");
     expect(requests[1]?.params).not.toHaveProperty("modelProvider");
     expect(requests[2]?.params.threadId).toBe("thread-new");
-    expect(requests[2]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[2]?.params).toMatchObject({
+      cwd: recoveredRoot,
+      runtimeWorkspaceRoots: [recoveredRoot],
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: [recoveredRoot] },
+    });
     expect(requests[2]?.params.serviceTier).toBe("priority");
     const savedBinding = await readTestConversationBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-new");
     expect(savedBinding?.authProfileId).toBe("work");
-    expect(savedBinding?.approvalPolicy).toBe("on-request");
-    expect(savedBinding?.sandbox).toBe("workspace-write");
+    expect(savedBinding).not.toHaveProperty("approvalPolicy");
+    expect(savedBinding).not.toHaveProperty("sandbox");
     expect(savedBinding?.serviceTier).toBe("priority");
     expect(savedBinding).not.toHaveProperty("modelProvider");
   });
@@ -2424,7 +2583,7 @@ describe("codex conversation binding", () => {
     });
   });
 
-  it("moves bounded visible session history into an isolated owned conversation thread", async () => {
+  it("moves bounded visible session history while clamping source-owned conversation permissions", async () => {
     const source = {
       agentId: "main",
       sessionId: "source-session",
@@ -2435,8 +2594,31 @@ describe("codex conversation binding", () => {
     await upsertSessionEntry({
       ...source,
       storePath,
-      entry: { sessionId: source.sessionId, updatedAt: Date.now() },
+      entry: {
+        sessionId: source.sessionId,
+        updatedAt: Date.now(),
+        permissionMode: "full",
+        sessionRoot: tempDir,
+      },
     });
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:destination-session",
+      storePath,
+      entry: {
+        sessionId: "destination-session",
+        updatedAt: Date.now(),
+        execSecurity: "full",
+        execAsk: "off",
+      },
+    });
+    codexRequirementsTomlMock.mockReturnValue(
+      [
+        'allowed_sandbox_modes = ["workspace-write"]',
+        'allowed_approval_policies = ["on-request"]',
+        'allowed_approvals_reviewers = ["auto_review"]',
+      ].join("\n"),
+    );
     await appendSessionTranscriptMessageByIdentity({
       ...source,
       storePath,
@@ -2459,6 +2641,10 @@ describe("codex conversation binding", () => {
         threadId: source.threadId,
         clientId: "source-client",
         cwd: tempDir,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
         dynamicToolsFingerprint: "harness-only-tools",
       },
     });
@@ -2509,7 +2695,10 @@ describe("codex conversation binding", () => {
       client,
       release: vi.fn(),
     });
-    const { event, ctx } = boundConversationClaim(path.join(tempDir, "session.jsonl"));
+    const { event, ctx } = boundConversationClaim(
+      path.join(tempDir, "session.jsonl"),
+      "agent:main:destination-session",
+    );
     ctx.pluginBinding.data = {
       kind: "codex-app-server-session" as const,
       version: 2 as const,
@@ -2532,8 +2721,20 @@ describe("codex conversation binding", () => {
       "turn/start",
     ]);
     expect(requests[0]?.params).toMatchObject({
+      cwd: tempDir,
+      runtimeWorkspaceRoots: [tempDir],
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
       developerInstructions: expect.stringContaining("bound to an OpenClaw conversation"),
       config: { apps: { _default: { enabled: false } }, "features.apps": false },
+    });
+    expect(requests[2]?.params).toMatchObject({
+      cwd: tempDir,
+      runtimeWorkspaceRoots: [tempDir],
+      sandboxPolicy: { type: "workspaceWrite" },
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
     });
     expect(requests[0]?.params).not.toHaveProperty("dynamicTools");
     expect(requests[1]?.params.items).toMatchObject([
@@ -2563,6 +2764,13 @@ describe("codex conversation binding", () => {
       sessionId: source.sessionId,
       sessionKey: source.sessionKey,
     };
+    const storePath = path.join(tempDir, "active-source.sqlite");
+    await upsertSessionEntry({
+      agentId: source.agentId,
+      sessionKey: source.sessionKey,
+      storePath,
+      entry: { sessionId: source.sessionId, updatedAt: Date.now() },
+    });
     await testCodexAppServerBindingStore.mutate(sourceIdentity, {
       kind: "set",
       binding: { threadId: source.threadId, clientId: "active-client", cwd: tempDir },
@@ -2610,7 +2818,10 @@ describe("codex conversation binding", () => {
     };
 
     try {
-      const result = await handleCodexConversationInboundClaim(event, ctx, { timeoutMs: 500 });
+      const result = await handleCodexConversationInboundClaim(event, ctx, {
+        config: { session: { store: storePath } },
+        timeoutMs: 500,
+      });
 
       expect(result?.reply?.text).toContain("active run");
       expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);

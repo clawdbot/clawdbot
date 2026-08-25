@@ -17,8 +17,8 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanSnapshot
 import ai.openclaw.app.chat.ChatPlanStepStatus
+import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
@@ -65,6 +65,7 @@ import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import ai.openclaw.app.ui.sessionPresentationTitle
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -302,7 +303,7 @@ fun ChatScreen(
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
-  val planSnapshot by viewModel.chatPlanSnapshot.collectAsState()
+  val progressCard by viewModel.chatProgressCard.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val swarmGroups by viewModel.chatSwarmGroups.collectAsState()
   val sessionBranches by viewModel.chatSessionBranches.collectAsState()
@@ -787,8 +788,8 @@ fun ChatScreen(
       modifier = Modifier.weight(1f),
     )
 
-    if (pendingRunCount > 0 && planSnapshot.steps.isNotEmpty()) {
-      PlanChecklistPill(plan = planSnapshot)
+    progressCard?.let { card ->
+      ProgressCardPill(card = card)
     }
 
     ChatSwarmProgress(groups = swarmGroups)
@@ -1404,6 +1405,7 @@ private fun ChatMessageList(
               resolveInlineWidgetResource = resolveInlineWidgetResource,
               loadImageArtifact = loadImageArtifact,
               loadMediaArtifact = loadMediaArtifact,
+              senderLabel = item.message.senderLabel,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -1709,12 +1711,14 @@ internal fun ChatBubble(
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  senderLabel: String? = null,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
+  val peerSenderLabel = senderLabel?.trim()?.takeIf { isUser && it.isNotEmpty() }
   val speaker =
     when {
-      isUser -> nativeString("You")
+      isUser -> peerSenderLabel ?: nativeString("You")
       normalizedRole == "system" -> nativeString("System")
       else -> nativeString("OpenClaw")
     }
@@ -1722,6 +1726,7 @@ internal fun ChatBubble(
     when {
       live -> nativeString("OpenClaw · Live")
       normalizedRole == "system" -> nativeString("System")
+      peerSenderLabel != null -> peerSenderLabel
       else -> null
     }
   var visibleImageCount = 0
@@ -2125,13 +2130,13 @@ private fun ChatNotice(
 }
 
 @Composable
-private fun PlanChecklistPill(plan: ChatPlanSnapshot) {
+private fun ProgressCardPill(card: ChatProgressCard) {
   var expanded by rememberSaveable { mutableStateOf(false) }
-  val steps = plan.steps
+  val steps = card.steps
   val currentStep =
     steps.firstOrNull { it.status == ChatPlanStepStatus.InProgress }
+      ?: steps.firstOrNull { it.status == ChatPlanStepStatus.Pending }
       ?: steps.lastOrNull { it.status == ChatPlanStepStatus.Completed }
-      ?: steps.first()
   val completedCount = steps.count { it.status == ChatPlanStepStatus.Completed }
 
   Surface(
@@ -2149,24 +2154,26 @@ private fun PlanChecklistPill(plan: ChatPlanSnapshot) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        PlanStepMarker(status = currentStep.status)
+        currentStep?.let { PlanStepMarker(status = it.status) }
         Text(
-          text = currentStep.step,
+          text = currentStep?.step ?: nativeString("Progress note"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.text,
           modifier = Modifier.weight(1f),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        Text(
-          text = "$completedCount/${steps.size}",
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-        )
+        if (steps.isNotEmpty()) {
+          Text(
+            text = "$completedCount/${steps.size}",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+          )
+        }
         Icon(
           imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-          contentDescription = if (expanded) nativeString("Collapse plan checklist") else nativeString("Expand plan checklist"),
+          contentDescription = if (expanded) nativeString("Collapse progress card") else nativeString("Expand progress card"),
           modifier = Modifier.size(16.dp),
           tint = ClawTheme.colors.textSubtle,
         )
@@ -2175,12 +2182,11 @@ private fun PlanChecklistPill(plan: ChatPlanSnapshot) {
       if (expanded) {
         HorizontalDivider(color = ClawTheme.colors.border)
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-          plan.explanation?.let { explanation ->
-            Text(
-              text = explanation,
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-              modifier = Modifier.padding(start = 22.dp),
+          card.markdown?.let { markdown ->
+            ChatMarkdown(
+              text = markdown,
+              textColor = ClawTheme.colors.text,
+              isStreaming = false,
             )
           }
           steps.forEach { step ->
@@ -3035,18 +3041,21 @@ private fun currentSessionTitle(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
 ): String {
-  val entry = sessions.firstOrNull { it.key == sessionKey }
-  val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return nativeString("New chat")
+  val entry = sessions.firstOrNull { it.key == sessionKey } ?: return nativeString("New chat")
+  val name = sessionPresentationTitle(entry) { nativeString("New chat") }
   return friendlySessionName(name)
 }
 
-private fun chatSessionChipText(
+internal fun chatSessionChipText(
   entry: ChatSessionEntry,
   mainSessionKey: String,
 ): String {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return nativeString("Main")
-  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+  val name =
+    sessionPresentationTitle(entry) {
+      entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+    }
   return friendlySessionName(name)
 }
 

@@ -3,10 +3,7 @@
  *
  * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
  */
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -21,8 +18,10 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
+  stringEnum,
 } from "../schema/typebox.js";
 import {
+  describeSessionLinkRule,
   describeSessionsListTool,
   describeSessionVisibilityScope,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -50,12 +49,13 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
+  SESSION_LIST_KINDS,
   type GatewaySessionListRow,
   type SessionListRow,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  kinds: Type.Optional(Type.Array(Type.String())),
+  kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: optionalPositiveIntegerSchema(),
   activeMinutes: optionalPositiveIntegerSchema(),
   messageLimit: optionalNonNegativeIntegerSchema(),
@@ -72,18 +72,12 @@ const SessionListRowOutputSchema = Type.Object(
     key: Type.String(),
     sessionId: Type.Optional(Type.String()),
     agentId: Type.String(),
-    kind: Type.Union([
-      Type.Literal("main"),
-      Type.Literal("group"),
-      Type.Literal("cron"),
-      Type.Literal("hook"),
-      Type.Literal("node"),
-      Type.Literal("other"),
-    ]),
+    kind: stringEnum(SESSION_LIST_KINDS),
     channel: Type.String(),
     archived: Type.Boolean(),
     pinned: Type.Boolean(),
     label: Type.Optional(Type.String()),
+    category: Type.Optional(Type.String()),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -113,6 +107,11 @@ const SessionsListOutputSchema = Type.Object(
   {
     count: Type.Number(),
     sessions: Type.Array(SessionListRowOutputSchema),
+    sessionLinkRule: Type.Optional(
+      Type.String({
+        description: "How to build Control UI URLs for sessionKey values in this result.",
+      }),
+    ),
     visibility: Type.Optional(
       Type.Object(
         {
@@ -148,12 +147,13 @@ export function createSessionsListTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionLinkBase?: string;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsListTool(),
+    description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
     execute: async (_toolCallId, args) => {
@@ -177,13 +177,13 @@ export function createSessionsListTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
 
-      const kindsRaw = readStringArrayParam(params, "kinds")
-        ?.map((value) => normalizeOptionalLowercaseString(value))
-        .filter((value): value is string => Boolean(value));
-      const allowedKindsList = (kindsRaw ?? []).filter((value) =>
-        ["main", "group", "cron", "hook", "node", "other"].includes(value),
-      );
-      const allowedKinds = allowedKindsList.length ? new Set(allowedKindsList) : undefined;
+      const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) => value.toLowerCase());
+      const requestedKinds = params.kinds;
+      const allowedKinds =
+        (Array.isArray(requestedKinds) || typeof requestedKinds === "string") &&
+        requestedKinds.length > 0
+          ? new Set(kindsRaw)
+          : undefined;
 
       const limit = readPositiveIntegerParam(params, "limit");
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
@@ -370,6 +370,7 @@ export function createSessionsListTool(opts?: {
           typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
         const stateVersion = stateVersions[stateVersionAgentId]?.[key];
         const rowLabel = readStringValue(entry.label);
+        const category = readStringValue(entry.category);
         const displayName = readStringValue(entry.displayName);
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
@@ -390,6 +391,8 @@ export function createSessionsListTool(opts?: {
           : undefined;
         const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : undefined;
         const model = readStringValue(entry.model);
+        // sessions.list owns runtime/context provenance; this tool only filters and
+        // narrows its GatewaySessionListRow without reinterpreting raw session state.
         const contextTokens =
           typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
         const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
@@ -419,6 +422,7 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           ...(rowLabel ? { label: rowLabel } : {}),
+          ...(category ? { category } : {}),
           ...(displayName ? { displayName } : {}),
           ...(derivedTitle ? { derivedTitle } : {}),
           ...(lastMessagePreview ? { lastMessagePreview } : {}),
@@ -528,6 +532,9 @@ export function createSessionsListTool(opts?: {
       return jsonResult({
         count: rows.length,
         sessions: rows,
+        ...(opts?.sessionLinkBase
+          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+          : {}),
         ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
     },

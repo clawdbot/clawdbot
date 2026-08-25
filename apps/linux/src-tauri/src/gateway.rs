@@ -220,13 +220,14 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
     let (response, output) =
         match cli.json::<DashboardResponse, _, _>(["dashboard", "--json", "--no-open"]) {
             Ok(result) => result,
+            // Older CLIs reject the app's own --json flag (prose on stdout, or a nonzero
+            // exit naming the flag); both mean the same missing integration, not a failure
+            // the user can repair in place.
             Err(crate::cli::CliError::InvalidJson(_)) => {
-                return Err(
-                    "The installed OpenClaw CLI does not support the desktop dashboard \
-                 integration. Update OpenClaw (for example: npm install -g openclaw@latest), \
-                 then retry."
-                        .to_string(),
-                );
+                return Err(unsupported_dashboard_integration());
+            }
+            Err(crate::cli::CliError::CommandFailed(message)) if message.contains("\"--json\"") => {
+                return Err(unsupported_dashboard_integration());
             }
             Err(error) => return Err(error.to_string()),
         };
@@ -252,6 +253,13 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
     Err(response
         .reason
         .unwrap_or_else(|| "Dashboard is not ready.".to_string()))
+}
+
+fn unsupported_dashboard_integration() -> String {
+    "The installed OpenClaw CLI does not support the desktop dashboard integration. \
+     Choose the Beta or Development release channel and install again, or wait for \
+     the next stable release."
+        .to_string()
 }
 
 fn dashboard_token(dashboard_url: &str) -> Result<Option<String>, String> {

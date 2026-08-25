@@ -1,7 +1,7 @@
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MAX_COMMAND_DETAIL_CHARS = 512;
 
@@ -11,7 +11,7 @@ function crabboxCommandDetail(result: SpawnResult): string {
     return "";
   }
   const compressed = redactSensitiveText(raw).replace(/\s+/gu, " ");
-  const redacted = truncateUtf16Safe(compressed, MAX_COMMAND_DETAIL_CHARS);
+  const redacted = sliceUtf16Safe(compressed, -MAX_COMMAND_DETAIL_CHARS);
   return redacted ? `: ${redacted}` : "";
 }
 

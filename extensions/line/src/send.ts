@@ -7,6 +7,10 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -37,6 +41,10 @@ const userProfileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
+const LINE_LOCATION_LABEL_LIMIT = 100;
+// This cap bounds receipts and diagnostics: overflow after acceptance becomes no-retry partial
+// delivery, while rejected responses keep their status with prefix-only diagnostics.
+const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
 function cacheUserProfile(
   userId: string,
@@ -196,19 +204,23 @@ async function sendLineProviderMessages(
   const acceptedRetryConflict = retryKey !== undefined && response.status === 409;
 
   if (!response.ok && !acceptedRetryConflict) {
+    const body = await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES).catch(
+      () => "",
+    );
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      body: await response.text(),
+      body,
     });
   }
 
   try {
-    const text = await response.text();
-    return (text ? JSON.parse(text) : null) as
-      | messagingApi.PushMessageResponse
-      | messagingApi.ReplyMessageResponse;
+    return await readProviderJsonResponse<
+      messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse
+    >(response, `LINE ${operation} response`, {
+      maxBytes: LINE_PROVIDER_RESPONSE_MAX_BYTES,
+    });
   } catch (error) {
     // LINE accepted this exact request before its receipt became unreadable; retrying duplicates it.
     throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
@@ -257,14 +269,29 @@ function isValidLineLocation(location: LineLocation): boolean {
   return location.title.trim().length > 0 && location.address.trim().length > 0;
 }
 
-export function createLocationMessage(location: LineLocation): LocationMessage | null {
+// A pin LINE will not render still carries the values the sender wrote, and the
+// coordinates are always present, so the location degrades to the text it was
+// made of instead of vanishing from the reply.
+function locationTextFallback(location: LineLocation): TextMessage {
+  // The pin caps each label, and so must the fallback: an unbounded label would
+  // breach LINE's text limit and lose the location the same silent way.
+  const authored = [location.title, location.address]
+    .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
+    .filter(Boolean);
+  return {
+    type: "text",
+    text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
+  };
+}
+
+export function createLocationMessage(location: LineLocation): LocationMessage | TextMessage {
   if (!isValidLineLocation(location)) {
-    return null;
+    return locationTextFallback(location);
   }
   return {
     type: "location",
-    title: truncateUtf16Safe(location.title, 100),
-    address: truncateUtf16Safe(location.address, 100),
+    title: truncateUtf16Safe(location.title, LINE_LOCATION_LABEL_LIMIT),
+    address: truncateUtf16Safe(location.address, LINE_LOCATION_LABEL_LIMIT),
     latitude: location.latitude,
     longitude: location.longitude,
   };
@@ -528,11 +555,7 @@ export async function pushLocationMessage(
   location: LineLocation,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  const message = createLocationMessage(location);
-  if (!message) {
-    throw new Error("LINE location title and address must be non-empty");
-  }
-  return pushLineMessages(to, [message], opts, {
+  return pushLineMessages(to, [createLocationMessage(location)], opts, {
     verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
   });
 }

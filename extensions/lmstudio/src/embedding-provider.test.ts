@@ -350,6 +350,8 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
           providers: {
             "lmstudio-spark": {
               baseUrl: "http://spark.local:1234/v1",
+              apiKey: "provider-host-key",
+              headers: { "X-Provider-Tenant": "provider-a" },
               localService: { command: process.execPath },
               models: [{ id: EMBEDDING_MODEL }],
             },
@@ -359,13 +361,42 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       provider: "lmstudio-spark",
       model: `lmstudio-spark/${EMBEDDING_MODEL}`,
       fallback: "none",
-      remote: { baseUrl: "http://memory.local:1234/v1" },
+      remote: {
+        baseUrl: "http://memory.local:1234/v1",
+        headers: { "X-Remote-Tenant": "remote-b" },
+      },
       acquireLocalService,
     };
-    const { provider } = await createLmstudioEmbeddingProvider(options);
+    const { provider, client } = await createLmstudioEmbeddingProvider(options);
 
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
     expect(acquireLocalService).not.toHaveBeenCalled();
+    expect(client.headers).toEqual({
+      "Content-Type": "application/json",
+      "X-Remote-Tenant": "remote-b",
+    });
+  });
+
+  it("does not inherit primary remote headers when LM Studio activates as a fallback", async () => {
+    const { client } = await createLmstudioEmbeddingProvider({
+      config: buildConfig({
+        provider: {
+          params: { preload: false },
+          headers: { "X-Provider-Tenant": "provider-a" },
+        },
+      }),
+      provider: "google",
+      model: EMBEDDING_MODEL,
+      fallback: "lmstudio",
+      remote: {
+        baseUrl: "http://memory.local:1234/v1",
+        apiKey: "primary-provider-key",
+        headers: { "X-Remote-Tenant": "remote-b" },
+      },
+    });
+
+    expect(client.baseUrl).toBe("http://localhost:1234/v1");
+    expect(client.headers).toEqual({ "Content-Type": "application/json" });
   });
 
   it("preserves a scheme-added /api/v1 local service target", async () => {
@@ -422,6 +453,50 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       provider: "lmstudio-spark",
       baseUrl: "http://spark.local:1234/v1",
       model: EMBEDDING_MODEL,
+    });
+  });
+
+  it("keeps API key rotation out of memory identity without dropping tenant headers", async () => {
+    const readIdentity = async (headers: Record<string, string>) =>
+      (
+        await lmstudioMemoryEmbeddingProviderAdapter.create({
+          config: buildConfig({ provider: { params: { preload: false } } }),
+          provider: "lmstudio",
+          model: EMBEDDING_MODEL,
+          fallback: "none",
+          remote: { headers },
+        })
+      ).runtime?.cacheKeyData;
+
+    const defaultIdentity = await readIdentity({});
+    const firstTenant = await readIdentity({
+      Authorization: "Bearer synthetic-before",
+      "X-API-KEY": "synthetic-key-before",
+      "X-Tenant": "tenant-a",
+    });
+    const rotatedTenant = await readIdentity({
+      Authorization: "Bearer synthetic-after",
+      "x-Api-Key": "synthetic-key-after",
+      "X-Tenant": "tenant-a",
+    });
+    const otherTenant = await readIdentity({
+      "X-Api-Key": "synthetic-key-after",
+      "X-Tenant": "tenant-b",
+    });
+
+    expect(defaultIdentity).toEqual({
+      provider: "lmstudio",
+      baseUrl: "http://localhost:1234/v1",
+      model: EMBEDDING_MODEL,
+      headers: [["Content-Type", "application/json"]],
+    });
+    expect(firstTenant).toEqual(rotatedTenant);
+    expect(firstTenant).not.toEqual(otherTenant);
+    expect(firstTenant).toMatchObject({
+      headers: [
+        ["Content-Type", "application/json"],
+        ["X-Tenant", "tenant-a"],
+      ],
     });
   });
 });

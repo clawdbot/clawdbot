@@ -44,7 +44,7 @@ function makeDistinctImageRef(index: number): string {
 
 async function executeNativeImageTool(imageCount: number): Promise<AgentMessage> {
   const result = await createRequiredImageTool().execute("native-image-context", {
-    images: Array.from({ length: imageCount }, (_, index) => makeDistinctImageRef(index)),
+    paths: Array.from({ length: imageCount }, (_, index) => makeDistinctImageRef(index)),
   });
   const content = result.content as ContentBlock[];
   expect(content[0]?.text).toBe(
@@ -58,7 +58,7 @@ async function executeNativeImageTool(imageCount: number): Promise<AgentMessage>
   return castAgentMessage({
     role: "toolResult",
     toolCallId: "native-image-context",
-    toolName: "image",
+    toolName: "view_image",
     isError: false,
     timestamp: 0,
     ...result,

@@ -25,6 +25,8 @@ function buildNodeInstallEnvironmentValueSources(): Record<
   return {
     OPENCLAW_GATEWAY_TOKEN: "file",
     OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+    CF_ACCESS_CLIENT_ID: "file",
+    CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
   };
 }
 

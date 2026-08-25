@@ -3,7 +3,6 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
-import { sidePanelHeaderActions } from "../chat-pane-embedded-panels.ts";
 import {
   openSlot,
   setSidebarDock,
@@ -82,15 +81,24 @@ describe("chat sidebar region", () => {
     expect(root(region).querySelector('[data-panel="detail"]')).not.toBeNull();
   });
 
-  it("keeps the destructive companion clear reachable, behind the active panel's overflow menu", async () => {
+  it("renders the active panel's supplied dropdown without hoisting its destructive action", async () => {
     const onClear = vi.fn();
     const region = await createRegion(openSlot(openSlot({ columns: [] }, "detail"), "companion"));
-    region.panelActions = sidePanelHeaderActions({
-      connected: true,
-      pendingQuestion: null,
-      discussionOpenUrl: null,
-      onClearCompanion: onClear,
-    });
+    // This representative action exercises the region contract; the app E2E
+    // separately verifies the production Side chat action's exact markup.
+    region.panelActions = {
+      companion: html`<wa-dropdown
+        class="chat-session-rail__menu"
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+          if (event.detail.item.value === "clear") {
+            onClear();
+          }
+        }}
+      >
+        <button slot="trigger" type="button">More</button>
+        <wa-dropdown-item value="clear">Clear</wa-dropdown-item>
+      </wa-dropdown>`,
+    };
     await region.updateComplete;
 
     const actions = root(region).querySelector(".side-panel__action-group--content");
@@ -174,7 +182,7 @@ describe("chat sidebar region", () => {
       Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Ctrl+`", "⇧⌘B"]);
+    ).toEqual(["Ctrl+`", "Ctrl+Shift+B"]);
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
@@ -221,7 +229,7 @@ describe("chat sidebar region", () => {
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review", "Terminal Ctrl+`", "Files ⇧⌘B", "Side chat"]);
+    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat"]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
   });
@@ -274,7 +282,7 @@ describe("chat sidebar region", () => {
     ).toEqual([
       "Terminal Ctrl+`",
       "Browser",
-      "Files ⇧⌘B",
+      "Files Ctrl+Shift+B",
       "Side chat",
       "Tasks",
       "Desktop",
@@ -314,6 +322,7 @@ describe("chat sidebar region", () => {
 
   it("offers expand and minimize controls in the no-tabs selector", async () => {
     const region = await createRegion({ columns: [], open: true });
+    expect(root(region).querySelector<HTMLElement>(".side-panel")?.style.width).toBe("480px");
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
     expect(region.callbacks?.setExpanded).toHaveBeenCalledWith(true);

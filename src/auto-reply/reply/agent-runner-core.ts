@@ -8,7 +8,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -20,7 +19,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import {
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -41,6 +40,7 @@ import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./q
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -144,18 +144,15 @@ export function resolveReplyRunDeliveryContext(params: {
   ) {
     return undefined;
   }
-  const threadId =
-    normalizeOptionalString(params.sessionCtx.MessageThreadId) ??
-    normalizeOptionalString(params.sessionCtx.TransportThreadId) ??
-    normalizeOptionalString(
-      parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
-    );
   return normalizeDeliveryContext({
     ...resolveEffectiveReplyRoute({
       ctx: params.sessionCtx,
       entry: params.sessionEntry,
     }),
-    threadId,
+    threadId: resolveRoutedDeliveryThreadId({
+      ctx: params.sessionCtx,
+      sessionKey: params.sessionCtx.SessionKey ?? params.sessionKey,
+    }),
   });
 }
 
@@ -182,9 +179,7 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
 }): boolean {
   const sentTerminalBlock = params.directlySentBlockPayloads?.some(
     (payload) =>
-      payload.isReasoning !== true &&
-      payload.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(payload) &&
+      isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   return (

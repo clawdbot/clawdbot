@@ -161,6 +161,15 @@ export class SystemAgentChatEngine {
     await cleanupSystemAgentSession(this.agentSession);
   }
 
+  /**
+   * Project the live hosted-wizard interaction onto a rejoin reply so a
+   * reconnecting client re-renders the answer controls this session still
+   * awaits; a no-op when no wizard is active.
+   */
+  decorateRejoinReply(reply: SystemAgentChatReply): SystemAgentChatReply {
+    return this.wizard.decorateReply(reply);
+  }
+
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {
     const turn = this.turnQueue.then(async () => {
       await this.requireVerifiedInference();

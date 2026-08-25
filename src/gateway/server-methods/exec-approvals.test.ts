@@ -29,6 +29,37 @@ function makeSnapshot(file: ExecApprovalsFile = { version: 1, agents: {} }) {
 }
 
 describe("exec approvals gateway methods", () => {
+  it("reports runtime defaults for fresh local approval state", async () => {
+    ensureExecApprovalsSnapshotMock.mockResolvedValueOnce(makeSnapshot({ version: 1, agents: {} }));
+    const respond = vi.fn();
+
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.get"],
+      'execApprovalsHandlers["exec.approvals.get"] test invariant',
+    )({
+      req: { type: "req", id: "req-fresh", method: "exec.approvals.get", params: {} },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: { version: 1, agents: {} },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      }),
+      undefined,
+    );
+  });
+
   it("returns a structured unavailable error when local approvals get cannot read state", async () => {
     ensureExecApprovalsSnapshotMock.mockRejectedValueOnce(
       new Error("permission denied while ensuring approvals"),

@@ -13,7 +13,7 @@ import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
 
 /** Normalized model metadata returned by the Codex app-server model listing helper. */
-type CodexAppServerModel = {
+export type CodexAppServerModel = {
   id: string;
   model: string;
   displayName?: string;
@@ -23,6 +23,7 @@ type CodexAppServerModel = {
   inputModalities: string[];
   supportedReasoningEfforts: string[];
   defaultReasoningEffort?: string;
+  multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
 /** One page of Codex app-server model metadata plus optional pagination state. */
@@ -167,6 +168,9 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     supportedReasoningEfforts: readReasoningEfforts(value.supportedReasoningEfforts),
     ...(normalizeOptionalString(value.defaultReasoningEffort)
       ? { defaultReasoningEffort: normalizeOptionalString(value.defaultReasoningEffort) }
+      : {}),
+    ...(value.multiAgentVersion !== undefined
+      ? { multiAgentVersion: value.multiAgentVersion }
       : {}),
   };
 }

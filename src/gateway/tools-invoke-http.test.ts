@@ -9,6 +9,16 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { TerminalSessionManager } from "./terminal/session-manager.js";
+import {
+  agentTerminalOwner,
+  baseOpenRequest,
+  makeFakePty,
+} from "./terminal/session-manager.test-helpers.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -98,7 +108,8 @@ vi.mock("../plugins/tools.js", () => ({
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
 // routing/policy tests we only need a small set of tool names.
-vi.mock("../agents/openclaw-tools.js", () => {
+vi.mock("../agents/openclaw-tools.js", async () => {
+  const { createTerminalTool } = await import("../agents/tools/terminal-tool.js");
   const toolInputError = (message: string) => {
     const err = new Error(message);
     err.name = "ToolInputError";
@@ -229,7 +240,21 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      const selected = ctx.disablePluginTools
+        ? tools.filter((tool) => tool.name !== "browser")
+        : tools;
+      return [
+        ...selected,
+        createTerminalTool({
+          agentId:
+            typeof ctx.requesterAgentIdOverride === "string"
+              ? ctx.requesterAgentIdOverride
+              : "main",
+          agentSessionKey:
+            typeof ctx.agentSessionKey === "string" ? ctx.agentSessionKey : undefined,
+          sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
+        }),
+      ];
     },
   };
 });
@@ -438,6 +463,12 @@ const invokeToolsRpc = async (
   scopes = ["operator.write"],
   clientInfo?: { id: string; mode: string },
   caps?: string[],
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+    updatedAt: number;
+  },
 ) => {
   const respond = vi.fn();
   await expectDefined(
@@ -448,6 +479,7 @@ const invokeToolsRpc = async (
     respond,
     context: { getRuntimeConfig: () => cfg } as never,
     client: {
+      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
       connect: {
         role: "operator",
         scopes,
@@ -487,6 +519,160 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  it("blocks an operator-triggered session spawn targeting an agent outside the role", async () => {
+    await withOpenClawTestState({ label: "tools-invoke-operator-role" }, async () => {
+      const profile = ensureProfileForEmail("operator@example.test");
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }] },
+        gateway: {
+          tools: { allow: ["sessions_spawn"] },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: ["guest-agent"],
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+
+      const call = await invokeToolsRpc(
+        {
+          name: "sessions_spawn",
+          args: { agentId: "restricted-agent" },
+          sessionKey: "main",
+        },
+        ["operator.write"],
+        undefined,
+        undefined,
+        {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+      );
+
+      expect(call?.[1]).toMatchObject({
+        ok: false,
+        toolName: "sessions_spawn",
+        error: {
+          code: "forbidden",
+          message: expect.stringContaining('cannot create sessions for agent "restricted-agent"'),
+        },
+      });
+      expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a nested sessions_send target that the operator cannot mutate", async () => {
+    await withOpenClawTestState({ label: "tools-invoke-foreign-session" }, async () => {
+      const owner = ensureProfileForEmail("owner@example.test");
+      const guest = ensureProfileForEmail("guest@example.test");
+      const foreignKey = "agent:main:foreign";
+      const entry = {
+        sessionId: "foreign-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, id: owner.id },
+      };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey: foreignKey }, entry);
+      sessionEntries.set(foreignKey, entry);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["sessions_send"] } }] },
+        gateway: {
+          tools: { allow: ["sessions_send"] },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" },
+                agents: "*",
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+
+      const call = await invokeToolsRpc(
+        {
+          name: "sessions_send",
+          args: { sessionKey: foreignKey, message: "hi" },
+          sessionKey: "main",
+        },
+        ["operator.write"],
+        undefined,
+        undefined,
+        {
+          profileId: guest.id,
+          displayName: guest.displayName,
+          hasAvatar: false,
+          updatedAt: guest.updatedAt,
+        },
+      );
+
+      expect(call?.[1]).toMatchObject({
+        ok: false,
+        toolName: "sessions_send",
+        error: { code: "forbidden", message: expect.stringContaining("session is shared") },
+      });
+      expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects HTTP tool execution against another operator's primary session", async () => {
+    await withOpenClawTestState({ label: "tools-invoke-foreign-primary-session" }, async () => {
+      const owner = ensureProfileForEmail("owner@example.test");
+      ensureProfileForEmail("guest@example.test");
+      const sessionKey = "agent:main:foreign-primary";
+      const entry = {
+        sessionId: "foreign-primary-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, id: owner.id },
+      };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+      sessionEntries.set(sessionKey, entry);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }] },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                agents: "*",
+                scopes: ["operator.write"],
+                sessions: { others: "view" },
+              },
+            },
+          },
+        },
+      };
+      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
+        ok: true,
+        method: "trusted-proxy",
+        user: "guest@example.test",
+      });
+
+      const response = await invokeToolAuthed({ tool: "agents_list", sessionKey });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: {
+          type: "tool_call_blocked",
+          message: expect.stringContaining("session is shared"),
+        },
+      });
+      expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+      expect(lastCreateOpenClawToolsContext).toBeUndefined();
+    });
+  });
+
   it("rejects reserved harness session contexts before tool resolution", async () => {
     allowAgentsListForMain();
     const res = await invokeAgentsListAuthed({
@@ -1041,6 +1227,47 @@ describe("POST /tools/invoke", () => {
     const writeScopedBody = await expectOkInvokeResponse(writeScopedRes);
     expect(writeScopedBody.result).toEqual({ ok: true, result: "write-scoped" });
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+
+    await withOpenClawTestState({ label: "tools-invoke-shared-secret-role-owner" }, async () => {
+      const owner = ensureProfileForEmail("role-owner@example.test");
+      const sessionKey = "agent:main:shared-secret-owner-session";
+      const entry = {
+        sessionId: "shared-secret-owner-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, id: owner.id },
+      };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+      sessionEntries.set(sessionKey, entry);
+      cfg = {
+        ...cfg,
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                agents: ["guest-agent"],
+                scopes: ["operator.write"],
+                sessions: { others: "none" },
+              },
+            },
+          },
+        },
+      };
+      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+        ok: true,
+        method: "token",
+      });
+
+      const roleConfiguredOwnerResponse = await invokeTool({
+        port: sharedPort,
+        headers: { authorization: "Bearer secret" },
+        tool: "write_scoped_test",
+        sessionKey,
+      });
+
+      await expectOkInvokeResponse(roleConfiguredOwnerResponse);
+    });
   });
 
   it("executes tools for write-scoped callers on the HTTP path", async () => {
@@ -1181,6 +1408,73 @@ describe("tools.invoke Gateway RPC", () => {
     expect(hookCtx.config).toBe(cfg);
     expect(hookCtx.sessionKey).toBe("agent:main:main");
     expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("opens terminal against the current persisted session generation", async () => {
+    setMainAllowedTools({ allow: ["terminal"], gatewayAllow: ["terminal"] });
+    const sessionKey = "agent:main:main";
+    sessionEntries.set(sessionKey, { sessionId: "S2" });
+    const ptys = [makeFakePty(), makeFakePty()];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => ptys.shift() ?? makeFakePty(),
+    });
+    const oldOwner = agentTerminalOwner(sessionKey, "S1");
+    const oldSession = await manager.open(baseOpenRequest({ owner: oldOwner }));
+    if (!oldSession.ok) {
+      throw new Error("expected old terminal session");
+    }
+    const context = {
+      terminalSessions: manager,
+      isTerminalEnabled: () => true,
+      resolveTerminalLaunchPolicy: () => ({
+        ok: true,
+        plan: { agentId: "main", cwd: "/tmp", shell: "/bin/sh", args: [] },
+      }),
+    } as never;
+
+    try {
+      const call = await withPluginRuntimeGatewayRequestScope(
+        { context, isWebchatConnect: () => false },
+        () =>
+          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
+            "operator.admin",
+          ]),
+      );
+      expect(call?.[1]?.ok).toBe(true);
+      expect(lastCreateOpenClawToolsContext?.sessionId).toBe("S2");
+      const opened = call?.[1]?.output as { details?: { sessionId?: string } } | undefined;
+      const openedSessionId = opened?.details?.sessionId;
+      expect(openedSessionId).toEqual(expect.any(String));
+      if (!openedSessionId) {
+        throw new Error("expected opened terminal session id");
+      }
+      const currentOwner = agentTerminalOwner(sessionKey, "S2");
+      expect(manager.listAgent(currentOwner).map((entry) => entry.sessionId)).toEqual([
+        openedSessionId,
+      ]);
+      expect(manager.writeAgent(oldOwner, openedSessionId, "stale")).toEqual({
+        ok: false,
+        code: "session_unavailable",
+      });
+      expect(manager.writeAgent(currentOwner, openedSessionId, "current")).toEqual({ ok: true });
+
+      sessionEntries.delete(sessionKey);
+      const missing = await withPluginRuntimeGatewayRequestScope(
+        { context, isWebchatConnect: () => false },
+        () =>
+          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
+            "operator.admin",
+          ]),
+      );
+      expect(missing?.[1]).toMatchObject({
+        ok: false,
+        error: { message: "agent session id required" },
+      });
+      expect(lastCreateOpenClawToolsContext?.sessionId).toBeUndefined();
+    } finally {
+      manager.disposeAll();
+    }
   });
 
   it("requires an operation-local marker for direct conversation reads", async () => {

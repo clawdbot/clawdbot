@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // Package manifest for the OpenClaw macOS companion (menu bar app + IPC library).
 
 import PackageDescription
@@ -16,13 +16,13 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.0.1"),
-        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
-        .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
+        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.1"),
+        .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.5"),
         .package(
             url: "https://github.com/openclaw/Peekaboo.git",
-            revision: "a2fb16764a7d1c53bf696127c287ba32703f614f"),
+            revision: "028cd9eb2d7b413c26f02f169c5f6224b2fcb3e0"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),

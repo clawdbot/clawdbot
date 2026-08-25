@@ -9,7 +9,7 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
-import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -44,7 +44,11 @@ import {
   type TaskNotifyPolicy,
   type TaskRecord,
 } from "../tasks/task-registry.types.js";
-import { formatTaskStatusDetail } from "../tasks/task-status.js";
+import {
+  formatTaskStatus,
+  formatTaskStatusDetail,
+  isTaskStatusIssue,
+} from "../tasks/task-status.js";
 import {
   TASK_SYSTEM_AUDIT_CODES,
   TASK_SYSTEM_AUDIT_SEVERITIES,
@@ -158,6 +162,9 @@ function formatTaskStatusCell(status: string, rich: boolean) {
   if (status === "running") {
     return theme.accentBright(padded);
   }
+  if (status === "blocked") {
+    return theme.warn(padded);
+  }
   return theme.muted(padded);
 }
 
@@ -182,7 +189,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
     const line = [
       shortToken(task.taskId).padEnd(ID_PAD),
       task.runtime.padEnd(RUNTIME_PAD),
-      formatTaskStatusCell(task.status, rich),
+      formatTaskStatusCell(formatTaskStatus(task), rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
       shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
       shortToken(task.childSessionKey, 36).padEnd(36),
@@ -195,7 +202,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
 
 function formatTaskListSummary(tasks: TaskRecord[]) {
   const summary = summarizeTaskRecords(tasks);
-  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${tasks.filter(isTaskStatusIssue).length} issues`;
 }
 
 function formatAgeMs(ageMs: number | undefined): string {
@@ -330,7 +337,7 @@ export async function tasksShowCommand(
     } else {
       runtime.error(message);
     }
-    runtime.exit(1);
+    runtime.exit(1, opts.json ? { resetStream: process.stderr } : undefined);
     return;
   }
 
@@ -344,7 +351,7 @@ export async function tasksShowCommand(
     `taskId: ${task.taskId}`,
     `kind: ${task.runtime}`,
     `sourceId: ${task.sourceId ?? "n/a"}`,
-    `status: ${task.status}`,
+    `status: ${formatTaskStatus(task)}`,
     `result: ${task.terminalOutcome ?? "n/a"}`,
     `delivery: ${task.deliveryStatus}`,
     `notify: ${task.notifyPolicy}`,
@@ -497,6 +504,7 @@ async function runTaskRecoveryCommand(
       ),
     );
   } catch (error) {
+    rethrowExpectedCliError(error);
     runtime.error(
       sanitizeTerminalText(
         `Task delivery ${action} requires a live Gateway: ${error instanceof Error ? error.message : String(error)}`,

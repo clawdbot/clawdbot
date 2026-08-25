@@ -3,7 +3,13 @@ import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-e
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
+import type {
+  LegacyMemoryReadResult,
+  MemoryOriginClass,
+  MemoryReadResult,
+  MemorySearchManager,
+  MemorySearchResult,
+} from "../memory-host-sdk/host/types.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
@@ -231,15 +237,6 @@ export type MemoryFlushPlan = {
   prompt: string;
   systemPrompt: string;
   relativePath: string;
-  recordWriteProvenance?: (params: {
-    workspaceDir: string;
-    relativePath: string;
-    contentBefore: string;
-    contentAfter: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }) => Promise<(() => Promise<void>) | void>;
-  clearWriteProvenance?: (params: { workspaceDir: string; relativePath: string }) => Promise<void>;
 };
 
 export type MemoryFlushPlanResolver = (params: {
@@ -247,7 +244,11 @@ export type MemoryFlushPlanResolver = (params: {
   nowMs?: number;
 }) => MemoryFlushPlan | null;
 
-export type RegisteredMemorySearchManager = MemorySearchManager;
+export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"> & {
+  readFile(
+    params: Parameters<MemorySearchManager["readFile"]>[0],
+  ): Promise<LegacyMemoryReadResult | MemoryReadResult>;
+};
 
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
@@ -256,6 +257,8 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: "default" | "status" | "cli";
+    /** Request a read-only source freshness scan; runtimes may ignore unsupported diagnostics. */
+    inspectSources?: boolean;
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
     debug?: {
@@ -277,6 +280,12 @@ export type MemoryPluginRuntime = {
     sandboxed: boolean;
     hits: MemorySearchResult[];
   }): Promise<MemorySearchResult[]>;
+  classifyWorkspaceMemoryPaths?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    workspaceDir: string;
+    relativePaths: string[];
+  }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };
@@ -301,6 +310,10 @@ export type MemoryPluginCapability = {
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
+  /** Local deterministic recall tool required by provider-owned direct lookup. */
+  deterministicRecallToolName?: string;
+  /** Whether recall may read protected same-agent private session transcripts. */
+  supportsPrivateTranscriptRecall?: boolean;
 };
 
 export type MemoryPluginCapabilityRegistration = {

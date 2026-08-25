@@ -201,11 +201,7 @@ describe("ConfigPage synced preference provenance", () => {
     expect(themeSection?.textContent).not.toContain("Default: Knot");
     expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
-    themeSection
-      ?.querySelector<HTMLButtonElement>(
-        ":scope > .settings-section__header button[aria-label='Reset to default']",
-      )
-      ?.click();
+    themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
 
     expect(changedServerUiPrefs(beforeReset, state.settings)).toEqual({ theme: null });
   });

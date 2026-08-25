@@ -24,7 +24,9 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
@@ -72,6 +74,14 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "ask",
   "node",
 ] as const;
+
+export function assertSupportedExecParams(args: unknown): void {
+  if (isRecord(args) && Object.hasOwn(args, "timeout")) {
+    throw new ToolInputError(
+      'exec parameter "timeout" is unsupported; use "timeoutSeconds" instead',
+    );
+  }
+}
 
 function buildSubprocessChannelContext(
   channelContext: PluginHookChannelContext | undefined,
@@ -172,6 +182,16 @@ export function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): bo
     return defaults.notifyOnExitEmptySuccess;
   }
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
+}
+
+export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
+  return (
+    defaults?.preparedRunEnvironment ??
+    prepareGitHubToolEnvironment({
+      config: defaults?.config ?? {},
+      agentId: defaults?.agentId ?? "main",
+    })
+  );
 }
 
 export function createExecRequestPreparation(params: {
@@ -275,6 +295,7 @@ export function createExecRequestPreparation(params: {
     args: unknown,
     context: { hookContext?: unknown },
   ): Promise<ExecToolArgs> => {
+    assertSupportedExecParams(args);
     const execParams = await prepareParamsWithResolvedExecWorkdir(args);
     const workdirState = getResolvedExecWorkdirPreparedState(execParams);
     if (workdirState?.resolution.kind === "unavailable") {
@@ -358,6 +379,9 @@ export function resolvePreparedExecEnvironment(params: {
   storeEnv?: Record<string, string>;
   storeSecretEnv?: Record<string, string>;
   secretEgressEnv?: Record<string, string>;
+  credentialScrubEnv?: Readonly<Record<string, string>>;
+  localIdentityEnv?: Readonly<Record<string, string>>;
+  managedLocalIdentity?: boolean;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
   const inheritedBaseEnv = coerceEnv(process.env);
@@ -482,6 +506,16 @@ export function resolvePreparedExecEnvironment(params: {
     applyPathPrepend(env, params.defaultPathPrepend);
   }
 
+  if (params.host === "gateway" && params.managedLocalIdentity === false) {
+    // Native GitHub identity is the explicit exception to the generic host-secret filter.
+    // Exact service-owner scrubs below still win; non-local hosts receive neither value.
+    for (const name of ["GH_TOKEN", "GITHUB_TOKEN"] as const) {
+      const value = process.env[name];
+      if (typeof value === "string") {
+        env[name] = value;
+      }
+    }
+  }
   if (params.storeSecretEnv) {
     // Secret-kind entries are authenticated ciphertext, not active credentials.
     // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.
@@ -494,6 +528,17 @@ export function resolvePreparedExecEnvironment(params: {
   if (params.secretEgressEnv) {
     Object.assign(env, params.secretEgressEnv);
   }
+  const preparedEnv = {
+    ...params.credentialScrubEnv,
+    ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
+  };
+  // Prepared host values are authoritative over ambient, model, plugin, and store projections.
+  Object.assign(env, preparedEnv);
 
-  return { env, requestedEnv };
+  return {
+    env,
+    ...(Object.keys(preparedEnv).length > 0
+      ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
+      : { requestedEnv }),
+  };
 }

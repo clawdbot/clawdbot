@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -16,6 +16,7 @@ import {
   REQUEST,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -34,6 +35,25 @@ describe("worker placement dispatch reclaim", () => {
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("rechecks session authorization at the activation lifecycle fence", async () => {
+    const harness = createHarness(placementStore);
+    let authorizationChecks = 0;
+    const authorize = vi.fn(() => {
+      authorizationChecks += 1;
+      if (authorizationChecks === 2) {
+        throw new Error("session access revoked");
+      }
+    });
+
+    await expect(harness.service.dispatch(REQUEST, undefined, authorize)).rejects.toThrow(
+      "session access revoked",
+    );
+
+    expect(authorize).toHaveBeenCalledTimes(2);
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    expect(harness.log).not.toContain("placement:active");
   });
 
   it("attaches before opening one tunnel for workspace sync and activation", async () => {
@@ -89,7 +109,8 @@ describe("worker placement dispatch reclaim", () => {
     });
 
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(harness.log.slice(-11)).toEqual([
+    expect(harness.log.slice(-13)).toEqual([
+      "placement:draining",
       "tunnel:attached",
       "workspace:quiesce",
       "workspace:reconcile",
@@ -99,9 +120,266 @@ describe("worker placement dispatch reclaim", () => {
       "workspace:verify",
       "workspace:verify-local",
       "teardown:destroy",
+      "placement:reconciling",
       "placement:reclaimed",
       "teardown:stop",
     ]);
+  });
+
+  it("moves an active placement back to the Gateway without a reclaimed intermediate", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    const active = await harness.service.dispatch(REQUEST);
+    database.db
+      .prepare(
+        `INSERT INTO worker_environments (
+          environment_id, provider_id, profile_id, profile_snapshot_json,
+          provision_operation_id, lease_id, state, owner_epoch,
+          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+        ) VALUES (?, 'test', ?, '{}', ?, 'lease-move', 'attached', ?, ?, 1000, 1000, 1000)`,
+      )
+      .run(
+        active.environmentId,
+        REQUEST.profileId,
+        `provision:${active.environmentId}`,
+        active.activeOwnerEpoch,
+        JSON.stringify([active.sessionId]),
+      );
+
+    await expect(
+      harness.service.move({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        source: {
+          generation: active.generation,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+        target: { kind: "gateway" },
+      }),
+    ).resolves.toMatchObject({
+      state: "local",
+      environmentId: null,
+      activeOwnerEpoch: null,
+    });
+
+    expect(harness.log).toContain("placement:draining");
+    expect(harness.log).toContain("placement:reconciling");
+    expect(harness.log).not.toContain("placement:reclaimed");
+    expect(placementStore.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+  });
+
+  it("carries session authorization from move source teardown into destination dispatch", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    const active = await harness.service.dispatch(REQUEST);
+    database.db
+      .prepare(
+        `INSERT INTO worker_environments (
+          environment_id, provider_id, profile_id, profile_snapshot_json,
+          provision_operation_id, lease_id, state, owner_epoch,
+          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+        ) VALUES (?, 'test', ?, '{}', ?, 'lease-move-auth', 'attached', ?, ?, 1000, 1000, 1000)`,
+      )
+      .run(
+        active.environmentId,
+        REQUEST.profileId,
+        `provision:${active.environmentId}`,
+        active.activeOwnerEpoch,
+        JSON.stringify([active.sessionId]),
+      );
+    let authorizationChecks = 0;
+    const authorize = vi.fn(() => {
+      authorizationChecks += 1;
+      if (authorizationChecks === 3) {
+        throw new Error("session access revoked");
+      }
+    });
+    const destinationDispatch = vi.fn(
+      async (
+        _request: Parameters<ReturnType<typeof createHarness>["service"]["dispatch"]>[0],
+        _onTransition: Parameters<ReturnType<typeof createHarness>["service"]["dispatch"]>[1],
+        destinationAuthorize: Parameters<
+          ReturnType<typeof createHarness>["service"]["dispatch"]
+        >[2],
+      ) => {
+        destinationAuthorize?.();
+        throw new Error("destination dispatch lost authorization");
+      },
+    );
+    const service = createWorkerPlacementMoveService({
+      placements: placementStore,
+      environments: { get: () => undefined },
+      runMoveBarrier: async ({ authorize: sourceAuthorize, begin }) => {
+        sourceAuthorize?.();
+        return begin();
+      },
+      dispatch: destinationDispatch,
+      reclaimSource: async (_request, intent, sourceAuthorize) => {
+        sourceAuthorize?.();
+        const draining = placementStore.get(intent.sessionId);
+        if (draining?.state !== "draining") {
+          throw new Error("move source did not enter draining state");
+        }
+        const reconciling = placementStore.startReconcile({
+          sessionId: draining.sessionId,
+          environmentId: draining.environmentId,
+          ownerEpoch: draining.activeOwnerEpoch,
+          expectedGeneration: draining.generation,
+        });
+        const local = placementStore.completePlacementMoveSourceToLocal({
+          operationId: intent.operationId,
+          sessionId: intent.sessionId,
+          expectedGeneration: reconciling.generation,
+        });
+        if (local.state !== "local") {
+          throw new Error("move source did not return to local state");
+        }
+        return local;
+      },
+      validateAbandonSource: vi.fn(),
+      abandonSource: vi.fn(async () => {
+        throw new Error("unexpected source abandonment");
+      }),
+      resolveDestination: async () => ({
+        profileId: "destination-profile",
+        executionMode: REQUEST.executionMode,
+      }),
+    });
+
+    await expect(
+      service.move(
+        {
+          sessionId: active.sessionId,
+          sessionKey: active.sessionKey,
+          agentId: active.agentId,
+          source: {
+            generation: active.generation,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          },
+          target: { kind: "profile", profileId: "destination-profile" },
+        },
+        undefined,
+        authorize,
+      ),
+    ).rejects.toThrow("session access revoked");
+
+    expect(authorize).toHaveBeenCalledTimes(3);
+    expect(destinationDispatch).toHaveBeenCalledOnce();
+    expect(placementStore.get(active.sessionId)).toMatchObject({ state: "local" });
+  });
+
+  it("recovers a durable Gateway move intent before generic draining recovery", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+      failMoveAfterBegin: true,
+    });
+    const active = await harness.service.dispatch(REQUEST);
+    database.db
+      .prepare(
+        `INSERT INTO worker_environments (
+          environment_id, provider_id, profile_id, profile_snapshot_json,
+          provision_operation_id, lease_id, state, owner_epoch,
+          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+        ) VALUES (?, 'test', ?, '{}', ?, 'lease-move-recovery', 'attached', ?, ?, 1000, 1000, 1000)`,
+      )
+      .run(
+        active.environmentId,
+        REQUEST.profileId,
+        `provision:${active.environmentId}`,
+        active.activeOwnerEpoch,
+        JSON.stringify([active.sessionId]),
+      );
+
+    await expect(
+      harness.service.move({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        source: {
+          generation: active.generation,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+        target: { kind: "gateway" },
+      }),
+    ).rejects.toThrow("move barrier interrupted");
+    expect(placementStore.get(active.sessionId)).toMatchObject({ state: "draining" });
+    expect(placementStore.getPlacementMove(active.sessionId)).toMatchObject({
+      target: { kind: "gateway" },
+      lastError: "move barrier interrupted",
+    });
+
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restarted = createHarness(restartedStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    await restarted.service.reconcile();
+
+    expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
+    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+  });
+
+  it("completes a restarted pending result through its Gateway move intent", async () => {
+    const workspacePath = path.join(root, "pending-gateway-move");
+    const harness = createHarness(placementStore, { workspacePath });
+    const active = await harness.service.dispatch(REQUEST);
+    database.db
+      .prepare(
+        `INSERT INTO worker_environments (
+          environment_id, provider_id, profile_id, profile_snapshot_json,
+          provision_operation_id, lease_id, state, owner_epoch,
+          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
+        ) VALUES (?, 'test', ?, '{}', ?, 'lease-pending-move', 'attached', ?, ?, 1000, 1000, 1000)`,
+      )
+      .run(
+        active.environmentId,
+        REQUEST.profileId,
+        `provision:${active.environmentId}`,
+        active.activeOwnerEpoch,
+        JSON.stringify([active.sessionId]),
+      );
+    const claim = placementStore.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "pending-move-claim",
+      runId: "pending-move-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const begun = placementStore.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+    });
+    expect(begun.placement).toMatchObject({ state: "draining" });
+    placementStore.markWorkspaceResultPending(claim);
+
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restarted = createHarness(restartedStore, { workspacePath });
+    restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    await restarted.service.reconcile();
+
+    expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
+    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(restarted.log).not.toContain("placement:reclaimed");
   });
 
   it("reclaims an environment-free failed placement back to clean local state", async () => {
@@ -131,6 +409,67 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
+
+  it("retries pending failed-environment teardown before clearing the placement", async () => {
+    const harness = createHarness(placementStore, { failAt: "sync", destroyFails: true });
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("environment destroy: destroy pending"),
+    });
+
+    vi.mocked(harness.environments.destroy).mockImplementationOnce(async () => {
+      harness.markEnvironmentDestroyed();
+      const destroyed = harness.environments.get(harness.attached.environmentId);
+      if (!destroyed) {
+        throw new Error("expected destroyed environment");
+      }
+      return destroyed;
+    });
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({ state: "local" });
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["active", "failed"] as const)(
+    "rejects %s reclaim before its first durable cleanup action when authorization changes",
+    async (state) => {
+      const harness = createHarness(placementStore);
+      if (state === "active") {
+        await harness.service.dispatch(REQUEST);
+      } else {
+        const requested = placementStore.startDispatch(REQUEST);
+        placementStore.fail({
+          sessionId: REQUEST.sessionId,
+          expectedGeneration: requested.generation,
+          recoveryError: "dispatch failed",
+        });
+      }
+      const destroyCalls = vi.mocked(harness.environments.destroy).mock.calls.length;
+      const authorizationError = new Error("session participation changed");
+
+      await expect(
+        harness.service.reclaim(
+          {
+            sessionId: REQUEST.sessionId,
+            sessionKey: REQUEST.sessionKey,
+            agentId: REQUEST.agentId,
+          },
+          () => {
+            throw authorizationError;
+          },
+        ),
+      ).rejects.toBe(authorizationError);
+
+      expect(harness.placements.current()).toMatchObject({ state });
+      expect(harness.environments.destroy).toHaveBeenCalledTimes(destroyCalls);
+    },
+  );
 
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
     const harness = createHarness(placementStore, {
@@ -280,11 +619,23 @@ describe("worker placement dispatch reclaim", () => {
         basePack,
       },
     );
-    const reclaimed = placementStore.finishReclaim({
+    const draining = placementStore.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
+    });
+    const reconciling = placementStore.startReconcile({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    const reclaimed = placementStore.transition({
+      sessionId: active.sessionId,
+      from: "reconciling",
+      to: "reclaimed",
+      expectedGeneration: reconciling.generation,
     });
     expect(placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
     expect(placementStore.get(active.sessionId)?.workspaceResultConflict).toBeDefined();
@@ -374,7 +725,7 @@ describe("worker placement dispatch reclaim", () => {
     };
 
     await expect(harness.service.reclaim(request)).rejects.toThrow("workspace conflict");
-    expect(harness.placements.current()).toMatchObject({ state: "active", turnClaim: null });
+    expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
 
     await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
@@ -439,7 +790,7 @@ describe("worker placement dispatch reclaim", () => {
 
     await expect(harness.service.reclaim(request)).rejects.toThrow("workspace quiescence expired");
     expect(harness.placements.current()).toMatchObject({
-      state: "active",
+      state: "draining",
       turnClaim: null,
     });
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
@@ -465,7 +816,7 @@ describe("worker placement dispatch reclaim", () => {
     ).rejects.toThrow("workspace quiescence expired");
 
     expect(harness.placements.current()).toMatchObject({
-      state: "active",
+      state: "draining",
       turnClaim: { owner: "worker" },
     });
     expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
@@ -495,7 +846,7 @@ describe("worker placement dispatch reclaim", () => {
       await expect(harness.service.reclaim(request)).rejects.toThrow(
         "workspace changed after reconciliation",
       );
-      expect(harness.placements.current()).toMatchObject({ state: "active", turnClaim: null });
+      expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
       expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
 
       await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
@@ -526,7 +877,7 @@ describe("worker placement dispatch reclaim", () => {
     ).rejects.toThrow("workspace changed after reconciliation");
 
     expect(harness.placements.current()).toMatchObject({
-      state: "active",
+      state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
       turnClaim: { owner: "worker" },
     });

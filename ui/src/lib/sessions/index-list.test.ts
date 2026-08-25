@@ -98,6 +98,17 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
+  it("forwards the involving-me predicate", async () => {
+    const request = vi.fn(async () => listResult());
+    const { sessions } = sessionHarness(request);
+    await sessions.list({ involvingMe: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ involvingMe: true }),
+    );
+    sessions.dispose();
+  });
+
   it("discards a list rejection from a retired same-client connection", async () => {
     let rejectStale!: (error: Error) => void;
     const staleRequest = new Promise<SessionsListResult>((_resolve, reject) => {
@@ -141,6 +152,70 @@ describe("session list requests", () => {
     expect(observeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ loading: true }));
     unsubscribe();
     sessions.dispose();
+  });
+
+  it("coalesces concurrent managed-list demand while preserving later forced refreshes", async () => {
+    let resolveRequest!: (result: SessionsListResult) => void;
+    const pendingResult = new Promise<SessionsListResult>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => pendingResult)
+      .mockResolvedValue(listResult(["agent:main:refreshed"]));
+    const { sessions } = sessionHarness(request);
+    const query = { agentId: "main", archivedFilter: "all" as const, limit: 50 };
+    const unsubscribe = sessions.subscribeList(query, () => undefined);
+
+    try {
+      const first = sessions.refreshList(query);
+      const duplicate = sessions.refreshList(query);
+      expect(duplicate).toBe(first);
+      expect(request).toHaveBeenCalledOnce();
+
+      resolveRequest(listResult(["agent:main:initial"]));
+      await Promise.all([first, duplicate]);
+      expect(request).toHaveBeenCalledOnce();
+
+      await sessions.refreshList({ ...query, force: true });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:refreshed");
+    } finally {
+      resolveRequest(listResult());
+      unsubscribe();
+      sessions.dispose();
+    }
+  });
+
+  it("retains an in-flight managed query while its route subscriber is replaced", async () => {
+    let resolveRequest!: (result: SessionsListResult) => void;
+    const pendingResult = new Promise<SessionsListResult>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const request = vi.fn(async () => pendingResult);
+    const { sessions } = sessionHarness(request);
+    const query = { agentId: "main", archivedFilter: "all" as const, limit: 50 };
+    let unsubscribe = sessions.subscribeList(query, () => undefined);
+
+    try {
+      const first = sessions.refreshList(query);
+      unsubscribe();
+      unsubscribe = sessions.subscribeList(query, () => undefined);
+
+      expect(sessions.listSnapshot(query).loading).toBe(true);
+      const replacement = sessions.refreshList(query);
+      expect(replacement).toBe(first);
+      expect(request).toHaveBeenCalledOnce();
+
+      resolveRequest(listResult(["agent:main:retained"]));
+      await Promise.all([first, replacement]);
+      expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:retained");
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      resolveRequest(listResult());
+      unsubscribe();
+      sessions.dispose();
+    }
   });
 
   it("keeps dashboard and sidebar queries distinct without inventing a dashboard agent", async () => {
@@ -235,6 +310,35 @@ describe("session list requests", () => {
       includeUnknown: true,
       limit: 50,
     });
+    unsubscribe();
+    sessions.dispose();
+  });
+
+  it("keeps involving-me queries independent from the primary roster", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(listResult(["agent:main:primary"]))
+      .mockResolvedValueOnce(listResult(["agent:main:involving-me"]));
+    const { sessions } = sessionHarness(request);
+    const involvingMeQuery = {
+      agentId: "main",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      involvingMe: true,
+    };
+    const unsubscribe = sessions.subscribeList(involvingMeQuery, () => undefined);
+
+    await sessions.refreshList({ agentId: "main", limit: 50, force: true });
+    const primaryResult = sessions.state.result;
+    await sessions.refreshList({ ...involvingMeQuery, force: true });
+
+    expect(sessions.state.result).toBe(primaryResult);
+    expect(sessions.listSnapshot(involvingMeQuery).result?.sessions[0]?.key).toBe(
+      "agent:main:involving-me",
+    );
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ involvingMe: true });
     unsubscribe();
     sessions.dispose();
   });

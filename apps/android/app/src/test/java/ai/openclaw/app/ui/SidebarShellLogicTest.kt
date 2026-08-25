@@ -118,54 +118,52 @@ class SidebarShellLogicTest {
             session("archived", activity = 50, archived = true),
             session("fresh-pinned", activity = 20, pinned = true),
           ),
-        query = "",
       )
 
     assertEquals(listOf("fresh-pinned", "old-pinned", "fresh"), rows.map(ChatSessionEntry::key))
   }
 
   @Test
-  fun recentSessionSearchCoversTitleLabelKeyAndOwnerWithoutApplyingRecentLimit() {
-    val rows =
-      sidebarRecentSessions(
+  fun collapsedSessionPresentationGroupsOnlyTheEightHighestPriorityActiveRows() {
+    val presentation =
+      sidebarSessionPresentation(
         sessions =
           listOf(
-            session("agent:main:title", activity = 1, displayName = "Ops planning"),
-            session("agent:main:label", activity = 2, label = "Ops handoff"),
-            session("agent:ops:key", activity = 3),
-            session("agent:main:owner", activity = 4, owner = "ops"),
-            session("agent:main:other", activity = 5, displayName = "Product notes"),
-          ),
-        query = "ops",
-        limit = 1,
+            session("pinned", activity = 1, pinned = true),
+            session("archived", activity = 100, archived = true),
+          ) +
+            (1L..10L).map { activity ->
+              session(
+                key = "session-$activity",
+                activity = activity,
+                category = if (activity % 2L == 0L) "Work" else null,
+              )
+            },
+        knownGroups = listOf("Personal"),
+        expanded = false,
       )
 
-    assertEquals(
-      listOf("agent:main:owner", "agent:ops:key", "agent:main:label", "agent:main:title"),
-      rows.map(ChatSessionEntry::key),
-    )
+    val keys = presentation.sections.flatMap { it.entries }.map(ChatSessionEntry::key)
+    assertEquals(8, keys.size)
+    assertEquals(setOf("pinned", "session-10", "session-9", "session-8", "session-7", "session-6", "session-5", "session-4"), keys.toSet())
+    assertEquals(listOf("Pinned", "Work", "Ungrouped"), presentation.sections.map { it.title })
+    assertTrue(presentation.sections.all { it.entries.isNotEmpty() })
+    assertTrue(presentation.canExpand)
   }
 
   @Test
-  fun activeSearchReturnsAllMatchesBeyondTheRecentSessionLimit() {
-    val rows =
-      sidebarRecentSessions(
-        sessions = (1L..12L).map { activity -> session("ops-session-$activity", activity = activity) },
-        query = "ops",
-      )
+  fun expandedSessionPresentationRevealsAllRowsAndCollapsesToTheSameResult() {
+    val sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) }
 
-    assertEquals(12, rows.size)
-  }
+    val collapsed = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false)
+    val expanded = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = true)
 
-  @Test
-  fun recentSessionsStayBoundedInsideTheSharedScrollableSidebar() {
-    val rows =
-      sidebarRecentSessions(
-        sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) },
-        query = "",
-      )
-
-    assertEquals(8, rows.size)
+    assertEquals(8, collapsed.sections.flatMap { it.entries }.size)
+    assertEquals(12, expanded.sections.flatMap { it.entries }.size)
+    assertFalse(collapsed.sections.flatMap { it.entries }.any { it.key == "session-1" })
+    assertTrue(expanded.sections.flatMap { it.entries }.any { it.key == "session-1" })
+    assertTrue(expanded.canExpand)
+    assertEquals(collapsed, sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false))
   }
 
   @Test
@@ -201,6 +199,7 @@ class SidebarShellLogicTest {
     displayName: String? = null,
     label: String? = null,
     owner: String? = null,
+    category: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
       key = key,
@@ -211,5 +210,6 @@ class SidebarShellLogicTest {
       displayName = displayName,
       label = label,
       ownerAgentId = owner,
+      category = category,
     )
 }

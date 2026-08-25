@@ -7,7 +7,7 @@ import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
-import { formatCliJsonFailure } from "./failure-output.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -46,6 +46,7 @@ async function runSystemGatewayCommand(
       defaultRuntime.log(successText);
     }
   } catch (err) {
+    rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (machineOutput) {
       defaultRuntime.writeJson(formatCliJsonFailure(message));

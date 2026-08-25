@@ -6,7 +6,7 @@ const log = createSubsystemLogger("agents/tools/media-generation-yield");
 
 export function createMediaGenerationAsyncStartCallback(params: {
   sessionKey?: string;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
 }): ((message: string) => void) | undefined {
   if (!params.onYield || (params.sessionKey && isCronRunSessionKey(params.sessionKey))) {
     return undefined;

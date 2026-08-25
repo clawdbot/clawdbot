@@ -29,7 +29,7 @@ describe("sidebar layout", () => {
     ]);
     expect(layout.columns[0]?.activePanelId).toBe("detail");
     expect(layout.columns[0]?.height).toBe(360);
-    expect(layout.columns[0]?.width).toBe(360);
+    expect(layout.columns[0]?.width).toBe(480);
     expect(layout.open).toBe(true);
   });
 
@@ -103,7 +103,7 @@ describe("sidebar layout", () => {
 
     expect(resized.dock).toBe("bottom");
     expect(resized.columns[0]?.height).toBe(480);
-    expect(resized.columns[0]?.width).toBe(360);
+    expect(resized.columns[0]?.width).toBe(480);
     expect(fitSidebarLayout(resized, 560)).toEqual(resized);
   });
 
@@ -153,6 +153,17 @@ describe("sidebar layout", () => {
 
   it("deduplicates slots and repairs untrusted persisted values", () => {
     expect(normalizeSidebarLayout(null)).toEqual({ columns: [], open: false, expanded: false });
+    expect(
+      normalizeSidebarLayout({
+        columns: [
+          {
+            id: "review",
+            side: "right",
+            panels: [{ id: "detail", slot: "detail" }],
+          },
+        ],
+      }).columns[0]?.width,
+    ).toBe(480);
     expect(normalizeSidebarLayout({ columns: "nope" })).toEqual({
       columns: [],
       open: false,

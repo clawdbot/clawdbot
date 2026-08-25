@@ -143,6 +143,25 @@ describe("parseCliJson", () => {
       },
     },
     {
+      name: "surfaces Claude error_during_execution errors[] and skips ede_diagnostic telemetry",
+      input: {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "session-json-ede",
+        errors: ["[ede_diagnostic] tool_use_ids=[toolu_1]", "API Error: 529 Overloaded"],
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-ede",
+        usage: undefined,
+        errorText: "API Error: 529 Overloaded",
+      },
+    },
+    {
       name: "classifies Claude is_error JSON results as provider errors",
       input: {
         type: "result",

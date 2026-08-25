@@ -1,3 +1,4 @@
+import type { ControlUiEnvironment } from "../gateway/control-ui-bootstrap-contract.js";
 // Defines gateway runtime and networking configuration types.
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -137,6 +138,10 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Optional visual label and named color distinguishing this Gateway environment. */
+  environment?: ControlUiEnvironment;
+  /** Optional service credential used only for Control UI GitHub previews and discovery. */
+  github?: { token?: SecretInput };
   /**
    * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
    * When enabled, chat.toolTitles generates short titles through standard
@@ -157,6 +162,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
+  automaticallyFetchFavicons?: boolean;
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
@@ -274,6 +281,8 @@ export type GatewayRemoteConfig = {
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
   password?: SecretInput;
+  /** Headers presented to an identity-aware proxy in front of the Gateway (values are secrets). */
+  edgeAuth?: Record<string, SecretInput>;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */
@@ -532,6 +541,26 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+/** Closed session, agent, and operator-scope policy for one named team role. */
+export type GatewayOperatorRoleDefinition = {
+  sessions: {
+    /** Maximum access to another person's sessions without explicit membership. */
+    others: "none" | "view" | "suggest" | "write";
+  };
+  /** Agent IDs available for session creation and runs, or all agents when set to "*". */
+  agents: "*" | string[];
+  /** Ceiling applied to the authenticated profile's granted operator scopes. */
+  scopes: OperatorScope[];
+};
+
+/** Optional named operator-role policies for Gateway deployments shared by a team. */
+export type GatewayOperatorRolesConfig = {
+  /** Required validated default for profiles without a valid assigned role. */
+  default?: string;
+  /** Closed capability bundles indexed by administrator-selected role names. */
+  definitions: Record<string, GatewayOperatorRoleDefinition>;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -559,6 +588,8 @@ export type GatewayConfig = {
   cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
+  /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
+  roles?: GatewayOperatorRolesConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;

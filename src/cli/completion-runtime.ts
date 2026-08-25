@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
+import { isErrno } from "../infra/errors.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
@@ -31,10 +32,13 @@ function resolveShellBasename(
   return normalizeLowercaseStringOrEmpty(basename.replace(/\.(?:exe|cmd|bat)$/i, ""));
 }
 
-/** Resolves the active shell from environment paths, defaulting to zsh for unknown shells. */
-export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): CompletionShell {
+/** Resolves the active shell from environment paths, using the platform's native default. */
+export function resolveShellFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): CompletionShell {
   const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-  const shellName = shellPath ? resolveShellBasename(shellPath) : "";
+  const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
   if (shellName === "zsh") {
     return "zsh";
   }
@@ -47,7 +51,7 @@ export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): Compl
   if (shellName === "pwsh" || shellName === "powershell") {
     return "powershell";
   }
-  return "zsh";
+  return platform === "win32" ? "powershell" : "zsh";
 }
 
 function sanitizeCompletionBasename(value: string): string {
@@ -417,6 +421,15 @@ export async function usesSlowDynamicCompletion(
     }
   }
   return false;
+}
+
+const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
+
+export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
+  if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
+    return err;
+  }
+  return err instanceof Error ? findCompletionProfileWriteError(err.cause) : undefined;
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {

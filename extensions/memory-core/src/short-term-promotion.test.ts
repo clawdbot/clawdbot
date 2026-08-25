@@ -1,9 +1,10 @@
 // Memory Core tests cover short term promotion plugin behavior.
-import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -13,14 +14,18 @@ import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 import {
   configureMemoryCoreDreamingState,
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  memoryCoreWorkspaceStateKey,
+  openMemoryCoreStateStore,
+  SHORT_TERM_LOCK_MAX_ENTRIES,
+  SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
+import { deleteShortTermLockEntryIfCurrent } from "./short-term-promotion-store.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -76,6 +81,42 @@ describe("short-term promotion", () => {
     const notePath = path.join(workspaceDir, "memory", `${date}.md`);
     await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
     return notePath;
+  }
+
+  async function promoteDailyHeadingSnippet(
+    workspaceDir: string,
+    params: { snippet: string; startLine?: number; endLine?: number },
+  ) {
+    const startLine = params.startLine ?? 4;
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "__dreaming_daily__:2026-05-28",
+      signalType: "daily",
+      dedupeByQueryPerDay: true,
+      dayBucket: "2026-05-28",
+      results: [
+        {
+          path: "memory/2026-05-28.md",
+          startLine,
+          endLine: params.endLine ?? startLine,
+          score: 0.91,
+          snippet: params.snippet,
+          source: "memory",
+        },
+      ],
+    });
+    const nowMs = Date.parse("2026-05-31T00:00:00.000Z");
+    const rankingOptions = {
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs,
+    };
+    return await applyShortTermPromotions({
+      ...rankingOptions,
+      candidates: await rankShortTermPromotionCandidates(rankingOptions),
+    });
   }
 
   async function writeDailyMemoryNoteInSubdir(
@@ -2135,16 +2176,16 @@ describe("short-term promotion", () => {
       });
       expect(ranked[0]?.provenance?.originClass).toBe("agent");
 
-      await writeMemoryCoreWorkspaceEntry({
-        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
-        workspaceDir,
-        key: relativePath,
-        value: {
-          fileHash: createHash("sha256").update(`${snippet}\n`).digest("hex"),
-          originClass: "untrusted" as const,
-          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+      vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+        {
+          relativePath,
+          provenance: {
+            fileHash: "0".repeat(64),
+            originClass: "untrusted",
+            observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          },
         },
-      });
+      ]);
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
@@ -2369,38 +2410,8 @@ describe("short-term promotion", () => {
         "## 模型切换 (16:23)",
         "- **需求**: 用户想使用小米 Mimo 模型作为默认",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 4,
-            score: 0.91,
-            snippet: "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认",
       });
 
       expect(applied.applied).toBe(1);
@@ -2424,39 +2435,10 @@ describe("short-term promotion", () => {
         "- **需求**: 用户想使用小米 Mimo 模型作为默认",
         "- **偏好**: 保持低成本默认路由",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 5,
-            score: 0.91,
-            snippet:
-              "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认; **偏好**: 保持低成本默认路由",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet:
+          "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认; **偏好**: 保持低成本默认路由",
+        endLine: 5,
       });
 
       expect(applied.applied).toBe(1);
@@ -2480,38 +2462,8 @@ describe("short-term promotion", () => {
         "## 🚀 New model routing (16:23)",
         "- Keep Xiaomi Mimo as the low-cost default.",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 4,
-            score: 0.91,
-            snippet: "Old model routing: Keep Xiaomi Mimo as the low-cost default.",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: "Old model routing: Keep Xiaomi Mimo as the low-cost default.",
       });
 
       expect(applied.applied).toBe(1);
@@ -2533,38 +2485,8 @@ describe("short-term promotion", () => {
         "## Model routing",
         "",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 4,
-            score: 0.91,
-            snippet: "Model routing: Keep Xiaomi Mimo as the low-cost default.",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: "Model routing: Keep Xiaomi Mimo as the low-cost default.",
       });
 
       expect(applied.applied).toBe(0);
@@ -2579,38 +2501,8 @@ describe("short-term promotion", () => {
         "## Model routing",
         "- Keep Xiaomi Mimo as the low-cost default.",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 4,
-            score: 0.91,
-            snippet: "Keep Xiaomi Mimo as the low-cost default.",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: "Keep Xiaomi Mimo as the low-cost default.",
       });
 
       expect(applied.applied).toBe(1);
@@ -2631,38 +2523,8 @@ describe("short-term promotion", () => {
         "## Long model routing",
         `- ${longBody}`,
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 4,
-            score: 0.91,
-            snippet: `Long model routing: ${longBody}`.slice(0, 280).replace(/\s+/g, " ").trim(),
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: `Long model routing: ${longBody}`.slice(0, 280).replace(/\s+/g, " ").trim(),
       });
 
       expect(applied.applied).toBe(1);
@@ -2683,38 +2545,8 @@ describe("short-term promotion", () => {
         "## New model routing",
         `- ${longBody}`,
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 4,
-            score: 0.91,
-            snippet: `Old model routing: ${longBody}`.slice(0, 280).replace(/\s+/g, " ").trim(),
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: `Old model routing: ${longBody}`.slice(0, 280).replace(/\s+/g, " ").trim(),
       });
 
       expect(applied.applied).toBe(1);
@@ -2736,38 +2568,9 @@ describe("short-term promotion", () => {
         "## New model routing",
         "- **需求**: use Mimo",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 7,
-            endLine: 7,
-            score: 0.91,
-            snippet: "Old model routing: **需求**: use Mimo",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: "Old model routing: **需求**: use Mimo",
+        startLine: 7,
       });
 
       expect(applied.applied).toBe(1);
@@ -2803,38 +2606,9 @@ describe("short-term promotion", () => {
         `- ${firstListItem}`,
         `- ${secondListItem}`,
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 4,
-            endLine: 5,
-            score: 0.91,
-            snippet: ingestedSnippet,
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: ingestedSnippet,
+        endLine: 5,
       });
 
       expect(applied.applied).toBe(1);
@@ -2859,38 +2633,9 @@ describe("short-term promotion", () => {
         "## Morning",
         "- Reviewed travel timing before the workshop.",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 7,
-            endLine: 7,
-            score: 0.91,
-            snippet: "Reviewed travel timing before the workshop.",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: "Reviewed travel timing before the workshop.",
+        startLine: 7,
       });
 
       expect(applied.applied).toBe(1);
@@ -2914,38 +2659,9 @@ describe("short-term promotion", () => {
         "<!-- openclaw:dreaming:light:end -->",
         "- Reviewed travel timing before the workshop.",
       ]);
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "__dreaming_daily__:2026-05-28",
-        signalType: "daily",
-        dedupeByQueryPerDay: true,
-        dayBucket: "2026-05-28",
-        results: [
-          {
-            path: "memory/2026-05-28.md",
-            startLine: 7,
-            endLine: 7,
-            score: 0.91,
-            snippet: "Reviewed travel timing before the workshop.",
-            source: "memory",
-          },
-        ],
-      });
-
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
-      });
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates: ranked,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      const applied = await promoteDailyHeadingSnippet(workspaceDir, {
+        snippet: "Reviewed travel timing before the workshop.",
+        startLine: 7,
       });
 
       expect(applied.applied).toBe(1);
@@ -3739,6 +3455,59 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("reclaims a stale sqlite lock owned by a Linux zombie", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const ownerPid = 4242;
+      await testing.writeShortTermLock(workspaceDir, {
+        owner: `${ownerPid}:0`,
+        acquiredAt: Date.now() - 120_000,
+      });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
+        if (String(filePath) === `/proc/${ownerPid}/status`) {
+          return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\n`;
+        }
+        throw new Error(`unexpected read: ${String(filePath)}`);
+      });
+
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(audit.issues.map((issue) => issue.code)).toContain("recall-lock-stale");
+
+      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
+        changed: true,
+        removedStaleLock: true,
+      });
+    });
+  });
+
+  it("preserves a replacement lock when the expected stale entry is no longer current", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const expected = {
+        owner: "4243:stale",
+        acquiredAt: Date.now() - 120_000,
+      };
+      const replacement = {
+        owner: `${process.pid}:replacement`,
+        acquiredAt: Date.now(),
+      };
+      const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+      const lockStore = openMemoryCoreStateStore<typeof expected>({
+        namespace: SHORT_TERM_LOCK_NAMESPACE,
+        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+      });
+      try {
+        await lockStore.register(lockKey, replacement);
+        await expect(deleteShortTermLockEntryIfCurrent(lockStore, lockKey, expected)).resolves.toBe(
+          false,
+        );
+        await expect(lockStore.lookup(lockKey)).resolves.toEqual(replacement);
+      } finally {
+        await lockStore.delete(lockKey);
+      }
+    });
+  });
+
   it("reports concept tag script coverage for multilingual recalls", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -3782,6 +3551,37 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md budget compaction (#73691)", () => {
+    async function applyBudgetCompactionPromotion(workspaceDir: string) {
+      const nowMs = Date.parse("2026-04-29T10:00:00.000Z");
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "rotate creds",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-29.md",
+            startLine: 3,
+            endLine: 3,
+            score: 0.96,
+            snippet: "Rotate the staging Postgres credentials before next deploy.",
+            source: "memory",
+          },
+        ],
+      });
+      const rankingOptions = {
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      };
+      return await applyShortTermPromotions({
+        ...rankingOptions,
+        candidates: await rankShortTermPromotionCandidates(rankingOptions),
+        nowMs,
+        memoryFileMaxChars: 1_400,
+      });
+    }
+
     it("preserves mixed marker-backed user text during a real promotion write", async () => {
       await withTempWorkspace(async (workspaceDir) => {
         await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
@@ -3808,37 +3608,7 @@ describe("short-term promotion", () => {
         ].join("\n");
         await fs.writeFile(memoryPath, seeded, "utf-8");
 
-        await recordShortTermRecalls({
-          workspaceDir,
-          query: "rotate creds",
-          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
-          results: [
-            {
-              path: "memory/2026-04-29.md",
-              startLine: 3,
-              endLine: 3,
-              score: 0.96,
-              snippet: "Rotate the staging Postgres credentials before next deploy.",
-              source: "memory",
-            },
-          ],
-        });
-
-        const ranked = await rankShortTermPromotionCandidates({
-          workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-        });
-        const applied = await applyShortTermPromotions({
-          workspaceDir,
-          candidates: ranked,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
-          memoryFileMaxChars: 1_400,
-        });
+        const applied = await applyBudgetCompactionPromotion(workspaceDir);
 
         expect(applied.applied).toBe(1);
         expect(applied.compactedDates).toEqual(["2026-04-20"]);
@@ -3877,38 +3647,7 @@ describe("short-term promotion", () => {
         ].join("\n");
         await fs.writeFile(memoryPath, seeded, "utf-8");
 
-        await recordShortTermRecalls({
-          workspaceDir,
-          query: "rotate creds",
-          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
-          results: [
-            {
-              path: "memory/2026-04-29.md",
-              startLine: 3,
-              endLine: 3,
-              score: 0.96,
-              snippet: "Rotate the staging Postgres credentials before next deploy.",
-              source: "memory",
-            },
-          ],
-        });
-
-        const ranked = await rankShortTermPromotionCandidates({
-          workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-        });
-
-        const applied = await applyShortTermPromotions({
-          workspaceDir,
-          candidates: ranked,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
-          memoryFileMaxChars: 1_400,
-        });
+        const applied = await applyBudgetCompactionPromotion(workspaceDir);
 
         expect(applied.applied).toBe(1);
         expect(applied.compactedDates).toContain("2026-04-10");
@@ -3946,38 +3685,7 @@ describe("short-term promotion", () => {
         ].join("\n");
         await fs.writeFile(memoryPath, seeded, "utf-8");
 
-        await recordShortTermRecalls({
-          workspaceDir,
-          query: "rotate creds",
-          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
-          results: [
-            {
-              path: "memory/2026-04-29.md",
-              startLine: 3,
-              endLine: 3,
-              score: 0.96,
-              snippet: "Rotate the staging Postgres credentials before next deploy.",
-              source: "memory",
-            },
-          ],
-        });
-
-        const ranked = await rankShortTermPromotionCandidates({
-          workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-        });
-
-        const applied = await applyShortTermPromotions({
-          workspaceDir,
-          candidates: ranked,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
-          memoryFileMaxChars: 1_400,
-        });
+        const applied = await applyBudgetCompactionPromotion(workspaceDir);
 
         expect(applied.applied).toBe(1);
         expect(applied.compactedSections).toBeGreaterThan(0);

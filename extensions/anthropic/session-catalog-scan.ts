@@ -2,6 +2,7 @@ import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
 export const CLAUDE_CATALOG_IO_CONCURRENCY = 32;
@@ -72,23 +73,18 @@ export function setBoundedCache<K, V>(
   }
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 async function safeSessionFile(
   root: string,
   resolvedRoot: string,
   candidate: string,
   sessionId: string,
 ): Promise<SafeSessionFile> {
-  if (!isWithin(root, candidate) || path.basename(candidate) !== `${sessionId}.jsonl`) {
+  if (!isPathInside(root, candidate) || path.basename(candidate) !== `${sessionId}.jsonl`) {
     return undefined;
   }
   try {
     const resolvedCandidate = await fs.realpath(candidate);
-    if (!isWithin(resolvedRoot, resolvedCandidate)) {
+    if (!isPathInside(resolvedRoot, resolvedCandidate)) {
       return undefined;
     }
     const stat = await fs.stat(resolvedCandidate);

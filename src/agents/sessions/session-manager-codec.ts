@@ -83,7 +83,7 @@ const indexedSessionEntrySchema = z.discriminatedUnion("type", [
   z.looseObject({
     ...indexedSessionEntryBaseShape,
     type: z.literal("reset"),
-    reason: z.enum(["new", "reset", "idle", "daily", "cron-stale"]),
+    reason: z.coerce.string().pipe(z.enum(["new", "reset", "idle", "daily", "cron-stale"])),
     firstKeptEntryId: z.string().optional(),
   }),
   z.looseObject({

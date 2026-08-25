@@ -92,7 +92,7 @@ describe("node worker bundle installer", () => {
   async function serve(archive: Buffer, token: string, declaredBytes = archive.byteLength) {
     const requests = vi.fn();
     server = http.createServer((req, res) => {
-      requests(req.url, req.headers.authorization);
+      requests(req.url, req.headers);
       if (req.headers.authorization !== `Bearer ${token}`) {
         res.writeHead(404).end();
         return;
@@ -149,6 +149,52 @@ describe("node worker bundle installer", () => {
         "utf8",
       ),
     ).resolves.toContain(fixture.input.build.bundleHash);
+  });
+
+  it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const readStats = fs.lstat.bind(fs);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await readStats(...args);
+      if (stats.isFile()) {
+        stats.mode = (Number(stats.mode) & ~0o777) | 0o666;
+      }
+      return stats;
+    });
+
+    try {
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      expect(served.requests).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        gatewayCloudflareAccess: {
+          clientId: "cf-bundle-id",
+          clientSecret: "cf-bundle-secret",
+        },
+      }),
+    ).rejects.toThrow("worker-bundle-install-failed: Cloudflare Access credentials require HTTPS");
+
+    expect(served.requests).not.toHaveBeenCalled();
   });
 
   it("reports installed only after full bundle validation", async () => {
