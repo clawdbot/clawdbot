@@ -30,6 +30,7 @@ import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
   CodexListMcpServerStatusResponse,
+  CodexConfigReadResponse,
   CodexMcpServerStatus,
   CodexPluginDetail,
   CodexPluginListResponse,
@@ -421,11 +422,11 @@ async function inspectCodexComputerUseWithoutFence(
     params.client,
     params.agentDir,
   );
-  if (params.installPlugin && managedMarketplacePath) {
-    const codexHome = params.client?.getRuntimeIdentity()?.codexHome;
-    if (codexHome) {
-      await assertNotSymlink(path.join(codexHome, "config.toml"), "Codex config");
-    }
+  const managedCodexHome = managedMarketplacePath
+    ? params.client?.getRuntimeIdentity()?.codexHome
+    : undefined;
+  if (params.installPlugin && managedCodexHome) {
+    await assertNotSymlink(path.join(managedCodexHome, "config.toml"), "Codex config");
   }
   const marketplace = await resolveMarketplaceRef({
     request,
@@ -434,7 +435,7 @@ async function inspectCodexComputerUseWithoutFence(
     signal: params.signal,
     defaultBundledMarketplacePath: params.defaultBundledMarketplacePath ?? managedMarketplacePath,
     defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
-    migrateLegacyBundledSource: Boolean(managedMarketplacePath),
+    managedCodexHome,
   });
   if (!marketplace.marketplace) {
     return unavailableStatus(
@@ -800,7 +801,7 @@ async function resolveMarketplaceRef(params: {
   signal?: AbortSignal;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
-  migrateLegacyBundledSource: boolean;
+  managedCodexHome?: string;
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
@@ -824,11 +825,12 @@ async function resolveMarketplaceRef(params: {
     bundledMarketplacePath &&
     shouldAddBundledComputerUseMarketplace(params)
   ) {
-    if (params.migrateLegacyBundledSource) {
+    if (params.managedCodexHome) {
       await migrateLegacyBundledMarketplaceSource({
         request: params.request,
         bundledMarketplacePath,
         legacySources: params.defaultBundledMarketplacePathCandidates,
+        userConfigPath: path.join(params.managedCodexHome, "config.toml"),
       });
     }
     const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
@@ -882,14 +884,22 @@ async function migrateLegacyBundledMarketplaceSource(params: {
   request: CodexComputerUseRequest;
   bundledMarketplacePath: string;
   legacySources?: readonly string[];
+  userConfigPath: string;
 }): Promise<void> {
-  const response = await params.request<{
-    config: { marketplaces?: Record<string, { source_type?: string; source?: string }> };
-    origins: Record<string, { name: { type: string } }>;
-  }>("config/read", { includeLayers: false });
+  const response = await params.request<
+    CodexConfigReadResponse & {
+      config: { marketplaces?: Record<string, { source_type?: string; source?: string }> };
+    }
+  >("config/read", { includeLayers: false });
   const bundled = response.config.marketplaces?.[BUNDLED_MARKETPLACE_NAME];
   const sourceOrigin = response.origins[`marketplaces.${BUNDLED_MARKETPLACE_NAME}.source`];
-  if (bundled?.source_type !== "local" || !bundled.source || sourceOrigin?.name.type !== "user") {
+  if (
+    bundled?.source_type !== "local" ||
+    !bundled.source ||
+    sourceOrigin?.name.type !== "user" ||
+    sourceOrigin.name.profile !== null ||
+    path.resolve(sourceOrigin.name.file) !== path.resolve(params.userConfigPath)
+  ) {
     return;
   }
 

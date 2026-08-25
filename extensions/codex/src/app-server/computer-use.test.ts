@@ -1197,6 +1197,26 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "marketplace/remove");
   });
 
+  it("preserves a legacy source owned by a selected user profile", async () => {
+    const { agentDir, client, managedMarketplacePath } = createManagedMarketplaceHarness(
+      tempDirs.make("openclaw-codex-managed-marketplace-"),
+    );
+    const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath, {
+      configuredSource: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
+      configuredSourceProfile: "work",
+    });
+
+    await expect(
+      ensureCodexComputerUse({
+        agentDir,
+        client,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        request,
+      }),
+    ).rejects.toThrow("already added from a different source");
+    expectRequestMethodNotCalled(request, "marketplace/remove");
+  });
+
   it.each([
     {
       label: "config-selected default marketplace",
@@ -2018,8 +2038,13 @@ function createMultiMarketplaceComputerUseRequest(): CodexComputerUseRequest {
 
 function createBundledMarketplaceComputerUseRequest(
   bundledMarketplacePath: string,
-  options: { configuredSource?: string; configuredSourceOrigin?: "system" | "user" } = {},
+  options: {
+    configuredSource?: string;
+    configuredSourceOrigin?: "system" | "user";
+    configuredSourceProfile?: string;
+  } = {},
 ): CodexComputerUseRequest {
+  const codexHome = path.resolve(bundledMarketplacePath, "../../..");
   let configuredSource = options.configuredSource;
   let registered = configuredSource === bundledMarketplacePath;
   let installed = false;
@@ -2043,7 +2068,13 @@ function createBundledMarketplaceComputerUseRequest(
                 name:
                   options.configuredSourceOrigin === "system"
                     ? { type: "system", file: "/etc/codex/config.toml" }
-                    : { type: "user", file: "/codex/config.toml", profile: null },
+                    : {
+                        type: "user",
+                        file: options.configuredSourceProfile
+                          ? path.join(codexHome, `${options.configuredSourceProfile}.config.toml`)
+                          : path.join(codexHome, "config.toml"),
+                        profile: options.configuredSourceProfile ?? null,
+                      },
                 version: "legacy-config",
               },
             }
