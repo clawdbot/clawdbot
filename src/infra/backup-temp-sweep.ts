@@ -1,5 +1,4 @@
-// Reclaims backup temp directories and legacy temp files that a hard-killed
-// run left behind.
+// Reclaims backup temp directories that a hard-killed run left behind.
 import { unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -134,51 +133,6 @@ export async function sweepStaleBackupTempDirectories(params: {
     );
     if (removed) {
       params.log?.(`Backup removed stale temp directory ${entryPath}.`);
-    }
-  }
-}
-
-/**
- * Removes files in `directoryPath` whose name matches `entryPattern` and that
- * have been idle past the orphan window. Unlike the mkdtemp staging
- * directories above, this targets the pre-durable-publish `<output>.<uuid>.tmp`
- * archive shape that predates #113302: no shipped or current code still
- * writes that shape into a bare file, so a match here is always a leftover,
- * never a directory a concurrent run could still own — no ownership marker
- * is needed. A live writer, old or current, streams the archive bytes
- * straight into this same file for the run's whole duration, so its own
- * mtime already tracks that activity the way a directory's cannot.
- */
-export async function sweepStaleBackupTempArchiveFiles(params: {
-  directoryPath: string;
-  entryPattern: RegExp;
-  log?: (message: string) => void;
-}): Promise<void> {
-  const nowMs = Date.now();
-  const entries = await fs
-    .readdir(params.directoryPath, { withFileTypes: true })
-    .catch(() => undefined);
-  if (!entries) {
-    return;
-  }
-
-  for (const entry of entries) {
-    // Dirent.isFile() is false for symlinks, so a symlinked name that
-    // matches the pattern is skipped instead of followed.
-    if (!entry.isFile() || !params.entryPattern.test(entry.name)) {
-      continue;
-    }
-    const entryPath = path.join(params.directoryPath, entry.name);
-    const entryStat = await fs.stat(entryPath).catch(() => undefined);
-    if (!entryStat || nowMs - entryStat.mtimeMs < BACKUP_TEMP_ORPHAN_MIN_AGE_MS) {
-      continue;
-    }
-    const removed = await fs.rm(entryPath, { force: true }).then(
-      () => true,
-      () => false,
-    );
-    if (removed) {
-      params.log?.(`Backup removed stale temp archive file ${entryPath}.`);
     }
   }
 }

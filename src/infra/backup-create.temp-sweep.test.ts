@@ -162,27 +162,23 @@ describe("createBackupArchive stale temp sweep", () => {
     );
   });
 
-  it("removes a legacy <output>.<uuid>.tmp archive file left beside the output", async () => {
+  it("preserves an aged Fleet archive temp file beside the output", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
-        prefix: "openclaw-backup-sweep-legacy-file-",
+        prefix: "openclaw-backup-sweep-fleet-file-",
         scenario: "minimal",
       },
       async (state) => {
         const outputDir = state.path("backups");
         await fs.mkdir(outputDir, { recursive: true });
-        // Pre-durable-publish releases (before #113302) staged the archive as
-        // this loose file beside the output rather than inside a directory.
-        // A previous day's output filename, not today's, proves the sweep
-        // reclaims by suffix rather than by matching the current run's name.
-        const orphan = path.join(
-          outputDir,
-          `2026-05-08T00-00-00.000-00-00-openclaw-backup.tar.gz.${randomUUID()}.tmp`,
-        );
-        await fs.writeFile(orphan, "orphaned legacy payload\n");
+        // Fleet backup publishes through the same `<archive>.<uuid>.tmp`
+        // shape as the retired backup-create writer. Backup-create cannot
+        // prove ownership of this sibling artifact, even after it ages out.
+        const fleetTemp = path.join(outputDir, `fleet-backup.tar.gz.${randomUUID()}.tmp`);
+        await fs.writeFile(fleetTemp, "fleet payload\n");
         const aged = new Date(Date.now() - 48 * HOUR_MS);
-        await fs.utimes(orphan, aged, aged);
+        await fs.utimes(fleetTemp, aged, aged);
 
         await createBackupArchive({
           output: outputDir,
@@ -190,7 +186,7 @@ describe("createBackupArchive stale temp sweep", () => {
           nowMs: ARCHIVE_NOW_MS,
         });
 
-        expect(await pathExists(orphan)).toBe(false);
+        expect(await pathExists(fleetTemp)).toBe(true);
       },
     );
   });
