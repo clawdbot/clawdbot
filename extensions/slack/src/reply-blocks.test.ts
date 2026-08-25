@@ -541,6 +541,14 @@ describe("renderSlackMessagePresentationFallbackText", () => {
                 decision: "allow-once",
               },
             },
+            {
+              label: "Question",
+              action: {
+                type: "question",
+                questionId: "ask_0123456789abcdef0123456789abcdef",
+                optionValue: "Question",
+              },
+            },
             { label: "URL", action: { type: "url", url: "https://example.com/docs" } },
             {
               label: "Web app",
@@ -585,8 +593,9 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       "openclaw:reply_button:1:1",
       "openclaw:callback_button:1:2",
       "openclaw:approval_button:1:3",
-      "openclaw:reply_link:1:4",
+      "openclaw:question_button:1:4",
       "openclaw:reply_link:1:5",
+      "openclaw:reply_link:1:6",
       "openclaw:reply_select:1",
       "openclaw:callback_select:2",
     ]);
