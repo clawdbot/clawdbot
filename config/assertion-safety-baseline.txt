@@ -3385,7 +3385,7 @@ src/logging/diagnostic.ts	2
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	13
+src/logging/logger.ts	14
 src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
@@ -3791,7 +3791,6 @@ src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/refresh.ts	3
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
-src/skills/runtime/session-snapshot.ts	1
 src/skills/security/clawhub-verdicts.ts	2
 src/skills/workshop/experience-review.ts	2
 src/skills/workshop/history-scan.ts	2
