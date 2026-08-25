@@ -245,7 +245,6 @@ export type CronServiceDeps = {
     job: CronJob;
     event: CronEvent;
     abortSignal: AbortSignal;
-    deadlineAtMs?: number;
     onDeliveryAccepted: () => void;
   }) => Promise<void>;
   cleanupTimedOutAgentRun?: (params: {

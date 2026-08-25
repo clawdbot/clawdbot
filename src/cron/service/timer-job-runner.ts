@@ -60,7 +60,6 @@ async function deliverPrimaryWebhook(
   result: CronCoreRunOutcome,
   abortSignal: AbortSignal,
   progress: CronRunProgress,
-  deadlineAtMs?: number,
   assertRunCurrent?: () => void,
 ): Promise<CronCoreRunOutcome> {
   const settle = (settledResult: CronCoreRunOutcome) => {
@@ -90,15 +89,13 @@ async function deliverPrimaryWebhook(
     });
   }
 
-  const deadlineExceeded = () => deadlineAtMs !== undefined && Date.now() >= deadlineAtMs;
   const interruptionError = () => {
     const reason = abortErrorMessage(abortSignal);
-    return deadlineExceeded() ||
-      (abortSignal.reason instanceof Error && abortSignal.reason.name === "TimeoutError")
+    return abortSignal.reason instanceof Error && abortSignal.reason.name === "TimeoutError"
       ? `cron webhook delivery timed out: ${reason}`
       : `cron webhook delivery cancelled: ${reason}`;
   };
-  if (abortSignal.aborted || deadlineExceeded()) {
+  if (abortSignal.aborted) {
     return withPrimaryWebhookTrace({
       job,
       result,
@@ -115,7 +112,6 @@ async function deliverPrimaryWebhook(
     await state.deps.sendCronWebhook({
       job,
       abortSignal,
-      ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
       onDeliveryAccepted: () => {
         settle(deliveredResult);
       },
@@ -144,7 +140,7 @@ async function deliverPrimaryWebhook(
     if (progress.settledDeliveryResult) {
       return progress.settledDeliveryResult;
     }
-    if (abortSignal.aborted || deadlineExceeded()) {
+    if (abortSignal.aborted) {
       return withPrimaryWebhookTrace({
         job,
         result,
@@ -288,7 +284,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
           result,
           runAbortController.signal,
           progress,
-          undefined,
           assertRunCurrent,
         );
       });
@@ -377,7 +372,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
         result,
         runAbortController.signal,
         progress,
-        watchdog.deadlineAtMs(),
         assertRunCurrent,
       );
     });
