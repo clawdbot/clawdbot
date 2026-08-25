@@ -233,6 +233,47 @@ describe("gateway hook admission", () => {
     });
   });
 
+  test("admits an HTTP hook after placement while runtime preparation remains blocked", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const placementAdmissionPublished = createDeferred();
+      const runtimePreparation = createDeferred();
+      let runnerEntered = false;
+      let response: Response | undefined;
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        const callbacks = params as {
+          onExecutionStarted?: () => void;
+          onLaneWait?: (info: { waiting: boolean }) => void;
+        };
+        callbacks.onLaneWait?.({ waiting: false });
+        placementAdmissionPublished.resolve();
+        await runtimePreparation.promise;
+        runnerEntered = true;
+        callbacks.onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      });
+      const responsePromise = postHook(
+        port,
+        "/hooks/agent",
+        { message: "Dispatch" },
+        "placement-admission-before-runtime",
+      ).then((result) => {
+        response = result;
+        return result;
+      });
+
+      try {
+        await placementAdmissionPublished.promise;
+        await expect.poll(() => response?.status, { timeout: 1_000, interval: 10 }).toBe(200);
+        expect(runnerEntered).toBe(false);
+      } finally {
+        runtimePreparation.resolve();
+        await responsePromise;
+      }
+    });
+  });
+
   test("shares one pending persistent dispatch without losing its session target", async () => {
     testState.hooksConfig = {
       enabled: true,
