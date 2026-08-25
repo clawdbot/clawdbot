@@ -45,20 +45,38 @@ const mockLoadChannelSecretContractApi = vi.hoisted(() =>
       telegram: ["botToken"],
     };
     return {
-      secretTargetRegistryEntries: (fields[channelId] ?? []).map((field) => {
-        const pathPattern = `channels.${channelId}.${field}`;
-        return {
-          id: pathPattern,
-          targetType: pathPattern,
-          configFile: "openclaw.json" as const,
-          pathPattern,
-          secretShape: "secret_input" as const,
-          expectedResolvedValue: "string" as const,
-          includeInPlan: true,
-          includeInConfigure: true,
-          includeInAudit: true,
-        };
-      }),
+      secretTargetRegistryEntries: [
+        ...(fields[channelId] ?? []).map((field) => {
+          const pathPattern = `channels.${channelId}.${field}`;
+          return {
+            id: pathPattern,
+            targetType: pathPattern,
+            configFile: "openclaw.json" as const,
+            pathPattern,
+            secretShape: "secret_input" as const,
+            expectedResolvedValue: "string" as const,
+            includeInPlan: true,
+            includeInConfigure: true,
+            includeInAudit: true,
+          };
+        }),
+        ...(channelId === "discord"
+          ? [
+              {
+                id: "channels.discord.accounts[].token",
+                targetType: "channels.discord.accounts[].token",
+                configFile: "openclaw.json" as const,
+                pathPattern: "channels.discord.accounts[].token",
+                refPathPattern: "channels.discord.accounts[].tokenRef",
+                secretShape: "sibling_ref" as const,
+                expectedResolvedValue: "string" as const,
+                includeInPlan: true,
+                includeInConfigure: true,
+                includeInAudit: true,
+              },
+            ]
+          : []),
+      ],
     };
   }),
 );
@@ -1906,6 +1924,79 @@ describe("config cli", () => {
         provider: "default",
         id: "DISCORD_BOT_TOKEN",
       });
+    });
+
+    it.each(["ref builder", "JSON value", "batch ref", "batch value"] as const)(
+      "writes array-indexed sibling SecretRefs to their registered ref path in %s mode",
+      async (mode) => {
+        const resolved = {
+          channels: { discord: { accounts: [{ token: "existing-token" }] } },
+        } as unknown as OpenClawConfig;
+        const ref = { source: "env", provider: "default", id: "DISCORD_ACCOUNT_TOKEN" };
+        const configPath = "channels.discord.accounts[0].token";
+        setSnapshot(resolved, resolved);
+
+        const args =
+          mode === "ref builder"
+            ? [
+                configPath,
+                "--ref-provider",
+                ref.provider,
+                "--ref-source",
+                ref.source,
+                "--ref-id",
+                ref.id,
+              ]
+            : mode === "JSON value"
+              ? [configPath, JSON.stringify(ref), "--strict-json"]
+              : [
+                  "--batch-json",
+                  JSON.stringify([
+                    mode === "batch ref"
+                      ? { path: configPath, ref }
+                      : { path: configPath, value: ref },
+                  ]),
+                ];
+        await runConfigSet(...args);
+
+        expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+        const written = firstWrittenConfig() as {
+          channels?: { discord?: { accounts?: Array<{ token?: unknown; tokenRef?: unknown }> } };
+        };
+        expect(written.channels?.discord?.accounts?.[0]).toEqual({
+          token: "existing-token",
+          tokenRef: ref,
+        });
+        expect(requireWriteOptions().explicitSetPaths).toEqual([
+          ["channels", "discord", "accounts", "0", "tokenRef"],
+        ]);
+      },
+    );
+
+    it("keeps a quoted numeric record key distinct from an array-indexed secret target", async () => {
+      const resolved = {
+        channels: { discord: { accounts: { "0": { token: "existing-token" } } } },
+      } as unknown as OpenClawConfig;
+      const ref = { source: "env", provider: "default", id: "DISCORD_ACCOUNT_TOKEN" };
+      setSnapshot(resolved, resolved);
+
+      await runConfigSet(
+        'channels.discord.accounts["0"].token',
+        "--ref-provider",
+        ref.provider,
+        "--ref-source",
+        ref.source,
+        "--ref-id",
+        ref.id,
+      );
+
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { accounts?: Record<string, { token?: unknown }> } };
+      };
+      expect(written.channels?.discord?.accounts?.["0"]).toEqual({ token: ref });
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["channels", "discord", "accounts", "0", "token"],
+      ]);
     });
 
     it("keeps numeric config set path segments as object keys for schema-backed Discord guild records", async () => {

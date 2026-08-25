@@ -19,7 +19,11 @@ import {
   validateExecSecretRefId,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
-import { toDotPath } from "../shared/dot-path.js";
+import {
+  parseConcreteConfigPathTokens,
+  toDotPath,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 import {
   parseConfigSetPath,
@@ -314,10 +318,11 @@ function touchesSecretDefaults(path: PathSegment[]): boolean {
 
 function buildRefAssignmentOperation(params: {
   requestedPath: PathSegment[];
+  pathTokens?: readonly ConcreteConfigPathSegment[];
   ref: SecretRef;
   inputMode: ConfigSetDryRunInputMode;
 }): ConfigSetOperation {
-  const resolved = resolveConfigSecretTargetByPath(params.requestedPath);
+  const resolved = resolveConfigSecretTargetByPath(params.requestedPath, params.pathTokens);
   if (resolved?.entry.secretShape === "sibling_ref" && resolved.refPathSegments) {
     return {
       inputMode: params.inputMode,
@@ -344,16 +349,20 @@ function buildRefAssignmentOperation(params: {
 
 function buildValueAssignmentOperation(params: {
   requestedPath: PathSegment[];
+  pathTokens?: readonly ConcreteConfigPathSegment[];
   value: unknown;
   inputMode: ConfigSetDryRunInputMode;
 }): ConfigSetOperation {
-  const resolved = resolveConfigSecretTargetByPath(params.requestedPath);
+  const resolved = resolveConfigSecretTargetByPath(params.requestedPath, params.pathTokens);
   const providerAlias = parseProviderAliasFromTargetPath(params.requestedPath);
   const coercedRef = coerceSecretRef(params.value);
   return {
     inputMode: params.inputMode,
     requestedPath: params.requestedPath,
-    setPath: params.requestedPath,
+    setPath:
+      coercedRef && resolved?.entry.secretShape === "sibling_ref" && resolved.refPathSegments
+        ? resolved.refPathSegments
+        : params.requestedPath,
     value: params.value,
     ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
     ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
@@ -363,10 +372,12 @@ function buildValueAssignmentOperation(params: {
 
 function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
   return entries.map((entry, index) => {
-    const path = parseConfigSetPath(entry.path);
+    const pathTokens = parseConcreteConfigPathTokens(entry.path);
+    const path = pathTokens.map(String);
     if (entry.ref !== undefined) {
       return buildRefAssignmentOperation({
         requestedPath: path,
+        pathTokens,
         ref: parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
         inputMode: "json",
       });
@@ -391,6 +402,7 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
     }
     return buildValueAssignmentOperation({
       requestedPath: path,
+      pathTokens,
       value: entry.value,
       inputMode: "json",
     });
@@ -403,7 +415,8 @@ function buildSingleSetOperations(params: {
   opts: ConfigSetOptions;
 }): ConfigSetOperation[] {
   const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
-  const parsedPath = pathProvided ? parseConfigSetPath(params.path as string) : null;
+  const pathTokens = pathProvided ? parseConcreteConfigPathTokens(params.path as string) : null;
+  const parsedPath = pathTokens?.map(String) ?? null;
   const strictJson = Boolean(params.opts.strictJson || params.opts.json);
   const modeResolution = resolveConfigSetMode({
     hasBatchMode: false,
@@ -430,6 +443,7 @@ function buildSingleSetOperations(params: {
     return [
       buildRefAssignmentOperation({
         requestedPath: parsedPath,
+        pathTokens: pathTokens ?? undefined,
         ref: parseSecretRefBuilder({
           provider: params.opts.refProvider,
           source: params.opts.refSource,
@@ -469,6 +483,7 @@ function buildSingleSetOperations(params: {
   return [
     buildValueAssignmentOperation({
       requestedPath: parsedPath,
+      pathTokens: pathTokens ?? undefined,
       value: parseConfigSetValue(params.value, strictJson),
       inputMode: modeResolution.mode === "json" ? "json" : "value",
     }),
@@ -533,8 +548,11 @@ function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
   };
 }
 
-export function buildUnsetOperation(path: PathSegment[]): ConfigSetOperation {
-  const resolved = resolveConfigSecretTargetByPath(path);
+export function buildUnsetOperation(
+  path: PathSegment[],
+  pathTokens?: readonly ConcreteConfigPathSegment[],
+): ConfigSetOperation {
+  const resolved = resolveConfigSecretTargetByPath(path, pathTokens);
   const providerAlias = parseProviderAliasFromTargetPath(path);
   return {
     inputMode: "unset",
