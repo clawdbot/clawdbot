@@ -743,6 +743,24 @@ test("sessions.list replaces a previous terminal status when execution starts", 
   );
 });
 
+test("sessions.list filters and returns the same live status projection", async () => {
+  await writeMainSessionStore({ status: "failed" });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-live-status-filter",
+    params: { status: "running" },
+    context: {
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", executionStarted: true }],
+      ]),
+    },
+  });
+
+  const session = findSession(expectRespondPayload(respond), "agent:main:main");
+  expect(session.status).toBe("running");
+  expect(session.hasActiveRun).toBe(true);
+});
+
 test("sessions.changed publishes visible active run ids", async () => {
   await writeMainSessionStore();
   const result = await invokeSessionMutation({

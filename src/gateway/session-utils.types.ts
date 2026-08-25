@@ -193,6 +193,11 @@ export type GatewaySessionRow = {
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
+export type SessionRunListProjection = Pick<
+  GatewaySessionRow,
+  "status" | "hasActiveRun" | "activeRunIds"
+>;
+
 /**
  * Compile-time drift guard: fails typecheck when the Gateway projection stops
  * matching the protocol schema's documented row fields. Value-level so the

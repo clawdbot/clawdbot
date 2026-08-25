@@ -179,6 +179,13 @@ describe("sessions_search tool", () => {
     );
   });
 
+  it.each(["", "other", 7, null, {}])("rejects invalid result mode %j", async (resultMode) => {
+    const tool = createTool({});
+    await expect(tool.execute("invalid-mode", { query: "ok", resultMode })).rejects.toThrow(
+      'resultMode must be "messages" or "sessions"',
+    );
+  });
+
   it("groups session results before applying the caller limit", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({

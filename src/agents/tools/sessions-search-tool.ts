@@ -379,7 +379,7 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_SESSION_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      const resultMode = readToolStringParam(params, "resultMode") ?? "messages";
+      const resultMode = params.resultMode === undefined ? "messages" : params.resultMode;
       if (resultMode !== "messages" && resultMode !== "sessions") {
         throw new ToolInputError('resultMode must be "messages" or "sessions"');
       }

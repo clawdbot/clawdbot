@@ -1,10 +1,15 @@
 import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildProjectedAgentRunIndex,
   hasProjectedAgentRunForSession,
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import type { GatewaySessionRow, SessionRunListProjection } from "../session-utils.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher including hidden remote lifecycle projections. */
@@ -16,7 +21,7 @@ type TrackedActiveSessionRun = {
   executionStarted: boolean;
 };
 
-export function collectTrackedActiveSessionRuns(
+function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
@@ -197,4 +202,33 @@ export function resolveVisibleActiveSessionRunState(params: {
     embeddedRunState === "running";
   const active = running || matchingTrackedRuns.length > 0 || embeddedRunState === "queued";
   return { active, runIds, ...(active && !running ? { status: "queued" as const } : {}) };
+}
+
+export function createSessionRunListProjector(params: {
+  cfg: OpenClawConfig;
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+}): (
+  key: string,
+  entry: SessionEntry,
+  status: GatewaySessionRow["status"],
+) => SessionRunListProjection {
+  const trackedActiveRuns = collectTrackedActiveSessionRuns(params.context);
+  const projectedAgentRunIndex = buildProjectedAgentRunIndex();
+  return (key, entry, status) => {
+    const activeRunState = resolveVisibleActiveSessionRunState({
+      context: params.context,
+      requestedKey: key,
+      canonicalKey: key,
+      sessionId: entry.sessionId,
+      agentId: parseAgentSessionKey(key)?.agentId,
+      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(params.cfg, key),
+      trackedActiveRuns,
+      projectedAgentRunIndex,
+    });
+    return {
+      status: activeRunState.active ? (activeRunState.status ?? "running") : status,
+      hasActiveRun: activeRunState.active,
+      ...(activeRunState.runIds.length > 0 ? { activeRunIds: activeRunState.runIds } : {}),
+    };
+  };
 }

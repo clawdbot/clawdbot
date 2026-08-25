@@ -6,6 +6,16 @@ import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
   resolveDefaultAgentId: vi.fn(() => "main"),
+  formatValidationErrors: vi.fn(() => "invalid params"),
+  validateSessionsSearchParams: Object.assign(
+    vi.fn(
+      (params: Record<string, unknown>) =>
+        params.resultMode === undefined ||
+        params.resultMode === "messages" ||
+        params.resultMode === "sessions",
+    ),
+    { errors: [] },
+  ),
   resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
     sessionKey === "main" ? "agent:main:main" : sessionKey,
   ),
@@ -53,7 +63,15 @@ const runtime = vi.hoisted(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
   })),
-  listSessionsFromStoreAsync: vi.fn(async () => ({ sessions: [] })),
+  listSessionsFromStoreAsync: vi.fn(
+    async (_options?: unknown): Promise<{ sessions: Array<Record<string, unknown>> }> => ({
+      sessions: [],
+    }),
+  ),
+  createSessionRunListProjector: vi.fn(() => (_key: string, _entry: unknown, status: string) => ({
+    status,
+    hasActiveRun: false,
+  })),
 }));
 
 vi.mock("./embedded-gateway-stub.runtime.js", () => runtime);
@@ -74,8 +92,10 @@ describe("embedded gateway stub", () => {
     runtime.resolveSessionStoreKey.mockClear();
     runtime.resolveStoredSessionKeyForAgentStore.mockClear();
     runtime.searchSessionTranscripts.mockClear();
+    runtime.validateSessionsSearchParams.mockClear();
     runtime.loadCombinedSessionStoreForGatewayCore.mockClear();
     runtime.listSessionsFromStoreAsync.mockClear();
+    runtime.createSessionRunListProjector.mockClear();
   });
 
   it("scopes embedded session lists to the requested agent", async () => {
@@ -94,7 +114,26 @@ describe("embedded gateway stub", () => {
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
       opts: { agentId: "work", includeGlobal: true, search: "global" },
+      projectRun: expect.any(Function),
     });
+  });
+
+  it("uses the shared live status projection for embedded lists", async () => {
+    const projectRun = vi.fn(() => ({
+      status: "running",
+      hasActiveRun: true,
+    }));
+    runtime.createSessionRunListProjector.mockReturnValueOnce(projectRun);
+
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway({
+      method: "sessions.list",
+      params: { status: "running" },
+    });
+
+    expect(runtime.listSessionsFromStoreAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ projectRun }),
+    );
   });
 
   it("resolves sessions through the gateway session resolver", async () => {
@@ -180,6 +219,36 @@ describe("embedded gateway stub", () => {
       sessionKeys: ["agent:main:main", "agent:main:other"],
     });
   });
+
+  it.each(["messages", "sessions"] as const)(
+    "accepts embedded %s result mode",
+    async (resultMode) => {
+      const callGateway = createEmbeddedCallGateway();
+      await callGateway({
+        method: "sessions.search",
+        params: { query: "needle", resultMode },
+      });
+
+      expect(runtime.searchSessionTranscripts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ resultMode }),
+      );
+    },
+  );
+
+  it.each(["", "other", 7, null, {}])(
+    "rejects invalid embedded result mode %j",
+    async (resultMode) => {
+      const callGateway = createEmbeddedCallGateway();
+
+      await expect(
+        callGateway({
+          method: "sessions.search",
+          params: { query: "needle", resultMode },
+        }),
+      ).rejects.toThrow('resultMode must be "messages" or "sessions"');
+      expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects empty session-key filters instead of widening the search", async () => {
     const callGateway = createEmbeddedCallGateway();

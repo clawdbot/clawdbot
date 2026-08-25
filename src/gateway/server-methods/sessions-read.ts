@@ -16,17 +16,12 @@ import {
   serializeSessionCleanupResult,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
-  tryResolveSessionCompatibilityOwnerAgentId,
-} from "../session-request-agent.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
   createSessionListEntryFilter,
   isGatewayAdmin,
@@ -53,14 +48,10 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
-import type { GatewaySessionRow } from "../session-utils.types.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
-import {
-  collectTrackedActiveSessionRuns,
-  resolveVisibleActiveSessionRunState,
-} from "./session-active-runs.js";
+import { createSessionRunListProjector } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   createSessionPlacementBatchProjector,
@@ -132,29 +123,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             throw new Error("sessions.list store input was not loaded");
           }
           const { durableStorePath, durableTargets, modelCatalog, storePath } = loaded;
-          const filterTrackedActiveRuns = p.status
-            ? collectTrackedActiveSessionRuns(context)
-            : undefined;
-          const filterProjectedAgentRunIndex = p.status ? buildProjectedAgentRunIndex() : undefined;
-          const statusFilter = p.status
-            ? (key: string, entry: SessionEntry, storedStatus: GatewaySessionRow["status"]) => {
-                const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-                const activeRunState = resolveVisibleActiveSessionRunState({
-                  context,
-                  requestedKey: key,
-                  canonicalKey: key,
-                  sessionId: entry.sessionId,
-                  agentId: parsedAgentId,
-                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
-                  trackedActiveRuns: filterTrackedActiveRuns,
-                  projectedAgentRunIndex: filterProjectedAgentRunIndex,
-                });
-                const status = activeRunState.active
-                  ? (activeRunState.status ?? "running")
-                  : storedStatus;
-                return status === p.status;
-              }
-            : undefined;
+          const projectRun = createSessionRunListProjector({ cfg, context });
           const visibilityFilter = createSessionListEntryFilter({ client });
           const entryFilter =
             visibilityFilter || options.excludedKeys?.size
@@ -173,7 +142,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 modelCatalog,
                 opts: p,
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
-                ...(statusFilter ? { statusFilter } : {}),
+                projectRun,
               }),
             {
               config: cfg,
@@ -262,8 +231,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
-          const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
-          const projectedAgentRunIndex = buildProjectedAgentRunIndex();
           const sessions = measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.active_run_flags",
             () => {
@@ -272,16 +239,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 const visibility = sharingTarget
                   ? resolveSessionVisibility(sharingTarget.entry)
                   : "shared";
-                const activeRunState = resolveVisibleActiveSessionRunState({
-                  context,
-                  requestedKey: session.key,
-                  canonicalKey: session.key,
-                  sessionId: session.sessionId,
-                  agentId: session.agentId,
-                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, session.key),
-                  trackedActiveRuns,
-                  projectedAgentRunIndex,
-                });
                 return Object.assign({}, session, {
                   visibility,
                   ...(sharingTarget
@@ -295,14 +252,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                         }),
                       }
                     : {}),
-                  hasActiveRun: activeRunState.active,
-                  ...(activeRunState.active
-                    ? { status: activeRunState.status ?? ("running" as const) }
-                    : {}),
                   ...projectPlacement(session.sessionId),
-                  ...(activeRunState.runIds.length > 0
-                    ? { activeRunIds: activeRunState.runIds }
-                    : {}),
                 });
               });
             },

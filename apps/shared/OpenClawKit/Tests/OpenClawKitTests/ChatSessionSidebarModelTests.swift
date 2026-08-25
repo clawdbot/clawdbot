@@ -307,12 +307,13 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
-    @Test(arguments: ["holiday", "KYOTO", "session-123", "  HoLiDaY  "])
+    @Test(arguments: ["holiday", "client-work", "KYOTO", "session-123", "  HoLiDaY  "])
     func `sidebar search matches every canonical gateway session field`(_ query: String) {
         let matching = self.entry(
             key: "agent:main:roadmap",
             displayName: "Planning",
             label: "Summer holiday",
+            category: "client-work",
             subject: "Kyoto itinerary",
             sessionId: "session-123",
             updatedAt: 200)

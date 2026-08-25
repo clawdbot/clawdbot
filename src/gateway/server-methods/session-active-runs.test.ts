@@ -18,7 +18,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import {
-  collectTrackedActiveSessionRuns,
+  createSessionRunListProjector,
   hasRegisteredChatRunForSessionKey,
   hasTrackedActiveSessionRun,
   resolveVisibleActiveSessionRunState,
@@ -72,7 +72,6 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
     sessionId: "session-projected",
   });
   try {
-    const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
     const projectedAgentRunIndex = buildProjectedAgentRunIndex();
     const cases = [
       { requestedKey: "agent:main:main", canonicalKey: "agent:main:main" },
@@ -95,7 +94,6 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
         resolveVisibleActiveSessionRunState({
           context,
           ...activeCase,
-          trackedActiveRuns,
           projectedAgentRunIndex,
         }),
       ).toEqual(resolveVisibleActiveSessionRunState({ context, ...activeCase }));
@@ -104,6 +102,25 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
     clearAgentRunContext("projected-key");
     clearAgentRunContext("projected-id");
   }
+});
+
+it("projects one canonical live status for list filtering and rows", () => {
+  const projectRun = createSessionRunListProjector({
+    cfg: { agents: { list: [{ id: "main", default: true }] } },
+    context: {
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", executionStarted: true }],
+      ]),
+    } as never,
+  });
+
+  expect(
+    projectRun(
+      "agent:main:main",
+      { sessionId: "session-main", status: "failed", updatedAt: 1 },
+      "failed",
+    ),
+  ).toEqual({ status: "running", hasActiveRun: true, activeRunIds: ["run-1"] });
 });
 
 it("matches session-id-only gateway runs during archive admission", () => {

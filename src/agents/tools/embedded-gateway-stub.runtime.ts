@@ -37,4 +37,9 @@ export {
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";
 export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";
+export { createSessionRunListProjector } from "../../gateway/server-methods/session-active-runs.js";
+export {
+  formatValidationErrors,
+  validateSessionsSearchParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 export type { SessionsListResult } from "../../gateway/session-utils.types.js";

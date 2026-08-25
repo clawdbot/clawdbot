@@ -17,6 +17,7 @@ vi.mock("./session-utils-row.js", () => ({
     throw new Error("search selection must not render session rows");
   },
   projectSessionActor: () => undefined,
+  resolveSessionListEntryStatus: ({ entry }: { entry?: SessionEntry }) => entry?.status,
 }));
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
@@ -40,6 +41,7 @@ function makeStore(now = Date.now()): Record<string, SessionEntry> {
       updatedAt: now,
       displayName: "Work Project Alpha",
       label: "work",
+      category: "Client Work",
     } as SessionEntry,
     "agent:main:personal-chat": {
       sessionId: "sess-personal-1",
@@ -86,6 +88,7 @@ describe("filterAndSortSessionEntries search", () => {
       { search: "sess-personal", expectedKey: "agent:main:personal-chat" },
       { search: "dev-team", expectedKey: "agent:main:discord:group:dev-team" },
       { search: "alpha", expectedKey: "agent:main:work-project" },
+      { search: "client", expectedKey: "agent:main:work-project" },
       { search: "  personal  ", expectedKey: "agent:main:personal-chat" },
       { search: "nonexistent-term", expectedKey: undefined },
     ] as const;

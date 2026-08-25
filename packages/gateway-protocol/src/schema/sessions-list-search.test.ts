@@ -26,6 +26,7 @@ describe("sessions.search schema", () => {
 
   it("accepts bounded message and session result modes", () => {
     expect(validateSessionsSearchParams(search())).toBe(true);
+    expect(validateSessionsSearchParams(search({ resultMode: "messages" }))).toBe(true);
     expect(
       validateSessionsSearchParams(
         search({
@@ -46,6 +47,10 @@ describe("sessions.search schema", () => {
       search({ sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`) }),
       search({ limit: 101 }),
       search({ resultMode: "other" }),
+      search({ resultMode: "" }),
+      search({ resultMode: 7 }),
+      search({ resultMode: null }),
+      search({ resultMode: {} }),
       { query: "" },
       { query: "x".repeat(4097) },
     ];

@@ -105,6 +105,17 @@ describe("sessions.search gateway method", () => {
     );
   });
 
+  it.each(["", "other", 7, null, {}])("rejects invalid result mode %j", async (resultMode) => {
+    const respond = await callSearch({ query: "needle", resultMode });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
+  });
+
   it("derives one agent and canonical filters from sessionKeys", async () => {
     searchSessionTranscriptsMock.mockReturnValue({
       hits: [
