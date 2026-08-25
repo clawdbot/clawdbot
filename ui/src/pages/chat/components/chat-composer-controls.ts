@@ -293,7 +293,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
   const label = finalizing
     ? t("chat.composer.dictationFinalizing")
     : active
-      ? t("chat.composer.dictationStop")
+      ? t("chat.composer.dictationDiscard")
       : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip =
     props.dictation && !(active || finalizing) ? t("chat.composer.voiceGestureHint") : label;
@@ -309,6 +309,11 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
           type="button"
           @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           @click=${(event: MouseEvent) => {
+            if (active) {
+              event.preventDefault();
+              props.dictation?.cancelActive();
+              return;
+            }
             if (props.dictation) {
               props.dictation.handleClick(event);
             } else {
@@ -426,28 +431,18 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             ? t("chat.composer.dictationFinalizing")
             : props.dictation.connecting
               ? t("chat.composer.dictationConnecting")
-              : t("chat.composer.dictationRecording", {
-                  elapsed: props.dictation.elapsed,
-                })}</span
+              : t("chat.composer.dictationListening")}</span
         >
-        <openclaw-tooltip .content=${t("chat.runControls.sendMessage")}>
+        <openclaw-tooltip .content=${t("chat.composer.dictationInsert")}>
           <button
-            class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-send"
+            class="chat-send-btn chat-send-btn--dictation-commit"
             type="button"
             @pointerdown=${props.onPrimaryActionPointerDown}
-            @click=${() => {
-              // Only the dictation session that actually committed text owns
-              // this send; an empty or stale finalization leaves the draft alone.
-              void props.dictation?.finishActive().then((committed) => {
-                if (committed) {
-                  props.onSend();
-                }
-              });
-            }}
+            @click=${() => void props.dictation?.finishActive()}
             ?disabled=${props.dictation.finalizing}
-            aria-label=${t("chat.runControls.sendMessage")}
+            aria-label=${t("chat.composer.dictationInsert")}
           >
-            ${icons.arrowUp}
+            ${icons.check}
           </button>
         </openclaw-tooltip>
       `

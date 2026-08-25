@@ -458,9 +458,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       }}
     >
       <summary
-        class="chat-controls__inline-select-trigger chat-controls__model-trigger ${params.disabled
-          ? "chat-controls__inline-select-trigger--disabled"
-          : ""}"
+        class="chat-controls__inline-select-trigger chat-controls__model-trigger ${params.triggerLoading
+          ? "chat-controls__model-trigger--loading"
+          : ""} ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-model-select="true"
         data-chat-model-settings="true"
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}

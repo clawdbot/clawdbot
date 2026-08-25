@@ -299,10 +299,6 @@
   grid-column: 2;
 }
 
-.chat-queue__item--reconnect .chat-queue__state {
-  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
-}
-
 .chat-queue__badge {
   padding: 1px 5px;
   border-radius: 999px;
@@ -317,6 +313,13 @@
 .chat-queue__badge--steered {
   background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--muted);
+}
+
+.chat-queue__badge--reconnect {
+  padding: 1px 4px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  line-height: 1.25;
 }
 
 .chat-queue__state {

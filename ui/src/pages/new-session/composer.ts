@@ -573,9 +573,15 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           : nothing}
       </div>
       ${options.blockedSubmitNotice
-        ? html`<div class="new-session-page__blocked-submit" role="status">
-            <span aria-hidden="true">${icons.info}</span>
-            <span>${options.blockedSubmitNotice}</span>
+        ? html`<div
+            class="new-session-page__blocked-submit agent-chat__composer-underlaps"
+            data-tone="info"
+            role="status"
+          >
+            <div class="agent-chat__composer-status-band">
+              <span class="agent-chat__composer-status-icon" aria-hidden="true">${icons.info}</span>
+              <span class="agent-chat__composer-status-text">${options.blockedSubmitNotice}</span>
+            </div>
           </div>`
         : nothing}
     </div>

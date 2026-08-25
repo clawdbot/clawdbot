@@ -84,7 +84,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps dictation activity, elapsed time, Stop, and Send visible", async () => {
+  it("keeps dictation activity and the insert/discard actions visible", async () => {
     await suite.withPage(
       { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
       async ({ page }) => {
@@ -132,16 +132,15 @@ suite.define(() => {
 
         const composer = page.locator(".agent-chat__input--dictating");
         const phase = composer.locator(".agent-chat__dictation-phase");
-        const elapsed = composer.locator(".agent-chat__dictation-elapsed");
-        const stop = composer.getByRole("button", { name: "Stop dictation" });
-        const send = composer.getByRole("button", { name: "Send message" });
+        const discard = composer.getByRole("button", { name: "Cancel and discard dictation" });
+        const insert = composer.getByRole("button", { name: "Stop and insert dictation" });
         await expect.poll(() => phase.isVisible()).toBe(true);
         await expect.poll(() => phase.textContent()).toBe("Listening…");
         expect(await composer.locator(".agent-chat__dictation-wave").count()).toBe(0);
-        await expect.poll(() => elapsed.textContent()).toBe("0:01");
-        await expect.poll(() => stop.isVisible()).toBe(true);
-        await expect.poll(() => send.isVisible()).toBe(true);
-        await captureComposerProof(page, "dictation-status-timer-actions.png");
+        expect(await composer.locator(".agent-chat__dictation-elapsed").count()).toBe(0);
+        await expect.poll(() => discard.isVisible()).toBe(true);
+        await expect.poll(() => insert.isVisible()).toBe(true);
+        await captureComposerProof(page, "dictation-status-actions.png");
         await page.screenshot({
           animations: "disabled",
           path: ".artifacts/control-ui-e2e/voice-controls/dictation-latched-after-release.png",
@@ -151,7 +150,7 @@ suite.define(() => {
         if (!composerBox) {
           throw new Error("expected active dictation composer layout box");
         }
-        for (const control of [phase, elapsed, stop, send]) {
+        for (const control of [phase, discard, insert]) {
           const box = await control.boundingBox();
           expect(box).not.toBeNull();
           if (!box) {

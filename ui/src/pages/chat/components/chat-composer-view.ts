@@ -370,9 +370,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                               ? t("chat.composer.dictationFinalizing")
                               : t("chat.composer.dictationListening")}
                         </span>
-                        <span class="agent-chat__dictation-elapsed" aria-hidden="true"
-                          >${dictation.elapsed}</span
-                        >
                       </div>
                     `
                   : nothing}

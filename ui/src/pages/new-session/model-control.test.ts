@@ -211,6 +211,9 @@ describe("new-session model runtime", () => {
     );
     expect(loadingModelTrigger).not.toBeNull();
     expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
+      true,
+    );
     expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("true");
     expect(loadingSkeleton).not.toBeNull();

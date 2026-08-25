@@ -38,11 +38,12 @@ describe("chat composer steering queue", () => {
     expect(container.querySelector(".chat-queue__state")).toBeNull();
     expect(container.querySelector(".chat-queue__global-state")).toBeNull();
     const icon = container.querySelector(".chat-queue__icon");
-    expect(icon?.querySelector('path[d="M12 19V5m-7 7 7-7 7 7"]')).not.toBeNull();
+    expect(icon?.querySelector('path[d="M21 5v12a2 2 0 0 1-2 2h-6"]')).not.toBeNull();
+    expect(icon?.querySelector('path[d="M12 19V5m-7 7 7-7 7 7"]')).toBeNull();
     expect(icon?.querySelector("circle")).toBeNull();
   });
 
-  it("keeps a failed steer visually classified as an error", () => {
+  it("keeps the queue identifier on failed and unconfirmed rows", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -56,17 +57,27 @@ describe("chat composer steering queue", () => {
             sendState: "failed",
             sendError: "steer rejected",
           },
+          {
+            id: "unconfirmed",
+            text: "review this delivery",
+            createdAt: 2,
+            sendState: "unconfirmed",
+          },
         ],
         onQueueRemove: vi.fn(),
       }),
       container,
     );
 
-    const row = container.querySelector(".chat-queue__item");
+    const rows = [...container.querySelectorAll(".chat-queue__item")];
+    expect(rows).toHaveLength(2);
+    for (const terminalRow of rows) {
+      const terminalIcon = terminalRow.querySelector(".chat-queue__icon");
+      expect(terminalIcon?.querySelector('path[d="M21 5v12a2 2 0 0 1-2 2h-6"]')).not.toBeNull();
+      expect(terminalIcon?.querySelector('path[d^="m21.73 18"]')).toBeNull();
+    }
+    const row = rows[0];
     expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
-    const icon = row?.querySelector(".chat-queue__icon");
-    expect(icon?.querySelector('path[d^="m21.73 18"]')).not.toBeNull();
-    expect(icon?.querySelector('path[d="M12 19V5m-7 7 7-7 7 7"]')).toBeNull();
     expect(container.querySelector(".chat-queue__badge--steered")).toBeNull();
     expect(row?.querySelector(".chat-queue__error .chat-queue__badge")?.textContent?.trim()).toBe(
       t("common.failed"),
@@ -401,9 +412,10 @@ describe("chat composer queue reordering", () => {
 
     const row = container.querySelector(".chat-queue__item");
     expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(row?.querySelector(".chat-queue__state")?.textContent?.trim()).toBe(
+    expect(row?.querySelector(".chat-queue__badge--reconnect")?.textContent?.trim()).toBe(
       t("chat.queue.states.waitingForReconnect"),
     );
+    expect(row?.querySelector(".chat-queue__state")).toBeNull();
     expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(0);
   });
 

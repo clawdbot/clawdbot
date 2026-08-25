@@ -138,9 +138,12 @@ async function releaseLatched(target: HTMLElement): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 
-async function stopLatched(target: HTMLElement): Promise<void> {
+async function commitLatched(
+  controller: ComposerDictationController,
+  target: HTMLElement,
+): Promise<void> {
   await releaseLatched(target);
-  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  void controller.finishActive();
 }
 
 beforeEach(() => {
@@ -307,7 +310,7 @@ describe("ComposerDictationController", () => {
       text: "hello world",
       final: true,
     });
-    await stopLatched(target);
+    await commitLatched(controller, target);
     expect(controller.finalizing).toBe(true);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
@@ -328,7 +331,7 @@ describe("ComposerDictationController", () => {
     emit({ transcriptionSessionId: "dictation-1", type: "transcript", text: "yes", final: true });
     emit({ transcriptionSessionId: "dictation-1", type: "transcript", text: "yes", final: true });
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
@@ -355,7 +358,7 @@ describe("ComposerDictationController", () => {
       final: true,
     });
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
@@ -369,7 +372,7 @@ describe("ComposerDictationController", () => {
     const { controller, onCommit, target } = createHarness();
     await startHold(target);
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
@@ -398,7 +401,7 @@ describe("ComposerDictationController", () => {
     const { controller, onCommit, target } = createHarness();
     await startHold(target);
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
@@ -422,7 +425,7 @@ describe("ComposerDictationController", () => {
     const { controller, onCommit, target } = createHarness();
     await startHold(target);
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
@@ -447,7 +450,7 @@ describe("ComposerDictationController", () => {
     const { controller, onCommit, onError, target } = createHarness();
     await startHold(target);
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
@@ -488,7 +491,7 @@ describe("ComposerDictationController", () => {
   it("ignores extra clicks while final text is draining", async () => {
     const { controller, onTap, target } = createHarness();
     await startHold(target);
-    await stopLatched(target);
+    await commitLatched(controller, target);
     target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
@@ -542,7 +545,7 @@ describe("ComposerDictationController", () => {
     });
     expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", expect.anything());
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     resolveCreate({
       sessionId: "late-session",
       transcriptionSessionId: "late-session",
@@ -598,7 +601,7 @@ describe("ComposerDictationController", () => {
     const { controller, onError, target } = createHarness();
     await startHold(target);
 
-    await stopLatched(target);
+    await commitLatched(controller, target);
     resolveCreate({
       sessionId: "late-session",
       transcriptionSessionId: "late-session",
@@ -633,7 +636,7 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
-  it("stays latched after release until the operator taps Stop", async () => {
+  it("stays latched after release until the operator discards with the square", async () => {
     const { controller, onCommit, target } = createHarness();
     await startHold(target);
     emit({
@@ -655,7 +658,7 @@ describe("ComposerDictationController", () => {
       expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
     );
     await vi.advanceTimersByTimeAsync(1500);
-    await waitForFast(() => expect(onCommit).toHaveBeenCalledWith("keep recording"));
+    expect(onCommit).not.toHaveBeenCalled();
     controller.dispose();
   });
 

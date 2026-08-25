@@ -1091,18 +1091,26 @@ openclaw-chat-page {
   padding: 0 9px 0 5px;
   border-radius: var(--radius-full);
   border: 0;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  color: currentColor;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: color-mix(in srgb, var(--warn) 88%, var(--text));
   font: inherit;
   font-size: 11px;
+  font-weight: 500;
   line-height: 1;
+  cursor: var(--cursor-action);
   transition:
     background 150ms ease-out,
+    color 150ms ease-out,
     opacity 150ms ease-out;
 }
 
 .context-ring__compact:hover:not(:disabled) {
-  background: color-mix(in srgb, currentColor 18%, transparent);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: color-mix(in srgb, var(--warn) 94%, var(--text-strong));
+}
+
+.context-ring__compact:active:not(:disabled) {
+  background: color-mix(in srgb, var(--warn) 19%, transparent);
 }
 
 .context-ring__compact:disabled {
@@ -4286,14 +4294,11 @@ button.chat-pr__diff {
 }
 
 .agent-chat__dictation-status {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 10px;
   width: 100%;
   color: var(--accent);
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .agent-chat__dictation-phase {
@@ -4302,10 +4307,6 @@ button.chat-pr__diff {
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-chat__dictation-elapsed {
-  color: var(--muted);
 }
 
 .agent-chat__dictation-status--finalizing .agent-chat__voice-activity-bar {
@@ -5114,8 +5115,8 @@ button.chat-pr__diff {
 }
 
 /* Capture button while dictating. Same element as the idle mic — swapping it
-   would release pointer capture mid-hold — so the mode only restyles it.
-   Stop keeps the transcript; Escape is the only discard. */
+   would release pointer capture mid-hold — so the mode only restyles it. Once
+   latched, this square is the explicit discard half of the action pair. */
 .chat-send-btn.chat-send-btn--dictating {
   width: var(--chat-composer-send-size);
   min-width: var(--chat-composer-send-size);
@@ -5142,9 +5143,22 @@ button.chat-pr__diff {
   stroke: none;
 }
 
-.chat-send-btn--dictating .agent-chat__voice-activity-bar {
-  background: color-mix(in srgb, var(--accent) 88%, var(--text));
-  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
+.agent-chat__input .chat-send-btn--dictation-commit {
+  background: color-mix(in srgb, white 92%, var(--chat-composer-surface));
+  color: color-mix(in srgb, black 82%, var(--primary));
+}
+
+.agent-chat__input .chat-send-btn--dictation-commit:hover:not(:disabled) {
+  background: color-mix(in srgb, white 84%, var(--chat-composer-surface));
+  color: color-mix(in srgb, black 88%, var(--primary));
+}
+
+.agent-chat__input .chat-send-btn--dictation-commit > svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25px;
 }
 
 .agent-chat__video-preview {
@@ -6166,7 +6180,7 @@ button.chat-pr__diff {
 .chat-controls__model-capability-alert {
   position: absolute;
   top: -5px;
-  right: -5px;
+  right: -1px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6188,16 +6202,54 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-trigger-skeleton {
-  display: inline-block;
-  width: 8.5em;
-  height: 1em;
+  display: block;
+  width: 100%;
+  height: 0.78em;
   border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--muted) 15%, transparent) 25%,
+    color-mix(in srgb, var(--text) 30%, transparent) 50%,
+    color-mix(in srgb, var(--muted) 15%, transparent) 75%
+  );
+  background-size: 200% 100%;
+  animation: chat-model-trigger-shimmer 1.45s ease-in-out infinite;
+}
+
+/* The loading label occupies the same explicit text metric as the skeleton.
+   The trigger's symmetric outer padding and fixed label track keep the chevron
+   from moving when the model name replaces it. */
+.chat-controls__model-trigger--loading .chat-controls__inline-select-label {
+  display: flex;
+  width: 8.5em;
+  height: 1.35em;
+  flex: 0 0 8.5em;
+  align-items: center;
+}
+
+@keyframes chat-model-trigger-shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes chat-model-trigger-pulse {
+  0%,
+  100% {
+    opacity: 0.62;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .chat-controls__model-trigger-skeleton {
-    animation: none;
-    background: var(--bg-muted);
+    background: color-mix(in srgb, var(--muted) 18%, transparent);
+    animation: chat-model-trigger-pulse 2.4s ease-in-out infinite;
   }
 }
 

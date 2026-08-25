@@ -404,12 +404,10 @@ export class ComposerDictationController {
   private options: ComposerDictationControllerOptions;
   private phase: DictationPhase = "idle";
   private partialTranscript = "";
-  private elapsedSeconds = 0;
   private pointerId: number | null = null;
   private pointerTarget: HTMLElement | null = null;
   private pointerBounds: DOMRect | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private elapsedTimer: ReturnType<typeof globalThis.setInterval> | null = null;
   private session: ComposerDictationSession | null = null;
   private suppressClick = false;
   private suppressedPointerId: number | null = null;
@@ -444,14 +442,8 @@ export class ComposerDictationController {
     return this.partialTranscript;
   }
 
-  get elapsed(): string {
-    const minutes = Math.floor(this.elapsedSeconds / 60);
-    const seconds = String(this.elapsedSeconds % 60).padStart(2, "0");
-    return `${minutes}:${seconds}`;
-  }
-
-  // Returns the stop promise so callers can sequence work (e.g. send) after
-  // the transcript lands in the draft.
+  // Returns the stop promise so the confirming control can remain tied to the
+  // session that actually inserted text into the draft.
   finishActive(): Promise<boolean> {
     return this.stop({ commit: true });
   }
@@ -518,7 +510,7 @@ export class ComposerDictationController {
     }
     if (this.active) {
       event.preventDefault();
-      void this.finishActive();
+      this.cancelActive();
       return;
     }
     if (this.phase !== "idle") {
@@ -634,7 +626,6 @@ export class ComposerDictationController {
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
     this.setPhase("connecting");
-    this.startElapsedTimer();
     const session = new ComposerDictationSession(client, {
       onError: (message) => {
         if (this.session !== session) {
@@ -672,7 +663,6 @@ export class ComposerDictationController {
     }
     const wasActive = this.active;
     this.clearGesture();
-    this.stopElapsedTimer();
     const session = this.session;
     if (!session) {
       this.reset();
@@ -696,7 +686,6 @@ export class ComposerDictationController {
 
   private reset(): void {
     this.partialTranscript = "";
-    this.elapsedSeconds = 0;
     this.inputLevel.set(0);
     this.setPhase("idle");
   }
@@ -731,21 +720,6 @@ export class ComposerDictationController {
     document.removeEventListener("keydown", this.handleDocumentKeyDown);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     window.removeEventListener("blur", this.handleWindowBlur);
-  }
-
-  private startElapsedTimer(): void {
-    this.elapsedSeconds = 0;
-    this.elapsedTimer = globalThis.setInterval(() => {
-      this.elapsedSeconds += 1;
-      this.options.onStateChange();
-    }, 1000);
-  }
-
-  private stopElapsedTimer(): void {
-    if (this.elapsedTimer !== null) {
-      globalThis.clearInterval(this.elapsedTimer);
-      this.elapsedTimer = null;
-    }
   }
 
   private expireClickSuppression(): void {

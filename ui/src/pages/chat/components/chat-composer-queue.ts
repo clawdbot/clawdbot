@@ -264,13 +264,9 @@ function renderChatQueueItem(
     (item.attachments?.length
       ? t("chat.queue.imageCount", { count: String(item.attachments.length) })
       : "");
-  const leadingIcon = reconnecting
-    ? queueWaitingIcon
-    : failed
-      ? icons.alertTriangle
-      : steered
-        ? icons.arrowUp
-        : queueWaitingIcon;
+  // The leading glyph identifies the object, not its transient delivery state.
+  // Row tone, badges, and actions carry failure, review, reconnect, and steer.
+  const leadingIcon = queueWaitingIcon;
   const itemClass = `chat-queue__item${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
   }${reconnecting ? " chat-queue__item--reconnect" : ""}${
@@ -422,7 +418,11 @@ function renderChatQueueItem(
               : nothing}
             ${stateLabel && (!failed || !item.sendError)
               ? html`<span
-                  class=${failed ? "chat-queue__badge" : "chat-queue__state"}
+                  class=${failed
+                    ? "chat-queue__badge"
+                    : reconnecting
+                      ? "chat-queue__badge chat-queue__badge--reconnect"
+                      : "chat-queue__state"}
                   title=${ifDefined(reconnecting ? item.sendError : undefined)}
                   >${stateLabel}</span
                 >`
