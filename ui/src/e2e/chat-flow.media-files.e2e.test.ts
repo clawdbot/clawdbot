@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -85,9 +85,25 @@ suite.define(() => {
       source: "/home/node/.openclaw/media/outbound/bootstrap-image.png",
       ticket: "ticket-bootstrap-image",
     },
+    {
+      kind: "image",
+      source: "FILE:///home/node/.openclaw/media/outbound/bootstrap-uppercase-image.png",
+      ticket: "ticket-bootstrap-uppercase-image",
+    },
+    {
+      kind: "image",
+      source: "file:/home/node/.openclaw/media/outbound/bootstrap-authorityless-image.png",
+      ticket: "ticket-bootstrap-authorityless-image",
+    },
+    {
+      kind: "audio",
+      source: "FILE:/home/node/.openclaw/media/outbound/bootstrap-structured-audio.mp3",
+      ticket: "ticket-bootstrap-structured-audio",
+      structured: true,
+    },
   ] as const)(
     "renders local assistant $kind through server metadata before preview roots load",
-    async ({ kind, source, ticket }) => {
+    async ({ kind, source, ticket, ...options }) => {
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -120,10 +136,7 @@ suite.define(() => {
           kind === "image"
             ? {
                 contentType: "image/png",
-                body: Buffer.from(
-                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-                  "base64",
-                ),
+                body: await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png")),
               }
             : {
                 contentType: "audio/mpeg",
@@ -144,7 +157,10 @@ suite.define(() => {
             : {
                 id: "assistant-bootstrap-local-audio",
                 role: "assistant",
-                content: [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
+                content:
+                  "structured" in options
+                    ? [{ type: "audio", url: source, fileName: "bootstrap-structured-audio.mp3" }]
+                    : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
                 timestamp: Date.now(),
               },
         ],
@@ -172,7 +188,7 @@ suite.define(() => {
                 element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
               ),
             )
-            .toBe(1);
+            .toBe(180);
         }
 
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -180,7 +196,7 @@ suite.define(() => {
           await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             fullPage: true,
-            path: path.join(artifactDir, `bootstrap-local-${kind}.png`),
+            path: path.join(artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
           });
         }
         if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
