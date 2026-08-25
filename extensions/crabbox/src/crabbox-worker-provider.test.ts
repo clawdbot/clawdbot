@@ -2418,7 +2418,7 @@ describe("Crabbox worker provider", () => {
     const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
-    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${prefix}`);
+    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}…${"x".repeat(504)}😀after`);
     expect(hasLoneSurrogate(message)).toBe(false);
   });
 
@@ -2431,7 +2431,7 @@ describe("Crabbox worker provider", () => {
     const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
-    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${detail}`);
+    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}…${"x".repeat(504)}😀after`);
     expect(hasLoneSurrogate(message)).toBe(false);
   });
 
