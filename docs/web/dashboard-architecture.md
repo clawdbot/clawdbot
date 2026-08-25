@@ -156,8 +156,9 @@ Shared infrastructure underneath (this is where the simplification lands):
   the natural case.
 - **One authorization model.** A widget's reach is a granted allowlist,
   whatever its kind: for `html` widgets, host tools; for `mcp-app` widgets,
-  the server's app-visible tools (via the existing `allowedAppToolNames`
-  mechanism, made durable per widget instead of per-minting-run).
+  the server's app-visible tools and same-server resources (via the existing
+  live App-interaction authority, made durable per widget instead of
+  per-minting-run).
 - **Host tools for `html` widgets** (exposed over the widget bridge, checked
   against the grant):
   - `openclaw.prompt.send` — tier 2; routed through the visible composer,
@@ -248,10 +249,11 @@ on staleness). Chat inline MCP app views get the same **Pin to dashboard**
 affordance as agent widgets. Re-opened views are read-only today by design;
 pinned apps that should stay interactive get a durable grant over the server's
 app-visible tools (explicit allowlist shown to the operator on pin), decoupled
-from the minting run. Ungranted pins stay read-only — still useful for display
-dashboards. v1 pins to the originating session's board; cross-session pinning
-needs a lease broker and waits. Coordinate with open PR #109807 (`ui/message`
-composer routing, theme/size propagation).
+from the minting run. Ungranted pins can render their fetched App HTML but
+cannot call tools or access the same-server resource bridge. v1 pins to the
+originating session's board; cross-session pinning needs a lease broker and
+waits. Coordinate with open PR #109807 (`ui/message` composer routing,
+theme/size propagation).
 
 ### WorkBoard integration
 
