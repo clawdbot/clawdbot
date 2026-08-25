@@ -23,6 +23,7 @@ import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
+import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import {
   AgentHarnessPreflightError,
@@ -35,6 +36,7 @@ import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { modelCircuitInternals } from "./model-fallback-circuit.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
@@ -279,6 +281,7 @@ function resetModelFallbackTestState(): void {
   // Fallback state has process-level caches for skip markers, harnesses, auth,
   // and plugin normalization. Reset every surface between tests.
   resetFallbackSkipCacheForTest();
+  modelCircuitInternals.modelCircuitStates.clear();
   clearAgentHarnesses();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
@@ -581,9 +584,20 @@ function captureModelFailoverDiagnostics(): {
   return { events, stop };
 }
 
-function makeDiagnosticFallbackConfig(fallbacks: string[]): OpenClawConfig {
+function makeDiagnosticFallbackConfig(
+  fallbacks: string[],
+  options?: { circuitBreaker?: boolean },
+): OpenClawConfig {
   return makeCfg({
-    agents: { defaults: { model: { primary: "openai/gpt-5.5", fallbacks } } },
+    agents: {
+      defaults: {
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks,
+          ...(options?.circuitBreaker ? { circuitBreaker: { enabled: true } } : {}),
+        },
+      },
+    },
   });
 }
 
@@ -793,6 +807,243 @@ describe("runWithModelFallback", () => {
         reason: "tls_certificate",
       },
     ]);
+  });
+
+  it("skips an intermittently degraded route after repeated transient failures", async () => {
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
+    const primaryOutcomes = Array.from({ length: 10 }, (_, index) =>
+      index % 2 === 0 ? "success" : "failure",
+    );
+    let primaryCalls = 0;
+    const run = vi.fn(async (provider: string, model: string) => {
+      if (provider !== "openai") {
+        return "fallback-ok";
+      }
+      const outcome = primaryOutcomes[primaryCalls++];
+      if (outcome === "failure") {
+        throw new FailoverError("provider overloaded", {
+          provider,
+          model,
+          reason: "overloaded",
+        });
+      }
+      return "primary-ok";
+    });
+
+    for (const outcome of primaryOutcomes) {
+      const turn = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+      });
+      expect(turn.result).toBe(outcome === "success" ? "primary-ok" : "fallback-ok");
+    }
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(primaryCalls).toBe(primaryOutcomes.length);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      reason: "overloaded",
+      status: 503,
+      code: "model_circuit_open",
+    });
+    expect(run).toHaveBeenLastCalledWith("anthropic", "claude-opus-4-7", {
+      isFinalFallbackAttempt: true,
+    });
+  });
+
+  it("attempts an open route when the only fallback cannot reach transport", async () => {
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
+    const sessionId = "session:circuit-last-runnable-route";
+    // The fallback is auth-skipped for this session, so it exists in the
+    // candidate array but is rejected before any provider call.
+    markFallbackCandidateSkipped({
+      sessionId,
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      ttlMs: 60_000,
+    });
+    const overloaded = () =>
+      new FailoverError("provider overloaded", {
+        provider: "openai",
+        model: "gpt-5.5",
+        reason: "overloaded",
+      });
+    let primaryHealthy = false;
+    const run = vi.fn(async (provider: string) => {
+      if (provider !== "openai") {
+        throw new Error("fallback must never reach transport in this test");
+      }
+      if (!primaryHealthy) {
+        throw overloaded();
+      }
+      return "primary-recovered";
+    });
+
+    // Open the primary circuit with repeated transient failures.
+    for (let index = 0; index < modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
+      await expect(
+        runWithModelFallback({ cfg, provider: "openai", model: "gpt-5.5", sessionId, run }),
+      ).rejects.toSatisfy(isFallbackSummaryError);
+    }
+
+    // Open primary + unavailable fallback: the open route must still be
+    // attempted instead of producing a turn with zero transport attempts.
+    primaryHealthy = true;
+    const recovered = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionId,
+      run,
+    });
+
+    expect(recovered.result).toBe("primary-recovered");
+    expect(recovered.attempts.map((attempt) => attempt.code)).not.toContain("model_circuit_open");
+    // The successful last-route probe closes the circuit again. The entry is
+    // retained (closed, not deleted) so a superseded probe can still detect
+    // that its generation is stale; the pruner reclaims it later.
+    const closedState = modelCircuitInternals.modelCircuitStates.get(
+      modelCircuitInternals.circuitKey("openai", "gpt-5.5"),
+    );
+    expect(closedState?.openUntil).toBe(0);
+  });
+
+  it("still skips an open route when a runnable fallback remains", async () => {
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
+    const sessionId = "session:circuit-runnable-fallback";
+    const run = vi.fn(async (provider: string, model: string) => {
+      if (provider === "openai") {
+        throw new FailoverError("provider overloaded", {
+          provider,
+          model,
+          reason: "overloaded",
+        });
+      }
+      return "fallback-ok";
+    });
+
+    for (let index = 0; index < modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
+      const turn = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId,
+        run,
+      });
+      expect(turn.result).toBe("fallback-ok");
+    }
+
+    const skipped = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionId,
+      run,
+    });
+
+    expect(skipped.result).toBe("fallback-ok");
+    expect(skipped.attempts[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      code: "model_circuit_open",
+    });
+  });
+
+  it("releases a half-open recovery probe when the attempt throws", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
+    const overloaded = new FailoverError("provider overloaded", {
+      provider: "openai",
+      model: "gpt-5.5",
+      reason: "overloaded",
+    });
+    const degradedRun = vi.fn(async (provider: string) => {
+      if (provider === "openai") {
+        throw overloaded;
+      }
+      return "fallback-ok";
+    });
+
+    try {
+      for (let index = 0; index < modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
+        await runWithModelFallback({ cfg, provider: "openai", model: "gpt-5.5", run: degradedRun });
+      }
+      // Without an open circuit the terminal attempt below is not a half-open
+      // probe and this regression would silently test nothing.
+      expect(
+        modelCircuitInternals.modelCircuitStates.get(
+          modelCircuitInternals.circuitKey("openai", "gpt-5.5"),
+        )?.openUntil,
+      ).toBeGreaterThan(now);
+      now += modelCircuitInternals.INITIAL_OPEN_MS + 1;
+      const terminalError = makeCommandLaneTaskTimeoutError("main", 1_000);
+      const terminalRun = vi.fn(async () => {
+        throw terminalError;
+      });
+
+      await expect(
+        runWithModelFallback({ cfg, provider: "openai", model: "gpt-5.5", run: terminalRun }),
+      ).rejects.toBe(terminalError);
+
+      const recoveryRun = vi.fn(async (provider: string) =>
+        provider === "openai" ? "primary-recovered" : "fallback-ok",
+      );
+      const recovered = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run: recoveryRun,
+      });
+
+      expect(recovered.result).toBe("primary-recovered");
+      expect(recoveryRun).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("keeps trying the only candidate when no fallback can serve", async () => {
+    const cfg = makeDiagnosticFallbackConfig([]);
+    const failure = new FailoverError("provider overloaded", {
+      provider: "openai",
+      model: "gpt-5.5",
+      reason: "overloaded",
+    });
+    const run = vi.fn().mockRejectedValue(failure);
+
+    for (let index = 0; index <= modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.5",
+          run,
+        }),
+      ).rejects.toBe(failure);
+    }
+
+    expect(run).toHaveBeenCalledTimes(modelCircuitInternals.FAILURE_THRESHOLD + 1);
+    expect(modelCircuitInternals.modelCircuitStates.size).toBe(0);
   });
 
   it("does not replay CLI max-turn failures on configured fallback models", async () => {

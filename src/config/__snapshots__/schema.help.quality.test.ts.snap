@@ -27,6 +27,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "agents.defaults.mediaModels.video.fallbacks.*",
   "agents.defaults.mediaModels.video.primary",
   "agents.defaults.model",
+  "agents.defaults.model.circuitBreaker.enabled",
   "agents.defaults.model.fallbacks.*",
   "agents.defaults.model.primary",
   "agents.defaults.modelPolicy.allow.*",

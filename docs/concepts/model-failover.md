@@ -262,6 +262,34 @@ If the entire candidate chain is exhausted only by overload failures, the reply 
 
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
+### Route circuit breaker
+
+The route circuit breaker is off by default. It changes which configured routes are attempted across turns, so it is opt-in:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-5.5",
+        "fallbacks": ["anthropic/claude-opus-4-7"],
+        "circuitBreaker": { "enabled": true }
+      }
+    }
+  }
+}
+```
+
+With it disabled, the per-run cooldown and skip behavior described above is unchanged.
+
+The circuit is process-global (keyed by agent directory, provider, and model), so the switch is accepted only on `agents.defaults.model`. Setting it on a per-agent, subagent, or tool model chain is a config error rather than a silent no-op.
+
+Once enabled, OpenClaw tracks repeated transient failures for each agent, provider, and model route. Five `rate_limit`, `overloaded`, `server_error`, `timeout`, or `empty_response` failures within 10 minutes open the route circuit. While it is open, new turns skip that route only when another fallback candidate can actually reach a provider: a candidate that would be rejected before transport — by the session auth skip-cache, an exhausted provider cooldown, an unverified agent-harness preflight, or a TLS exclusion — does not count. When every remaining candidate is blocked, the open route is attempted anyway as a recovery probe, so a turn never fails with zero provider attempts because of the circuit.
+
+The first open period lasts 2 minutes. After it expires, one turn reserves a recovery probe while concurrent turns continue to fallback. A successful probe closes the circuit; another eligible failure doubles the open period up to 15 minutes. Recovery probes carry the route state generation they observed, so when last-route probes overlap a superseded completion cannot overwrite a newer result. The state is process-local, bounded, and cleared by a Gateway restart.
+
+`timeout` failures are not counted while the local event loop is saturated (rolling utilization at or above 0.9). On a saturated host, in-flight provider calls get classified as timeouts regardless of provider health, and counting them would open circuits for healthy routes exactly when the host needs them most. Other failure reasons still count, so a genuinely degraded provider trips the circuit even on a busy host.
+
 ### Candidate chain rules
 
 OpenClaw builds the candidate list from the currently requested `provider/model` plus configured fallbacks.
