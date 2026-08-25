@@ -201,11 +201,17 @@ describe("CronService startup catch-up repair scoping", () => {
         order.push("notify");
       }
     });
-    const requestHeartbeat = vi.fn((request: { reason?: string }) => {
-      if (request.reason && deferredAutoDisableReasons.has(request.reason)) {
-        order.push("heartbeat");
-      }
-    });
+    const requestHeartbeat = vi.fn(
+      (request: { source?: string; intent?: string; reason?: string }) => {
+        if (
+          request.source === "notifications-event" &&
+          request.intent === "immediate" &&
+          request.reason === "wake"
+        ) {
+          order.push("heartbeat");
+        }
+      },
+    );
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
