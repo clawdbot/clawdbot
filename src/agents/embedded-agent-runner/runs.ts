@@ -18,10 +18,8 @@ import {
   resolveActiveReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveReplyBackendQueueMessageMismatch,
-  resolveReplyRunPhaseForSessionId,
   supersedeReplyRunByRunId,
   type ReplyOperation,
-  type ReplyOperationPhase,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -802,10 +800,13 @@ export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
   return resolveEmbeddedAgentRunProgressState(sessionId) !== undefined;
 }
 
-export function resolveEmbeddedAgentReplyRunPhase(
+export function resolveEmbeddedReplyActivity(
   sessionId: string,
-): ReplyOperationPhase | undefined {
-  return resolveReplyRunPhaseForSessionId(sessionId);
+): Pick<ReplyOperation, "phase" | "lastActivityAtMs"> | undefined {
+  const operation = resolveActiveReplyOperationForSessionId(sessionId);
+  return operation
+    ? { phase: operation.phase, lastActivityAtMs: operation.lastActivityAtMs }
+    : undefined;
 }
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {

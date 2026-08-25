@@ -34,6 +34,7 @@ type InternalAgentTurnFacadeOptions = {
 type InternalAgentTurnDispatchOptions = {
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -102,6 +103,15 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
             ...(meta ? { meta } : {}),
           };
           resolveAcceptance?.(acceptance);
+          const acceptedRunId =
+            typeof meta?.runId === "string" && meta.runId.trim() ? meta.runId.trim() : undefined;
+          if (
+            meta?.cached === true &&
+            acceptedRunId &&
+            context.chatAbortControllers.get(acceptedRunId)?.executionStarted === true
+          ) {
+            dispatchOptions.onExecutionStarted?.();
+          }
         }
       },
       emitFinal: (frame, meta) => {
@@ -115,6 +125,9 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
           resolveFinal?.(final);
         }
       },
+      ...(dispatchOptions.onExecutionStarted
+        ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
+        : {}),
     };
     const operation = runWithGatewayRequestEnvelope(
       method,

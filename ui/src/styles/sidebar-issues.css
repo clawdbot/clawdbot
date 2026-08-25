@@ -459,6 +459,10 @@
   color: var(--danger);
 }
 
+.sidebar-issues-panel__details[data-attention-kind="scopeUpgrade"] .sidebar-issues-panel__icon {
+  color: var(--warn);
+}
+
 .sidebar-issues-panel__dismiss {
   display: inline-grid;
   width: 24px;

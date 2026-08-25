@@ -16,6 +16,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { requiresMattermostMediaUpload } from "../normalize.js";
 import type { MattermostSendResult } from "./send.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
@@ -28,6 +29,7 @@ type SendMattermostMessage = (
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
+    requireMediaUpload?: boolean;
     replyToId?: string;
   },
 ) => Promise<MattermostSendResult>;
@@ -105,11 +107,14 @@ export async function deliverMattermostReplyPayload(params: {
         acceptedContents.push(result.content);
       },
       sendMedia: async ({ mediaUrl, caption }) => {
+        // Require upload for local media so a failure surfaces instead of
+        // silently posting the caption alone (mirrors channel.ts send paths).
         const result = await params.sendMessage(deliveryTarget, caption ?? "", {
           cfg: params.cfg,
           accountId: params.accountId,
           mediaUrl,
           mediaLocalRoots,
+          ...(requiresMattermostMediaUpload(mediaUrl) ? { requireMediaUpload: true } : {}),
           replyToId: params.replyToId,
         });
         results.push(result);

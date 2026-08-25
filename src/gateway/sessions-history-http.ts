@@ -36,16 +36,12 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import {
   buildSessionHistorySnapshot,
+  readSessionHistoryRawSnapshotAsync,
   resolveCursorSeq,
-  resolveSessionHistoryTailReadOptions,
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
-import {
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionMessagesWithSourceAsync,
-} from "./session-transcript-readers.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -221,46 +217,21 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  let boundedSnapshot:
-    | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>
-    | undefined;
-  let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
+  const historyTarget = {
+    agentId: target.agentId,
+    sessionEntry: entry,
+    sessionId: entry.sessionId,
+    sessionKey: target.canonicalKey,
+    storePath: target.storePath,
+  };
+  let rawSnapshot: Awaited<ReturnType<typeof readSessionHistoryRawSnapshotAsync>>;
   try {
-    boundedSnapshot =
-      cursor === undefined && typeof limit === "number"
-        ? await readRecentSessionMessagesWithStatsAsync(
-            {
-              agentId: target.agentId,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: target.canonicalKey,
-              storePath: target.storePath,
-            },
-            {
-              ...resolveSessionHistoryTailReadOptions(limit),
-              allowResetArchiveFallback: true,
-            },
-          )
-        : undefined;
-    // Cursor reads still need an arbitrary historical window. The common first
-    // page path is bounded above so `limit=1` cannot materialize huge transcripts.
-    fullSnapshot =
-      boundedSnapshot === undefined && entry?.sessionId
-        ? await readSessionMessagesWithSourceAsync(
-            {
-              agentId: target.agentId,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: target.canonicalKey,
-              storePath: target.storePath,
-            },
-            {
-              mode: "full",
-              reason: "session history cursor pagination",
-              allowResetArchiveFallback: true,
-            },
-          )
-        : undefined;
+    rawSnapshot = await readSessionHistoryRawSnapshotAsync({
+      cursor,
+      target: historyTarget,
+      limit,
+      maxChars: effectiveMaxChars,
+    });
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
@@ -276,16 +247,9 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
+  const historySnapshot = { ...rawSnapshot, maxChars: effectiveMaxChars, limit, cursor };
   if (!shouldStreamSse(req)) {
-    const history = buildSessionHistorySnapshot({
-      rawMessages: rawSnapshot,
-      maxChars: effectiveMaxChars,
-      limit,
-      cursor,
-      rawTranscriptSeq: boundedSnapshot?.totalMessages,
-      totalRawMessages: boundedSnapshot?.totalMessages,
-    }).history;
+    const history = buildSessionHistorySnapshot(historySnapshot).history;
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
@@ -293,34 +257,20 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  const transcriptCandidates = entry?.sessionId
-    ? new Set(
-        resolveSessionTranscriptCandidates(
-          entry.sessionId,
-          target.storePath,
-          undefined,
-          target.agentId,
-        )
-          .map((candidate) => resolveTranscriptPathForComparison(candidate))
-          .filter((candidate): candidate is string => typeof candidate === "string"),
-      )
-    : new Set<string>();
+  const transcriptCandidates = new Set(
+    resolveSessionTranscriptCandidates(
+      historyTarget.sessionId,
+      target.storePath,
+      undefined,
+      target.agentId,
+    )
+      .map((candidate) => resolveTranscriptPathForComparison(candidate))
+      .filter((candidate): candidate is string => typeof candidate === "string"),
+  );
 
   const sseState = SessionHistorySseState.fromRawSnapshot({
-    target: {
-      agentId: target.agentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: target.canonicalKey,
-      storePath: target.storePath,
-    },
-    rawMessages: rawSnapshot,
-    rawTranscriptSeq: boundedSnapshot?.totalMessages,
-    totalRawMessages: boundedSnapshot?.totalMessages,
-    transcriptPath: boundedSnapshot?.transcriptPath ?? fullSnapshot?.transcriptPath,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
+    ...historySnapshot,
+    target: historyTarget,
   });
   let sentHistory = sseState.snapshot();
   let streamStopped = false;
@@ -499,11 +449,8 @@ export async function handleSessionHistoryHttpRequest(
     // transcript write in the gateway would otherwise append a Promise-chain
     // entry capturing `update.message` to every open SSE stream's queue —
     // O(streams × updates) for busy deployments.
-    if (!entry?.sessionId) {
-      return;
-    }
     const updateMatchesIdentity =
-      update.target?.sessionId === entry.sessionId &&
+      update.target?.sessionId === historyTarget.sessionId &&
       normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
     const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {

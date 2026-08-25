@@ -370,6 +370,7 @@ type ToolHandlerState = Pick<
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"

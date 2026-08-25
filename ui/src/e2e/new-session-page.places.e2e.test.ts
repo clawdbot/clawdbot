@@ -2,13 +2,16 @@ import { expect, it } from "vitest";
 import {
   PICKED,
   WORKSPACE,
+  captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  newSessionComposerProofArtifactDir,
   pollLocatorText,
+  prepareNewSessionComposerUiProof,
   prepareProjectUiProof,
   projectProofArtifactDir,
 } from "./new-session-page.test-support.ts";
@@ -17,10 +20,19 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it("keeps the pre-submit draft on the composer and creates exactly one session", async () => {
+    await prepareNewSessionComposerUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: newSessionComposerProofArtifactDir,
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -49,6 +61,14 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
+      await message.fill("/");
+      const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
+      await pollLocatorText(slashMenu).toContain("/status");
+      expect(await slashMenu.textContent()).not.toContain("/clear");
+      await captureNewSessionComposerUiProof(page, "slash-menu-open.png");
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(750);
+      }
       await message.fill("fix the flaky draft test");
 
       // Owner boundary: the New Session page (new-session-page.ts:228) keeps

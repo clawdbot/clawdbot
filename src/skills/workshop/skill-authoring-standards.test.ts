@@ -2,42 +2,30 @@ import { describe, expect, it } from "vitest";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
 import { buildLearnPrompt } from "./learn-prompt.js";
-import {
-  SKILL_AUTHORING_STANDARDS_PROMPT,
-  SKILL_AUTONOMOUS_CAPTURE_EXCLUSIONS_PROMPT,
-} from "./skill-authoring-standards.js";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js";
 
 describe("skill authoring standards", () => {
-  it("defines routing, naming, body, token, evidence, and durable-fix requirements", () => {
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("first ~60 characters");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("one trigger per actual branch");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("notes, helpers, or workflows");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("class-level name");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("checkable completion criterion");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("direct pointer");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("one source for each meaning");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("Every sentence must earn its tokens");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("never invent flags");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("capture the working fix");
-    expect(SKILL_AUTONOMOUS_CAPTURE_EXCLUSIONS_PROMPT).toBe(
-      "- NEVER capture: environment-dependent failures; claims that a tool or provider is broken or unavailable; transient errors that later resolved; one-off task narratives or session recaps; sequences of failed attempts dressed up as best practice; procedures the evidence did not verify.",
-    );
+  it("defines the lean procedure standard", () => {
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("under 10,000 characters");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("Procedures, not records");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("first 60 characters");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("2–4 words");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("completion criterion");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("one source per meaning");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("never the failed attempts");
   });
 
-  it("is included verbatim in learn, experience-review, and history-scan prompts", () => {
+  it("keeps review instructions in the tool description instead of the review prompt", () => {
     const learnPrompt = buildLearnPrompt("Capture the recovery procedure");
     const experienceReviewPrompt = buildSkillExperienceReviewPrompt({
       ctx: { runId: "run-1" },
-      transcript: "[user]\nFix it\n\n[assistant]\nRecovered.",
-      modelIterations: 10,
     });
     const historyScanPrompt = buildSkillHistoryScanPrompt({ sessions: [] });
 
-    for (const prompt of [learnPrompt, experienceReviewPrompt, historyScanPrompt]) {
+    for (const prompt of [learnPrompt, historyScanPrompt]) {
       expect(prompt).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
       expect(prompt.split(SKILL_AUTHORING_STANDARDS_PROMPT)).toHaveLength(2);
     }
-    expect(experienceReviewPrompt).toContain(SKILL_AUTONOMOUS_CAPTURE_EXCLUSIONS_PROMPT);
-    expect(historyScanPrompt).toContain(SKILL_AUTONOMOUS_CAPTURE_EXCLUSIONS_PROMPT);
+    expect(experienceReviewPrompt).not.toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
   });
 });

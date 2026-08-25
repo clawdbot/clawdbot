@@ -156,7 +156,11 @@ describe("iOS release shell wrapper arguments", () => {
     expect(script).toContain('export GIT_COMMIT="${RELEASE_GIT_COMMIT}"');
   });
 
-  function runSharedFastlane(options: { fastlaneExit: number; bundleGemfile?: string }) {
+  function runSharedFastlane(options: {
+    fastlaneExit: number;
+    bundleGemfile?: string;
+    changeDirectoryAfterSource?: boolean;
+  }) {
     const binDir = tempDirs.make("openclaw-fastlane-test-");
     const bundle = path.join(binDir, "bundle");
     const fastlane = path.join(binDir, "fastlane");
@@ -175,7 +179,12 @@ describe("iOS release shell wrapper arguments", () => {
     chmodSync(fastlane, 0o755);
     return spawnSync(
       BASH_BIN,
-      ["-c", "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan"],
+      [
+        "-c",
+        options.changeDirectoryAfterSource
+          ? "source scripts/lib/ios-fastlane.sh; cd apps/ios; run_ios_fastlane ios release_plan"
+          : "source scripts/lib/ios-fastlane.sh; run_ios_fastlane ios release_plan",
+      ],
       {
         cwd: process.cwd(),
         env: {
@@ -197,6 +206,16 @@ describe("iOS release shell wrapper arguments", () => {
   it("overrides a hostile inherited Gemfile in the shared runner", () => {
     const result = runSharedFastlane({
       bundleGemfile: "/tmp/hostile/Gemfile",
+      fastlaneExit: 0,
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("keeps the repository Gemfile after the caller changes directories", () => {
+    const result = runSharedFastlane({
+      bundleGemfile: "/tmp/hostile/Gemfile",
+      changeDirectoryAfterSource: true,
       fastlaneExit: 0,
     });
 

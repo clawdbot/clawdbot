@@ -45,10 +45,10 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
-import ai.openclaw.app.selectableAgents
+import ai.openclaw.app.ui.AgentPicker
+import ai.openclaw.app.ui.AgentPickerState
+import ai.openclaw.app.ui.agentPickerState
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
-import ai.openclaw.app.ui.design.AgentAvatarSource
-import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -59,7 +59,6 @@ import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
-import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
@@ -689,22 +688,30 @@ fun ChatScreen(
       },
     )
 
-    ChatAgentSelector(
-      activeAgentId = activeAgentId,
-      agents = gatewayAgents,
-      onSelectAgent = viewModel::selectChatAgent,
-    )
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      ChatAgentSelector(
+        activeAgentId = activeAgentId,
+        agents = gatewayAgents,
+        onSelectAgent = viewModel::selectChatAgent,
+        modifier = Modifier.weight(1f),
+      )
 
-    ChatSessionSwitcher(
-      sessionKey = sessionKey,
-      sessions = sessions,
-      mainSessionKey = mainSessionKey,
-      onSelectSession = { entry ->
-        viewModel.switchChatSession(entry.key, entry.ownerAgentId)
-        viewModel.refreshChatSessions(limit = 100)
-      },
-      onOpenSessions = onOpenSessions,
-    )
+      ChatSessionSwitcher(
+        sessionKey = sessionKey,
+        sessions = sessions,
+        mainSessionKey = mainSessionKey,
+        onSelectSession = { entry ->
+          viewModel.switchChatSession(entry.key, entry.ownerAgentId)
+          viewModel.refreshChatSessions(limit = 100)
+        },
+        onOpenSessions = onOpenSessions,
+        modifier = Modifier.weight(1f),
+      )
+    }
 
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
       ChatNotice(
@@ -978,24 +985,50 @@ private fun ChatAgentSelector(
   activeAgentId: String,
   agents: List<GatewayAgentSummary>,
   onSelectAgent: (String) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-  val selectableAgents = agents.selectableAgents()
-  if (selectableAgents.size <= 1) return
+  val state = chatAgentPickerState(activeAgentId = activeAgentId, agents = agents)
+  if (!shouldShowChatAgentPicker(state)) return
+  AgentPicker(state = state, onSelectAgent = onSelectAgent, modifier = modifier)
+}
 
-  Row(
-    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(6.dp),
-  ) {
-    selectableAgents.forEach { agent ->
-      ChatSessionChip(
-        text = chatAgentChipText(agent),
-        avatarSource = agentAvatarSource(agent),
-        active = agent.id == activeAgentId,
-        onClick = { onSelectAgent(agent.id) },
-      )
-    }
-  }
+internal fun chatAgentPickerState(
+  activeAgentId: String,
+  agents: List<GatewayAgentSummary>,
+) = agentPickerState(agents = agents, selectedAgentId = activeAgentId, fallbackToFirst = false)
+
+internal fun shouldShowChatAgentPicker(state: AgentPickerState): Boolean = state.agents.isNotEmpty() && (state.agents.size > 1 || state.selected == null)
+
+internal data class ChatSessionPickerState(
+  val choices: List<ChatSessionEntry>,
+  val selected: ChatSessionEntry?,
+  val hasMore: Boolean,
+)
+
+internal fun chatSessionPickerState(
+  sessionKey: String,
+  sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
+  nowMs: Long = System.currentTimeMillis(),
+): ChatSessionPickerState {
+  val allChoices =
+    resolveSessionChoices(
+      currentSessionKey = sessionKey,
+      sessions = sessions,
+      mainSessionKey = mainSessionKey,
+      nowMs = nowMs,
+    )
+  val choices =
+    compactSessionChoices(
+      choices = allChoices,
+      currentSessionKey = sessionKey,
+      mainSessionKey = mainSessionKey,
+    )
+  return ChatSessionPickerState(
+    choices = choices,
+    selected = choices.firstOrNull { isActiveSessionChoice(it.key, sessionKey, mainSessionKey) } ?: choices.firstOrNull(),
+    hasMore = hasAdditionalSessionChoices(sessions, choices, mainSessionKey),
+  )
 }
 
 @Composable
@@ -1005,100 +1038,78 @@ private fun ChatSessionSwitcher(
   mainSessionKey: String,
   onSelectSession: (ChatSessionEntry) -> Unit,
   onOpenSessions: () -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-  val allChoices =
-    remember(sessionKey, sessions, mainSessionKey) {
-      resolveSessionChoices(
-        currentSessionKey = sessionKey,
-        sessions = sessions,
-        mainSessionKey = mainSessionKey,
-      )
-    }
-  val choices =
-    remember(sessionKey, allChoices, mainSessionKey) {
-      compactSessionChoices(
-        choices = allChoices,
-        currentSessionKey = sessionKey,
-        mainSessionKey = mainSessionKey,
-      )
-    }
-  val hasMoreSessions =
-    remember(sessions, choices, mainSessionKey) {
-      hasAdditionalSessionChoices(
-        sessions = sessions,
-        displayedChoices = choices,
-        mainSessionKey = mainSessionKey,
-      )
-    }
-  if (choices.size <= 1 && !hasMoreSessions) return
+  val state = remember(sessionKey, sessions, mainSessionKey) { chatSessionPickerState(sessionKey, sessions, mainSessionKey) }
+  val selected = state.selected ?: return
+  if (state.choices.size <= 1 && !state.hasMore) return
+  var expanded by remember { mutableStateOf(false) }
 
-  Row(
-    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(6.dp),
-  ) {
-    choices.forEach { entry ->
-      ChatSessionChip(
-        text = chatSessionChipText(entry = entry, mainSessionKey = mainSessionKey),
-        active = isActiveSessionChoice(entry.key, sessionKey, mainSessionKey),
-        onClick = { onSelectSession(entry) },
-      )
-    }
-    if (hasMoreSessions) {
-      Surface(
-        onClick = onOpenSessions,
-        modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-        shape = RoundedCornerShape(ClawTheme.radii.pill),
-        color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
-        contentColor = ClawTheme.colors.textMuted,
-        border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
-      ) {
-        Row(
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-          Icon(imageVector = Icons.Default.MoreHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
-          Text(text = nativeString("All"), style = ClawTheme.type.caption, maxLines = 1)
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun ChatSessionChip(
-  text: String,
-  avatarSource: AgentAvatarSource? = null,
-  active: Boolean,
-  onClick: () -> Unit,
-) {
-  Surface(
-    onClick = onClick,
-    modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
-    color = if (active) ClawTheme.colors.surfacePressed.copy(alpha = 0.9f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.7f)),
-  ) {
-    Row(
-      modifier =
-        Modifier.padding(
-          horizontal = if (avatarSource == null) 11.dp else 8.dp,
-          vertical = if (avatarSource == null) 7.dp else 5.dp,
-        ),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
+  Box(modifier = modifier) {
+    Surface(
+      onClick = { expanded = true },
+      modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
+      shape = RoundedCornerShape(ClawTheme.radii.pill),
+      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
+      contentColor = ClawTheme.colors.text,
+      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
     ) {
-      if (avatarSource != null) {
-        ClawAgentAvatar(source = avatarSource, size = 20.dp) {}
+      Row(
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+      ) {
+        Text(
+          text = chatSessionChipText(entry = selected, mainSessionKey = mainSessionKey),
+          modifier = Modifier.weight(1f),
+          style = ClawTheme.type.caption,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Icon(
+          imageVector = Icons.Default.KeyboardArrowDown,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
       }
-      Text(
-        text = text,
-        style = ClawTheme.type.caption,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
+    }
+
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false },
+      containerColor = ClawTheme.colors.surfaceRaised,
+    ) {
+      state.choices.forEach { entry ->
+        val active = isActiveSessionChoice(entry.key, sessionKey, mainSessionKey)
+        DropdownMenuItem(
+          text = {
+            Text(
+              text = chatSessionChipText(entry = entry, mainSessionKey = mainSessionKey),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          },
+          trailingIcon = {
+            if (active) {
+              Icon(imageVector = Icons.Default.Check, contentDescription = null)
+            }
+          },
+          onClick = {
+            expanded = false
+            onSelectSession(entry)
+          },
+        )
+      }
+      if (state.hasMore) {
+        DropdownMenuItem(
+          text = { Text(text = nativeString("All"), maxLines = 1) },
+          leadingIcon = { Icon(imageVector = Icons.Default.MoreHoriz, contentDescription = null) },
+          onClick = {
+            expanded = false
+            onOpenSessions()
+          },
+        )
+      }
     }
   }
 }
@@ -3057,12 +3068,6 @@ internal fun chatSessionChipText(
       entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
     }
   return friendlySessionName(name)
-}
-
-internal fun chatAgentChipText(agent: GatewayAgentSummary): String {
-  val name = agent.name?.trim()?.takeIf { it.isNotEmpty() } ?: agent.id
-  val emoji = agent.emoji?.trim()?.takeIf { it.isNotEmpty() } ?: return name
-  return nativeString("\$emoji \$name", emoji, name)
 }
 
 internal fun selectedChatAgentId(

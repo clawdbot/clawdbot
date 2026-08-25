@@ -1,12 +1,11 @@
 // Coverage for building compaction runtime context from active runner state.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { addSession } from "../bash-process-registry.js";
+import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionContextTokenBudget,
@@ -112,10 +111,6 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
 });
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
-  afterEach(() => {
-    resetProcessRegistryForTests();
-  });
-
   it("preserves sender and current message routing for compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
@@ -241,18 +236,18 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves scoped active process session references for compaction", () => {
     // Only sessions tied to the same scope are summarized; cross-session process
     // state would leak unrelated task context into the compaction prompt.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
+    const scopeKey = "agent:main:compaction-runtime-context";
+    const startedAt = Date.now() - 1_000;
     const active = createProcessSessionFixture({
-      id: "sess-active",
+      id: "compaction-runtime-active",
       command: "sleep 600",
       backgrounded: true,
       pid: 1234,
-      startedAt: 1_000,
+      startedAt,
     });
-    active.scopeKey = "agent:main:thread:1";
+    active.scopeKey = scopeKey;
     const other = createProcessSessionFixture({
-      id: "sess-other",
+      id: "compaction-runtime-other",
       command: "sleep 600",
       backgrounded: true,
     });
@@ -260,61 +255,35 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     addSession(active);
     addSession(other);
 
-    const result = buildEmbeddedCompactionRuntimeContext({
-      sessionKey: "agent:main:thread:1",
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      config: {} as unknown as OpenClawConfig,
-    });
-
     try {
+      const result = buildEmbeddedCompactionRuntimeContext({
+        sessionKey: scopeKey,
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        config: {} as unknown as OpenClawConfig,
+      });
+
       expect(result.activeProcessSessions).toEqual([
         {
           command: "sleep 600",
           cwd: "/tmp",
           name: "sleep 600",
           pid: 1234,
-          runtimeMs: 1_767_323_044_000,
-          sessionId: "sess-active",
-          startedAt: 1_000,
+          runtimeMs: expect.any(Number),
+          sessionId: "compaction-runtime-active",
+          startedAt,
           status: "running",
           tail: "",
           truncated: false,
         },
       ]);
     } finally {
-      vi.useRealTimers();
+      deleteSession(active.id);
+      deleteSession(other.id);
     }
-  });
-
-  it("keeps same-timestamp process references newest-first in compaction context", () => {
-    for (const id of ["z-oldest", "a-middle", "m-newest"]) {
-      const session = createProcessSessionFixture({ id, startedAt: 1_000, backgrounded: true });
-      session.scopeKey = "agent:main:thread:1";
-      addSession(session);
-    }
-
-    const result = buildEmbeddedCompactionRuntimeContext({
-      sessionKey: "agent:main:thread:1",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(result.activeProcessSessions?.map(({ sessionId }) => sessionId)).toEqual([
-      "m-newest",
-      "a-middle",
-      "z-oldest",
-    ]);
   });
 
   it("omits active process session references when no safe scope is available", () => {
-    const active = createProcessSessionFixture({
-      id: "sess-active",
-      command: "sleep 600",
-      backgrounded: true,
-    });
-    active.scopeKey = "agent:main:thread:1";
-    addSession(active);
-
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",

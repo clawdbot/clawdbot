@@ -3,8 +3,10 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 import type { BrowserRequest } from "./types.js";
 
 const routeState = vi.hoisted(() => ({
+  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
   cookiesSetManyViaPlaywright: vi.fn(async () => ({ added: 2 })),
   setDeviceViaPlaywright: vi.fn(async () => {}),
+  setHttpCredentialsViaPlaywright: vi.fn(async () => {}),
   withPlaywrightRouteContext: vi.fn(),
 }));
 
@@ -25,8 +27,10 @@ type PlaywrightRouteParams = {
     tab: { targetId: string };
     signal: AbortSignal;
     pw: {
+      cookiesGetViaPlaywright: typeof routeState.cookiesGetViaPlaywright;
       cookiesSetManyViaPlaywright: typeof routeState.cookiesSetManyViaPlaywright;
       setDeviceViaPlaywright: typeof routeState.setDeviceViaPlaywright;
+      setHttpCredentialsViaPlaywright: typeof routeState.setHttpCredentialsViaPlaywright;
     };
   }) => Promise<unknown>;
 };
@@ -39,25 +43,21 @@ function getPostHandler(route: string) {
   return handler;
 }
 
-describe("browser device route", () => {
-  beforeEach(() => {
-    routeState.cookiesSetManyViaPlaywright.mockClear();
-    routeState.setDeviceViaPlaywright.mockClear();
-    routeState.withPlaywrightRouteContext
-      .mockReset()
-      .mockImplementation(async (params: PlaywrightRouteParams) => {
-        await params.run({
-          cdpUrl: "http://127.0.0.1:18800",
-          tab: { targetId: "tab-1" },
-          signal: params.req.signal ?? new AbortController().signal,
-          pw: {
-            cookiesSetManyViaPlaywright: routeState.cookiesSetManyViaPlaywright,
-            setDeviceViaPlaywright: routeState.setDeviceViaPlaywright,
-          },
-        });
+beforeEach(() => {
+  vi.clearAllMocks();
+  routeState.withPlaywrightRouteContext
+    .mockReset()
+    .mockImplementation(async (params: PlaywrightRouteParams) => {
+      await params.run({
+        cdpUrl: "http://127.0.0.1:18800",
+        tab: { targetId: "tab-1" },
+        signal: params.req.signal ?? new AbortController().signal,
+        pw: routeState,
       });
-  });
+    });
+});
 
+describe("browser device route", () => {
   it("forwards the route lease signal into the atomic device transition", async () => {
     const controller = new AbortController();
     const response = createBrowserRouteResponse();
@@ -79,27 +79,36 @@ describe("browser device route", () => {
       signal: controller.signal,
     });
     expect(response.body).toEqual({ ok: true, targetId: "tab-1" });
+    expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: "device emulation" }),
+    );
+    expect(routeState.withPlaywrightRouteContext.mock.calls[0]?.[0]).not.toHaveProperty(
+      "enforceCurrentUrlAllowed",
+    );
+  });
+
+  it("never publishes a successful mutation after its route lease is canceled", async () => {
+    const controller = new AbortController();
+    const response = createBrowserRouteResponse();
+    routeState.setDeviceViaPlaywright.mockImplementationOnce(async () => controller.abort());
+
+    await expect(
+      getPostHandler("/set/device")?.(
+        {
+          params: {},
+          query: {},
+          body: { name: "iPhone 14" },
+          signal: controller.signal,
+        },
+        response.res,
+      ),
+    ).rejects.toThrow();
+
+    expect(response.body).toBeUndefined();
   });
 });
 
 describe("browser cookie batch route", () => {
-  beforeEach(() => {
-    routeState.cookiesSetManyViaPlaywright.mockClear();
-    routeState.withPlaywrightRouteContext
-      .mockReset()
-      .mockImplementation(async (params: PlaywrightRouteParams) => {
-        await params.run({
-          cdpUrl: "http://127.0.0.1:18800",
-          tab: { targetId: "tab-1" },
-          signal: params.req.signal ?? new AbortController().signal,
-          pw: {
-            cookiesSetManyViaPlaywright: routeState.cookiesSetManyViaPlaywright,
-            setDeviceViaPlaywright: routeState.setDeviceViaPlaywright,
-          },
-        });
-      });
-  });
-
   it("parses and injects a non-empty cookie batch", async () => {
     const controller = new AbortController();
     const response = createBrowserRouteResponse();
@@ -148,5 +157,45 @@ describe("browser cookie batch route", () => {
     expect(response.statusCode).toBe(400);
     expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
     expect(routeState.cookiesSetManyViaPlaywright).not.toHaveBeenCalled();
+  });
+});
+
+describe("browser storage route boundaries", () => {
+  it("keeps cookie reads behind the current-tab URL guard", async () => {
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserAgentStorageRoutes(app, {} as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/cookies")?.({ params: {}, query: {} }, response.res);
+
+    expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: "cookies", enforceCurrentUrlAllowed: true }),
+    );
+    expect(response.body).toEqual({ ok: true, targetId: "tab-1", cookies: [] });
+  });
+
+  it("applies HTTP credentials without ever returning the password", async () => {
+    const response = createBrowserRouteResponse();
+
+    await getPostHandler("/set/credentials")?.(
+      {
+        params: {},
+        query: {},
+        body: { username: "browser-user", password: "sensitive-browser-password" },
+      },
+      response.res,
+    );
+
+    expect(routeState.setHttpCredentialsViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      targetId: "tab-1",
+      username: "browser-user",
+      password: "sensitive-browser-password",
+      clear: false,
+    });
+    expect(response.body).toEqual({ ok: true, targetId: "tab-1" });
+    expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: "http credentials" }),
+    );
   });
 });

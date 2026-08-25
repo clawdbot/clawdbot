@@ -442,6 +442,7 @@ describe("DraftSubmissionFlow", () => {
 
     expect(flow.submissionOutcomeUnknown).toBe("gateway-changed");
     expect(flow.submitting).toBe(false);
+    expect(flow.canSubmit()).toBe(false);
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     finishOriginal({ key: "agent:main:old", initialRun: { status: "idle" } });
     await initialSubmission;

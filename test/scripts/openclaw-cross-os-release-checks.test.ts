@@ -98,15 +98,11 @@ import {
   resolveStaticFileContentType,
   startStaticFileServer,
   trimForSummary,
-  shouldExerciseManagedGatewayLifecycleAfterInstall,
   shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
-  shouldSkipInstallerDaemonHealthCheck,
-  shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
   shouldRetryCrossOsAgentTurnError,
   shouldSkipOptionalCrossOsAgentTurnError,
-  shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDashboardAssetUrls,
   verifyDevUpdateStatus,
@@ -116,6 +112,12 @@ import {
   writePackageDistInventoryForCandidate,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
+
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -1625,18 +1627,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       inputs: ["win32", "darwin", "linux"] as const,
       expected: [true, false, false],
     },
-    {
-      name: "stops the managed gateway before the manual fallback only on Windows",
-      decide: shouldStopManagedGatewayBeforeManualFallback,
-      inputs: ["win32", "darwin", "linux"] as const,
-      expected: [true, false, false],
-    },
-    {
-      name: "skips daemon health during installed onboarding only on native Windows",
-      decide: shouldSkipInstallerDaemonHealthCheck,
-      inputs: ["win32", "darwin", "linux"] as const,
-      expected: [true, false, false],
-    },
   ])("$name", ({ decide, inputs, expected }) => {
     expect(inputs.map((platform) => decide(platform))).toEqual(expected);
   });
@@ -1667,13 +1657,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--json",
       "--skip-health",
     ]);
-  });
-
-  it("keeps the Windows installer runtime on the manual gateway after managed lifecycle checks", () => {
-    expect(shouldExerciseManagedGatewayLifecycleAfterInstall("win32")).toBe(true);
-    expect(shouldUseManagedGatewayForInstallerRuntime("win32")).toBe(false);
-    expect(shouldExerciseManagedGatewayLifecycleAfterInstall("darwin")).toBe(false);
-    expect(shouldUseManagedGatewayForInstallerRuntime("darwin")).toBe(false);
   });
 
   it("runs the installed browser override import smoke only on native Windows", () => {
@@ -2641,7 +2624,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+        JSON.stringify({
+          files: ["dist/"],
+          name: "openclaw-fixture",
+          packageManager: rootPackageManager,
+          version: "0.0.0",
+        }),
         "utf8",
       );
       writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");

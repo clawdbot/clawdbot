@@ -892,6 +892,20 @@ export function resolveProviderModernModelRef(params: {
   return resolveProviderRuntimePlugin(params)?.isModernModelRef?.(params.context);
 }
 
+/** Returns provider-owned profile ids retired from generic credential resolution. */
+export function resolveProviderDeprecatedAuthProfileIds(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): readonly string[] {
+  return (
+    resolveBundledProviderPolicySurface(params.provider)?.deprecatedProfileIds ??
+    resolveLoadedProviderRuntimePlugin(params)?.deprecatedProfileIds ??
+    []
+  );
+}
+
 export function buildProviderMissingAuthMessageWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;

@@ -1058,7 +1058,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, { type: "response.created", response: initialResponse });
   writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
 
-  // Add output item
+  // Start empty because content_part.added owns appending content index 0.
   const outputItem = createAssistantOutputItem({
     id: outputItemId,
     text: "",
@@ -1068,7 +1068,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, {
     type: "response.output_item.added",
     output_index: 0,
-    item: outputItem,
+    item: { ...outputItem, content: [] },
   });
 
   // Add content part

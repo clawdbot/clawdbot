@@ -68,6 +68,8 @@ export type CodexStartOrResumeThreadParams = {
     decision: CodexThreadFinalConfigPatchDecision,
   ) => CodexThreadFinalConfigPatchResult;
   nativeHookRelayGeneration?: string;
+  /** Session-layer PreToolUse hooks must survive authoritative managed hook requirements. */
+  nativeHookRelayRequired?: boolean;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;

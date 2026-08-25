@@ -4652,6 +4652,7 @@ extension TalkModeManager {
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         try session.setCategory(.playAndRecord, mode: mode, options: options)
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])

@@ -229,7 +229,10 @@ describe("plugin-owned CLI execution host boundary", () => {
       runId: "plugin-user-input",
       nativeTools: ["AskUserQuestion"],
     });
-    const onBlockReply = vi.fn(async () => {});
+    let promptDelivered = createDeferred();
+    const onBlockReply = vi.fn(async () => {
+      promptDelivered.resolve();
+    });
     context.params.onBlockReply = onBlockReply;
     const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
     mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
@@ -240,9 +243,8 @@ describe("plugin-owned CLI execution host boundary", () => {
       }
       if (method === "question.waitAnswer") {
         const request = requests.get(params.id);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 5);
-        });
+        await promptDelivered.promise;
+        promptDelivered = createDeferred();
         return {
           status: "answered",
           answers: {

@@ -258,7 +258,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
             payload: { ok: true, result, components: true },
-            target: to,
+            target: result.receipt?.threadId ?? to,
             threadName,
           }),
         );
@@ -309,7 +309,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       return jsonResult(
         await appendDiscordThreadRenameResult(ctx, {
           payload: { ok: true, result },
-          target: to,
+          target: result.receipt?.threadId ?? to,
           threadName,
         }),
       );

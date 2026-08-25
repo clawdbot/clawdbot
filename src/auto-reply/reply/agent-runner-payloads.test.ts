@@ -13,6 +13,7 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
@@ -166,6 +167,83 @@ describe("buildReplyPayloads media filter integration", () => {
         },
       ]),
     );
+  });
+
+  it.each<{
+    name: string;
+    payload: ReplyPayload;
+    sentMediaUrls?: string[];
+    expected?: ReplyPayload[];
+  }>([
+    {
+      name: "unsent media after the legacy media URL was already sent",
+      payload: {
+        text: "already sent",
+        mediaUrl: "file:///tmp/sent.ogg",
+        mediaUrls: ["file:///tmp/unsent-a.ogg", "file:///tmp/unsent-b.ogg"],
+        audioAsVoice: true,
+      },
+      sentMediaUrls: ["file:///tmp/sent.ogg"],
+      expected: [
+        {
+          text: "already sent",
+          mediaUrl: undefined,
+          mediaUrls: ["file:///tmp/unsent-a.ogg", "file:///tmp/unsent-b.ogg"],
+          audioAsVoice: true,
+        },
+      ],
+    },
+    {
+      name: "an unsent portable presentation",
+      payload: {
+        text: "already sent",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+    },
+    {
+      name: "unsent legacy interactive controls",
+      payload: {
+        text: "already sent",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+        },
+      },
+    },
+    {
+      name: "unsent channel-specific content",
+      payload: { text: "already sent", channelData: { telegram: { buttons: [] } } },
+    },
+    {
+      name: "an unsent portable location",
+      payload: { text: "already sent", location: { latitude: 1, longitude: 2 } },
+    },
+    {
+      name: "an enabled delivery operation",
+      payload: { text: "already sent", delivery: { pin: true } },
+    },
+    {
+      name: "an enabled configured delivery operation",
+      payload: { text: "already sent", delivery: { pin: { enabled: true } } },
+    },
+    {
+      name: "no unsent content for a disabled delivery operation",
+      payload: { text: "already sent", delivery: { pin: { enabled: false } } },
+      expected: [],
+    },
+  ])("preserves $name when only the reply text was sent", async (testCase) => {
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [testCase.payload],
+      messagingToolSentTexts: ["already sent"],
+      messagingToolSentMediaUrls: testCase.sentMediaUrls,
+    });
+
+    const expected = testCase.expected ?? [testCase.payload];
+    expect(replyPayloads).toHaveLength(expected.length);
+    for (const [index, payload] of expected.entries()) {
+      expect(replyPayloads[index]).toMatchObject(payload);
+    }
   });
 
   it("shares first-reply threading across staged payload builds", async () => {

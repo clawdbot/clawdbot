@@ -17,6 +17,7 @@ function resumeResponse(threadId: string, restoredTurns = 0) {
       status: { type: "idle" },
       path: null,
       cwd: "/repo",
+      projectId: null,
       cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,

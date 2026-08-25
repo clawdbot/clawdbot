@@ -2373,6 +2373,86 @@ describe("handleFeishuMessage command authorization", () => {
     expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
   });
 
+  it("delivers unique rich-post attachments in their original mixed-media order", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockImplementation(
+      async (params: { fileKey: string; originalFilename?: string; type: "file" | "image" }) => ({
+        buffer: Buffer.from(params.fileKey),
+        contentType: params.type === "image" ? "image/png" : "video/mp4",
+        fileName: params.originalFilename ?? `${params.fileKey}.png`,
+      }),
+    );
+    mockSaveMediaBuffer.mockImplementation(
+      async (
+        buffer: Buffer,
+        contentType: string,
+        _direction: string,
+        _limit: number,
+        name: string,
+      ) => ({
+        id: name,
+        path: `/tmp/${name}`,
+        size: buffer.length,
+        contentType,
+      }),
+    );
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+      event: createFeishuTestEvent({
+        messageId: "msg-post-mixed-attachments",
+        senderOpenId: "ou-sender",
+        messageType: "post",
+        content: JSON.stringify({
+          title: "Rich text",
+          content: [
+            [
+              { tag: "media", file_key: "file_first", file_name: "first.mov" },
+              { tag: "img", image_key: "img_shared" },
+              { tag: "media", file_key: "file_last", file_name: "last.mov" },
+              { tag: "img", image_key: "img_shared" },
+              { tag: "media", file_key: "file_first", file_name: "first.mov" },
+              { tag: "img", image_key: "file_first" },
+            ],
+          ],
+        }),
+      }),
+    });
+
+    expect(
+      mockDownloadMessageResourceFeishu.mock.calls.map((_call, index) => {
+        const request = mockCallArg<{ fileKey: string; originalFilename?: string; type: string }>(
+          mockDownloadMessageResourceFeishu,
+          index,
+          0,
+        );
+        return {
+          fileKey: request.fileKey,
+          ...(request.originalFilename ? { fileName: request.originalFilename } : {}),
+          type: request.type,
+        };
+      }),
+    ).toEqual([
+      { fileKey: "file_first", fileName: "first.mov", type: "file" },
+      { fileKey: "img_shared", type: "image" },
+      { fileKey: "file_last", fileName: "last.mov", type: "file" },
+      { fileKey: "file_first", type: "image" },
+    ]);
+
+    const context = mockCallArg<{ MediaPaths?: string[]; MediaTypes?: string[] }>(
+      mockFinalizeInboundContext,
+      0,
+      0,
+    );
+    expect(context.MediaPaths).toEqual([
+      "/tmp/first.mov",
+      "/tmp/img_shared.png",
+      "/tmp/last.mov",
+      "/tmp/file_first.png",
+    ]);
+    expect(context.MediaTypes).toEqual(["video/mp4", "image/png", "video/mp4", "image/png"]);
+  });
+
   it("removes failed rich-post media markers while preserving post text", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired image key"));

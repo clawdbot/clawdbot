@@ -120,6 +120,7 @@ export type ChatThreadProps = {
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onRetryQueuedMessage?: (id: string) => void;
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;

@@ -9,7 +9,10 @@ import type {
   UpdateScheduleState,
 } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  hiddenScopeUpgradeCapability,
+} from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
@@ -288,7 +291,8 @@ describe("sidebar attention refresh ownership", () => {
       gateway,
       overlays,
       agentSelection,
-    } as ApplicationContext);
+      scopeUpgrade: hiddenScopeUpgradeCapability,
+    } as unknown as ApplicationContext);
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);
@@ -400,6 +404,7 @@ describe("sidebar attention refresh ownership", () => {
           return () => selectionListeners.delete(listener);
         },
       },
+      scopeUpgrade: hiddenScopeUpgradeCapability,
     } as unknown as ApplicationContext);
     vi.stubGlobal("localStorage", createTestStorageMock());
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
@@ -471,7 +476,8 @@ describe("sidebar attention refresh ownership", () => {
       gateway,
       overlays,
       agentSelection,
-    } as ApplicationContext);
+      scopeUpgrade: hiddenScopeUpgradeCapability,
+    } as unknown as ApplicationContext);
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);

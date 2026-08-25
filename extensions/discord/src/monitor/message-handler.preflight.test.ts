@@ -645,6 +645,7 @@ describe("preflightDiscordMessage", () => {
       {
         path: "/tmp/openclaw-discord-test/photo.png",
         contentType: "image/png",
+        fileName: "photo.png",
       },
     ]);
   });

@@ -38,6 +38,17 @@ import {
   updateSkillMenu,
   type SkillMenuHost,
 } from "../chat/components/chat-composer-skill-menu.ts";
+import {
+  createSlashMenuState,
+  getActiveSlashMenuOptionId,
+  getActiveSlashMenuOptionLabel,
+  handleSlashMenuKeydown,
+  isSlashMenuVisible,
+  renderSlashMenu,
+  resetSlashMenuState,
+  type SlashMenuHost,
+  updateSlashMenu,
+} from "../chat/components/chat-composer-slash-menu.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
@@ -77,11 +88,9 @@ type NewSessionComposerOptions = {
   onSubmit: () => void;
 };
 
-function submitNewSession(
-  options: NewSessionComposerOptions,
-  skillMenuState: NewSessionComposerTextareaController["skillMenuState"],
-) {
-  resetSkillMenuState(skillMenuState);
+function submitNewSession(options: NewSessionComposerOptions) {
+  resetSkillMenuState(options.textareaController.skillMenuState);
+  resetSlashMenuState(options.textareaController.slashMenuState);
   options.onSubmit();
 }
 
@@ -96,7 +105,7 @@ function renderStartControl(options: NewSessionComposerOptions) {
           ?disabled=${!options.canSubmit}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
-          @click=${() => submitNewSession(options, options.textareaController.skillMenuState)}
+          @click=${() => submitNewSession(options)}
         >
           ${options.submitting ? icons.loader : icons.arrowUp}
         </button>
@@ -113,7 +122,7 @@ function renderStartControl(options: NewSessionComposerOptions) {
           ?disabled=${!options.canSubmit}
           aria-busy=${String(options.submitting)}
           aria-label=${startLabel}
-          @click=${() => submitNewSession(options, options.textareaController.skillMenuState)}
+          @click=${() => submitNewSession(options)}
         >
           ${options.submitting ? icons.loader : icons.arrowUp}
         </button>
@@ -149,6 +158,7 @@ function renderStartControl(options: NewSessionComposerOptions) {
 export class NewSessionComposerTextareaController {
   private textarea: HTMLTextAreaElement | null = null;
   readonly skillMenuState = createSkillMenuState();
+  readonly slashMenuState = createSlashMenuState();
   capabilityMenuOpen = false;
   capabilityMenuView: ChatComposerPlusMenuView = "root";
 
@@ -176,6 +186,7 @@ export class NewSessionComposerTextareaController {
 
   disconnect() {
     resetSkillMenuState(this.skillMenuState);
+    resetSlashMenuState(this.slashMenuState);
     this.capabilityMenuOpen = false;
     this.capabilityMenuView = "root";
     if (this.textarea) {
@@ -185,13 +196,18 @@ export class NewSessionComposerTextareaController {
   }
 }
 
-export function renderDraftError(message: string) {
+export function renderDraftError(message: string, action?: { label: string; onClick: () => void }) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
       <span class="callout__content new-session-page__alert-message"
         >${formatUiError(message)}</span
       >
+      ${action
+        ? html`<button class="btn btn--sm" type="button" @click=${action.onClick}>
+            ${action.label}
+          </button>`
+        : nothing}
     </div>
   `;
 }
@@ -200,6 +216,7 @@ function handleComposerKeydown(
   event: KeyboardEvent,
   options: NewSessionComposerOptions,
   skillMenuHost: SkillMenuHost,
+  slashMenuHost: SlashMenuHost,
 ) {
   if (event.isComposing || event.keyCode === 229) {
     return;
@@ -209,6 +226,16 @@ function handleComposerKeydown(
       event,
       options.textareaController.skillMenuState,
       skillMenuHost,
+      options.requestUpdate,
+    )
+  ) {
+    return;
+  }
+  if (
+    handleSlashMenuKeydown(
+      event,
+      options.textareaController.slashMenuState,
+      slashMenuHost,
       options.requestUpdate,
     )
   ) {
@@ -225,7 +252,7 @@ function handleComposerKeydown(
   // Only silent gates (busy button, empty draft) keep Enter native.
   if (options.canSubmit || options.submitDisabledReason !== undefined) {
     event.preventDefault();
-    submitNewSession(options, options.textareaController.skillMenuState);
+    submitNewSession(options);
   }
 }
 
@@ -321,6 +348,7 @@ function renderNewSessionSelectionStatus(options: NewSessionComposerOptions) {
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const skillMenuState = options.textareaController.skillMenuState;
+  const slashMenuState = options.textareaController.slashMenuState;
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
     getDraft: () => options.textareaController.getTextarea()?.value ?? options.message,
@@ -328,7 +356,17 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     getTextarea: options.textareaController.getTextarea,
     refreshCommands: options.refreshCommands,
   };
-  const updateSkills = (target: HTMLTextAreaElement) =>
+  const slashMenuHost: SlashMenuHost = {
+    paneId: skillMenuHost.paneId,
+    getDraft: skillMenuHost.getDraft,
+    commitDraft: skillMenuHost.commitDraft,
+    resolveArgOptions: (command) => command.argOptions ?? [],
+    runCommand: () => submitNewSession(options),
+    refreshCommands: options.refreshCommands,
+    commandFilter: (command) => command.executeLocal !== true,
+  };
+  const updateMenus = (target: HTMLTextAreaElement) => {
+    updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
     updateSkillMenu(
       target.value,
       target.selectionStart,
@@ -336,10 +374,17 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       skillMenuHost,
       options.requestUpdate,
     );
+  };
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
-      updateSkills(target);
+      updateSkillMenu(
+        target.value,
+        target.selectionStart,
+        skillMenuState,
+        skillMenuHost,
+        options.requestUpdate,
+      );
     }
   };
   const attachmentProps = {
@@ -362,9 +407,20 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
   options.textareaController.syncDraft(options.message);
   const skillMenuVisible =
     !options.submitting && !options.messageLocked && isSkillMenuVisible(skillMenuState);
-  const skillMenuListboxId = paneDomId(skillMenuHost.paneId, "skill-menu-listbox");
-  const activeSkillOptionId = getActiveSkillMenuOptionId(skillMenuState, skillMenuHost.paneId);
-  const skillMenuAnnouncementId = paneDomId(skillMenuHost.paneId, "skill-active-announcement");
+  const slashMenuVisible =
+    !options.submitting && !options.messageLocked && isSlashMenuVisible(slashMenuState);
+  const menuVisible = skillMenuVisible || slashMenuVisible;
+  const menuListboxId = paneDomId(
+    skillMenuHost.paneId,
+    skillMenuVisible ? "skill-menu-listbox" : "slash-menu-listbox",
+  );
+  const activeMenuOptionId = skillMenuVisible
+    ? getActiveSkillMenuOptionId(skillMenuState, skillMenuHost.paneId)
+    : getActiveSlashMenuOptionId(slashMenuState, slashMenuHost.paneId);
+  const activeMenuOptionLabel = skillMenuVisible
+    ? getActiveSkillMenuOptionLabel(skillMenuState)
+    : getActiveSlashMenuOptionLabel(slashMenuState);
+  const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
   return html`
     <div
       class="agent-chat__composer-shell new-session-page__composer"
@@ -377,6 +433,14 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
+            ${slashMenuVisible
+              ? renderSlashMenu(
+                  slashMenuState,
+                  slashMenuHost,
+                  options.message,
+                  options.requestUpdate,
+                )
+              : nothing}
             ${skillMenuVisible
               ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
               : nothing}
@@ -389,19 +453,19 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               aria-label=${t("newSession.messagePlaceholder")}
               .value=${options.message}
               aria-autocomplete="list"
-              aria-controls=${ifDefined(skillMenuVisible ? skillMenuListboxId : undefined)}
-              aria-expanded=${ifDefined(skillMenuVisible ? "true" : undefined)}
-              aria-activedescendant=${ifDefined(activeSkillOptionId ?? undefined)}
-              aria-describedby=${skillMenuAnnouncementId}
+              aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
+              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
+              aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
+              aria-describedby=${menuAnnouncementId}
               @input=${(event: Event) => {
                 const target = event.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
-                updateSkills(target);
+                updateMenus(target);
                 options.onInput(target.value);
               }}
               @select=${handleSelect}
               @keydown=${(event: KeyboardEvent) =>
-                handleComposerKeydown(event, options, skillMenuHost)}
+                handleComposerKeydown(event, options, skillMenuHost, slashMenuHost)}
               @paste=${(event: ClipboardEvent) => {
                 if (!options.submitting && !options.messageLocked) {
                   handleChatAttachmentPaste(event, attachmentProps);
@@ -409,12 +473,12 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               }}
             ></textarea>
             <span
-              id=${skillMenuAnnouncementId}
+              id=${menuAnnouncementId}
               class="sr-only"
               role="status"
               aria-live="polite"
               aria-atomic="true"
-              >${getActiveSkillMenuOptionLabel(skillMenuState)}</span
+              >${activeMenuOptionLabel}</span
             >
           </div>
           <div class="agent-chat__composer-actions">${renderStartControl(options)}</div>

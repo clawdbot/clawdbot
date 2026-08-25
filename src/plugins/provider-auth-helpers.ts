@@ -237,20 +237,23 @@ export function applyAuthProfileConfig(
 export function configReferencesAuthProfile(cfg: OpenClawConfig, profileId: string): boolean {
   return (
     Boolean(cfg.auth?.profiles?.[profileId]) ||
-    Object.values(cfg.auth?.order ?? {}).some((order) => order.includes(profileId))
+    Object.values(cfg.auth?.order ?? {}).some((order) => order.includes(profileId)) ||
+    Object.values(cfg.models?.providers ?? {}).some((provider) => provider.apiKey === profileId)
   );
 }
 
 /**
- * Counterpart to {@link applyAuthProfileConfig}: drops a profile from
- * `auth.profiles` and every `auth.order` list. An emptied provider order is
- * deleted rather than left as `[]`, because an authored empty order is a hard
- * "select no profiles" instruction and would disable the provider entirely.
+ * Drops a profile from `auth.profiles`, every `auth.order` list, and provider-entry
+ * `apiKey` references. An emptied provider order is deleted rather than left as
+ * `[]`, because an authored empty order is a hard "select no profiles" instruction.
  */
 export function removeAuthProfileConfig(cfg: OpenClawConfig, profileId: string): OpenClawConfig {
   if (!configReferencesAuthProfile(cfg, profileId)) {
     return cfg;
   }
+  const authReferencesProfile =
+    Boolean(cfg.auth?.profiles?.[profileId]) ||
+    Object.values(cfg.auth?.order ?? {}).some((providerOrder) => providerOrder.includes(profileId));
   const profiles = Object.fromEntries(
     Object.entries(cfg.auth?.profiles ?? {}).filter(([id]) => id !== profileId),
   );
@@ -268,13 +271,27 @@ export function removeAuthProfileConfig(cfg: OpenClawConfig, profileId: string):
     {},
   );
   const { order: _droppedOrder, ...auth } = cfg.auth ?? {};
+  const providers = Object.fromEntries(
+    Object.entries(cfg.models?.providers ?? {}).map(([providerId, provider]) => {
+      if (provider.apiKey !== profileId) {
+        return [providerId, provider];
+      }
+      const { apiKey: _droppedApiKey, ...nextProvider } = provider;
+      return [providerId, nextProvider];
+    }),
+  );
   return {
     ...cfg,
-    auth: {
-      ...auth,
-      profiles,
-      ...(Object.keys(order).length > 0 ? { order } : {}),
-    },
+    ...(authReferencesProfile
+      ? {
+          auth: {
+            ...auth,
+            profiles,
+            ...(Object.keys(order).length > 0 ? { order } : {}),
+          },
+        }
+      : {}),
+    ...(cfg.models?.providers ? { models: { ...cfg.models, providers } } : {}),
   };
 }
 

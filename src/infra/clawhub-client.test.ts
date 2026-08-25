@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   fetchClawHubSkillInstallResolution,
   fetchClawHubSkillSecurityVerdicts,
@@ -51,14 +51,15 @@ function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
 }
 
 describe("clawhub client", () => {
-  const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
+  const originalEnv = captureEnv(["APPDATA", "HOME", "XDG_CONFIG_HOME"]);
 
-  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+  async function searchAuthorizationHeader(): Promise<string | null> {
+    let authorization: string | null = null;
     await expect(
       searchClawHubSkills({
         query: "calendar",
         fetchImpl: async (_input, init) => {
-          expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${expectedToken}`);
+          authorization = new Headers(init?.headers).get("Authorization");
           return new Response(JSON.stringify({ results: [] }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -66,6 +67,11 @@ describe("clawhub client", () => {
         },
       }),
     ).resolves.toStrictEqual([]);
+    return authorization;
+  }
+
+  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+    await expect(searchAuthorizationHeader()).resolves.toBe(`Bearer ${expectedToken}`);
   }
 
   afterEach(() => {
@@ -103,6 +109,90 @@ describe("clawhub client", () => {
       await expectSearchUsesAuthToken("fixture-legacy-token");
     });
   });
+
+  it.each(["clawhub", "clawdhub"])(
+    "loads ClawHub request auth from the Windows AppData %s config path",
+    async (configDirectory) => {
+      await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+        const configPath = path.join(appDataRoot, configDirectory, "config.json");
+        const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        deleteTestEnvValue("XDG_CONFIG_HOME");
+        try {
+          await fs.mkdir(path.dirname(configPath), { recursive: true });
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({ token: "fixture-appdata-token" }),
+            "utf8",
+          );
+
+          await expectSearchUsesAuthToken("fixture-appdata-token");
+        } finally {
+          platformSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("keeps XDG_CONFIG_HOME ahead of AppData on Windows", async () => {
+    await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+      await withTestDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
+        const appDataConfigPath = path.join(appDataRoot, "clawhub", "config.json");
+        const xdgConfigPath = path.join(xdgRoot, "clawhub", "config.json");
+        const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
+        try {
+          await Promise.all([
+            fs.mkdir(path.dirname(appDataConfigPath), { recursive: true }),
+            fs.mkdir(path.dirname(xdgConfigPath), { recursive: true }),
+          ]);
+          await Promise.all([
+            fs.writeFile(
+              appDataConfigPath,
+              JSON.stringify({ token: "stale-appdata-token" }),
+              "utf8",
+            ),
+            fs.writeFile(xdgConfigPath, JSON.stringify({ token: "fixture-xdg-token" }), "utf8"),
+          ]);
+
+          await expectSearchUsesAuthToken("fixture-xdg-token");
+        } finally {
+          platformSpy.mockRestore();
+        }
+      });
+    });
+  });
+
+  it.each([
+    ["without a token", JSON.stringify({})],
+    ["with malformed JSON", "{"],
+  ])(
+    "does not fall back to a legacy token when the canonical config exists %s",
+    async (_, contents) => {
+      await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+        const canonicalConfigPath = path.join(appDataRoot, "clawhub", "config.json");
+        const legacyConfigPath = path.join(appDataRoot, "clawdhub", "config.json");
+        const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        deleteTestEnvValue("XDG_CONFIG_HOME");
+        try {
+          await Promise.all([
+            fs.mkdir(path.dirname(canonicalConfigPath), { recursive: true }),
+            fs.mkdir(path.dirname(legacyConfigPath), { recursive: true }),
+          ]);
+          await Promise.all([
+            fs.writeFile(canonicalConfigPath, contents, "utf8"),
+            fs.writeFile(legacyConfigPath, JSON.stringify({ token: "stale-legacy-token" }), "utf8"),
+          ]);
+
+          await expect(searchAuthorizationHeader()).resolves.toBeNull();
+        } finally {
+          platformSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it.runIf(process.platform === "darwin")(
     "loads ClawHub request auth from the macOS Application Support path",

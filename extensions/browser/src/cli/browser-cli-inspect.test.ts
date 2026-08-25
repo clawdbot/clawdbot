@@ -95,7 +95,10 @@ function installInspectSpies() {
 describe("browser cli snapshot defaults", () => {
   const runBrowserInspect = async (args: string[], withJson = false) => {
     const program = new Command();
-    const browser = program.command("browser").option("--json", "JSON output", false);
+    const browser = program
+      .command("browser")
+      .option("--json", "JSON output", false)
+      .option("--timeout <ms>", "Timeout in ms", "30000");
     registerBrowserInspectCommands(browser, (cmd) => cmd.parent?.opts() ?? {});
     await program.parseAsync(withJson ? ["browser", "--json", ...args] : ["browser", ...args], {
       from: "user",
@@ -122,6 +125,24 @@ describe("browser cli snapshot defaults", () => {
     resetRuntimeCapture();
     configMocks.loadConfig.mockReturnValue({ browser: {} });
   });
+
+  it.each([
+    { command: "screenshot", requestPath: "/screenshot", timeout: "30000" },
+    { command: "screenshot", requestPath: "/screenshot", timeout: "60000" },
+    { command: "snapshot", requestPath: "/snapshot", timeout: "30000" },
+    { command: "snapshot", requestPath: "/snapshot", timeout: "60000" },
+  ])(
+    "inherits parent $timeout ms timeout for $command",
+    async ({ command, requestPath, timeout }) => {
+      const args = timeout === "30000" ? [command] : ["--timeout", timeout, command];
+      await runBrowserInspect(args, true);
+
+      expect(sharedMocks.callBrowserRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ timeout }),
+        expect.objectContaining({ path: requestPath }),
+      );
+    },
+  );
 
   it.each<SnapshotDefaultsCase>([
     {

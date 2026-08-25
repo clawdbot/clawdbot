@@ -203,7 +203,7 @@ function normalizeSlashCommandName(value: string): string {
 
 function appendSlashCommand(
   commands: SlashCommand[],
-  seen: Set<string>,
+  seen: Map<string, SlashCommand["getArgumentCompletions"]>,
   name: string,
   description: string,
   getArgumentCompletions?: SlashCommand["getArgumentCompletions"],
@@ -212,7 +212,7 @@ function appendSlashCommand(
   if (!normalizedName || seen.has(normalizedName)) {
     return;
   }
-  seen.add(normalizedName);
+  seen.set(normalizedName, getArgumentCompletions);
   commands.push({ name: normalizedName, description, getArgumentCompletions });
 }
 
@@ -247,7 +247,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     ? options.thinkingLevels.map((level) => level.label)
     : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
   const commands: SlashCommand[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, SlashCommand["getArgumentCompletions"]>();
   for (const command of TUI_COMMAND_DESCRIPTORS) {
     if (
       command.shared ||
@@ -287,7 +287,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
-      appendSlashCommand(commands, seen, alias, command.description);
+      appendSlashCommand(commands, seen, alias, command.description, seen.get(command.key));
     }
   }
 

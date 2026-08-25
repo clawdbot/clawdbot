@@ -93,6 +93,7 @@ describe("mattermost monitor resources", () => {
     const saveRemoteMedia = vi.fn(async () => ({
       path: "/tmp/file.png",
       contentType: "image/png",
+      fileName: "original screenshot.png",
     }));
 
     const resources = createMattermostMonitorResources({
@@ -113,6 +114,7 @@ describe("mattermost monitor resources", () => {
       {
         path: "/tmp/file.png",
         contentType: "image/png",
+        fileName: "original screenshot.png",
         kind: "image",
       },
     ]);
@@ -166,7 +168,7 @@ describe("mattermost monitor resources", () => {
       .mockRejectedValueOnce(new Error("download failed"));
     const request = vi.fn(async (requestPath: string) => {
       expect(requestPath).toBe("/files/file-audio/info");
-      return { mime_type: "audio/mpeg" };
+      return { mime_type: "audio/mpeg", name: "private-unavailable-recording.mp3" };
     });
     const resources = createMattermostMonitorResources({
       accountId: "default",

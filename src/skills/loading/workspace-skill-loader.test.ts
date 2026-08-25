@@ -13,6 +13,7 @@ import type {
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -226,6 +227,60 @@ async function setupWorkspaceSkillPlugin() {
 }
 
 describe("loadWorkspaceSkills", () => {
+  it("reuses unfiltered skill discovery until the workspace snapshot version changes", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "cached-skill"),
+      name: "cached-skill",
+      description: "Cached skill",
+    });
+    const config: OpenClawConfig = {};
+    const options = {
+      config,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: "",
+      pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
+      pluginMetadataSnapshot: createWorkspacePluginMetadataSnapshot({
+        workspaceDir,
+        config,
+        manifestRegistry: createWorkspacePluginRegistry(workspaceDir),
+      }),
+    };
+    const directoryReads = vi.spyOn(fsSync, "readdirSync");
+
+    try {
+      const first = loadWorkspaceSkills(workspaceDir, options);
+      const initialReadCount = directoryReads.mock.calls.length;
+      expect(initialReadCount).toBeGreaterThan(0);
+
+      const filtered = loadWorkspaceSkills(workspaceDir, {
+        ...options,
+        skillFilter: ["cached-skill"],
+      });
+      expect(filtered[0]).toBe(first[0]);
+      expect(directoryReads).toHaveBeenCalledTimes(initialReadCount);
+
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "fresh-skill"),
+        name: "fresh-skill",
+        description: "Fresh skill",
+      });
+      expect(loadWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name)).toEqual([
+        "cached-skill",
+      ]);
+      expect(directoryReads).toHaveBeenCalledTimes(initialReadCount);
+
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      expect(loadWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name)).toEqual([
+        "cached-skill",
+        "fresh-skill",
+      ]);
+      expect(directoryReads.mock.calls.length).toBeGreaterThan(initialReadCount);
+    } finally {
+      directoryReads.mockRestore();
+    }
+  });
+
   it("filters plugin-shipped skills through plugin config", async () => {
     const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
 

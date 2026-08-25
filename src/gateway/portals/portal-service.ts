@@ -11,6 +11,8 @@ import type {
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { handlePortalProxyRequest, handlePortalProxyUpgrade } from "./portal-http-proxy.js";
 
+const PORTAL_PORT_ALLOCATION_ATTEMPTS = 10;
+
 type PortalEntry = {
   id: string;
   title: string;
@@ -189,7 +191,40 @@ export function createGatewayPortalService(params: {
         // Registration precedes every bind so whole-gateway cleanup owns partial startup.
         params.httpServers.push(...servers);
         try {
+          const primaryServer = servers[0];
+          const primaryHost = params.httpBindHosts[0];
+          if (!primaryServer || !primaryHost) {
+            throw new Error("Missing primary portal HTTP server");
+          }
+          for (let attempt = 0; attempt < PORTAL_PORT_ALLOCATION_ATTEMPTS; attempt += 1) {
+            await listenGatewayHttpServer({
+              httpServer: primaryServer,
+              bindHost: primaryHost,
+              port: 0,
+              retryEaddrinuse: false,
+              serviceName: "portal",
+              endpointScheme: params.tlsOptions ? "https" : "http",
+            });
+            const address = primaryServer.address() as AddressInfo | null;
+            if (!address || typeof address === "string") {
+              throw new Error("Portal listener failed to resolve its port");
+            }
+            if (address.port !== portal.targetPort) {
+              portal.listenPort = address.port;
+              break;
+            }
+            // A proxy cannot share its target port: it would dial itself and fail auth.
+            await closeServers([primaryServer]);
+          }
+          if (portal.listenPort === 0) {
+            throw new Error(
+              `Portal listener repeatedly allocated target port ${portal.targetPort}`,
+            );
+          }
           for (const [index, host] of params.httpBindHosts.entries()) {
+            if (index === 0) {
+              continue;
+            }
             const server = servers[index];
             if (!server) {
               throw new Error(`Missing portal HTTP server for bind host ${host}`);
@@ -197,18 +232,11 @@ export function createGatewayPortalService(params: {
             await listenGatewayHttpServer({
               httpServer: server,
               bindHost: host,
-              port: index === 0 ? 0 : portal.listenPort,
+              port: portal.listenPort,
               retryEaddrinuse: false,
               serviceName: "portal",
               endpointScheme: params.tlsOptions ? "https" : "http",
             });
-            if (index === 0) {
-              const address = server.address() as AddressInfo | null;
-              if (!address || typeof address === "string") {
-                throw new Error("Portal listener failed to resolve its port");
-              }
-              portal.listenPort = address.port;
-            }
           }
         } catch (error) {
           removeServers(params.httpServers, servers);

@@ -15,9 +15,9 @@ import type {
   AuthProfileCredential,
   AuthProfileStore,
   OAuthCredential,
+  RuntimeAuthProfileStore,
 } from "./auth-profiles/types.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
-import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   createRuntimeProviderAuthLookup,
   getApiKeyForModelCore,
@@ -218,6 +218,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   },
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderDeprecatedAuthProfileIds: ({ provider }: { provider: string }) =>
+    provider === "anthropic" || provider === "claude-cli" ? ["anthropic:claude-cli"] : [],
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
@@ -257,9 +259,6 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 const cliCredentialMocks = vi.hoisted(() => ({
-  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => ClaudeCliCredential | null>(
-    () => null,
-  ),
   readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
   readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
@@ -268,7 +267,6 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
-  cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
@@ -715,14 +713,6 @@ describe("getApiKeyForModelCore", () => {
   });
 
   it("does not read unrelated external CLI credentials when resolving provider auth", async () => {
-    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "claude-cli-access",
-      refresh: "claude-cli-refresh",
-      expires: createUsableOAuthExpiry(),
-    });
-
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -753,20 +743,11 @@ describe("getApiKeyForModelCore", () => {
       },
     );
 
-    expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
     expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
     expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
-  it("reads Claude CLI credentials when the Claude CLI provider is resolved", async () => {
-    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "claude-cli-access",
-      refresh: "claude-cli-refresh",
-      expires: createUsableOAuthExpiry(),
-    });
-
+  it("does not read Claude CLI credentials when the Claude CLI provider is resolved", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -774,18 +755,46 @@ describe("getApiKeyForModelCore", () => {
         agentEnv: "main",
       },
       async () => {
-        const resolved = await resolveApiKeyForProviderCore({ provider: "claude-cli" });
-        expect(resolved.apiKey).toBe("claude-cli-access");
-        expect(resolved.profileId).toBe("anthropic:claude-cli");
-        expect(resolved.source).toBe("profile:anthropic:claude-cli");
-        expect(resolved.mode).toBe("oauth");
+        const error = await resolveApiKeyForProviderCore({ provider: "claude-cli" }).catch(
+          (caught: unknown) => caught,
+        );
+        expect(error).toMatchObject({
+          code: "missing-provider-auth",
+          provider: "claude-cli",
+        });
       },
     );
+  });
 
-    const options = cliCredentialMocks.readClaudeCliCredentialsCached.mock.calls.at(0)?.[0] as
-      | { allowKeychainPrompt?: boolean }
-      | undefined;
-    expect(options?.allowKeychainPrompt).toBe(false);
+  it("keeps the native Claude CLI profile out of Anthropic SDK auth resolution", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: "current-anthropic-key",
+        ANTHROPIC_OAUTH_TOKEN: undefined,
+      },
+      async () => {
+        const store: RuntimeAuthProfileStore = {
+          version: 1,
+          profiles: {
+            "anthropic:claude-cli": {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "copied-native-access",
+              refresh: "copied-native-refresh",
+              expires: createUsableOAuthExpiry(),
+            },
+          },
+          runtimeExternalCliProfileIds: ["anthropic:claude-cli"],
+        };
+        const resolved = await resolveApiKeyForProviderCore({
+          provider: "anthropic",
+          store,
+        });
+
+        expect(resolved.apiKey).toBe("current-anthropic-key");
+        expect(resolved.source).toContain("ANTHROPIC_API_KEY");
+      },
+    );
   });
 
   it("throws when ZAI API key is missing", async () => {
@@ -1919,6 +1928,38 @@ describe("getApiKeyForModelCore", () => {
 });
 
 describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID reference", () => {
+  it("rejects a retired profile reference before resolving its copied credential", async () => {
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "anthropic",
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                api: "anthropic-messages",
+                baseUrl: "https://api.anthropic.com",
+                apiKey: "anthropic:claude-cli",
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "anthropic:claude-cli": {
+              type: "oauth",
+              provider: "anthropic",
+              access: "copied-native-access",
+              refresh: "copied-native-refresh",
+              expires: createUsableOAuthExpiry(),
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/anthropic:claude-cli.*retired.*doctor --fix/);
+  });
+
   it("resolves actual credential when per-entry apiKey matches a profile ID in the store", async () => {
     // Scenario from #67423: openrouter-minimax.apiKey = "openrouter:key-b"
     // should resolve the actual key from that profile, not use the string literally.

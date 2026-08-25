@@ -210,7 +210,7 @@ extensions/codex/src/app-server/plugin-activation.ts	6
 extensions/codex/src/app-server/plugin-approval-roundtrip.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
-extensions/codex/src/app-server/plugin-thread-app-admission.ts	2
+extensions/codex/src/app-server/plugin-thread-app-admission.ts	1
 extensions/codex/src/app-server/protocol-validators.ts	9
 extensions/codex/src/app-server/rate-limits.ts	1
 extensions/codex/src/app-server/reasoning-effort.ts	1
@@ -436,7 +436,6 @@ extensions/discord/src/send.shared.ts	4
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
 extensions/discord/src/setup-core.ts	1
-extensions/discord/src/shared-interactive.ts	1
 extensions/discord/src/shared.ts	1
 extensions/discord/src/status-issues.ts	1
 extensions/discord/src/target-parsing.ts	1
@@ -631,7 +630,7 @@ extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	6
 extensions/line/src/rich-menu.ts	1
-extensions/line/src/send.ts	2
+extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	4
 extensions/line/src/webhook-utils.ts	1
@@ -673,7 +672,7 @@ extensions/matrix/src/matrix/actions/devices.ts	1
 extensions/matrix/src/matrix/actions/messages.ts	8
 extensions/matrix/src/matrix/actions/polls.ts	1
 extensions/matrix/src/matrix/actions/reactions.ts	1
-extensions/matrix/src/matrix/actions/summary.ts	6
+extensions/matrix/src/matrix/actions/summary.ts	2
 extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	5
@@ -1189,7 +1188,7 @@ extensions/slack/src/monitor/events/interactions.block-actions.ts	16
 extensions/slack/src/monitor/events/interactions.modal.ts	4
 extensions/slack/src/monitor/events/interactions.ts	7
 extensions/slack/src/monitor/events/members.ts	2
-extensions/slack/src/monitor/events/message-subtype-handlers.ts	6
+extensions/slack/src/monitor/events/message-subtype-handlers.ts	5
 extensions/slack/src/monitor/events/messages.ts	14
 extensions/slack/src/monitor/events/pins.ts	1
 extensions/slack/src/monitor/events/reactions.ts	2
@@ -1438,7 +1437,7 @@ extensions/workboard/src/sqlite-store.ts	44
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-card-helpers.ts	1
 extensions/workboard/src/store-core.ts	5
-extensions/workboard/src/store-normalizers.ts	33
+extensions/workboard/src/store-normalizers.ts	11
 extensions/workboard/src/store-workflow.ts	2
 extensions/workboard/src/store.ts	5
 extensions/workboard/src/tools.ts	11
@@ -1713,7 +1712,6 @@ src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/portability.ts	1
 src/agents/auth-profiles/profiles.ts	1
 src/agents/auth-profiles/repair.ts	1
-src/agents/auth-profiles/runtime-external-profile-references.ts	2
 src/agents/auth-profiles/runtime-snapshots.ts	1
 src/agents/auth-profiles/source-check.ts	1
 src/agents/auth-profiles/sqlite.ts	2
@@ -1739,7 +1737,7 @@ src/agents/cache-trace.ts	3
 src/agents/channel-tools.ts	3
 src/agents/cli-auth-epoch.ts	1
 src/agents/cli-backends.ts	1
-src/agents/cli-credentials.ts	15
+src/agents/cli-credentials.ts	10
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
 src/agents/cli-runner.ts	1
@@ -2024,12 +2022,12 @@ src/agents/sessions/agent-session-tree.ts	2
 src/agents/sessions/agent-session-utils.ts	1
 src/agents/sessions/auth-storage.ts	4
 src/agents/sessions/extensions/loader.ts	7
-src/agents/sessions/extensions/runner.ts	19
+src/agents/sessions/extensions/runner.ts	17
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	13
 src/agents/sessions/model-resolver.ts	1
-src/agents/sessions/package-manager.ts	8
+src/agents/sessions/package-manager.ts	3
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-branching.ts	1
@@ -2110,7 +2108,7 @@ src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
 src/agents/tools/cron-tool.ts	13
 src/agents/tools/dashboard-tool.ts	3
-src/agents/tools/embedded-gateway-stub.ts	13
+src/agents/tools/embedded-gateway-stub.ts	8
 src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
 src/agents/tools/goal-tools.ts	4
@@ -2528,7 +2526,6 @@ src/commands/doctor-agent-memory-schema.ts	1
 src/commands/doctor-auth-flat-profiles.ts	5
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	4
-src/commands/doctor-claude-cli.ts	1
 src/commands/doctor-config-analysis.ts	3
 src/commands/doctor-config-flow.ts	3
 src/commands/doctor-config-preflight.cron.ts	4
@@ -2622,7 +2619,6 @@ src/commands/export-trajectory.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	2
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
-src/commands/health.ts	1
 src/commands/message-format.ts	21
 src/commands/message.ts	4
 src/commands/models/fallbacks-shared.ts	2
@@ -2658,7 +2654,7 @@ src/commands/tasks.ts	2
 src/commands/telemetry-exporter-summary.ts	3
 src/commands/test-runtime-config-helpers.ts	3
 src/config/agent-dirs.ts	1
-src/config/allowed-values.ts	2
+src/config/allowed-values.ts	1
 src/config/bundled-channel-config-metadata.generated.ts	1
 src/config/channel-alias-migration.ts	2
 src/config/channel-capabilities.ts	2
@@ -3097,7 +3093,7 @@ src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
 src/gateway/session-utils-search.ts	1
-src/gateway/session-utils.fs.ts	16
+src/gateway/session-utils.fs.ts	10
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
@@ -3118,7 +3114,6 @@ src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-tunnel.ts	6
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/node-workspace-transfer-service.ts	1
-src/gateway/worker-environments/node-workspace-transfer-snapshot.ts	1
 src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/provider-lifecycle.ts	1
@@ -3386,7 +3381,7 @@ src/logging/diagnostic.ts	2
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	13
+src/logging/logger.ts	14
 src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
@@ -3792,9 +3787,8 @@ src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/refresh.ts	3
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
-src/skills/runtime/session-snapshot.ts	1
 src/skills/security/clawhub-verdicts.ts	2
-src/skills/workshop/experience-review.ts	2
+src/skills/workshop/experience-review.ts	1
 src/skills/workshop/history-scan.ts	2
 src/skills/workshop/policy.ts	1
 src/skills/workshop/store-record.ts	3
@@ -4063,7 +4057,6 @@ ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/components/theme-mode-toggle.ts	1
-ui/src/components/viewer-facepile.ts	2
 ui/src/components/web-awesome.ts	2
 ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/registry.ts	2
@@ -4111,7 +4104,7 @@ ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
-ui/src/pages/activity/view.ts	4
+ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/agents-page.ts	1
 ui/src/pages/agents/memory/memory-panel.ts	2
 ui/src/pages/agents/memory/view.ts	1
@@ -4203,7 +4196,7 @@ ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	2
 ui/src/pages/chat/session-cache.ts	2
 ui/src/pages/chat/stream-reconciliation.ts	12
-ui/src/pages/chat/tool-stream.ts	8
+ui/src/pages/chat/tool-stream.ts	5
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/config-page.ts	1
 ui/src/pages/config/config-sections.ts	1
@@ -4229,7 +4222,7 @@ ui/src/pages/custodian/custodian-session-store.ts	1
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
-ui/src/pages/devices/devices-page.ts	3
+ui/src/pages/devices/devices-page.ts	1
 ui/src/pages/devices/view-exec-approvals.ts	7
 ui/src/pages/devices/view.ts	5
 ui/src/pages/labs/labs-registry.ts	6
@@ -4244,7 +4237,7 @@ ui/src/pages/new-session/composer.ts	1
 ui/src/pages/new-session/detail-chip.ts	2
 ui/src/pages/new-session/discovery.ts	3
 ui/src/pages/new-session/draft-place-browser.ts	4
-ui/src/pages/new-session/new-session-runtime.ts	3
+ui/src/pages/new-session/new-session-runtime.ts	1
 ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/place-facts.ts	1
 ui/src/pages/new-session/preferences.ts	1
@@ -4270,6 +4263,6 @@ ui/src/pages/workboard/view-card-actions.ts	2
 ui/src/pages/workboard/view-card-details.ts	1
 ui/src/pages/workboard/view-card-modal.ts	1
 ui/src/pages/workboard/view-card.ts	1
-ui/src/pages/workboard/view.ts	2
+ui/src/pages/workboard/view.ts	1
 ui/src/pages/workboard/workboard-select.ts	1
 ui/src/pages/worktrees/worktrees-page.ts	3

@@ -47,7 +47,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/markdown-it": "14.1.2",
+    "@types/markdown-it": "14.2.0",
     "@vitest/browser": "4.1.10",
     "@vitest/browser-playwright": "4.1.10",
     "fake-indexeddb": "6.2.5",

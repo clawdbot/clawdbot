@@ -3,6 +3,7 @@ import type {
   ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
+import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -170,9 +171,12 @@ export function prepareAgentCommandExecutionIdentity(params: {
     },
   };
   const spawnFacts = readAgentCommandExecutionIdentitySpawnFacts(opts);
-  return spawnFacts
+  const preparedAdmission = spawnFacts
     ? prepareAgentCommandRunAdmissionWithSpawnFacts(admissionParams, spawnFacts)
     : executionIdentity.prepare(admissionParams);
+  return opts.onPostAdmittedRunContext
+    ? withPostAdmissionExecutionOwnerBinding(preparedAdmission, opts.onPostAdmittedRunContext)
+    : preparedAdmission;
 }
 
 export function sanitizePublicAgentCommandIngressOpts(
@@ -187,6 +191,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     operationalRunInstance: undefined,
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
+    onPostAdmittedRunContext: undefined,
   });
 }
 

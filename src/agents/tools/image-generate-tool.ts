@@ -30,15 +30,9 @@ import {
   resolveConfiguredMediaMaxBytes,
   resolveGeneratedMediaMaxBytes,
 } from "../../media/configured-max-bytes.js";
-import {
-  classifyMediaReferenceSource,
-  normalizeMediaReferenceSource,
-} from "../../media/media-reference.js";
 import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -61,7 +55,6 @@ import {
   createImageGenerateListActionResult,
   createImageGenerateStatusActionResult,
 } from "./image-generate-tool.actions.js";
-import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   createDefaultMediaGenerateBackgroundScheduler,
   type MediaGenerateAsyncStartCallback,
@@ -73,18 +66,17 @@ import {
   type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
-  applyImageGenerationModelConfigDefaults,
+  applyAgentDefaultModelConfig,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
+  loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
-  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
-  resolveMediaToolReferenceAccess,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import {
@@ -92,12 +84,7 @@ import {
   hasToolModelConfig,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import {
-  createSandboxBridgeReadFile,
-  type AnyAgentTool,
-  type SandboxFsBridge,
-  type ToolFsPolicy,
-} from "./tool-runtime.helpers.js";
+import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
@@ -563,87 +550,29 @@ async function loadReferenceImages(params: {
     rewrittenFrom?: string;
   }>
 > {
-  const loaded: Array<{
-    sourceImage: ImageGenerationSourceImage;
-    resolvedImage: string;
-    rewrittenFrom?: string;
-  }> = [];
-
-  for (const imageRawInput of params.imageInputs) {
-    params.signal?.throwIfAborted();
-    const trimmed = imageRawInput.trim();
-    const imageRaw = normalizeMediaReferenceSource(
-      trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
-    );
-    if (!imageRaw) {
-      throw new ToolInputError("image required (empty string in array)");
-    }
-    const refInfo = classifyMediaReferenceSource(imageRaw);
-    const { isDataUrl, isHttpUrl } = refInfo;
-    if (refInfo.hasUnsupportedScheme) {
-      throw new ToolInputError(
-        `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
-      );
-    }
-    if (params.sandboxConfig && isHttpUrl) {
-      throw new ToolInputError("Sandboxed image_generate does not allow remote URLs.");
-    }
-
-    const resolvedImage = (() => {
-      if (params.sandboxConfig) {
-        return imageRaw;
-      }
-      if (imageRaw.startsWith("~")) {
-        return resolveUserPath(imageRaw);
-      }
-      return imageRaw;
-    })();
-
-    const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
-      input: resolvedImage,
-      isDataUrl,
-      workspaceDir: params.workspaceDir,
-      sandbox: params.sandboxConfig,
-    });
-    params.signal?.throwIfAborted();
-
-    const media = isDataUrl
-      ? decodeDataUrl(resolvedImage, { maxBytes: params.maxBytes })
-      : params.sandboxConfig
-        ? await loadWebMedia(resolvedPath ?? resolvedImage, {
-            maxBytes: params.maxBytes,
-            sandboxValidated: true,
-            readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
-            ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
-          })
-        : await loadWebMedia(resolvedPath ?? resolvedImage, {
-            maxBytes: params.maxBytes,
-            localRoots,
-            ssrfPolicy: params.ssrfPolicy,
-            ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
-            ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
-          });
-    params.signal?.throwIfAborted();
-    if (media.kind !== "image") {
-      throw new ToolInputError(`Unsupported media type: ${media.kind}`);
-    }
-
-    const mimeType =
-      ("contentType" in media && media.contentType) ||
-      ("mimeType" in media && media.mimeType) ||
-      "image/png";
-
-    loaded.push({
-      sourceImage: {
-        buffer: media.buffer,
-        mimeType,
-      },
-      resolvedImage,
-      ...(rewrittenFrom ? { rewrittenFrom } : {}),
-    });
-  }
-
-  return loaded;
+  const loaded = await loadMediaToolReferences<ImageGenerationSourceImage>({
+    inputs: params.imageInputs,
+    toolName: "image_generate",
+    expectedKind: "image",
+    sandbox: params.sandboxConfig,
+    workspaceDir: params.workspaceDir,
+    maxBytes: params.maxBytes,
+    ssrfPolicy: params.ssrfPolicy,
+    signal: params.signal,
+    mapMedia: (media) => ({
+      buffer: media.buffer,
+      mimeType:
+        ("contentType" in media && media.contentType) ||
+        ("mimeType" in media && media.mimeType) ||
+        "image/png",
+    }),
+  });
+  return loaded.map(({ source, resolvedInput, rewrittenFrom }) =>
+    Object.assign(
+      { sourceImage: source, resolvedImage: resolvedInput },
+      rewrittenFrom ? { rewrittenFrom } : {},
+    ),
+  );
 }
 
 async function inferResolutionFromInputImages(
@@ -933,7 +862,7 @@ export function createImageGenerateTool(options?: {
       }
       const explicitModelConfig = hasExplicitImageGenerationModelConfig(cfg);
       const effectiveCfg =
-        applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
+        applyAgentDefaultModelConfig(cfg, "image", imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readToolStringParam(params, "prompt", { required: true });
 

@@ -309,14 +309,14 @@ describe("gateway e2e", () => {
           const sourceBeforeUnrelatedWrite = (await configIO.readConfigFileSnapshot()).sourceConfig;
           const nextUnrelatedSource = {
             ...sourceBeforeUnrelatedWrite,
-            ui: { assistant: { name: "unrelated-managed-write" } },
+            ui: { seamColor: "#123456" },
           } satisfies OpenClawConfig;
           await writeConfigFile(nextUnrelatedSource);
           const persistedAfterUnrelatedWrite = JSON.parse(
             await fs.readFile(configPath, "utf-8"),
           ) as OpenClawConfig;
           expect(persistedAfterUnrelatedWrite.channels?.whatsapp?.dmPolicy).toBe("disabled");
-          expect(persistedAfterUnrelatedWrite.ui?.assistant?.name).toBe("unrelated-managed-write");
+          expect(persistedAfterUnrelatedWrite.ui?.seamColor).toBe("#123456");
         }
 
         const reconnected = await connectGatewayClient({
@@ -561,7 +561,7 @@ describe("gateway e2e", () => {
       expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
       await writeConfigFile({
         ...initialConfig,
-        ui: { assistant: { name: "override-active" } },
+        ui: { seamColor: "#123456" },
         logging: { level: "debug" },
       });
       await expect
@@ -571,7 +571,7 @@ describe("gateway e2e", () => {
       resetConfigOverrides();
       await writeConfigFile({
         ...initialConfig,
-        ui: { assistant: { name: "override-reset" } },
+        ui: { seamColor: "#654321" },
         logging: { level: "debug" },
       });
       await expect
