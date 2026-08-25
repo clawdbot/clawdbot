@@ -189,18 +189,20 @@ suite.define(() => {
           const card = page.locator('[data-progress-card-placement="composer"]');
           await expect.poll(() => card.isVisible()).toBe(true);
           const expectMarkerCentered = async () => {
-            const summaryBounds = await card.locator("summary").boundingBox();
-            const markerBounds = await card
-              .locator('.session-progress-card__current-marker[data-status="completed"]')
-              .boundingBox();
-            expect(summaryBounds).not.toBeNull();
-            expect(markerBounds).not.toBeNull();
-            if (!summaryBounds || !markerBounds) {
-              return;
-            }
-            const summaryCenterY = summaryBounds.y + summaryBounds.height / 2;
-            const markerCenterY = markerBounds.y + markerBounds.height / 2;
-            expect(Math.abs(summaryCenterY - markerCenterY)).toBeLessThanOrEqual(0.5);
+            await expect
+              .poll(async () => {
+                const summaryBounds = await card.locator("summary").boundingBox();
+                const markerBounds = await card
+                  .locator('.session-progress-card__current-marker[data-status="completed"]')
+                  .boundingBox();
+                if (!summaryBounds || !markerBounds) {
+                  return Number.POSITIVE_INFINITY;
+                }
+                const summaryCenterY = summaryBounds.y + summaryBounds.height / 2;
+                const markerCenterY = markerBounds.y + markerBounds.height / 2;
+                return Math.abs(summaryCenterY - markerCenterY);
+              })
+              .toBeLessThanOrEqual(0.5);
           };
           await expectMarkerCentered();
           await card.locator("summary").click();

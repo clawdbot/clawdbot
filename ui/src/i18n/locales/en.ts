@@ -915,7 +915,7 @@ export const en: TranslationMap = {
     runsOn: "Runs on {place}",
     browse: "Browse folders",
     browseRequiresAdmin:
-      "To browse outside agent workspaces, open the access status, request admin, then approve in Devices.",
+      "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
     connectMachine: "Connect a machine…",
     connectMachineTitle: "Connect a machine",
     connectMachineDescription: "Run this command on the machine you want to connect.",
@@ -4252,6 +4252,7 @@ export const en: TranslationMap = {
       guidance:
         "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
       status: "Limited access",
+      inboxState: "Administrator access required",
       showDetails: "Show limited access details",
       closeDetails: "Close limited access details",
       request: "Request admin",
