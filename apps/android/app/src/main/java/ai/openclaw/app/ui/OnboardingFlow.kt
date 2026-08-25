@@ -15,6 +15,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -3310,6 +3311,16 @@ private fun rememberPermissionState(
       },
     )
 
+  val requestedLocationMode =
+    locationModeAfterBackgroundSettings(
+      previousMode = currentLocationMode.takeUnless { it == LocationMode.Off } ?: LocationMode.WhileUsing,
+      foregroundGranted = locationGranted,
+      backgroundGranted =
+        currentLocationMode == LocationMode.Always &&
+          SensitiveFeatureConfig.backgroundLocationEnabled &&
+          hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+    )
+
   return PermissionState(
     rows = rows,
     requiresNodeApprovalAfterApply =
@@ -3317,13 +3328,13 @@ private fun rememberPermissionState(
         currentCameraEnabled = currentCameraEnabled,
         requestedCameraEnabled = cameraGranted,
         currentLocationMode = currentLocationMode,
-        requestedLocationMode = if (locationGranted) LocationMode.WhileUsing else LocationMode.Off,
+        requestedLocationMode = requestedLocationMode,
         currentSmsGranted = currentSmsGranted,
         requestedSmsGranted = smsGranted,
       ),
     applyToViewModel = {
       viewModel.setCameraEnabled(cameraGranted)
-      viewModel.setLocationMode(if (locationGranted) LocationMode.WhileUsing else LocationMode.Off)
+      viewModel.setLocationMode(requestedLocationMode)
       viewModel.setNotificationForwardingEnabled(notificationListenerGranted)
     },
   )

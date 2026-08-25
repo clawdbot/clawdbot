@@ -396,8 +396,12 @@ type StringUnit = {
   value?: string;
 };
 
-type CatalogEntry = {
-  localizations?: Record<string, { stringUnit?: StringUnit }>;
+type CatalogLocalization = Record<string, unknown> & {
+  stringUnit?: StringUnit;
+};
+
+type CatalogEntry = Record<string, unknown> & {
+  localizations?: Record<string, CatalogLocalization>;
 };
 
 type Catalog = {
@@ -447,8 +451,28 @@ function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function serializeCatalog(catalog: Catalog): string {
-  return `${JSON.stringify(catalog, null, 2)}\n`;
+export function serializeAppleCatalog(catalog: Catalog): string {
+  const topLevelEntries = Object.entries(catalog);
+  const lines = ["{"];
+
+  for (const [topLevelIndex, [key, value]] of topLevelEntries.entries()) {
+    const comma = topLevelIndex === topLevelEntries.length - 1 ? "" : ",";
+    if (key !== "strings" || !value || typeof value !== "object" || Array.isArray(value)) {
+      lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(value)}${comma}`);
+      continue;
+    }
+
+    const entries = Object.entries(value);
+    lines.push(`  ${JSON.stringify(key)}: {`);
+    for (const [entryIndex, [entryKey, entry]] of entries.entries()) {
+      const entryComma = entryIndex === entries.length - 1 ? "" : ",";
+      lines.push(`    ${JSON.stringify(entryKey)}: ${JSON.stringify(entry)}${entryComma}`);
+    }
+    lines.push(`  }${comma}`);
+  }
+
+  lines.push("}", "");
+  return lines.join("\n");
 }
 
 function decodeXml(value: string): string {
@@ -888,7 +912,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
 export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild> {
   const build = await readIosCatalogBuild();
   const catalogPath = path.join(ROOT, IOS_CATALOG_PATH);
-  const expected = serializeCatalog(build.catalog);
+  const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
   if (actual !== expected) {
     if (!write) {
@@ -904,7 +928,7 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
 export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuild> {
   const build = await readMacosCatalogBuild();
   const catalogPath = path.join(ROOT, MACOS_CATALOG_PATH);
-  const expected = serializeCatalog(build.catalog);
+  const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
   if (actual !== expected) {
     if (!write) {
@@ -917,7 +941,7 @@ export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuil
 }
 
 export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBuild): void {
-  if (actual !== serializeCatalog(build.catalog)) {
+  if (actual !== serializeAppleCatalog(build.catalog)) {
     throw new Error(
       `Apple catalog ${MACOS_CATALOG_PATH} is stale; run native-app-i18n.ts sync --write`,
     );

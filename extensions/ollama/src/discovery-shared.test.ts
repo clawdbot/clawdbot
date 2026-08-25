@@ -16,6 +16,9 @@ describe("isLocalOllamaBaseUrl", () => {
     "http://127.0.0.1:11434",
     "http://127.0.0.2:11434",
     "http://127.1.2.3:11434",
+    "http://[::ffff:127.0.0.1]:11434",
+    "http://[::ffff:127.0.0.2]:11434",
+    "http://[::ffff:7f00:2]:11434",
     "http://0.0.0.0:11434",
     "http://[::1]:11434",
     "http://10.0.0.5:11434",
@@ -42,6 +45,8 @@ describe("isLocalOllamaBaseUrl", () => {
     "http://172.32.0.1:11434",
     "http://193.168.1.1:11434",
     "http://[2001:4860:4860::8888]:11434",
+    "http://[::ffff:10.0.0.5]:11434",
+    "http://[::ffff:8.8.8.8]:11434",
     "http://10.example.com:11434",
     "not a url",
   ])("classifies %s as remote", (baseUrl) => {
@@ -334,28 +339,34 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     expect(result?.provider.models).toEqual([cloudModel]);
   });
 
-  it.each(["localhost", "127.0.0.1", "127.0.0.2", "127.1.2.3", "10.0.0.5"])(
-    "keeps ambient cloud credentials away from the local endpoint %s",
-    async (hostname) => {
-      const provider = {
-        baseUrl: `http://${hostname}:11434`,
-        api: "ollama" as const,
-        models: [cloudModel],
-      };
-      const result = await resolveOllamaDiscoveryResult({
-        ctx: {
-          config: { models: { providers: { ollama: provider } } },
-          env: { OLLAMA_API_KEY: "ambient-cloud-credential" },
-          resolveProviderApiKey: () => ({}),
-        },
-        pluginConfig: {},
-        buildProvider: buildMockProvider,
-      });
+  it.each([
+    "localhost",
+    "127.0.0.1",
+    "127.0.0.2",
+    "127.1.2.3",
+    "[::ffff:127.0.0.1]",
+    "[::ffff:127.0.0.2]",
+    "[::ffff:7f00:2]",
+    "10.0.0.5",
+  ])("keeps ambient cloud credentials away from the local endpoint %s", async (hostname) => {
+    const provider = {
+      baseUrl: `http://${hostname}:11434`,
+      api: "ollama" as const,
+      models: [cloudModel],
+    };
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: { models: { providers: { ollama: provider } } },
+        env: { OLLAMA_API_KEY: "ambient-cloud-credential" },
+        resolveProviderApiKey: () => ({}),
+      },
+      pluginConfig: {},
+      buildProvider: buildMockProvider,
+    });
 
-      expect(result?.provider.apiKey).toBe("ollama-local");
-      expect(shouldUseSyntheticOllamaAuth(provider)).toBe(true);
-    },
-  );
+    expect(result?.provider.apiKey).toBe("ollama-local");
+    expect(shouldUseSyntheticOllamaAuth(provider)).toBe(true);
+  });
 
   it("does not call buildProvider for remote base URL without explicit models", async () => {
     let providerCalled = false;

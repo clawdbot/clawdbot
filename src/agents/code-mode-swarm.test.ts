@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -283,6 +284,20 @@ describe("Code Mode swarm guest", () => {
         "SwarmAgentError: Swarm agent collector-3 timeout: deadline exceeded",
       );
     }
+  });
+
+  it("keeps a guest error after agents.run restricted", async () => {
+    const details = await runSwarmCode(
+      createSwarmHarness(),
+      `await agents.run("Research"); return missingAfterCollector();`,
+    );
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(consumeRepairableCodeModeFailure(details)).toBe(false);
   });
 
   it.each([

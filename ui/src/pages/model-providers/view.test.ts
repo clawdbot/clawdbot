@@ -47,6 +47,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
     mutationBlockedReason: null,
+    providerUsageStalled: false,
     probeAvailable: true,
     busy: {},
     messages: {},
