@@ -161,6 +161,8 @@ export function renderAttachmentCardHeader(
               class=${downloadClass}
               href=${options.downloadHref}
               download=${options.label}
+              target="_blank"
+              rel="noreferrer"
               aria-label=${downloadTitle}
               title=${downloadTitle}
               >${icons.download}</a

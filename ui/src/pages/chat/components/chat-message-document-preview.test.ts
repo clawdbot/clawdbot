@@ -248,6 +248,11 @@ describe("parseDelimitedPreview", () => {
     expect(container.querySelector("iframe")).toBeNull();
     expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
     expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+    const download = container.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__download",
+    );
+    expect(download?.target).toBe("_blank");
+    expect(download?.rel).toBe("noreferrer");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
