@@ -2180,6 +2180,49 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
+  it("restores source identifiers omitted by an oversized generated summary", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "preserve the pending deployment status";
+    const identifier = "/tmp/source-only-compaction-id.log";
+    const generatedSummary = [
+      "## Decisions",
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve exact context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const summary = expectCompactionResult(result).summary;
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(`## Exact identifiers\nNone.\n${identifier}`);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
   it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "preserve the pending deployment status";

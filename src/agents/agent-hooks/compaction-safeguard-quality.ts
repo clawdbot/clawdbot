@@ -138,18 +138,14 @@ export function createSummaryQualityRetentionPlan(
   }
   const enforceIdentifiers = (params.identifierPolicy ?? "strict") === "strict";
   const auditSummary = params.auditSummary ?? summary;
-  if (
-    enforceIdentifiers &&
-    params.identifiers.some((identifier) => !summaryIncludesIdentifier(auditSummary, identifier))
-  ) {
-    return null;
-  }
   if (!hasAskOverlap(auditSummary, params.latestAsk)) {
     return null;
   }
   const pendingAsk = contents[QUALITY_PROTECTED_SECTION_START] ?? "";
   const requiredAskContext = params.requiredAskContext?.trim() ?? "";
   const exactIdentifiers = contents[QUALITY_PROTECTED_SECTION_START + 1] ?? "";
+  // Source identifiers are audit facts, not model-owned output. Restore them
+  // here so a model omission cannot disable the retention plan that repairs it.
   const missingIdentifiers = enforceIdentifiers
     ? params.identifiers.filter(
         (identifier) => !summaryIncludesIdentifier(exactIdentifiers, identifier),
