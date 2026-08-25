@@ -106,16 +106,12 @@ import { isToolResultError, readToolResultDetails } from "./tool-result-error.js
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
-type ToolExecutionEndResult =
-  | { status: "stale" }
-  | { status: "completed"; executionStarted: boolean };
-
 /** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
   options?: { deliveryGeneration?: number },
-): Promise<ToolExecutionEndResult> {
+) {
   const isCurrentDeliveryGeneration = () =>
     options?.deliveryGeneration === undefined ||
     options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
@@ -707,18 +703,16 @@ export async function handleToolExecutionEnd(
   if (!isCurrentDeliveryGeneration()) {
     return { status: "stale" };
   }
-  if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    scheduleEmbeddedAfterToolCallHook({
-      ctx,
-      hookRunner: hookRunnerAfter,
-      params: startArgs,
-      result: sanitizedResult,
-      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-      startedAt: startData?.startTime,
-      toolName,
-      toolCallId,
-      runId,
-    });
-  }
+  scheduleEmbeddedAfterToolCallHook({
+    ctx,
+    hookRunner: hookRunnerAfter,
+    params: startArgs,
+    result: sanitizedResult,
+    error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+    startedAt: startData?.startTime,
+    toolName,
+    toolCallId,
+    runId,
+  });
   return { status: "completed", executionStarted: terminal.executionStarted };
 }

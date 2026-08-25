@@ -262,7 +262,7 @@ describe("subagent registry persistence", () => {
         task: "must be durable before spawn",
         cleanup: "keep",
       }),
-    ).toThrow(persistError);
+    ).toThrow("sqlite busy");
     expect(getLatestSubagentRunByChildSessionKey("agent:main:subagent:persist-fails")).toBeNull();
     expect(loadSubagentRegistryFromSqlite().has("run-persist-fails")).toBe(false);
     expect(callGateway).not.toHaveBeenCalled();

@@ -3,7 +3,7 @@ import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.typ
 
 export function scheduleEmbeddedAfterToolCallHook(params: {
   ctx: ToolHandlerContext;
-  hookRunner: HookRunner;
+  hookRunner?: HookRunner | null;
   params: Record<string, unknown>;
   result: unknown;
   error?: string;
@@ -13,6 +13,9 @@ export function scheduleEmbeddedAfterToolCallHook(params: {
   runId: string;
 }): void {
   const { ctx, hookRunner, runId, toolCallId, toolName } = params;
+  if (!hookRunner?.hasHooks("after_tool_call")) {
+    return;
+  }
   void hookRunner
     .runAfterToolCall(
       {
