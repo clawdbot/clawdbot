@@ -209,6 +209,7 @@ export const defaultControlUiFeatureMethods = [
   "device.scopes.waitUpgrade",
   "session.members.add",
   "session.members.list",
+  "session.members.listEvidence",
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",

@@ -762,6 +762,7 @@ enum class GatewayMethod(
   ToolsGithubAuthorizeCancel("tools.github.authorize.cancel"),
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
+  SessionMembersListEvidence("session.members.listEvidence"),
 }
 
 enum class GatewayEvent(
@@ -776,6 +777,7 @@ enum class GatewayEvent(
   SessionObserver("session.observer"),
   SessionOperation("session.operation"),
   SessionSharing("session.sharing"),
+  SessionSharingEvidence("session.sharing.evidence"),
   SessionSuggestion("session.suggestion"),
   SessionTyping("session.typing"),
   SessionTool("session.tool"),

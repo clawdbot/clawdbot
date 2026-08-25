@@ -6,8 +6,10 @@ import {
   validateSessionMembersListParams,
   validateSessionVisibilitySetParams,
   type SessionMember,
+  type SessionMemberEvidence,
   type SessionCreatedActor,
   type SessionSharingEvent,
+  type SessionSharingEvidenceEvent,
   type SessionSharingIdentity,
   type SessionVisibility,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -68,16 +70,6 @@ function actorIdentity(client: GatewayClient | null): SharingActorFacts {
     : { state: "absent" };
 }
 
-function sharingActorEventFields(
-  facts: SharingActorFacts,
-): Pick<SessionSharingEvent, "actor" | "actorState"> {
-  return facts.state === "present"
-    ? { actor: facts.actor }
-    : facts.state === "unknown"
-      ? { actorState: "unknown" }
-      : {};
-}
-
 function sharingActorStorageRef(facts: SharingActorFacts): string {
   return facts.state === "present"
     ? facts.actor.id
@@ -86,9 +78,9 @@ function sharingActorStorageRef(facts: SharingActorFacts): string {
       : UNATTRIBUTED_SHARING_ACTOR_STORAGE_REF;
 }
 
-function projectSessionMember(
+function projectSessionMemberEvidence(
   member: ReturnType<typeof listSessionMembers>[number],
-): SessionMember {
+): SessionMemberEvidence {
   // Sentinel ids satisfy the existing non-null storage contract only. Project
   // actor evidence here so persistence markers never become protocol identities.
   const common = { identityId: member.identityId, addedAt: member.addedAt };
@@ -104,6 +96,17 @@ function projectSessionMember(
     return common;
   }
   return { ...common, addedBy: member.addedBy };
+}
+
+function projectLegacySessionMember(member: SessionMemberEvidence): SessionMember | null {
+  if (!member.addedBy) {
+    return null;
+  }
+  return {
+    identityId: member.identityId,
+    addedBy: member.addedBy,
+    addedAt: member.addedAt,
+  };
 }
 
 function requireManageableTarget(params: {
@@ -215,13 +218,24 @@ function knownSessionIdentities(params: {
 
 function publishSharingChange(params: {
   context: GatewayRequestContext;
-  event: SessionSharingEvent;
+  actor: SharingActorFacts;
+  event: Omit<SessionSharingEvidenceEvent, "actorState">;
   agentId: string;
 }): void {
   invalidateSessionSharingSnapshot(params.event.sessionKey);
-  params.context.broadcast("session.sharing", params.event, {
+  const eventOptions = {
     sessionKeys: [params.event.sessionKey],
-  });
+  };
+  if (params.actor.state === "present") {
+    const event: SessionSharingEvent = { ...params.event, actor: params.actor.actor };
+    params.context.broadcast("session.sharing", event, eventOptions);
+  } else {
+    const event: SessionSharingEvidenceEvent = {
+      ...params.event,
+      ...(params.actor.state === "unknown" ? { actorState: "unknown" } : {}),
+    };
+    params.context.broadcast("session.sharing.evidence", event, eventOptions);
+  }
   emitSessionsChanged(params.context, {
     reason: "sharing",
     sessionKey: params.event.sessionKey,
@@ -230,6 +244,80 @@ function publishSharingChange(params: {
   // Draft recipients cannot receive the scoped row, but still need a redacted
   // catalog invalidation so their next canonical list drops a newly hidden session.
   emitSessionsChanged(params.context, { reason: "sharing" });
+}
+
+function createSessionMembersListHandler(
+  method: "session.members.list" | "session.members.listEvidence",
+): GatewayRequestHandlers[string] {
+  const evidenceAware = method === "session.members.listEvidence";
+  return async ({ params, respond, client, context }) => {
+    if (!assertValidParams(params, validateSessionMembersListParams, method, respond)) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const managed = requireManageableTarget({
+      cfg,
+      client,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      respond,
+    });
+    if (!managed) {
+      return;
+    }
+    const target = managed.target;
+    const actor = actorIdentity(client);
+    const evidenceMembers = listSessionMembers({
+      agentId: target.agentId,
+      sessionKey: target.storeKey,
+      storePath: target.storePath,
+    }).map(projectSessionMemberEvidence);
+    const members = evidenceAware
+      ? evidenceMembers
+      : evidenceMembers.map(projectLegacySessionMember);
+    if (!evidenceAware && members.some((member) => member === null)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "session membership includes actor evidence this client cannot represent",
+          {
+            details: {
+              code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
+              recommendedMethod: "session.members.listEvidence",
+            },
+          },
+        ),
+      );
+      return;
+    }
+    const projectedMembers = members.filter((member) => member !== null);
+    const identities = knownSessionIdentities({ cfg, actor });
+    for (const member of projectedMembers) {
+      if (!identities.some((identity) => identity.id === member.identityId)) {
+        identities.push({ type: "human", id: member.identityId });
+      }
+    }
+    identities.sort(
+      (left, right) =>
+        (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
+        left.id.localeCompare(right.id),
+    );
+    const owner = target.entry.createdActor?.id ? target.entry.createdActor : undefined;
+    respond(
+      true,
+      {
+        sessionKey: target.canonicalKey,
+        ...(owner ? { owner: { ...owner } } : {}),
+        members: projectedMembers,
+        identities,
+        role: managed.role,
+        allowedVisibilities: allowedSessionVisibilities(cfg),
+      },
+      undefined,
+    );
+  };
 }
 
 export const sessionSharingHandlers: GatewayRequestHandlers = {
@@ -296,11 +384,11 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       publishSharingChange({
         context,
         agentId: current.agentId,
+        actor,
         event: {
           action: "visibility",
           sessionKey: current.canonicalKey,
           agentId: current.agentId,
-          ...sharingActorEventFields(actor),
           visibility,
           ts: now,
         },
@@ -309,58 +397,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     respond(true, { ok: true, sessionKey: managed.target.canonicalKey, visibility }, undefined);
   },
 
-  "session.members.list": async ({ params, respond, client, context }) => {
-    if (
-      !assertValidParams(params, validateSessionMembersListParams, "session.members.list", respond)
-    ) {
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const managed = requireManageableTarget({
-      cfg,
-      client,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      respond,
-    });
-    if (!managed) {
-      return;
-    }
-    const target = managed.target;
-    const actor = actorIdentity(client);
-    const members = listSessionMembers({
-      agentId: target.agentId,
-      sessionKey: target.storeKey,
-      storePath: target.storePath,
-    }).map(projectSessionMember);
-    const identities = knownSessionIdentities({
-      cfg,
-      actor,
-    });
-    for (const member of members) {
-      if (!identities.some((identity) => identity.id === member.identityId)) {
-        identities.push({ type: "human", id: member.identityId });
-      }
-    }
-    identities.sort(
-      (left, right) =>
-        (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
-        left.id.localeCompare(right.id),
-    );
-    const owner = target.entry.createdActor?.id ? target.entry.createdActor : undefined;
-    respond(
-      true,
-      {
-        sessionKey: target.canonicalKey,
-        ...(owner ? { owner: { ...owner } } : {}),
-        members,
-        identities,
-        role: managed.role,
-        allowedVisibilities: allowedSessionVisibilities(cfg),
-      },
-      undefined,
-    );
-  },
+  "session.members.list": createSessionMembersListHandler("session.members.list"),
+  "session.members.listEvidence": createSessionMembersListHandler("session.members.listEvidence"),
 
   "session.members.add": async ({ params, respond, client, context }) => {
     if (
@@ -408,11 +446,11 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       publishSharingChange({
         context,
         agentId: current.agentId,
+        actor,
         event: {
           action: "member-added",
           sessionKey: current.canonicalKey,
           agentId: current.agentId,
-          ...sharingActorEventFields(actor),
           identityId: params.identityId,
           ts: now,
         },
@@ -468,11 +506,11 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       publishSharingChange({
         context,
         agentId: current.agentId,
+        actor,
         event: {
           action: "member-removed",
           sessionKey: current.canonicalKey,
           agentId: current.agentId,
-          ...sharingActorEventFields(actor),
           identityId: params.identityId,
           ts: now,
         },

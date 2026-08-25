@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
-  SessionMembersListResult,
+  SessionMembersListEvidenceResult,
   SessionVisibility,
   SessionsListResult,
 } from "../../api/types.ts";
@@ -31,7 +31,7 @@ type SharingPane = TestChatPane & {
 
 const SHARING_METHODS = [
   "session.visibility.set",
-  "session.members.list",
+  "session.members.listEvidence",
   "session.members.add",
   "session.members.remove",
 ];
@@ -92,7 +92,7 @@ function sharingSessionsResult(row: GatewaySessionRow): SessionsListResult {
   };
 }
 
-function sharingResult(row: GatewaySessionRow): SessionMembersListResult {
+function sharingResult(row: GatewaySessionRow): SessionMembersListEvidenceResult {
   return {
     sessionKey: row.key,
     members: [],
@@ -155,7 +155,7 @@ describe("chat pane sharing authorization", () => {
   it("allows read-scoped owners to load sharing data but not mutate it", async () => {
     const row = sessionRow();
     const request = vi.fn(async (method: string) => {
-      if (method === "session.members.list") {
+      if (method === "session.members.listEvidence") {
         return sharingResult(row);
       }
       throw new Error(`unexpected request: ${method}`);
@@ -176,7 +176,7 @@ describe("chat pane sharing authorization", () => {
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(
-      "session.members.list",
+      "session.members.listEvidence",
       expect.objectContaining({ sessionKey: row.key }),
     );
     expect(sessions.refreshReplacement).not.toHaveBeenCalled();
@@ -186,7 +186,7 @@ describe("chat pane sharing authorization", () => {
     for (const scope of ["operator.write", "operator.admin"]) {
       const row = sessionRow();
       const request = vi.fn(async (method: string) => {
-        if (method === "session.members.list") {
+        if (method === "session.members.listEvidence") {
           return sharingResult(row);
         }
         return {};
@@ -255,7 +255,7 @@ describe("chat pane sharing authorization", () => {
     });
     const pane = testPane as SharingPane;
     setSharingAuthorization(pane, {
-      methods: ["session.members.list"],
+      methods: ["session.members.listEvidence"],
       scopes: ["operator.admin"],
     });
 
@@ -265,7 +265,7 @@ describe("chat pane sharing authorization", () => {
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(
-      "session.members.list",
+      "session.members.listEvidence",
       expect.objectContaining({ sessionKey: row.key }),
     );
   });
@@ -303,9 +303,9 @@ describe("chat pane sharing authorization", () => {
   it("releases a stale same-key sharing load for the replacement session", async () => {
     const stale = sessionRow();
     const replacement = { ...sessionRow(), sessionId: "session-replacement" };
-    const listed = createDeferred<SessionMembersListResult>();
+    const listed = createDeferred<SessionMembersListEvidenceResult>();
     const request = vi.fn((method: string) => {
-      if (method !== "session.members.list") {
+      if (method !== "session.members.listEvidence") {
         throw new Error(`unexpected request: ${method}`);
       }
       return request.mock.calls.length === 1
@@ -338,7 +338,7 @@ describe("chat pane sharing authorization", () => {
 
   it("drops a sharing load failure after leaving and returning", async () => {
     const row = sessionRow();
-    const listed = createDeferred<SessionMembersListResult>();
+    const listed = createDeferred<SessionMembersListEvidenceResult>();
     const request = vi.fn(() => listed.promise);
     const { pane: testPane } = createSharingTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
@@ -592,12 +592,12 @@ describe("chat pane sharing mutation phase ownership", () => {
     it.each(["resolve", "reject"] as const)(
       "drops a stale sharing reload when it later %s",
       async (completion) => {
-        const listed = createDeferred<SessionMembersListResult>();
+        const listed = createDeferred<SessionMembersListEvidenceResult>();
         const request = vi.fn((requestMethod: string) => {
           if (requestMethod === method) {
             return Promise.resolve({});
           }
-          if (requestMethod === "session.members.list") {
+          if (requestMethod === "session.members.listEvidence") {
             return listed.promise;
           }
           throw new Error(`unexpected old-connection request: ${requestMethod}`);
@@ -614,7 +614,7 @@ describe("chat pane sharing mutation phase ownership", () => {
         const pending = invoke(pane, row);
         await vi.waitFor(() => {
           expect(request).toHaveBeenCalledWith(
-            "session.members.list",
+            "session.members.listEvidence",
             expect.objectContaining({ sessionKey: row.key }),
           );
         });
@@ -639,7 +639,7 @@ describe("chat pane sharing mutation phase ownership", () => {
     const refreshed = createDeferred();
     const row = sessionRow();
     const request = vi.fn(async (method: string) => {
-      if (method === "session.members.list") {
+      if (method === "session.members.listEvidence") {
         return sharingResult(row);
       }
       if (method === "session.members.add") {
@@ -676,7 +676,7 @@ describe("chat pane current sharing mutation refresh order", () => {
     const calls: string[] = [];
     const request = vi.fn(async (method: string) => {
       calls.push(method);
-      if (method === "session.members.list") {
+      if (method === "session.members.listEvidence") {
         return sharingResult(row);
       }
       return {};
@@ -697,7 +697,7 @@ describe("chat pane current sharing mutation refresh order", () => {
     expect(calls).toEqual([
       "session.visibility.set",
       "sessions.refreshReplacement",
-      "session.members.list",
+      "session.members.listEvidence",
     ]);
     expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result).toEqual(
       sharingResult(row),
@@ -709,7 +709,7 @@ describe("chat pane current sharing mutation refresh order", () => {
     const calls: string[] = [];
     const request = vi.fn(async (method: string) => {
       calls.push(method);
-      if (method === "session.members.list") {
+      if (method === "session.members.listEvidence") {
         return sharingResult(row);
       }
       return {};
@@ -729,7 +729,7 @@ describe("chat pane current sharing mutation refresh order", () => {
 
     expect(calls).toEqual([
       "session.members.add",
-      "session.members.list",
+      "session.members.listEvidence",
       "sessions.refreshReplacement",
     ]);
     expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result).toEqual(

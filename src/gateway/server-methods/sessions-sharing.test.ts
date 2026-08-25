@@ -1,9 +1,11 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  SessionMembersListResultSchema,
+  SessionMembersListEvidenceResultSchema,
+  SessionSharingEvidenceEventSchema,
   SessionSharingEventSchema,
-  type SessionMembersListResult,
+  type SessionMembersListEvidenceResult,
+  type SessionSharingEvidenceEvent,
   type SessionSharingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -37,6 +39,7 @@ import {
   invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
 import { createControlUiHandlers } from "./control-ui.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -120,6 +123,7 @@ async function call(
   method:
     | "session.visibility.set"
     | "session.members.list"
+    | "session.members.listEvidence"
     | "session.members.add"
     | "session.members.remove",
   params: Record<string, unknown>,
@@ -136,17 +140,27 @@ async function call(
   return responses;
 }
 
-function sessionMembersListResult(responses: Parameters<RespondFn>[]): SessionMembersListResult {
+function sessionMembersListEvidenceResult(
+  responses: Parameters<RespondFn>[],
+): SessionMembersListEvidenceResult {
   const response = responses[0];
   if (response?.[0] !== true || response[1] === undefined) {
     throw new Error("expected one successful Gateway response");
   }
-  return Value.Decode(SessionMembersListResultSchema, response[1]);
+  return Value.Decode(SessionMembersListEvidenceResultSchema, response[1]);
 }
 
 function sharingEvents(broadcast: ReturnType<typeof vi.fn>): SessionSharingEvent[] {
   return broadcast.mock.calls.flatMap(([name, event]) =>
     name === "session.sharing" ? [Value.Decode(SessionSharingEventSchema, event)] : [],
+  );
+}
+
+function sharingEvidenceEvents(broadcast: ReturnType<typeof vi.fn>): SessionSharingEvidenceEvent[] {
+  return broadcast.mock.calls.flatMap(([name, event]) =>
+    name === "session.sharing.evidence"
+      ? [Value.Decode(SessionSharingEvidenceEventSchema, event)]
+      : [],
   );
 }
 
@@ -170,8 +184,7 @@ describe("session sharing handlers", () => {
         { name: "unknown", client: unknown },
         { name: "absent", client: absent },
       ] as const;
-      const events = new Map<string, SessionSharingEvent[]>();
-      const listings = new Map<string, SessionMembersListResult>();
+      const listings = new Map<string, SessionMembersListEvidenceResult>();
 
       for (const item of cases) {
         const sessionKey = `agent:main:sharing-actor-${item.name}`;
@@ -187,11 +200,13 @@ describe("session sharing handlers", () => {
           },
         );
         const broadcast = vi.fn();
+        const requestContext = context(broadcast);
+        requestContext.getSessionEventSubscriberConnIds = () => new Set(["legacy-client"]);
         expect(
           await call(
             "session.visibility.set",
             { sessionKey, visibility: "draft" },
-            context(broadcast),
+            requestContext,
             item.client,
           ),
         ).toMatchObject([[true, { ok: true, sessionKey }, undefined]]);
@@ -199,48 +214,71 @@ describe("session sharing handlers", () => {
           await call(
             "session.members.add",
             { sessionKey, identityId: member.id },
-            context(broadcast),
+            requestContext,
             item.client,
           ),
         ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
         const listed = await call(
-          "session.members.list",
+          "session.members.listEvidence",
           { sessionKey },
-          context(broadcast),
+          requestContext,
           item.client,
         );
-        expect(listed[0]?.[0]).toBe(true);
-        listings.set(item.name, sessionMembersListResult(listed));
+        listings.set(item.name, sessionMembersListEvidenceResult(listed));
+        const legacyListed = await call(
+          "session.members.list",
+          { sessionKey },
+          requestContext,
+          item.client,
+        );
+        expect(legacyListed[0]?.[0]).toBe(item.name === "present");
+        if (item.name === "present") {
+          expect(legacyListed[0]?.[1]).toMatchObject({
+            members: [{ identityId: member.id, addedBy: "profile-ada" }],
+          });
+        } else {
+          expect(legacyListed[0]?.[2]?.details).toEqual({
+            code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
+            recommendedMethod: "session.members.listEvidence",
+          });
+        }
         expect(
           await call(
             "session.members.remove",
             { sessionKey, identityId: member.id },
-            context(broadcast),
+            requestContext,
             item.client,
           ),
         ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
+        flushPendingSessionsChangedEvents(requestContext);
+        expect(requestContext.broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({ reason: "sharing", sessionKey }),
+          new Set(["legacy-client"]),
+          expect.objectContaining({ sessionKeys: [sessionKey] }),
+        );
         const publishedEvents = sharingEvents(broadcast);
-        expect(publishedEvents.map((event) => event.action)).toEqual([
-          "visibility",
-          "member-added",
-          "member-removed",
-        ]);
-        events.set(item.name, publishedEvents);
-        expect(JSON.stringify(broadcast.mock.calls)).not.toContain("actor-evidence:");
-      }
-
-      for (const event of events.get("present") ?? []) {
-        expect(event).toMatchObject({
-          actor: { type: "human", id: "profile-ada", label: "Ada" },
-        });
-      }
-      for (const event of events.get("unknown") ?? []) {
-        expect(event).toMatchObject({ actorState: "unknown" });
-        expect(event).not.toHaveProperty("actor");
-      }
-      for (const event of events.get("absent") ?? []) {
-        expect(event).not.toHaveProperty("actor");
-        expect(event).not.toHaveProperty("actorState");
+        expect(publishedEvents.map((event) => event.action)).toEqual(
+          item.name === "present" ? ["visibility", "member-added", "member-removed"] : [],
+        );
+        const publishedEvidenceEvents = sharingEvidenceEvents(broadcast);
+        expect(publishedEvidenceEvents.map((event) => event.action)).toEqual(
+          item.name === "present" ? [] : ["visibility", "member-added", "member-removed"],
+        );
+        for (const event of publishedEvents) {
+          expect(event.actor).toMatchObject({ type: "human", id: "profile-ada", label: "Ada" });
+        }
+        for (const event of publishedEvidenceEvents) {
+          expect(event).not.toHaveProperty("actor");
+          if (item.name === "unknown") {
+            expect(event).toMatchObject({ actorState: "unknown" });
+          } else {
+            expect(event).not.toHaveProperty("actorState");
+          }
+        }
+        expect(JSON.stringify([publishedEvidenceEvents, listings.get(item.name)])).not.toMatch(
+          /local-operator|operator\.admin|actor-evidence:/,
+        );
       }
       const listedMember = (name: "present" | "unknown" | "absent") =>
         listings.get(name)?.members[0];
@@ -258,19 +296,6 @@ describe("session sharing handlers", () => {
       expect(listedMember("absent")).not.toHaveProperty("addedByState");
       expect(getGatewayLocalUserIngress(unknown)?.facts.invoker).toEqual({ state: "unknown" });
       expect(getGatewayLocalUserIngress(absent)).toBeUndefined();
-      for (const name of ["unknown", "absent"] as const) {
-        const serialized = JSON.stringify(events.get(name));
-        expect(serialized).not.toContain("local-operator");
-        expect(serialized).not.toContain("operator.admin");
-        expect(serialized).not.toContain("actor-evidence:");
-        expect(JSON.stringify(listings.get(name))).not.toContain("actor-evidence:");
-      }
-      expect(JSON.stringify(listings.get("present"))).not.toContain("actor-evidence:");
-      const actorEvidence = (name: "unknown" | "absent") => {
-        const { sessionKey: _sessionKey, ts: _ts, ...evidence } = events.get(name)?.[0] ?? {};
-        return evidence;
-      };
-      expect(actorEvidence("unknown")).not.toEqual(actorEvidence("absent"));
     });
   });
 
@@ -292,8 +317,8 @@ describe("session sharing handlers", () => {
         ).toBe(true);
       }
 
-      const response = await call("session.members.list", { sessionKey }, context(vi.fn()));
-      const result = sessionMembersListResult(response);
+      const response = await call("session.members.listEvidence", { sessionKey }, context(vi.fn()));
+      const result = sessionMembersListEvidenceResult(response);
       const member = (identityId: string) =>
         result.members.find((candidate) => candidate.identityId === identityId);
       expect(member("real-prefix-member")).toMatchObject({
@@ -945,7 +970,7 @@ describe("session sharing handlers", () => {
         }),
       ).toEqual(transcriptBefore);
       const publishedEvents = broadcast.mock.calls
-        .filter(([event]) => event === "session.sharing")
+        .filter(([event]) => event === "session.sharing.evidence")
         .map(([, payload, options]) => ({ payload, options }));
       expect(publishedEvents).toEqual([
         {

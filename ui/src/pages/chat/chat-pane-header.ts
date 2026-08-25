@@ -156,7 +156,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const sharingMethodsSupported =
       isGatewayMethodAdvertised(sharingSnapshot, "session.visibility.set") === true;
     const sharingReadAccess = readSessionMethodAccess(sharingSnapshot, {
-      method: "session.members.list",
+      method: "session.members.listEvidence",
       requiredScope: "operator.read",
     });
     const sharingVisibilityAccess = readSessionMethodAccess(sharingSnapshot, {

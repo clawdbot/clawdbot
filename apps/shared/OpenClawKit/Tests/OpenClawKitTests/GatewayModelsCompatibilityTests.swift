@@ -68,31 +68,58 @@ struct GatewayModelsCompatibilityTests {
 
     @Test
     func `session sharing decodes present unknown and absent actor evidence`() throws {
-        let members = try JSONDecoder().decode(
-            [SessionMember].self,
+        let presentList = try JSONDecoder().decode(
+            SessionMembersListResult.self,
             from: Data(
-                #"[{"identityId":"present","addedBy":"profile-ada","addedAt":1},{"identityId":"unknown","addedByState":"unknown","addedAt":2},{"identityId":"absent","addedAt":3}]"#
+                #"{"sessionKey":"main","members":[{"identityId":"present","addedBy":"profile-ada","addedAt":1}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                    .utf8))
+        let principalLessList = try JSONDecoder().decode(
+            SessionMembersListEvidenceResult.self,
+            from: Data(
+                #"{"sessionKey":"main","members":[{"identityId":"unknown","addedByState":"unknown","addedAt":2},{"identityId":"absent","addedAt":3}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
                     .utf8))
 
-        #expect(members[0].addedby == "profile-ada")
-        #expect(members[0].addedbystate == nil)
-        #expect(members[1].addedby == nil)
-        #expect(members[1].addedbystate == "unknown")
-        #expect(members[2].addedby == nil)
-        #expect(members[2].addedbystate == nil)
+        #expect(presentList.members[0].addedby == "profile-ada")
+        #expect(principalLessList.members[0].addedby == nil)
+        #expect(principalLessList.members[0].addedbystate == "unknown")
+        #expect(principalLessList.members[1].addedby == nil)
+        #expect(principalLessList.members[1].addedbystate == nil)
+        for member in [
+            #"{"identityId":"unknown","addedByState":"unknown","addedAt":2}"#,
+            #"{"identityId":"absent","addedAt":3}"#,
+        ] {
+            #expect(throws: DecodingError.self) {
+                try JSONDecoder().decode(
+                    SessionMembersListResult.self,
+                    from: Data(
+                        #"{"sessionKey":"main","members":[\#(member)],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                            .utf8))
+            }
+        }
 
-        let events = try JSONDecoder().decode(
-            [SessionSharingEvent].self,
+        let present = try JSONDecoder().decode(
+            SessionSharingEvent.self,
             from: Data(
-                #"[{"action":"visibility","sessionKey":"main","agentId":"main","actor":{"type":"human","id":"profile-ada"},"ts":1},{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2},{"action":"member-removed","sessionKey":"main","agentId":"main","identityId":"member","ts":3}]"#
+                #"{"action":"visibility","sessionKey":"main","agentId":"main","actor":{"type":"human","id":"profile-ada"},"ts":1}"#
                     .utf8))
 
-        #expect(events[0].actor?.id == "profile-ada")
-        #expect(events[0].actorstate == nil)
-        #expect(events[1].actor == nil)
-        #expect(events[1].actorstate == "unknown")
-        #expect(events[2].actor == nil)
-        #expect(events[2].actorstate == nil)
+        #expect(present.actor.id == "profile-ada")
+
+        let principalLess = try JSONDecoder().decode(
+            [SessionSharingEvidenceEvent].self,
+            from: Data(
+                #"[{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2},{"action":"member-removed","sessionKey":"main","agentId":"main","identityId":"member","ts":3}]"#
+                    .utf8))
+
+        #expect(principalLess[0].actorstate == "unknown")
+        #expect(principalLess[1].actorstate == nil)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(
+                SessionSharingEvent.self,
+                from: Data(
+                    #"{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2}"#
+                        .utf8))
+        }
     }
 
     @Test

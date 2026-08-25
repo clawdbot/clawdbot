@@ -6791,6 +6791,28 @@ public struct SessionMembersListParams: Codable, Sendable {
 
 public struct SessionMember: Codable, Sendable {
     public let identityid: String
+    public let addedby: String
+    public let addedat: Int
+
+    public init(
+        identityid: String,
+        addedby: String,
+        addedat: Int)
+    {
+        self.identityid = identityid
+        self.addedby = addedby
+        self.addedat = addedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case identityid = "identityId"
+        case addedby = "addedBy"
+        case addedat = "addedAt"
+    }
+}
+
+public struct SessionMemberEvidence: Codable, Sendable {
+    public let identityid: String
     public let addedby: String?
     public let addedbystate: String?
     public let addedat: Int
@@ -6827,6 +6849,40 @@ public struct SessionMembersListResult: Codable, Sendable {
         sessionkey: String,
         owner: SessionSharingIdentity? = nil,
         members: [SessionMember],
+        identities: [SessionSharingIdentity],
+        role: SessionSharingRole,
+        allowedvisibilities: [SessionVisibility])
+    {
+        self.sessionkey = sessionkey
+        self.owner = owner
+        self.members = members
+        self.identities = identities
+        self.role = role
+        self.allowedvisibilities = allowedvisibilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case owner
+        case members
+        case identities
+        case role
+        case allowedvisibilities = "allowedVisibilities"
+    }
+}
+
+public struct SessionMembersListEvidenceResult: Codable, Sendable {
+    public let sessionkey: String
+    public let owner: SessionSharingIdentity?
+    public let members: [SessionMemberEvidence]
+    public let identities: [SessionSharingIdentity]
+    public let role: SessionSharingRole
+    public let allowedvisibilities: [SessionVisibility]
+
+    public init(
+        sessionkey: String,
+        owner: SessionSharingIdentity? = nil,
+        members: [SessionMemberEvidence],
         identities: [SessionSharingIdentity],
         role: SessionSharingRole,
         allowedvisibilities: [SessionVisibility])
@@ -6919,8 +6975,7 @@ public struct SessionSharingEvent: Codable, Sendable {
     public let action: SessionSharingAction
     public let sessionkey: String
     public let agentid: String
-    public let actor: SessionSharingIdentity?
-    public let actorstate: String?
+    public let actor: SessionSharingIdentity
     public let visibility: SessionVisibility?
     public let identityid: String?
     public let ts: Int
@@ -6929,8 +6984,7 @@ public struct SessionSharingEvent: Codable, Sendable {
         action: SessionSharingAction,
         sessionkey: String,
         agentid: String,
-        actor: SessionSharingIdentity? = nil,
-        actorstate: String? = nil,
+        actor: SessionSharingIdentity,
         visibility: SessionVisibility? = nil,
         identityid: String? = nil,
         ts: Int)
@@ -6939,7 +6993,6 @@ public struct SessionSharingEvent: Codable, Sendable {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.actor = actor
-        self.actorstate = actorstate
         self.visibility = visibility
         self.identityid = identityid
         self.ts = ts
@@ -6950,6 +7003,43 @@ public struct SessionSharingEvent: Codable, Sendable {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case actor
+        case visibility
+        case identityid = "identityId"
+        case ts
+    }
+}
+
+public struct SessionSharingEvidenceEvent: Codable, Sendable {
+    public let action: SessionSharingAction
+    public let sessionkey: String
+    public let agentid: String
+    public let actorstate: String?
+    public let visibility: SessionVisibility?
+    public let identityid: String?
+    public let ts: Int
+
+    public init(
+        action: SessionSharingAction,
+        sessionkey: String,
+        agentid: String,
+        actorstate: String? = nil,
+        visibility: SessionVisibility? = nil,
+        identityid: String? = nil,
+        ts: Int)
+    {
+        self.action = action
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.actorstate = actorstate
+        self.visibility = visibility
+        self.identityid = identityid
+        self.ts = ts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case actorstate = "actorState"
         case visibility
         case identityid = "identityId"
