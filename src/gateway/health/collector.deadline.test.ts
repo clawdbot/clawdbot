@@ -85,6 +85,7 @@ describe("gateway health collection deadline", () => {
     vi.useFakeTimers();
     const accountIds = ["default", "fast-1", "fast-2", "fast-3", "fast-4", "fast-5"];
     const started: string[] = [];
+    let releaseSlowProbe: (() => void) | undefined;
     let active = 0;
     let maxActive = 0;
     healthPluginsForTest = [
@@ -95,7 +96,12 @@ describe("gateway health collection deadline", () => {
           active += 1;
           maxActive = Math.max(maxActive, active);
           if (account.accountId === "default") {
-            return await new Promise<Record<string, unknown>>(() => {});
+            return await new Promise<Record<string, unknown>>((resolve) => {
+              releaseSlowProbe = () => {
+                active -= 1;
+                resolve({ ok: true });
+              };
+            });
           }
           await Promise.resolve();
           active -= 1;
@@ -116,6 +122,8 @@ describe("gateway health collection deadline", () => {
     for (const accountId of accountIds.slice(1)) {
       expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
     }
+    releaseSlowProbe?.();
+    await vi.advanceTimersByTimeAsync(0);
   }, 1_000);
 
   it("does not start queued probes after the aggregate deadline", async () => {
@@ -130,12 +138,15 @@ describe("gateway health collection deadline", () => {
       "queued-2",
     ];
     const started: string[] = [];
+    const releaseProbes: Array<() => void> = [];
     healthPluginsForTest = [
       createDeadlinePlugin({
         accountIds,
         probe: async (account) => {
           started.push(account.accountId);
-          return await new Promise<Record<string, unknown>>(() => {});
+          return await new Promise<Record<string, unknown>>((resolve) => {
+            releaseProbes.push(() => resolve({ ok: true }));
+          });
         },
       }),
     ];
@@ -154,5 +165,61 @@ describe("gateway health collection deadline", () => {
         timedOut: true,
       });
     }
+    for (const release of releaseProbes) {
+      release();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+  }, 1_000);
+
+  it("retains timed-out permits across repeated health collections", async () => {
+    vi.useFakeTimers();
+    const accountIds = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];
+    const started: string[] = [];
+    const releaseProbes: Array<() => void> = [];
+    let active = 0;
+    let maxActive = 0;
+    healthPluginsForTest = [
+      createDeadlinePlugin({
+        accountIds,
+        probe: async (account) => {
+          started.push(account.accountId);
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          return await new Promise<Record<string, unknown>>((resolve) => {
+            releaseProbes.push(() => {
+              active -= 1;
+              resolve({ ok: true });
+            });
+          });
+        },
+      }),
+    ];
+
+    const firstSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toEqual(accountIds);
+    await vi.advanceTimersByTimeAsync(50);
+    await firstSnapshot;
+
+    const secondSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toEqual(accountIds);
+    await vi.advanceTimersByTimeAsync(50);
+    const second = await secondSnapshot;
+
+    expect(started).toEqual(accountIds);
+    expect(active).toBe(5);
+    expect(maxActive).toBe(5);
+    for (const accountId of accountIds) {
+      expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toMatchObject({
+        ok: false,
+        timedOut: true,
+      });
+    }
+    for (const release of releaseProbes) {
+      release();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(active).toBe(0);
   }, 1_000);
 });

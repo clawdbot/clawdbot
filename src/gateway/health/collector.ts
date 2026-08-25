@@ -232,6 +232,92 @@ type HealthChannelPlan = {
   accountSummaries: Record<string, ChannelAccountHealthSummary>;
 };
 
+type HealthOperationRelease = () => void;
+type HealthOperationWaiter = {
+  deadlineAtMs: number;
+  resolve: (release: HealthOperationRelease | null) => void;
+  timer: ReturnType<typeof setTimeout>;
+  settled: boolean;
+};
+
+// Permits outlive response deadlines so an unfinished plugin hook cannot be
+// replaced by later health refreshes and amplify process-wide probe work.
+let activeHealthOperations = 0;
+const healthOperationWaiters: HealthOperationWaiter[] = [];
+
+function settleHealthOperationWaiter(
+  waiter: HealthOperationWaiter,
+  release: HealthOperationRelease | null,
+): void {
+  if (waiter.settled) {
+    return;
+  }
+  waiter.settled = true;
+  clearTimeout(waiter.timer);
+  waiter.resolve(release);
+}
+
+function releaseNextHealthOperationWaiter(): void {
+  while (healthOperationWaiters.length > 0) {
+    const waiter = healthOperationWaiters.shift();
+    if (!waiter || waiter.settled) {
+      continue;
+    }
+    if (Date.now() >= waiter.deadlineAtMs) {
+      settleHealthOperationWaiter(waiter, null);
+      continue;
+    }
+    settleHealthOperationWaiter(waiter, createHealthOperationRelease());
+    return;
+  }
+}
+
+function createHealthOperationRelease(): HealthOperationRelease {
+  activeHealthOperations += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    activeHealthOperations -= 1;
+    releaseNextHealthOperationWaiter();
+  };
+}
+
+async function acquireHealthOperationPermit(
+  deadlineAtMs: number,
+): Promise<HealthOperationRelease | null> {
+  if (Date.now() >= deadlineAtMs) {
+    return null;
+  }
+  if (activeHealthOperations < HEALTH_PROBE_CONCURRENCY) {
+    return createHealthOperationRelease();
+  }
+
+  return await new Promise<HealthOperationRelease | null>((resolve) => {
+    const waiter: HealthOperationWaiter = {
+      deadlineAtMs,
+      resolve,
+      timer: setTimeout(
+        () => {
+          const index = healthOperationWaiters.indexOf(waiter);
+          if (index >= 0) {
+            healthOperationWaiters.splice(index, 1);
+          }
+          settleHealthOperationWaiter(waiter, null);
+        },
+        Math.max(1, deadlineAtMs - Date.now()),
+      ),
+      settled: false,
+    };
+    if (typeof waiter.timer === "object" && "unref" in waiter.timer) {
+      waiter.timer.unref();
+    }
+    healthOperationWaiters.push(waiter);
+  });
+}
+
 function buildHealthTimeoutRecord(
   accountId: string,
   timeoutMs: number,
@@ -386,6 +472,22 @@ async function buildHealthAccountRecord(params: {
   return record;
 }
 
+async function runHealthAccountWithinDeadline(
+  params: Parameters<typeof buildHealthAccountRecord>[0],
+): Promise<ChannelAccountHealthSummary> {
+  const release = await acquireHealthOperationPermit(params.deadlineAtMs);
+  if (!release) {
+    return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+  }
+
+  const operation = buildHealthAccountRecord(params);
+  void operation.then(release, release);
+  const result = await awaitWithinDeadline(() => operation, params.deadlineAtMs);
+  return result === ABSOLUTE_DEADLINE_EXPIRED
+    ? buildHealthTimeoutRecord(params.accountId, params.timeoutMs)
+    : result;
+}
+
 /** Collects the gateway-owned health snapshot for an explicit trust audience. */
 export async function collectGatewayHealthSnapshot(params: {
   audience: HealthSnapshotAudience;
@@ -499,31 +601,21 @@ export async function collectGatewayHealthSnapshot(params: {
     plan.accountIds.map((accountId) => ({ plan, accountId })),
   );
   const { results: accountResults } = await runTasksWithConcurrency({
-    tasks: accountTasks.map(({ plan, accountId }) => async () => {
-      const result = await awaitWithinDeadline(
-        () =>
-          buildHealthAccountRecord({
-            plugin: plan.plugin,
-            cfg,
-            accountId,
-            defaultAccountId: plan.defaultAccountId,
-            includeSensitive,
-            probe: params.probe,
-            deadlineAtMs,
-            timeoutMs,
-            runtimeSnapshot: params.runtimeSnapshot,
-          }),
-        deadlineAtMs,
-      );
-      return {
-        plan,
+    tasks: accountTasks.map(({ plan, accountId }) => async () => ({
+      plan,
+      accountId,
+      record: await runHealthAccountWithinDeadline({
+        plugin: plan.plugin,
+        cfg,
         accountId,
-        record:
-          result === ABSOLUTE_DEADLINE_EXPIRED
-            ? buildHealthTimeoutRecord(accountId, timeoutMs)
-            : result,
-      };
-    }),
+        defaultAccountId: plan.defaultAccountId,
+        includeSensitive,
+        probe: params.probe,
+        deadlineAtMs,
+        timeoutMs,
+        runtimeSnapshot: params.runtimeSnapshot,
+      }),
+    })),
     limit: params.probe ? HEALTH_PROBE_CONCURRENCY : 1,
     throwOnError: true,
   });
