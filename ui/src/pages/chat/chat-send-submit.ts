@@ -117,6 +117,7 @@ function clearSubmittedComposerState(
   host: ChatHost,
   submittedDraft: string,
   submittedAttachments: ChatAttachment[],
+  preserveBrowserAnnotations = false,
 ) {
   const attachmentsUnchanged =
     host.chatAttachments.length === submittedAttachments.length &&
@@ -129,7 +130,9 @@ function clearSubmittedComposerState(
     return {};
   }
   host.chatMessage = "";
-  host.chatAttachments = [];
+  host.chatAttachments = preserveBrowserAnnotations
+    ? host.chatAttachments.filter((attachment) => attachment.browserAnnotation)
+    : [];
   resetChatInputHistoryNavigation(host);
   return {
     previousAttachments: submittedAttachments,
@@ -195,6 +198,7 @@ export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
   opts?: ChatSendSubmitOptions,
+  submissionAction?: Event,
 ) {
   const previousDraft = host.chatMessage;
   const userMessage = (messageOverride ?? host.chatMessage).trim();
@@ -224,21 +228,25 @@ export async function handleSendChat(
     return;
   }
 
-  // Materialize hidden annotation context once after inline-edit classification.
-  // Delivery and retry consume this snapshot; they must not re-read or recompose attachments.
-  const message = composeBrowserAnnotationContext(userMessage, attachmentsToSend);
+  // Commands own the raw composer text. Annotation context is model input and must not
+  // turn a recognized command into an ordinary message.
+  const message = rawParsedCommand
+    ? userMessage
+    : composeBrowserAnnotationContext(userMessage, attachmentsToSend);
+  // Slash commands may use ordinary files, but annotations belong to the next model prompt.
+  const deliveredAttachments = rawParsedCommand
+    ? attachmentsToSend.filter((attachment) => !attachment.browserAnnotation)
+    : attachmentsToSend;
 
   if (!message && !hasAttachments) {
     return;
   }
 
-  const parsedCommand = parseSlashCommand(message);
-
   {
     // Natural stop aliases require a run; explicit /stop is always available.
     if (
-      isChatStopCommand(message) &&
-      (message.trim().startsWith("/") || hasAbortableSessionRun(host))
+      isChatStopCommand(userMessage) &&
+      (userMessage.startsWith("/") || hasAbortableSessionRun(host))
     ) {
       if (host.connected && !requireChatSessionAction(host, "abort")) {
         return;
@@ -252,9 +260,9 @@ export async function handleSendChat(
     }
 
     host.chatRunError = null;
-    const parsed = parsedCommand;
-    if (/^\/(?:btw|side)(?::|\s|$)/i.test(message)) {
-      const question = extractCompanionCommandQuestion(message);
+    const parsed = rawParsedCommand;
+    if (/^\/(?:btw|side)(?::|\s|$)/i.test(userMessage)) {
+      const question = extractCompanionCommandQuestion(userMessage);
       if (!question) {
         return;
       }
@@ -319,14 +327,14 @@ export async function handleSendChat(
         }
         const cleared =
           messageOverride == null
-            ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
+            ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend, true)
             : {};
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
         }
         const recoveryScope = resolveStoredChatOutboxScope(host, submittedSessionKey);
         await sendDetachedCommandMessage(host, message, {
-          attachments: hasAttachments ? attachmentsToSend : undefined,
+          attachments: deliveredAttachments.length ? deliveredAttachments : undefined,
           recovery: captureChatCommandComposerRecovery(
             host,
             recoveryScope,
@@ -362,7 +370,8 @@ export async function handleSendChat(
               args: parsed.args,
               name: parsed.command.key,
             },
-            resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+            resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser) ??
+              undefined,
           );
           if (!queued) {
             return;
@@ -470,7 +479,7 @@ export async function handleSendChat(
   // Keep their guards independent so submitting one cannot suppress the other.
   const submitKind = requestedEditId ? "queued-edit" : "message";
   const submitKey = chatSubmitKey(host, submitKind, effectiveMessage, attachmentsToSend);
-  await withChatSubmitGuard(host, submitKey, async () => {
+  const submitMessage = async () => {
     if (host.chatLoading) {
       // A terminal event can render before its authoritative leaf arrives.
       // Reuse the in-flight history request before fencing the follow-up send.
@@ -499,7 +508,12 @@ export async function handleSendChat(
     }
     const cleared =
       messageOverride == null
-        ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
+        ? clearSubmittedComposerState(
+            host,
+            previousDraft,
+            attachmentsToSend,
+            Boolean(rawParsedCommand),
+          )
         : {};
     if (messageOverride == null) {
       recordNonTranscriptInputHistory(host, userMessage);
@@ -522,7 +536,7 @@ export async function handleSendChat(
     const queued = enqueuePendingSendMessage(
       host,
       effectiveMessage,
-      hasAttachments ? attachmentsToSend : undefined,
+      deliveredAttachments.length ? deliveredAttachments : undefined,
       refreshSessions,
       submittedAtMs,
       waitingForSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
@@ -571,6 +585,7 @@ export async function handleSendChat(
       ...(pendingSettings ? { pendingSettings } : {}),
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+      restoreOnTerminalFailure: Boolean(rawParsedCommand),
       routingSessionKey: submittedSessionKey,
       storageMode: canSendFromMemory ? "memory" : "durable",
     });
@@ -585,7 +600,7 @@ export async function handleSendChat(
       recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
     }
     if (
-      sendResult !== "failed" &&
+      (sendResult !== "failed" || pending?.sendState === "failed") &&
       replyTarget &&
       host.chatReplyTarget?.messageId === replyTarget.messageId &&
       host.sessionKey === submittedSessionKey
@@ -593,7 +608,8 @@ export async function handleSendChat(
       // The reconnect queue owns the quote; later offline turns must not reuse it.
       host.chatReplyTarget = null;
     }
-  });
+  };
+  await withChatSubmitGuard(host, submitKey, submitMessage, submissionAction);
 }
 
 function prependReplyQuote(

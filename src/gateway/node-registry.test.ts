@@ -881,6 +881,14 @@ describe("gateway/node-registry", () => {
       capacity: { total: 2, available: 2 },
       bundlePrewarm: 1,
     });
+    expect(
+      priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true, ["system.run"]),
+    ).toBe(true);
+    expect(nodeRegistry.updateSurface("node-1", { commands: [] })).not.toBeNull();
+    expect(priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true)).toBe(true);
+    expect(
+      priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true, ["system.run"]),
+    ).toBe(false);
   });
 
   it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {
@@ -981,6 +989,38 @@ describe("gateway/node-registry", () => {
       },
     });
     expect(frames).toEqual([]);
+  });
+
+  it("fails closed without dispatching when the pairing store is unavailable during invoke", async () => {
+    const frames: string[] = [];
+    const registry = createNodeRegistry({
+      resolveCurrentPairingState: async () => {
+        throw new Error("pairing store unavailable");
+      },
+    });
+    registerNodeSession(registry, makeClient("conn-lease", "node-lease", frames), {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+    const isDispatchAuthorized = vi.fn(() => true);
+    const onDispatchReady = vi.fn();
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-lease",
+        expectedConnId: "conn-lease",
+        expectedPairingGeneration: "generation-a",
+        command: "system.which",
+        isDispatchAuthorized,
+        onDispatchReady,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "node pairing state unavailable before dispatch" },
+    });
+    expect(frames).toEqual([]);
+    expect(isDispatchAuthorized).not.toHaveBeenCalled();
+    expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
   it("revalidates persistent generation ownership for inbound node RPCs", async () => {
@@ -1874,7 +1914,7 @@ describe("gateway/node-registry", () => {
     }
   });
 
-  it("returns unavailable without dispatching an invoke to a closing node websocket", async () => {
+  it("fails closed without dispatching system.which to a closing node websocket", async () => {
     const registry = createNodeRegistry();
     const frames: string[] = [];
     const socket = createTestNodeSocket(frames, WebSocket.CLOSING);
@@ -1884,7 +1924,7 @@ describe("gateway/node-registry", () => {
     await expect(
       registry.invoke({
         nodeId: "node-1",
-        command: "debug.ping",
+        command: "system.which",
         timeoutMs: 0,
         onDispatchReady,
       }),

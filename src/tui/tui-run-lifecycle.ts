@@ -2,6 +2,7 @@
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { formatPrimitiveString } from "./tui-formatters.js";
+import { matchesSelectedTuiSession } from "./tui-session-events.js";
 import type { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -9,7 +10,12 @@ import {
   getPendingSubmitAcceptedRunId,
   hasPendingSubmit,
 } from "./tui-submit-state.js";
-import type { AgentEvent, TuiHistoryRunOutcome, TuiStateAccess } from "./tui-types.js";
+import type {
+  AgentEvent,
+  SessionChangedEvent,
+  TuiHistoryRunOutcome,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
@@ -231,15 +237,34 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     return true;
   };
 
-  const clearStaleStreamingIfNoTrackedRunRemains = () => {
-    const activeRunId = state.activeChatRunId;
-    const activeRunIsStillTracked = activeRunId ? sessionRuns.has(activeRunId) : false;
-    if (state.activityStatus !== "streaming" || activeRunIsStillTracked || sessionRuns.size > 0) {
+  const clearStaleStreamingIfNoTrackedRunRemains = (event?: SessionChangedEvent) => {
+    const authoritativeIdle =
+      Array.isArray(event?.activeRunIds) &&
+      event.activeRunIds.length === 0 &&
+      matchesSelectedTuiSession(state, event, { requireAliasOwnership: true }) &&
+      (typeof event.sessionId !== "string" ||
+        !state.currentSessionId ||
+        event.sessionId === state.currentSessionId);
+    if (
+      (event && !authoritativeIdle) ||
+      (!event && (state.activityStatus !== "streaming" || sessionRuns.size > 0))
+    ) {
       return;
     }
+    if (authoritativeIdle) {
+      for (const runId of sessionRuns.keys()) {
+        runCoordinator.dropSessionRun(runId);
+      }
+      if (state.activeChatRunId) {
+        chatLog.dismissPendingSystem(state.activeChatRunId);
+      }
+      reconnectPendingRunId = null;
+    }
     state.activeChatRunId = null;
-    state.activityStatus = "idle";
-    setActivityStatus("idle");
+    if (!hasPendingSubmit(state)) {
+      state.activityStatus = "idle";
+    }
+    setActivityStatus(state.activityStatus);
     clearStreamingWatchdog();
     flushPendingHistoryRefreshIfIdle();
   };

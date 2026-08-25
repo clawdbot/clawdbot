@@ -1,14 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   listModels,
   providerCatalogEntry,
 } from "./models-list-result.openai-routes.test-support.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const config = {
   agents: {
@@ -25,11 +22,17 @@ const config = {
   },
 } satisfies OpenClawConfig;
 
-async function listClaudeCliModel() {
+async function listClaudeCliModel(
+  params: {
+    cfg?: OpenClawConfig;
+    metadataSnapshot?: PluginMetadataSnapshot;
+  } = {},
+) {
   return await listModels({
     catalog: [],
     staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
-    cfg: config,
+    cfg: params.cfg ?? config,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     view: "configured",
   });
 }
@@ -43,30 +46,67 @@ describe("models.list CLI runtime availability", () => {
     vi.unstubAllEnvs();
   });
 
-  it("marks a Claude CLI runtime model available with ambient CLI OAuth", async () => {
-    const homeDir = tempDirs.make("models-list-claude-cli-");
-    const credentialDir = path.join(homeDir, ".claude");
-    fs.mkdirSync(credentialDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      path.join(credentialDir, ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "test-access",
-          refreshToken: "test-refresh",
-          expiresAt: Date.now() + 3_600_000,
-        },
-      }),
-      { mode: 0o600 },
-    );
-    vi.stubEnv("HOME", homeDir);
-
+  it("marks a Claude CLI runtime model available through bundled synthetic auth", async () => {
     await expect(listClaudeCliModel()).resolves.toEqual({
       models: [expect.objectContaining({ id: "claude-opus-5", available: true })],
     });
   });
 
-  it("marks a Claude CLI runtime model unavailable without ambient CLI OAuth", async () => {
-    await expect(listClaudeCliModel()).resolves.toEqual({
+  it("does not use synthetic auth from an explicitly disabled Anthropic plugin", async () => {
+    await expect(
+      listClaudeCliModel({
+        cfg: {
+          ...config,
+          plugins: { entries: { anthropic: { enabled: false } } },
+        },
+      }),
+    ).resolves.toEqual({
+      models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
+    });
+  });
+
+  it("does not use synthetic auth when plugins are globally disabled", async () => {
+    await expect(
+      listClaudeCliModel({
+        cfg: {
+          ...config,
+          plugins: { enabled: false },
+        },
+      }),
+    ).resolves.toEqual({
+      models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
+    });
+  });
+
+  it("does not choose between multiple active runtime owners", async () => {
+    const metadataSnapshot = loadManifestMetadataSnapshot({ config, env: process.env });
+    const anthropic = metadataSnapshot.plugins.find((plugin) => plugin.id === "anthropic");
+    if (!anthropic) {
+      throw new Error("Anthropic manifest missing from model availability fixture");
+    }
+    const duplicate = { ...anthropic, id: "anthropic-duplicate" };
+    const providerOwners = new Map(metadataSnapshot.owners.providers);
+    providerOwners.set("anthropic", [...(providerOwners.get("anthropic") ?? []), duplicate.id]);
+    const cliBackendOwners = new Map(metadataSnapshot.owners.cliBackends);
+    cliBackendOwners.set("claude-cli", [
+      ...(cliBackendOwners.get("claude-cli") ?? []),
+      duplicate.id,
+    ]);
+
+    await expect(
+      listClaudeCliModel({
+        metadataSnapshot: {
+          ...metadataSnapshot,
+          plugins: [...metadataSnapshot.plugins, duplicate],
+          byPluginId: new Map([...metadataSnapshot.byPluginId, [duplicate.id, duplicate]]),
+          owners: {
+            ...metadataSnapshot.owners,
+            providers: providerOwners,
+            cliBackends: cliBackendOwners,
+          },
+        },
+      }),
+    ).resolves.toEqual({
       models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
     });
   });

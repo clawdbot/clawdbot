@@ -77,6 +77,16 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+      rtt_scenario:
+        description: Optional Telegram QA scenario id for repeated RTT sampling
+        required: false
+        default: ""
+        type: string
+      allow_older_binary_destructive_actions:
+        description: Allow destructive actions for intentional historical downgrade or recovery proof
+        required: false
+        default: false
+        type: boolean
       advisory:
         description: Treat package Telegram failures as advisory for the caller
         required: false
@@ -163,6 +173,16 @@ on:
         required: false
         default: ""
         type: string
+      rtt_scenario:
+        description: Optional Telegram QA scenario id for repeated RTT sampling
+        required: false
+        default: ""
+        type: string
+      allow_older_binary_destructive_actions:
+        description: Allow destructive actions for intentional historical downgrade or recovery proof
+        required: false
+        default: false
+        type: boolean
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -185,7 +205,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   run_package_telegram_e2e:
@@ -202,19 +222,19 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout dispatch ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: scripts/e2e/Dockerfile
 
       - name: Build Docker E2E image
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
           file: ./scripts/e2e/Dockerfile
@@ -228,6 +248,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -407,6 +428,7 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: ${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}
           OPENCLAW_SKIP_DOCKER_BUILD: "1"
           OPENCLAW_DOCKER_E2E_IMAGE: openclaw-docker-e2e:local
           OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.package_spec }}
@@ -414,6 +436,7 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.provider_mode }}
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: convex
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
+          OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: ${{ inputs.rtt_scenario }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"

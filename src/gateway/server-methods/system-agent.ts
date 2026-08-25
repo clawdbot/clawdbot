@@ -239,7 +239,13 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const manager = context.systemAgentApprovalManager;
     respond(
       true,
-      manager ? listVisiblePendingApprovalRequests({ manager, client }) : [],
+      manager
+        ? listVisiblePendingApprovalRequests({
+            manager,
+            client,
+            ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+          })
+        : [],
       undefined,
     );
   },

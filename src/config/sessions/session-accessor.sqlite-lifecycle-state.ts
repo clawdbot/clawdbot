@@ -35,11 +35,9 @@ import type {
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
-import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
@@ -394,18 +392,12 @@ export async function projectSessionEntryLifecycleMutation(
     const cloned = cloneSessionEntry(entry);
     store[sessionKey] = cloned;
     changedSessionKeys.add(sessionKey);
-    const resetBoundaryPlan =
-      upsert.resetBoundaryReason && expectedEntry?.sessionId
-        ? await buildSessionResetBoundaryPlan({
-            events: loadTranscriptEventsFromDatabase(database, expectedEntry.sessionId),
-            reason: upsert.resetBoundaryReason,
-          })
-        : undefined;
     upsertedEntries.push({
       expectedEntry,
       sessionKey,
       entry: cloned,
-      ...(resetBoundaryPlan ? { resetBoundaryPlan } : {}),
+      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
+      ...(upsert.resetBoundaryReason ? { resetBoundaryReason: upsert.resetBoundaryReason } : {}),
     });
   }
   const referencedSessionIds = collectProjectedReferencedSessionIds({
@@ -627,7 +619,7 @@ export function planSessionLifecycleArtifactCleanup(
     ) {
       continue;
     }
-    const entry = parseSessionEntryRow(row);
+    const entry = projectedStore[row.session_key];
     const sessionIds = uniqueStrings([
       row.current_session_id,
       ...(entry ? collectSessionStateIdsForEntry(entry) : []),

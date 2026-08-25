@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerProfile,
   type WorkerProvider,
@@ -21,10 +21,11 @@ import {
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import {
   normalizeWorkerMachineOptions,
+  requireInheritedWorkerProfileAuthorization,
   requireProviderProvisionTimeoutMs,
   requireWorkerLease,
   requireWorkerLeaseStatus,
-  resolveWorkerLeaseModeError,
+  resolveWorkerLeaseTransportError,
 } from "./service-validation.js";
 import type {
   WorkerEnvironmentRecord,
@@ -233,8 +234,23 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     preparedInstallation?: WorkerInstallationArtifact,
   ) => {
     let lease: WorkerLease;
+    let executionMode: WorkerExecutionMode | undefined;
     try {
       const profile = requireWorkerProfile(record.profileSnapshot.settings);
+      const requestedExecutionMode = record.profileSnapshot.executionMode;
+      if (
+        requestedExecutionMode !== undefined &&
+        requestedExecutionMode !== "worker-turn" &&
+        requestedExecutionMode !== "remote-exec"
+      ) {
+        throw new WorkerProviderError("Worker environment has an invalid placement execution mode");
+      }
+      executionMode = requestedExecutionMode;
+      if (executionMode && !provider.supportedExecutionModes?.includes(executionMode)) {
+        throw new WorkerProviderError(
+          `Worker provider ${provider.id} does not support ${executionMode} placement`,
+        );
+      }
       const providerTimeoutMs =
         options.providerCallTimeoutMs === undefined
           ? requireProviderProvisionTimeoutMs(provider.resolveProvisionTimeoutMs?.(profile))
@@ -248,9 +264,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         throw new Error("Worker node enrollment runtime is unavailable");
       }
       const provisionOptions =
-        machineClass || provider.requiresNodeEnrollment === true
+        machineClass || executionMode || provider.requiresNodeEnrollment === true
           ? {
               ...(machineClass ? { machineClass } : {}),
+              ...(executionMode ? { executionMode } : {}),
               ...(provider.requiresNodeEnrollment === true && prepareNodeEnrollment
                 ? { beginNodeEnrollment: async () => await prepareNodeEnrollment(record) }
                 : {}),
@@ -283,34 +300,33 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       leaseId: lease.leaseId,
       sharedHost: lease.sharedHost === true,
       desktop: lease.desktop ?? null,
+      ...(lease.node
+        ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null }
+        : { nodeDeviceId: null, sshEndpoint: lease.ssh }),
     };
-    const leaseModeError = resolveWorkerLeaseModeError(provider, lease);
+    const leaseModeError = resolveWorkerLeaseTransportError(
+      provider,
+      lease.node ? "node" : "ssh",
+      executionMode,
+    );
     if (leaseModeError) {
-      const leasePatch = {
-        ...patch,
-        ...(lease.node
-          ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null }
-          : { nodeDeviceId: null, sshEndpoint: lease.ssh }),
-      };
       return await failBootstrap(
         record,
         lease.leaseId,
         provider,
         leaseModeError,
         "invalid_profile",
-        leasePatch,
+        patch,
       );
+    }
+    if (record.destroyRequestedAtMs !== null) {
+      // Replay must recover its exact lease, but teardown intent forbids transport bootstrap.
+      return move(record, "draining", patch);
     }
     if (lease.node) {
       return await finishNodeProvisioning(record, lease, provider, patch);
     }
-    const bootstrapping = move(record, "bootstrapping", {
-      ...patch,
-      sshEndpoint: lease.ssh,
-    });
-    if (record.destroyRequestedAtMs !== null) {
-      return bootstrapping;
-    }
+    const bootstrapping = move(record, "bootstrapping", patch);
     let installation = preparedInstallation;
     if (!installation) {
       try {
@@ -585,11 +601,15 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         profileSnapshot: WorkerProfile;
       };
       machineClass?: string;
+      executionMode?: WorkerExecutionMode;
     } = {},
   ) => {
-    const { inherited, machineClass } = createOptions;
-    let stopping = options.isStopping();
-    if (stopping) {
+    const { inherited, machineClass, executionMode } = createOptions;
+    const provisionSnapshot = {
+      ...(machineClass === undefined ? {} : { machineClass }),
+      ...(executionMode === undefined ? {} : { executionMode }),
+    };
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     const normalizedProfileId = profileId.trim();
@@ -598,8 +618,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     const { environmentId, provisionOperationId } = deriveEnvironmentIntent(idempotencyKey);
     return withLock(environmentId, async () => {
-      stopping = options.isStopping();
-      if (stopping) {
+      if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
       const existing = store.get(environmentId);
@@ -610,9 +629,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
             (existing.providerId !== inherited.providerId ||
               !isDeepStrictEqual(existing.profileSnapshot, {
                 ...inherited.profileSnapshot,
-                ...(machineClass === undefined ? {} : { machineClass }),
+                ...provisionSnapshot,
               }))) ||
-          (inherited === undefined && existing.profileSnapshot.machineClass !== machineClass)
+          (inherited === undefined &&
+            (existing.profileSnapshot.machineClass !== machineClass ||
+              existing.profileSnapshot.executionMode !== executionMode))
         ) {
           throw serviceError("invalid_profile", "Idempotency key belongs to another profile");
         }
@@ -627,11 +648,23 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       let provider: WorkerProvider;
       let providerId: string;
       let profileSnapshot: WorkerProfile;
+      const profiles = options.getConfig().cloudWorkers?.profiles;
+      const configuredProfile =
+        profiles && Object.hasOwn(profiles, normalizedProfileId)
+          ? profiles[normalizedProfileId]
+          : undefined;
       if (inherited) {
         providerId = normalizeCapabilityProviderId(inherited.providerId) ?? inherited.providerId;
         if (providerId !== inherited.providerId) {
           throw serviceError("invalid_profile", "Inherited worker provider id is not canonical");
         }
+        requireInheritedWorkerProfileAuthorization(
+          normalizedProfileId,
+          providerId,
+          inherited.profileSnapshot.settings,
+          configuredProfile?.provider,
+          serviceError,
+        );
         provider = providerFor(providerId);
         const resolvedProviderId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
         if (resolvedProviderId !== providerId) {
@@ -639,24 +672,19 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }
         profileSnapshot = requireWorkerProfile({
           ...inherited.profileSnapshot,
-          ...(machineClass === undefined ? {} : { machineClass }),
+          ...provisionSnapshot,
         });
       } else {
-        const profiles = options.getConfig().cloudWorkers?.profiles;
-        if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
+        if (!configuredProfile) {
           throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
         }
-        const profile = expectDefined(
-          profiles[normalizedProfileId],
-          "profiles entry at normalized profile id",
-        );
-        provider = providerFor(profile.provider);
+        provider = providerFor(configuredProfile.provider);
         providerId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
-        const settings = requireWorkerProfile(profile.settings ?? {});
+        const settings = requireWorkerProfile(configuredProfile.settings ?? {});
         profileSnapshot = requireWorkerProfile({
-          install: profile.install ?? "bundle",
+          install: configuredProfile.install ?? "bundle",
           settings,
-          ...(machineClass === undefined ? {} : { machineClass }),
+          ...provisionSnapshot,
         });
       }
       const intent = store.createIntent({

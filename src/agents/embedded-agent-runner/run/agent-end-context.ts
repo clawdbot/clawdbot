@@ -5,7 +5,8 @@ import {
 import type { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AgentEndContext = Parameters<typeof runAgentEndSideEffects>[0]["ctx"];
+type AgentEndContext = Parameters<typeof runAgentEndSideEffects>[0]["ctx"] &
+  Pick<EmbeddedRunAttemptParams, "reasoningLevel">;
 
 export function buildEmbeddedAgentEndContext(params: {
   run: EmbeddedRunAttemptParams;
@@ -25,6 +26,7 @@ export function buildEmbeddedAgentEndContext(params: {
     modelProviderId: run.provider,
     modelId: run.modelId,
     modelContextWindowTokens: run.contextTokenBudget ?? run.model.contextWindow,
+    reasoningLevel: run.reasoningLevel,
     authProfileId: run.authProfileId,
     skillWorkshopAvailable: params.skillWorkshopAvailable,
     compacted: params.compacted,

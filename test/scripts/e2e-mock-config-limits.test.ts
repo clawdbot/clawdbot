@@ -1,7 +1,7 @@
 // E2E Mock Config Limits tests cover e2e mock config limits script behavior.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -17,6 +17,7 @@ const scrubbedEnvKeys = [
   "CLICKCLACK_FIXTURE_PORT",
   "CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES",
   "FIXTURE_PORT",
+  "MOCK_BIND_HOST",
   "MOCK_PORT",
   "MOCK_REQUEST_LOG",
   "MOCK_RESPONSE_CHUNK_DELAY_MS",
@@ -184,6 +185,25 @@ describe("mock OpenAI response markers", () => {
     );
   });
 
+  it("accepts response-control delays above 60 seconds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-delay-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(control, JSON.stringify({ chunkDelayMs: 60_001, text: "delayed response" }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "validate the configured delay", stream: false }),
+        });
+
+        expect(response.status).toBe(200);
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("reloads the lane-owned response control between turns", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-"));
     const control = join(root, "response.json");
@@ -217,6 +237,33 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
+  it("streams lane-owned raw Responses API events", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-events-"));
+    const control = join(root, "response.json");
+    const events = [
+      { delta: "< / internal", type: "response.reasoning_text.delta" },
+      { delta: "VISIBLE", type: "response.output_text.delta" },
+      { response: { output: [], status: "completed" }, type: "response.completed" },
+    ];
+    try {
+      await writeFile(control, JSON.stringify({ events }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "exercise raw events", stream: true }),
+        });
+        const body = await response.text();
+        expect(response.status).toBe(200);
+        for (const event of events) {
+          expect(body).toContain(`data: ${JSON.stringify(event)}`);
+        }
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("holds a lane response until the recorder reveals the outbound message", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-hold-"));
     const control = join(root, "response.json");
@@ -242,6 +289,209 @@ describe("mock OpenAI response markers", () => {
           JSON.stringify({ chunkDelayMs: 0, hold: false, text: "visible after reveal" }),
         );
         expect((await request).output?.[0]?.content?.[0]?.text).toBe("visible after reveal");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("consumes scripted responses in order and logs the selected entries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-script-"));
+    const control = join(root, "response.json");
+    const requestLog = join(root, "requests.ndjson");
+    const script = {
+      scriptVersion: "script-1",
+      hold: true,
+      responses: [
+        { text: "first response" },
+        { fail: { status: 429 } },
+        { text: "third response" },
+      ],
+      default: { text: "default response" },
+    };
+    try {
+      await writeFile(control, JSON.stringify(script));
+      await writeFile(requestLog, "");
+      await withMockServer(
+        mockOpenAiPath,
+        { MOCK_REQUEST_LOG: requestLog, MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          const request = () =>
+            fetch(`${baseUrl}/v1/responses`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ input: "scripted turn", stream: false }),
+            });
+          const firstPromise = request();
+          await delay(75);
+          await writeFile(control, JSON.stringify({ ...script, hold: false }));
+          const first = await firstPromise;
+          expect((await first.json()).output?.[0]?.content?.[0]?.text).toBe("first response");
+          const second = await request();
+          expect(second.status).toBe(429);
+          expect(await second.json()).toEqual({ error: { message: "mantis injected fault" } });
+          const third = await request();
+          expect((await third.json()).output?.[0]?.content?.[0]?.text).toBe("third response");
+          const fourth = await request();
+          expect((await fourth.json()).output?.[0]?.content?.[0]?.text).toBe("default response");
+          await writeFile(
+            control,
+            JSON.stringify({ ...script, hold: false, scriptVersion: "script-2" }),
+          );
+          const reset = await request();
+          expect((await reset.json()).output?.[0]?.content?.[0]?.text).toBe("first response");
+          await writeFile(
+            control,
+            JSON.stringify({ responses: [{ text: "last response" }], scriptVersion: "script-3" }),
+          );
+          expect((await (await request()).json()).output?.[0]?.content?.[0]?.text).toBe(
+            "last response",
+          );
+          expect((await (await request()).json()).output?.[0]?.content?.[0]?.text).toBe(
+            "last response",
+          );
+
+          const entries = (await readFile(requestLog, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(entries.map((entry) => entry.scriptEntry)).toEqual([
+            { entryIndex: 0, requestIndex: 0, source: "responses" },
+            { entryIndex: 1, requestIndex: 1, source: "responses" },
+            { entryIndex: 2, requestIndex: 2, source: "responses" },
+            { requestIndex: 3, source: "default" },
+            { entryIndex: 0, requestIndex: 0, source: "responses" },
+            { entryIndex: 0, requestIndex: 0, source: "responses" },
+            { entryIndex: 0, requestIndex: 1, source: "last" },
+          ]);
+        },
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("records bounded media facts without provider payload bytes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-content-facts-"));
+    const requestLog = join(root, "requests.ndjson");
+    const pdfBytes = "private-pdf-bytes";
+    const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
+    try {
+      await writeFile(requestLog, "");
+      await withMockServer(mockOpenAiPath, { MOCK_REQUEST_LOG: requestLog }, async (baseUrl) => {
+        const send = async (input: unknown) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input, stream: false }),
+          });
+          expect(response.status).toBe(200);
+        };
+        await send([
+          {
+            type: "message",
+            role: "user",
+            content: Array.from({ length: 128 }, (_, index) => ({
+              type: "input_text",
+              text: `historical turn ${index}`,
+            })),
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                filename: "proof.pdf",
+                file_data: `data:application/pdf;base64,${pdfBase64}`,
+              },
+              { type: "input_text", text: "Summarize the staged document." },
+            ],
+          },
+        ]);
+        await send([
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "[media attached: /tmp/session/proof.pdf (application/pdf)]\nSummarize it.",
+              },
+            ],
+          },
+        ]);
+
+        const recorded = await readFile(requestLog, "utf8");
+        const entries = recorded
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(entries[0]?.contentFacts).toHaveLength(128);
+        expect(entries[0]?.contentFactsTruncated).toBe(true);
+        expect(entries[0]?.contentFacts.slice(-2)).toEqual([
+          {
+            type: "input_file",
+            filename: "proof.pdf",
+            mimeType: "application/pdf",
+            byteLength: Buffer.byteLength(pdfBytes),
+          },
+          { type: "input_text" },
+        ]);
+        expect(entries[1]?.contentFacts).toEqual([
+          { type: "input_text" },
+          {
+            type: "legacy_media",
+            filename: "/tmp/session/proof.pdf",
+            mimeType: "application/pdf",
+          },
+        ]);
+        expect(recorded).not.toContain(pdfBase64);
+        expect(entries[0]?.body).toContain("data:application/pdf;base64,[redacted:17 bytes]");
+        expect(entries.map((entry) => entry.seq)).toEqual([1, 2]);
+
+        // Redaction walks parsed JSON, so an unparseable body must never be
+        // logged as raw text — that path would leak the base64 payload.
+        const malformed = `{"input": "data:application/pdf;base64,${pdfBase64}"`;
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: malformed,
+        });
+        expect(response.status).toBe(200);
+        const withMalformed = await readFile(requestLog, "utf8");
+        expect(withMalformed).not.toContain(pdfBase64);
+        const malformedEntry = withMalformed
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .at(-1);
+        expect(malformedEntry?.body).toBe(
+          `[unparseable request body redacted: ${Buffer.byteLength(malformed)} bytes]`,
+        );
+        expect(malformedEntry?.seq).toBe(3);
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("supports scripted connection drops", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-drop-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(
+        control,
+        JSON.stringify({ responses: [{ fail: { mode: "drop" } }], scriptVersion: "drop-1" }),
+      );
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        await expect(
+          fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input: "drop this turn", stream: false }),
+          }),
+        ).rejects.toThrow();
       });
     } finally {
       await rm(root, { force: true, recursive: true });

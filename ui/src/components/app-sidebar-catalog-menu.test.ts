@@ -32,4 +32,27 @@ describe("SidebarCatalogMenuController", () => {
 
     expect(order).toEqual(["dismiss", "open"]);
   });
+
+  it("does not schedule trigger retargeting while the menu is closed", () => {
+    const controller = new SidebarCatalogMenuController({
+      beforeOpen: vi.fn(),
+      requestUpdate: vi.fn(),
+      terminalAvailable: () => true,
+      navigate: vi.fn(),
+    });
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    const queueMicrotaskSpy = vi.spyOn(globalThis, "queueMicrotask");
+
+    try {
+      controller.retargetTrigger(
+        { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+        trigger,
+      );
+      expect(queueMicrotaskSpy).not.toHaveBeenCalled();
+    } finally {
+      queueMicrotaskSpy.mockRestore();
+      trigger.remove();
+    }
+  });
 });

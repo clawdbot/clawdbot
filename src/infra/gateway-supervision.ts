@@ -1,22 +1,20 @@
 // Defines gateway lifecycle ownership shared by service, restart, and update paths.
 import { isDefaultInstallIdentity, resolveNativeServiceProfileConflict } from "../config/paths.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
+import { isContainerEnvironment } from "./container-environment.js";
 
 const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-update-required";
 export const NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON =
   "service management skipped: non-default state dir or config path";
 
-type GatewaySupervisorMode = "auto" | "external";
-
-function resolveGatewaySupervisorMode(env: NodeJS.ProcessEnv = process.env): GatewaySupervisorMode {
-  return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external"
-    ? "external"
-    : "auto";
+export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
 }
 
-export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveGatewaySupervisorMode(env) === "external";
+export function isGatewayHostServiceEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
+  const { KUBERNETES_SERVICE_HOST: host, KUBERNETES_SERVICE_PORT: port } = env;
+  return !isContainerEnvironment() && !(host?.trim() && port?.trim());
 }
 
 export function formatExternalSupervisorActionRequired(action: string): string {

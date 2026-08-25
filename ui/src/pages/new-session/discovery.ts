@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeArrayBackedTrimmedStringList,
+  normalizeSortedUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import type {
   EnvironmentStatus,
   RuntimeTargetIssue,
@@ -27,6 +30,7 @@ export type DraftCloudProfile = {
   providerId: string;
   trust?: "persistent" | "disposable";
   executionMode?: WorkerExecutionMode;
+  executionModes?: readonly WorkerExecutionMode[];
   machines?: DraftMachineOption[];
 };
 
@@ -52,6 +56,7 @@ export type DraftEnvironment = {
   lastSeenReason?: string;
   trust?: "persistent" | "disposable";
   capabilities?: string[];
+  invocableCommands?: string[];
   issues?: RuntimeTargetIssue[];
 };
 
@@ -84,6 +89,25 @@ function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefin
   return issues.length > 0 ? issues : undefined;
 }
 
+function readDraftCloudProfileExecutionModes(value: unknown): readonly WorkerExecutionMode[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  if (value.length === 1 && (value[0] === "worker-turn" || value[0] === "remote-exec")) {
+    return [value[0]];
+  }
+  return value.length === 2 && value[0] === "worker-turn" && value[1] === "remote-exec"
+    ? ["worker-turn", "remote-exec"]
+    : [];
+}
+
+export function draftCloudProfileSupportsExecutionMode(
+  profile: DraftCloudProfile,
+  executionMode: WorkerExecutionMode,
+): boolean {
+  return profile.executionModes?.includes(executionMode) === true;
+}
+
 export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
   return (Array.isArray(value) ? value : [])
     .flatMap<DraftCloudProfile>((raw) => {
@@ -95,6 +119,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         providerId?: unknown;
         trust?: unknown;
         executionMode?: unknown;
+        executionModes?: unknown;
         machines?: unknown;
       };
       const id = normalizeOptionalString(profile.id);
@@ -112,7 +137,16 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
           : undefined;
       const machines = readDraftMachineOptions(profile.machines);
       return [
-        { id, providerId, trust, executionMode, ...(machines.length > 0 ? { machines } : {}) },
+        {
+          id,
+          providerId,
+          trust,
+          executionMode,
+          ...(Object.hasOwn(profile, "executionModes")
+            ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }
+            : {}),
+          ...(machines.length > 0 ? { machines } : {}),
+        },
       ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
@@ -194,6 +228,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
         lastSeenReason?: unknown;
         trust?: unknown;
         capabilities?: unknown;
+        invocableCommands?: unknown;
         issues?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
@@ -213,6 +248,11 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ? environment.trust
           : undefined;
       const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
+      const invocableCommands = Array.isArray(environment.invocableCommands)
+        ? normalizeSortedUniqueTrimmedStringList(environment.invocableCommands)
+            .filter((command) => command.length <= 128)
+            .slice(0, 128)
+        : undefined;
       const lastConnectedAtMs = normalizeTimestamp(environment.lastConnectedAtMs);
       const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
@@ -236,6 +276,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ...(lastSeenReason ? { lastSeenReason } : {}),
           ...(trust ? { trust } : {}),
           ...(capabilities ? { capabilities } : {}),
+          ...(invocableCommands ? { invocableCommands } : {}),
           ...(issues ? { issues } : {}),
         },
       ];

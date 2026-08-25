@@ -541,8 +541,9 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
+    const catalog = page.locator('[data-session-section="catalog:claude"]');
     await page.locator('[data-session-catalog-load-more="claude"]').click();
-    await page.getByText("Older remote review", { exact: true }).waitFor();
+    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
       catalogId: "claude",
@@ -560,8 +561,11 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);
-    await page.getByText("Older remote review", { exact: true }).waitFor();
-    await page.getByText("Remote architecture review", { exact: true }).click();
+    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+    const remote = catalog.getByRole("link", { name: /^Remote architecture review$/ });
+    await remote.hover();
+    await page.locator(".session-progress-hovercard").waitFor();
+    await remote.click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
     const catalogPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     const thread = catalogPane.locator(".chat-thread");

@@ -50,7 +50,10 @@ type ScopedSessionSelection = {
   lastActiveSessionKey: string;
 };
 
-type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActiveSessionKey"> & {
+type PersistedUiSettings = Omit<
+  UiSettings,
+  "token" | "sessionKey" | "lastActiveSessionKey" | "navCollapsed"
+> & {
   token?: never;
   sessionKey?: string;
   lastActiveSessionKey?: string;
@@ -154,6 +157,12 @@ export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
 export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
+export function normalizeAccentColor(value: unknown): string | undefined {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
+}
+
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -191,6 +200,7 @@ export type UiSettings = {
   lastActiveSessionKey: string;
   theme: ThemeName;
   themeMode: ThemeMode;
+  accent?: string;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
@@ -499,6 +509,7 @@ export function loadSettings(): UiSettings {
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
+      accent: normalizeAccentColor(parsed.accent),
       chatShowThinking:
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
@@ -529,8 +540,7 @@ export function loadSettings(): UiSettings {
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
         parsed.sidebarSessionActivePanels,
       ),
-      navCollapsed:
-        typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
+      navCollapsed: defaults.navCollapsed,
       navWidth:
         typeof parsed.navWidth === "number" &&
         parsed.navWidth >= NAV_WIDTH_MIN &&
@@ -619,6 +629,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
+  const accent = normalizeAccentColor(next.accent);
   const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
@@ -648,6 +659,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
     themeMode: next.themeMode,
+    ...(accent ? { accent } : {}),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
@@ -684,8 +696,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
           ),
         }
       : {}),
-    navCollapsed: next.navCollapsed,
-    navWidth: next.navWidth,
+    navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)

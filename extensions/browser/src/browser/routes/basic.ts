@@ -202,16 +202,16 @@ async function buildBrowserStatus(
           }),
       )
     : null;
-  let detectedBrowser: string | null = null;
-  let detectedExecutablePath: string | null = null;
+  let detected: ReturnType<typeof resolveBrowserExecutableForPlatform> = null;
   let detectError: string | null = null;
 
   try {
-    const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
-    if (detected) {
-      detectedBrowser = detected.kind;
-      detectedExecutablePath = detected.path;
-    }
+    detected = resolveBrowserExecutableForPlatform(
+      capabilities.mode === "local-managed" && capabilities.browserFilesystemLocal
+        ? { ...current.resolved, executablePath: profileCtx.profile.executablePath }
+        : current.resolved,
+      process.platform,
+    );
   } catch (err) {
     detectError = String(err);
   }
@@ -248,8 +248,8 @@ async function buildBrowserStatus(
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
     cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
     chosenBrowser: profileState?.running?.exe.kind ?? null,
-    detectedBrowser,
-    detectedExecutablePath,
+    detectedBrowser: detected?.kind ?? null,
+    detectedExecutablePath: detected?.path ?? null,
     detectError,
     userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
     color: profileCtx.profile.color,

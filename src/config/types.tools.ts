@@ -202,9 +202,9 @@ export type CodeModeConfig =
       maxPendingToolCalls?: number;
       /** Retention for suspended snapshots. */
       snapshotTtlSeconds?: number;
-      /** Default search result count for tools.search. */
+      /** Default search result count for catalog.search. */
       searchDefaultLimit?: number;
-      /** Maximum search result count for tools.search. */
+      /** Maximum search result count for catalog.search. */
       maxSearchLimit?: number;
     };
 

@@ -97,6 +97,7 @@ export type PreparedCronRunContext = {
   agentCfg: AgentDefaultsConfig;
   agentDir: string;
   agentSessionKey: string;
+  sourceSessionKey?: string;
   runSessionId: string;
   currentRunSessionId: () => string;
   runSessionKey: string;
@@ -310,6 +311,7 @@ export async function prepareCronRunContext(params: {
     const persistSessionEntry = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey,
+      createdActor: input.job.createdActor,
       persistSessionEntry: persistCronSessionRow,
     });
     const withRunSession: WithRunSession = (result) => ({
@@ -655,6 +657,7 @@ export async function prepareCronRunContext(params: {
       ? createCronRunContinuationSession({
           cronSession,
           runSessionKey,
+          createdActor: input.job.createdActor,
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
@@ -682,6 +685,7 @@ export async function prepareCronRunContext(params: {
         agentCfg,
         agentDir,
         agentSessionKey,
+        sourceSessionKey,
         runSessionId,
         currentRunSessionId,
         runSessionKey,

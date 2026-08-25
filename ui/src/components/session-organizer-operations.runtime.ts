@@ -164,7 +164,9 @@ export async function archiveSessionWithUndo(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
+  scope.sessions.setArchiveVisibility(session.key, "pending");
   const result = await patchSession(host, session, { archived: true }, scope);
+  scope.sessions.setArchiveVisibility(session.key, result === "completed" ? "archived" : undefined);
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
@@ -395,8 +397,8 @@ export async function renameSession(
 }
 
 export async function assignSessionOwner(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
+  host: SessionActionHost,
+  session: Pick<SidebarRecentSession, "key">,
   owner: Pick<SessionOwnerOption, "type" | "id">,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
@@ -409,9 +411,16 @@ export async function assignSessionOwner(
   ) {
     return;
   }
-  await scope.sessions.assignOwner(session.key, owner, {
+  const assigned = await scope.sessions.assignOwner(session.key, owner, {
     agentId: parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId,
   });
+  if (
+    host.sessionData.isSessionMutationScopeCurrent(scope) &&
+    !assigned &&
+    scope.sessions.state.error
+  ) {
+    host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+  }
 }
 
 export async function createSessionGroup(

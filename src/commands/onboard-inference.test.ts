@@ -70,7 +70,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -88,7 +88,10 @@ describe("detectInferenceBackends", () => {
           timedOut: true,
           error: "timed out after 1500ms",
         }),
-        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        detectClaudeLoginState: async () => ({
+          credentials: true,
+          authKind: "claude-subscription",
+        }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => ({ type: "oauth" }),
       },
@@ -109,7 +112,10 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        detectClaudeLoginState: async () => ({
+          credentials: true,
+          authKind: "claude-subscription",
+        }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => ({ type: "oauth" }),
         randomInt: () => 0,
@@ -165,7 +171,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => ({ type: "api_key_helper" }),
+        detectClaudeLoginState: async () => ({ credentials: true, authKind: "api-key" }),
       },
     });
 
@@ -185,7 +191,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: true, authKind: "api-key" }),
       },
     });
 
@@ -194,61 +200,15 @@ describe("detectInferenceBackends", () => {
     );
   });
 
-  it.each(["oauth", "token"])(
-    "labels parsed Claude CLI %s credentials as a subscription",
-    async (type) => {
-      const candidates = await detectInferenceBackends({
-        env: {},
-        platform: "linux",
-        deps: {
-          probeLocalCommand: probeDeps({ claude: true }),
-          readClaudeCliCredentials: () => ({ type }),
-        },
-      });
-
-      expect(candidates).toMatchObject([
-        {
-          kind: "claude-cli",
-          credentials: true,
-          detail: "logged in · Claude subscription",
-        },
-      ]);
-    },
-  );
-
-  it("keeps an Anthropic environment key ahead of unknown Claude credentials", async () => {
-    const candidates = await detectInferenceBackends({
-      env: { ANTHROPIC_API_KEY: "sk-y" },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates.map((candidate) => candidate.kind)).toEqual([
-      "anthropic-api-key",
-      "claude-cli",
-    ]);
-    expect(candidates[1]?.credentials).toBeUndefined();
-  });
-
-  it("keeps a lower-version Claude wrapper selectable with capability guidance", async () => {
+  it("labels a Claude CLI subscription reported by its status command", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "linux",
       deps: {
-        probeLocalCommand: async (command) => ({
-          command,
-          found: command === "claude",
-          ...(command === "claude" ? { version: "2.1.205 (Claude Code)" } : {}),
-        }),
-        readClaudeCliCredentials: () => ({ type: "oauth" }),
-        resolveClaudeLiveSessionRequirement: () => ({
-          capability: "msg_lifecycle_v1",
-          minimumVersion: "2.1.206",
-          versionArgs: ["--version"],
-          updateCommand: "claude update",
+        probeLocalCommand: probeDeps({ claude: true }),
+        detectClaudeLoginState: async () => ({
+          credentials: true,
+          authKind: "claude-subscription",
         }),
       },
     });
@@ -257,10 +217,26 @@ describe("detectInferenceBackends", () => {
       {
         kind: "claude-cli",
         credentials: true,
-        detail:
-          "logged in · Claude subscription; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
+        detail: "logged in · Claude subscription",
       },
     ]);
+  });
+
+  it("keeps an Anthropic environment key ahead of unknown Claude status", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { ANTHROPIC_API_KEY: "sk-y" },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true }),
+        detectClaudeLoginState: async () => ({ credentials: undefined }),
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual([
+      "anthropic-api-key",
+      "claude-cli",
+    ]);
+    expect(candidates[1]?.credentials).toBeUndefined();
   });
 
   it("keeps a logged-in Gemini CLI after environment keys", async () => {
@@ -288,7 +264,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => null,
       },
@@ -318,7 +294,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -343,7 +319,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -359,7 +335,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
       },
     });
@@ -377,7 +353,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
         readGeminiCliCredentials: () => null,
       },
@@ -472,7 +448,10 @@ describe("detectInferenceBackends", () => {
         platform: "linux",
         deps: {
           probeLocalCommand: probeDeps({ claude: true, codex: true }),
-          readClaudeCliCredentials: () => ({ type: "oauth" }),
+          detectClaudeLoginState: async () => ({
+            credentials: true,
+            authKind: "claude-subscription",
+          }),
           readCodexCliCredentials: () => ({ type: "oauth" }),
           randomInt: () => pick,
         },
@@ -488,13 +467,13 @@ describe("detectInferenceBackends", () => {
     ]);
   });
 
-  it("treats missing file credentials as unknown on macOS (keychain may hold the login)", async () => {
+  it("keeps an unverified Claude status unknown", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "darwin",
       deps: {
         probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: undefined }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -548,7 +527,7 @@ describe("detectInferenceBackends", () => {
       platform: "darwin",
       deps: {
         probeLocalCommand: probeDeps({ [appCli]: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -575,7 +554,7 @@ describe("detectInferenceBackends", () => {
             found: command === chatGPTCli || command === legacyCodexCli,
           };
         },
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -591,7 +570,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });

@@ -360,6 +360,7 @@ describe("gatherDaemonStatus", () => {
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
     isGatewayExternallySupervised.mockReset().mockReturnValue(false);
+    auditGatewayServiceConfig.mockClear();
     callGatewayStatusProbe.mockClear();
     resolveAdvertisedControlUiLinks.mockClear();
     resolveAdvertisedControlUiLinks.mockResolvedValue({
@@ -740,7 +741,7 @@ describe("gatherDaemonStatus", () => {
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
 
-  it("bounds both service-manager reads and still emits JSON after they time out", async () => {
+  it("bounds all service-manager reads and still emits JSON after they time out", async () => {
     serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
       if (args?.timeoutMs === undefined) {
         return await new Promise<boolean>(() => {});
@@ -762,6 +763,9 @@ describe("gatherDaemonStatus", () => {
 
     expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
     expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
+    expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 100 }),
+    );
     expect(status.service.loadState).toEqual({
       status: "unknown",
       detail: "Error: systemctl is-enabled timed out",
@@ -810,6 +814,19 @@ describe("gatherDaemonStatus", () => {
       error.mockRestore();
     }
   }, 1_000);
+
+  it.each(["bogus", "0", "-1", "1.5"])(
+    "rejects invalid status timeout %s before reading service state",
+    async (timeout) => {
+      await expect(gatherStatus({ rpc: { timeout } })).rejects.toThrow(
+        `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "${timeout}".`,
+      );
+
+      expect(serviceReadCommand).not.toHaveBeenCalled();
+      expect(serviceIsLoaded).not.toHaveBeenCalled();
+      expect(serviceReadRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps gateway status read-only when service management is unsupported", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);

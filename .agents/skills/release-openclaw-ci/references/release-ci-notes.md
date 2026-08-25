@@ -25,6 +25,11 @@
 - Classify one failed surface, make one fix when needed, and retry the narrowest
   failed group once. Then reassess whether to ship, explicitly waive, or block
   instead of creating another verification loop.
+- Release-check recovery uses one concrete group. The removed `release-checks`
+  aggregate handle must never be substituted with `all`.
+- Controller recovery uses `qa-parity` or `qa-live`; `qa` is reserved for a
+  deliberate direct-child manual aggregate. Filters that do not belong to the
+  selected group fail closed.
 - Preserve successful exact-tuple evidence when the documented finalization
   rules allow reuse. Narrow evidence does not become publish authorization by
   itself, and there is no standalone rerunnable finalizer today.

@@ -55,6 +55,7 @@ const wsMockState = vi.hoisted(() => ({
 
 vi.mock("ws", () => ({
   WebSocket: class MockWebSocket {
+    static readonly OPEN = 1;
     on = vi.fn();
     close = vi.fn();
     send = vi.fn();
@@ -272,6 +273,7 @@ describe("GatewayClient", () => {
 });
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
@@ -291,6 +293,7 @@ type RecordingSocket = TestSocket & {
 function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
   return {
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => {
       sent.push(JSON.parse(payload) as EventFrame);
@@ -592,8 +595,8 @@ describe("gateway broadcaster", () => {
   });
 
   it("requires operator.questions for question broadcasts", () => {
-    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const questionSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
     const clients = new Set<GatewayWsClient>([
       makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),

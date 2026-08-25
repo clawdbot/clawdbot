@@ -17,6 +17,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -29,6 +30,11 @@ import {
 } from "../server-model-catalog-auth.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
+
+const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
+  requiredNodeCommands: [],
+  consumesWorkerSlot: true,
+};
 
 const modelPluginMetadataSnapshot = vi.hoisted(() => {
   const plugins = [
@@ -52,6 +58,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       skills: [],
       hooks: [],
       origin: "bundled",
+      enabledByDefault: true,
       rootDir: "/test/anthropic",
       source: "/test/anthropic/index.js",
       manifestPath: "/test/anthropic/openclaw.plugin.json",
@@ -995,6 +1002,7 @@ describe("models.list", () => {
                   id: "openclaw",
                   cloudPlacementSupported: true,
                   cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -1056,6 +1064,7 @@ describe("models.list", () => {
                   id: "openclaw",
                   cloudPlacementSupported: true,
                   cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -1108,6 +1117,7 @@ describe("models.list", () => {
                 id: "openclaw",
                 cloudPlacementSupported: true,
                 cloudPlacementExecutionMode: "worker-turn",
+                devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                 devicePlacementSupported: true,
                 source: "implicit",
               },
@@ -1623,7 +1633,7 @@ describe("models.list", () => {
     });
   });
 
-  it("keeps catalog models available through a refresh-owned CLI runtime", async () => {
+  it("keeps catalog models available through a native CLI runtime", async () => {
     await withoutAnthropicEnvAuth(async () => {
       await withModelsTestState(
         {
@@ -1631,35 +1641,8 @@ describe("models.list", () => {
           prefix: "openclaw-models-list-cli-runtime-",
           agentEnv: "main",
         },
-        async (state) => {
-          const store = {
-            version: 1,
-            profiles: {
-              "anthropic:claude-cli": {
-                type: "oauth",
-                provider: "claude-cli",
-                access: "claude-cli-access",
-                refresh: "claude-cli-refresh",
-                expires: Date.now() - 60_000,
-              },
-            },
-          } as const;
-          await state.writeAuthProfiles(store);
-          replaceRuntimeAuthProfileStoreSnapshots([
-            {
-              agentDir: state.agentDir(),
-              store: Object.assign({}, store, {
-                runtimeExternalCliProfileIds: ["anthropic:claude-cli"],
-              }),
-            },
-          ]);
-
+        async () => {
           const runtimeConfig = {
-            auth: {
-              profiles: {
-                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
-              },
-            },
             agents: {
               defaults: {
                 models: {

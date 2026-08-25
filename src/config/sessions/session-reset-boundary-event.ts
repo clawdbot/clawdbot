@@ -1,11 +1,5 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
-import {
-  DEFAULT_REPLAY_MAX_MESSAGES,
-  replayableTranscriptRole,
-  selectRecentUserAssistantReplayRecords,
-} from "./transcript-replay.js";
-import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
+import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
 export type SessionResetBoundaryReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
@@ -17,11 +11,6 @@ type SessionResetBoundaryEvent = {
   timestamp: string;
   reason: SessionResetBoundaryReason;
   firstKeptEntryId?: string;
-};
-
-export type SessionResetBoundaryPlan = {
-  event: SessionResetBoundaryEvent;
-  seedEvents: unknown[];
 };
 
 function recordId(record: unknown): string | undefined {
@@ -73,7 +62,7 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
   return [...kept, ...entries.slice(boundaryIndex + 1)];
 }
 
-function buildSessionResetBoundaryEvent(params: {
+export function buildSessionResetBoundaryEvent(params: {
   events: readonly unknown[];
   reason: SessionResetBoundaryReason;
 }): SessionResetBoundaryEvent {
@@ -96,88 +85,5 @@ function buildSessionResetBoundaryEvent(params: {
     timestamp: new Date().toISOString(),
     reason: params.reason,
     ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
-  };
-}
-
-async function readLegacyTranscriptEvents(sessionFile: string | undefined): Promise<unknown[]> {
-  const filePath = sessionFile?.trim();
-  if (!filePath || !path.isAbsolute(filePath) || !filePath.endsWith(".jsonl")) {
-    return [];
-  }
-  try {
-    const newestFirst: unknown[] = [];
-    let boundaryFirstKeptEntryId: string | undefined;
-    let foundBoundary = false;
-    for await (const line of streamSessionTranscriptLinesReverse(filePath)) {
-      let record: unknown;
-      try {
-        record = JSON.parse(line) as unknown;
-      } catch {
-        continue;
-      }
-      const type =
-        record && typeof record === "object" && !Array.isArray(record)
-          ? (record as { type?: unknown }).type
-          : undefined;
-      if (!foundBoundary && (type === "reset" || type === "compaction")) {
-        foundBoundary = true;
-        const firstKept = (record as { firstKeptEntryId?: unknown }).firstKeptEntryId;
-        boundaryFirstKeptEntryId =
-          typeof firstKept === "string" && firstKept.trim() ? firstKept : undefined;
-        if (!boundaryFirstKeptEntryId) {
-          break;
-        }
-        continue;
-      }
-      if (foundBoundary && (type === "reset" || type === "compaction")) {
-        break;
-      }
-      if (replayableTranscriptRole(record as Parameters<typeof replayableTranscriptRole>[0])) {
-        newestFirst.push(record);
-      }
-      if (
-        newestFirst.length >= DEFAULT_REPLAY_MAX_MESSAGES ||
-        (foundBoundary && recordId(record) === boundaryFirstKeptEntryId)
-      ) {
-        break;
-      }
-    }
-    const selected = selectRecentUserAssistantReplayRecords(newestFirst.toReversed());
-    return selected.map((record, index) =>
-      Object.assign({}, record as Record<string, unknown>, {
-        parentId: index === 0 ? null : (recordId(selected[index - 1]) ?? null),
-      }),
-    );
-  } catch {
-    return [];
-  }
-}
-
-export async function buildSessionResetBoundaryPlan(params: {
-  events: readonly unknown[];
-  legacySessionFile?: string;
-  reason: SessionResetBoundaryReason;
-}): Promise<SessionResetBoundaryPlan> {
-  const hasConversationEvents = params.events.some((event) => {
-    const type =
-      event !== null && typeof event === "object" && !Array.isArray(event)
-        ? (event as { type?: unknown }).type
-        : undefined;
-    return type === "message" || type === "compaction" || type === "reset";
-  });
-  const legacyEvents = hasConversationEvents
-    ? []
-    : await readLegacyTranscriptEvents(params.legacySessionFile);
-  const seedEvents = legacyEvents.filter(
-    (event) =>
-      event !== null &&
-      typeof event === "object" &&
-      !Array.isArray(event) &&
-      (event as { type?: unknown }).type !== "session",
-  );
-  const events = seedEvents.length > 0 ? [...params.events, ...seedEvents] : params.events;
-  return {
-    event: buildSessionResetBoundaryEvent({ events, reason: params.reason }),
-    seedEvents,
   };
 }

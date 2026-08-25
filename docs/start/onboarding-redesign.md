@@ -124,7 +124,7 @@ Remote-gateway onboarding keeps its legacy conversational handoff
   source). Once-semantics (offer only until accepted, stored scan) also lands
   with the phase 5 store; today a rerun re-offers.
 - Also fixed: custom `completeSetupInference` prompts no longer inherit the
-  32-token verification-probe output cap (`SETUP_INFERENCE_TEST_MAX_TOKENS`
+  bounded verification-probe output cap (`SETUP_INFERENCE_TEST_MAX_TOKENS`
   applies to the "reply OK" probe only).
 
 ### Phase 2 — CLI custodian spine (PR #109841)

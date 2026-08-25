@@ -10,6 +10,7 @@ import { handleBuzzInbound } from "./inbound.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
 import {
+  assertBuzzAccountAvailable,
   resolveBuzzAccount,
   resolveDefaultBuzzAccountId,
   type ResolvedBuzzAccount,
@@ -62,10 +63,8 @@ function resolveBuzzProfileName(params: {
 export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<ResolvedBuzzAccount>) {
   const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
   const buildContext = channelRuntime?.inbound.buildContext;
-  const account = resolveBuzzAccount({
-    cfg: ctx.cfg,
-    accountId: ctx.account.accountId,
-  });
+  const account = ctx.account;
+  assertBuzzAccountAvailable(account);
   if (!account.configured) {
     throw new Error(`Buzz is not configured for account "${account.accountId}"`);
   }
@@ -236,6 +235,7 @@ export const buzzOutboundAdapter = {
     const runtime = getBuzzRuntime();
     const resolvedAccountId = accountId ?? resolveDefaultBuzzAccountId(cfg);
     const account = resolveBuzzAccount({ cfg, accountId: resolvedAccountId });
+    assertBuzzAccountAvailable(account);
     if (!account.enabled) {
       throw new Error(`Buzz is disabled for account ${resolvedAccountId}`);
     }

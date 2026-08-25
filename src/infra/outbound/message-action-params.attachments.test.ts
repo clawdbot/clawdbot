@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 // Covers message-action media hydration, sandbox path normalization,
 // attachments, and channel/plugin media source aliases.
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -17,12 +18,17 @@ import {
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
+const { hydrateAttachmentParamsForAction, normalizeSandboxMediaParams } =
+  await import("./message-action-params.js");
 const loadWebMedia = messageActionRunnerMocks.loadWebMedia;
 
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
   "base64",
 );
+const onePixelPngBase64 = onePixelPng.toString("base64");
+const wrappedOnePixelPngBase64 = onePixelPngBase64.match(/.{1,24}/g)?.join("\r\n") ?? "";
+const parameterizedPngDataUrl = `data:image/png;charset=utf-8;name=../../ignored.svg;base64,${wrappedOnePixelPngBase64}`;
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -99,6 +105,106 @@ describe("runMessageAction media behavior", () => {
   beforeEach(async () => {
     await resetMessageActionMediaMocks();
   });
+
+  it.each(["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const)(
+    "normalizes parameterized, line-wrapped image data URLs for %s",
+    async (action) => {
+      const args: Record<string, unknown> = { buffer: parameterizedPngDataUrl };
+
+      await hydrateAttachmentParamsForAction({
+        cfg: {},
+        channel: "imessage",
+        args,
+        action,
+        dryRun: true,
+        mediaPolicy: { mode: "host" },
+      });
+
+      expect(args.contentType).toBe("image/png");
+      if (action === "send") {
+        expect(args.media).toBe("buffer://message-send/attachment");
+        expect(args.filename).toBe("attachment.png");
+      } else {
+        expect(canonicalizeBase64(String(args.buffer))).toBe(onePixelPngBase64);
+      }
+      expect(args.filename).not.toBe("../../ignored.svg");
+    },
+  );
+
+  it.each(["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const)(
+    "keeps explicit content type authoritative for %s data URLs",
+    async (action) => {
+      const args: Record<string, unknown> = {
+        buffer: parameterizedPngDataUrl,
+        contentType: "image/jpeg",
+      };
+
+      await hydrateAttachmentParamsForAction({
+        cfg: {},
+        channel: "imessage",
+        args,
+        action,
+        dryRun: true,
+        mediaPolicy: { mode: "host" },
+      });
+
+      expect(args.contentType).toBe("image/jpeg");
+      expect(args.filename).toBe("attachment.jpg");
+    },
+  );
+
+  it.each([
+    ["duplicate marker", "image/png;base64;base64"],
+    ["marker before another parameter", "image/png;base64;charset=utf-8"],
+    ["missing MIME type", ";base64"],
+    ["metadata newline", "image/png;name=bad\r\nvalue;base64"],
+  ])("rejects a data URL with a %s", async (_label, metadata) => {
+    await expect(
+      hydrateAttachmentParamsForAction({
+        cfg: {},
+        channel: "imessage",
+        args: { buffer: `data:${metadata},${onePixelPngBase64}` },
+        action: "send",
+        dryRun: true,
+        mediaPolicy: { mode: "host" },
+      }),
+    ).rejects.toThrow(/invalid base64/i);
+  });
+
+  it("rejects an oversized parameterized data URL before decoding its payload", async () => {
+    const fromSpy = vi.spyOn(Buffer, "from");
+    try {
+      await expect(
+        hydrateAttachmentParamsForAction({
+          cfg: { agents: { defaults: { mediaMaxMb: 0.00001 } } },
+          channel: "imessage",
+          args: { buffer: parameterizedPngDataUrl },
+          action: "send",
+          dryRun: true,
+          mediaPolicy: { mode: "host" },
+        }),
+      ).rejects.toThrow(/too large|limit/i);
+      const base64Calls = (fromSpy.mock.calls as ReadonlyArray<readonly unknown[]>).filter(
+        (call) => call[1] === "base64",
+      );
+      expect(base64Calls).toHaveLength(0);
+    } finally {
+      fromSpy.mockRestore();
+    }
+  });
+
+  it.each(["media", "mediaUrl", "path", "filePath"])(
+    "keeps data URLs forbidden in the %s source field",
+    async (field) => {
+      await expect(
+        normalizeSandboxMediaParams({
+          args: { [field]: parameterizedPngDataUrl },
+          mediaPolicy: { mode: "host" },
+        }),
+      ).rejects.toThrow(/data: URLs are not supported for media/i);
+    },
+  );
+
   describe("sendAttachment hydration", () => {
     const cfg = {
       channels: {
@@ -207,6 +313,25 @@ describe("runMessageAction media behavior", () => {
       expect(options.hostReadCapability).toBe(true);
       expect(options.sandboxValidated).not.toBe(true);
     });
+
+    it.each(["sendAttachment", "upload-file"] as const)(
+      "delivers parameterized wrapped image data URLs through the %s handler",
+      async (action) => {
+        const result = await runMessageAction({
+          cfg,
+          action,
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            buffer: parameterizedPngDataUrl,
+          },
+        });
+
+        const payload = requireActionPayload(result);
+        expect(payload.contentType).toBe("image/png");
+        expect(canonicalizeBase64(String(payload.buffer))).toBe(onePixelPngBase64);
+      },
+    );
 
     it("allows host-local image attachment paths when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
@@ -476,6 +601,23 @@ describe("runMessageAction media behavior", () => {
       expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
       expect(handlerParams.filename).toBe("pic.png");
       expect(handlerParams.contentType).toBe("image/png");
+    });
+
+    it("delivers parameterized wrapped image data URLs through the reply handler", async () => {
+      await runMessageAction({
+        cfg,
+        action: "reply",
+        params: {
+          channel: "replychat",
+          target: "+15551234567",
+          messageId: "parent-id",
+          buffer: parameterizedPngDataUrl,
+        },
+      });
+
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
+      expect(handlerParams.contentType).toBe("image/png");
+      expect(canonicalizeBase64(String(handlerParams.buffer))).toBe(onePixelPngBase64);
     });
 
     it("hydrates buffer and metadata from attachments[] before the reply handler runs", async () => {

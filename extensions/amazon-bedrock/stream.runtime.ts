@@ -73,6 +73,7 @@ import {
 import {
   describeToolResultMediaPlaceholder,
   finalizeTerminalToolCallArguments,
+  notifyProviderHttpMetadata,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
@@ -289,19 +290,24 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       const command = new ConverseStreamCommand(commandInput);
 
       const response = await client.send(command, { abortSignal: options.signal });
+      const responseIterator = response.stream![Symbol.asyncIterator]();
       if (response.$metadata.httpStatusCode !== undefined) {
         const responseHeaders: Record<string, string> = {};
         if (response.$metadata.requestId) {
           responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
         }
-        await options?.onResponse?.(
-          { status: response.$metadata.httpStatusCode, headers: responseHeaders },
+        await notifyProviderHttpMetadata({
+          options,
+          response: { status: response.$metadata.httpStatusCode, headers: responseHeaders },
           model,
-        );
+          cancelStream: async () => {
+            await responseIterator.return?.();
+          },
+        });
       }
 
       let sawMessageStop = false;
-      for await (const item of response.stream!) {
+      for await (const item of { [Symbol.asyncIterator]: () => responseIterator }) {
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
             throw new Error(
@@ -472,7 +478,7 @@ function resolveSimpleBedrockOptions(
         : undefined;
     return {
       ...base,
-      ...(reasoning !== undefined
+      ...(reasoning !== undefined || supportsAdaptiveThinking(model)
         ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
         : {}),
       reasoning,
@@ -480,7 +486,13 @@ function resolveSimpleBedrockOptions(
   }
 
   if (options.reasoning === "off") {
-    return { ...base, reasoning: "off" } satisfies BedrockOptions;
+    return {
+      ...base,
+      ...(supportsAdaptiveThinking(model)
+        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
+        : {}),
+      reasoning: "off",
+    } satisfies BedrockOptions;
   }
 
   if (isAnthropicClaudeModel(model)) {

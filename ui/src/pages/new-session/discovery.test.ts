@@ -1,6 +1,37 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
+import {
+  draftCloudProfileSupportsExecutionMode,
+  readDraftCloudProfiles,
+  readDraftEnvironments,
+} from "./discovery.ts";
+
+describe("draftCloudProfileSupportsExecutionMode", () => {
+  it.each([
+    { name: "worker turns", executionMode: "worker-turn" },
+    { name: "remote execution", executionMode: "remote-exec" },
+  ] as const)(
+    "rejects $name when the provider advertises no placement modes",
+    ({ executionMode }) => {
+      expect(
+        draftCloudProfileSupportsExecutionMode(
+          { id: "lifecycle-only", providerId: "crabbox" },
+          executionMode,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("does not treat the singular display projection as a placement capability", () => {
+    expect(
+      draftCloudProfileSupportsExecutionMode(
+        { id: "legacy", providerId: "crabbox", executionMode: "worker-turn" },
+        "worker-turn",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("readDraftCloudProfiles", () => {
   it("keeps closed profile summaries in stable order", () => {
     expect(
@@ -18,7 +49,8 @@ describe("readDraftCloudProfiles", () => {
           id: "aws",
           providerId: "crabbox",
           trust: "persistent",
-          executionMode: "remote-exec",
+          executionMode: "worker-turn",
+          executionModes: ["worker-turn", "remote-exec"],
           machines: [
             {
               id: "standard",
@@ -47,7 +79,8 @@ describe("readDraftCloudProfiles", () => {
         id: "aws",
         providerId: "crabbox",
         trust: "persistent",
-        executionMode: "remote-exec",
+        executionMode: "worker-turn",
+        executionModes: ["worker-turn", "remote-exec"],
         machines: [
           {
             id: "standard",
@@ -79,6 +112,36 @@ describe("readDraftCloudProfiles", () => {
       },
     ]);
   });
+
+  it.each([
+    { name: "empty", executionModes: [] },
+    { name: "unknown", executionModes: ["sandbox"] },
+    { name: "duplicate", executionModes: ["remote-exec", "remote-exec"] },
+    { name: "out-of-order", executionModes: ["remote-exec", "worker-turn"] },
+    { name: "oversized", executionModes: ["worker-turn", "remote-exec", "worker-turn"] },
+  ])(
+    "keeps a present $name mode set closed instead of using its primary-mode fallback",
+    ({ executionModes }) => {
+      expect(
+        readDraftCloudProfiles([
+          {
+            id: "aws",
+            providerId: "crabbox",
+            executionMode: "remote-exec",
+            executionModes,
+          },
+        ]),
+      ).toEqual([
+        {
+          id: "aws",
+          providerId: "crabbox",
+          trust: undefined,
+          executionMode: "remote-exec",
+          executionModes: [],
+        },
+      ]);
+    },
+  );
 });
 
 describe("readDraftEnvironments", () => {
@@ -99,6 +162,28 @@ describe("readDraftEnvironments", () => {
         },
       ])[0]?.issues,
     ).toEqual([issue]);
+  });
+
+  it("normalizes bounded invocable commands separately from declared capabilities", () => {
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:runner",
+          type: "node",
+          status: "available",
+          capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+          invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:runner",
+        type: "node",
+        status: "available",
+        capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+        invocableCommands: ["camera.snap", "z.command"],
+      },
+    ]);
   });
 
   it("keeps the closed environment types while rejecting malformed entries", () => {

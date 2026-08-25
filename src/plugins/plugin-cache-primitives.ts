@@ -98,7 +98,9 @@ export function createConfigScopedPromiseLoader<T>(
     const promise = Promise.resolve().then(() => load(config));
     void promise.catch(() => {
       if (config) {
-        promisesByConfig.delete(config);
+        if (promisesByConfig.get(config) === promise) {
+          promisesByConfig.delete(config);
+        }
       } else if (defaultPromise === promise) {
         defaultPromise = undefined;
       }

@@ -11,6 +11,10 @@ const PLAYWRIGHT_BROWSER_REGISTRY_INIT =
   '    registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));';
 const WORKER_BROWSER_RUNTIME_COMPOSITION = `import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";
 export default { createAttachedBrowserToolRuntime };`;
+const WORKER_PLAYWRIGHT_RUNTIME = `import * as playwrightCore from "playwright-core";
+import { getUserAgent } from "playwright-core/lib/coreBundle";
+export function getPlaywrightCore() { return playwrightCore; }
+export function getPlaywrightUserAgent() { return getUserAgent(); }`;
 const UNDICI_REQUIRE_BOOTSTRAP = [
   'import { createRequire } from "node:module";',
   "const requireUndici = createRequire(import.meta.url);\n",
@@ -24,6 +28,9 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const coreBundlePath = fs.realpathSync(path.join(playwrightRoot, "lib/coreBundle.js"));
   const browserRuntimeBridgePath = fs.realpathSync(
     path.resolve("src/worker/worker-deploy-browser-runtime.ts"),
+  );
+  const playwrightRuntimePath = fs.realpathSync(
+    path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts"),
   );
   const undiciDispatcherOptionsPath = fs.realpathSync(
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
@@ -55,14 +62,10 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
       }
+      if (resolvedId === playwrightRuntimePath) {
+        return WORKER_PLAYWRIGHT_RUNTIME;
+      }
       if (resolvedId === undiciDispatcherOptionsPath) {
-        if (
-          code.includes(WORKER_UNDICI_IMPORT) &&
-          code.includes("return bundledUndici;") &&
-          UNDICI_REQUIRE_BOOTSTRAP.every((fragment) => !code.includes(fragment))
-        ) {
-          return code;
-        }
         if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {
           this.error("undici dispatcher bootstrap changed; update the worker deploy transform");
         }

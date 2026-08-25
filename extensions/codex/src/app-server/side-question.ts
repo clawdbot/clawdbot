@@ -18,6 +18,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -39,9 +40,11 @@ import {
 } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
+  readCodexRequirementsToml,
   resolveCodexAppServerHomeScope,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
@@ -51,6 +54,7 @@ import {
 import {
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
+  resolveCodexNodePlacementToolConstructionPlan,
   resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldRequireCodexSandboxExecServerEnvironment,
@@ -110,6 +114,13 @@ import {
 } from "./sandbox-exec-server.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
+import {
+  applyCodexSessionPermissionPolicy,
+  CODEX_SESSION_PERMISSION_EXEC_MODES,
+  resolveCodexEffectiveSessionPermissionPolicy,
+  resolveCodexSessionPermissionCwd,
+  type CodexEffectiveSessionPermissionPolicy,
+} from "./session-permission-policy.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
@@ -171,6 +182,7 @@ export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParamsV2,
   options: {
     bindingStore: CodexAppServerBindingStore;
+    runtime?: PluginRuntime;
     pluginConfig?: unknown;
     /** Private app-server request identity; public side-run identity remains params.model. */
     runtimeModelId?: string;
@@ -196,6 +208,11 @@ export async function runCodexAppServerSideQuestion(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
     );
   }
+  if (isCodexPairedNodeRemoteExecPlacementSandbox(params.sandbox)) {
+    throw new Error(
+      "Normal Codex turns are supported on nodes, but /btw is not yet bound to the active placement.",
+    );
+  }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -203,7 +220,11 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
   });
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
-    approvals: loadExecApprovals(),
+    permissionMode: params.sessionEntry.permissionMode,
+    execOverrides: params.sessionEntry.permissionMode
+      ? { mode: CODEX_SESSION_PERMISSION_EXEC_MODES[params.sessionEntry.permissionMode] }
+      : undefined,
+    approvals: params.sessionEntry.permissionMode === "full" ? undefined : loadExecApprovals(),
     config: params.cfg,
     agentId: sessionAgentId,
   });
@@ -272,8 +293,38 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     agentDir: params.agentDir,
   });
-  const appServer = connection.appServer;
-  const cwd = binding.cwd || params.workspaceDir || process.cwd();
+  const reviewerContext = {
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.cfg,
+    env: process.env,
+    agentDir: params.agentDir,
+  };
+  const appServer = resolveCodexAppServerForModelProvider({
+    appServer: applyCodexSessionPermissionPolicy({
+      appServer: connection.appServer,
+      permissionMode: params.sessionEntry.permissionMode,
+      sessionRoot: params.sessionEntry.sessionRoot,
+      pluginConfig,
+      canUseAutoReview: canUseCodexModelBackedApprovalsReviewerForModel(reviewerContext),
+      requirementsToml: readCodexRequirementsToml({}),
+      policyLocked: usesSupervisionConnection,
+      execMode: execPolicy.mode,
+    }),
+    ...reviewerContext,
+    provider: reviewerContext.modelProvider,
+  });
+  const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
+    appServer,
+    permissionMode: params.sessionEntry.permissionMode,
+    sessionRoot: params.sessionEntry.sessionRoot,
+  });
+  const cwd = resolveCodexSessionPermissionCwd({
+    permissionMode: params.sessionEntry.permissionMode,
+    sessionRoot: params.sessionEntry.sessionRoot,
+    requestedCwd: binding.cwd,
+    fallbackCwd: params.workspaceDir || process.cwd(),
+  });
   const runId = params.opts?.runId ?? randomUUID();
   // Side runs inherit private-binding capabilities, not outer model metadata.
   const effectiveParams: AgentHarnessSideQuestionParamsV2 = supervisionModelSelection
@@ -298,6 +349,11 @@ export async function runCodexAppServerSideQuestion(
     runId,
     timeoutMs: appServer.requestTimeoutMs,
   });
+  sideRunParams.permissionMode = sessionPermissionPolicy?.mode;
+  sideRunParams.sessionRoot = sessionPermissionPolicy?.root;
+  sideRunParams.execOverrides = sessionPermissionPolicy && {
+    mode: sessionPermissionPolicy.execMode,
+  };
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, params.sandbox);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     sideRunParams,
@@ -413,9 +469,10 @@ export async function runCodexAppServerSideQuestion(
     if (!sandboxEnvironment) {
       return;
     }
+    const environment = sandboxEnvironment;
     sandboxEnvironment = undefined;
     sandboxEnvironmentClient = undefined;
-    await releaseCodexSandboxExecServerEnvironment(params.sandbox);
+    await releaseCodexSandboxExecServerEnvironment(params.sandbox, environment);
   };
   const ensureSandboxEnvironment = async (targetClient: CodexAppServerClient) => {
     if (!sandboxEnvironmentRequired || sandboxEnvironmentClient === targetClient) {
@@ -425,9 +482,15 @@ export async function runCodexAppServerSideQuestion(
     const environment = await ensureCodexSandboxExecServerEnvironment({
       client: targetClient,
       sandbox: params.sandbox ?? null,
+      runtime: options.runtime,
       appServerStartOptions: appServer.start,
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
+      onExecutionDisconnect: (error) => {
+        collector.reject(error);
+        embeddedAgentLog.warn(error.message);
+        runAbortController.abort("client_closed");
+      },
     });
     if (!environment) {
       throw new Error(
@@ -439,27 +502,8 @@ export async function runCodexAppServerSideQuestion(
   };
 
   try {
-    const modelScopedAppServer = resolveCodexAppServerForModelProvider({
-      appServer,
-      provider: reviewerPolicyContext.modelProvider,
-      model: reviewerPolicyContext.model,
-      config: params.cfg,
-      env: process.env,
-      agentDir: params.agentDir,
-    });
-    const useModelScopedPolicy = !canUseCodexModelBackedApprovalsReviewerForModel({
-      modelProvider: reviewerPolicyContext.modelProvider,
-      model: reviewerPolicyContext.model,
-      config: params.cfg,
-      env: process.env,
-      agentDir: params.agentDir,
-    });
-    const approvalPolicy = useModelScopedPolicy
-      ? modelScopedAppServer.approvalPolicy
-      : (binding.approvalPolicy ?? modelScopedAppServer.approvalPolicy);
-    const sandbox = useModelScopedPolicy
-      ? modelScopedAppServer.sandbox
-      : (binding.sandbox ?? modelScopedAppServer.sandbox);
+    const approvalPolicy = appServer.approvalPolicy;
+    const sandbox = appServer.sandbox;
     const nativeProviderWebSearchSupport =
       resolveCodexWebSearchPlan({
         config: params.cfg,
@@ -479,6 +523,7 @@ export async function runCodexAppServerSideQuestion(
       sessionAgentId,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
+      sessionPermissionPolicy,
       runId,
       signal: runAbortController.signal,
     });
@@ -533,7 +578,7 @@ export async function runCodexAppServerSideQuestion(
             nativeHookRelay,
             autoApprove: shouldAutoApproveCodexAppServerApprovals({
               approvalPolicy,
-              networkProxy: modelScopedAppServer.networkProxy,
+              networkProxy: appServer.networkProxy,
               sandbox,
             }),
             signal: runAbortController.signal,
@@ -674,13 +719,13 @@ export async function runCodexAppServerSideQuestion(
         nativeHookRelayConfig,
         runtimeThreadConfig,
         pluginAppsConfigPatch,
-        modelScopedAppServer.networkProxy?.configPatch,
+        appServer.networkProxy?.configPatch,
       ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
       await withLeasedCodexAppServerClientStartSelectionRetry({
         lease: clientLease,
         options: clientOptions,
-        signal: params.opts?.abortSignal,
+        signal: runAbortController.signal,
         run: async (forkClient, requestOptions) => {
           await ensureSandboxEnvironment(forkClient);
           const executionCwd = sandboxEnvironment?.cwd ?? cwd;
@@ -693,9 +738,12 @@ export async function runCodexAppServerSideQuestion(
                 ? { modelProvider: modelSelection.modelProvider }
                 : {}),
               cwd: executionCwd,
+              ...(sessionPermissionPolicy
+                ? { runtimeWorkspaceRoots: [sessionPermissionPolicy.root] }
+                : {}),
               approvalPolicy,
-              approvalsReviewer: modelScopedAppServer.approvalsReviewer,
-              ...(sandboxEnvironment || modelScopedAppServer.networkProxy ? {} : { sandbox }),
+              approvalsReviewer: appServer.approvalsReviewer,
+              ...(sandboxEnvironment || appServer.networkProxy ? {} : { sandbox }),
               ...(serviceTier ? { serviceTier } : {}),
               config: threadConfig,
               developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
@@ -725,7 +773,7 @@ export async function runCodexAppServerSideQuestion(
         threadId: childThreadId,
         items: [sideBoundaryPromptItem()],
       },
-      { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
+      { timeoutMs: appServer.requestTimeoutMs, signal: runAbortController.signal },
     );
 
     const effort = usesSupervisionConnection
@@ -771,7 +819,7 @@ export async function runCodexAppServerSideQuestion(
                   },
                 }),
           },
-          { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
+          { timeoutMs: appServer.requestTimeoutMs, signal: runAbortController.signal },
         )
         .catch((error: unknown) => {
           if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -803,7 +851,7 @@ export async function runCodexAppServerSideQuestion(
     let text: string;
     try {
       text = await collector.wait({
-        signal: params.opts?.abortSignal,
+        signal: runAbortController.signal,
         timeoutMs: Math.max(
           appServer.turnCompletionIdleTimeoutMs,
           SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
@@ -1017,6 +1065,7 @@ async function createCodexSideToolBridge(input: {
   sessionAgentId: string;
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
+  sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
   runId: string;
   signal: AbortSignal;
 }): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
@@ -1042,6 +1091,10 @@ async function createCodexSideToolBridge(input: {
             sessionKey: sandboxSessionKey,
             workspaceDir: input.cwd,
           });
+    const toolConstructionPlan = resolveCodexNodePlacementToolConstructionPlan(
+      sandbox,
+      input.nativeToolSurfaceEnabled,
+    );
     const allTools = createOpenClawCodingTools({
       agentId: input.sessionAgentId,
       sessionKey: sandboxSessionKey,
@@ -1050,6 +1103,8 @@ async function createCodexSideToolBridge(input: {
           ? input.params.sessionKey
           : undefined,
       sessionId: input.params.sessionId,
+      exec: input.sessionPermissionPolicy && { mode: input.sessionPermissionPolicy.execMode },
+      sessionPermissionPolicy: input.sessionPermissionPolicy,
       runId: input.runId,
       agentDir:
         input.params.agentDir ?? resolveAgentDir(input.params.cfg ?? {}, input.sessionAgentId),
@@ -1114,6 +1169,7 @@ async function createCodexSideToolBridge(input: {
         currentChannelId: input.params.currentChannelId,
       }).channelId,
       sandbox,
+      ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
       emitBeforeToolCallDiagnostics: false,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
@@ -1413,7 +1469,7 @@ class CodexSideQuestionCollector {
     settle?.resolve(text);
   }
 
-  private reject(error: string | Error): void {
+  reject(error: string | Error): void {
     this.terminalError = error instanceof Error ? error : new Error(error);
     const settle = this.settle;
     this.settle = undefined;

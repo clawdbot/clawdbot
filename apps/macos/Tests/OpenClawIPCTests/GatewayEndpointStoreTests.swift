@@ -315,6 +315,60 @@ struct GatewayEndpointStoreTests {
         }
     }
 
+    @Test func `stale local conflict cannot replace a healthy remote endpoint`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let remoteURL = try #require(URL(string: "ws://192.168.1.20:18789"))
+            let localSource = self.source(mode: .local, token: "local-token")
+            let remoteSource = self.source(
+                mode: .remote,
+                token: "remote-token",
+                transport: .direct,
+                directURL: remoteURL)
+            let sourceGate = GatewayEndpointSourceGate(localSource)
+            let store = self.makeStore(sourceSnapshot: { await sourceGate.snapshot() })
+            _ = try await store.requireEndpoint()
+
+            await sourceGate.update(remoteSource)
+            let remote = try await store.requireEndpoint()
+            await store.setLocalUnavailableReason("Profile port conflict")
+
+            #expect(try await store.currentState() == .ready(
+                mode: .remote,
+                url: remoteURL,
+                token: "remote-token",
+                password: nil,
+                routeRevision: #require(remote.revision)))
+            #expect(try await store.requireEndpoint().revision == remote.revision)
+
+            await sourceGate.update(localSource)
+            await store.refresh()
+            #expect(await store.currentState() == .unavailable(
+                mode: .local,
+                reason: "Profile port conflict"))
+
+            await store.setLocalUnavailableReason(nil)
+            #expect(try await store.currentState() == .ready(
+                mode: .local,
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: "local-token",
+                password: nil,
+                routeRevision: #require(try await store.requireEndpoint().revision)))
+        }
+    }
+
+    @Test func `local conflict does not claim an unconfigured endpoint`() async {
+        await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let source = self.source(mode: .unconfigured)
+            let store = self.makeStore(sourceSnapshot: { source })
+
+            await store.setLocalUnavailableReason("Profile port conflict")
+
+            #expect(await store.currentState() == .unavailable(
+                mode: .unconfigured,
+                reason: "Gateway not configured"))
+        }
+    }
+
     private func dashboardURL(
         _ endpoint: String,
         mode: AppState.ConnectionMode,

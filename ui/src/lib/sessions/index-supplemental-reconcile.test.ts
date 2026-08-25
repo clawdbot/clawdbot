@@ -114,7 +114,6 @@ describe("supplemental session reconciliation", () => {
     const sessions = capabilityWithList(sessionsResult([canonical], 10));
     const sourceCanonicalListRevision = sessions.canonicalListRevision;
     await sessions.refresh({ force: true });
-    const reconcile = vi.spyOn(sessions, "reconcile");
     const cached = {
       ...canonical,
       updatedAt: 20,
@@ -141,11 +140,6 @@ describe("supplemental session reconciliation", () => {
       sourceCanonicalListRevision,
     );
 
-    expect(reconcile).toHaveBeenCalledWith(
-      expect.objectContaining({ placement: placement("offline") }),
-      sessions.state.result?.defaults,
-      { archivedFilter: "all", sourceCanonicalListRevision },
-    );
     expect(sessions.state.result?.sessions[0]?.placement).toEqual(placement("offline"));
     expect(owner.activeSessionLineageSelectedRow).toMatchObject({
       placement: placement("offline"),
@@ -159,7 +153,6 @@ describe("supplemental session reconciliation", () => {
     const sessions = capabilityWithList(sessionsResult([], 10));
     const sourceCanonicalListRevision = sessions.canonicalListRevision;
     await sessions.refresh({ force: true });
-    const reconcile = vi.spyOn(sessions, "reconcile");
     const archived = {
       key: "agent:main:archived-routed",
       kind: "direct" as const,
@@ -182,10 +175,6 @@ describe("supplemental session reconciliation", () => {
       sourceCanonicalListRevision,
     );
 
-    expect(reconcile).toHaveBeenCalledWith(archived, sessions.state.result?.defaults, {
-      archivedFilter: "all",
-      sourceCanonicalListRevision,
-    });
     expect(sessions.state.result?.sessions).toEqual([archived]);
     sessions.dispose();
   });

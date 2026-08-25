@@ -102,6 +102,18 @@ function decodeRequest(raw?: string | null): unknown {
   }
 }
 
+export function assertNodeWorkerLaunchIdentity(
+  input: Pick<NodeWorkerLaunchInput, "launchId" | "expectedBundleHash">,
+  descriptor: WorkerLaunchPlan,
+): void {
+  if (descriptor.assignment.turnId !== input.launchId) {
+    throw new Error("INVALID_REQUEST: launchId must match descriptor assignment turnId");
+  }
+  if (descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
+    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
+  }
+}
+
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
   const value = decodeRequest(raw);
   if (
@@ -132,9 +144,10 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
   } catch {
     throw new Error("INVALID_REQUEST: invalid worker launch descriptor");
   }
-  if (descriptor.admission.handshake.bundleHash !== value.expectedBundleHash) {
-    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
-  }
+  assertNodeWorkerLaunchIdentity(
+    { launchId, expectedBundleHash: value.expectedBundleHash },
+    descriptor,
+  );
   return {
     launchId,
     gatewayNamespace,

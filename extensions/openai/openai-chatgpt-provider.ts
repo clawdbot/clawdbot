@@ -327,6 +327,25 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
+  } else if (
+    ctx.agentRuntimeId === "codex" &&
+    ctx.authProfileId === undefined &&
+    ctx.authProfileMode === undefined &&
+    ctx.providerConfig?.auth === undefined
+  ) {
+    // Codex owns its account-scoped model catalog. When that catalog is not yet
+    // available, keep the requested identity intact and let the native runtime
+    // decide whether the account can actually use it.
+    templateIds = OPENAI_CODEX_GPT_56_MODEL_IDS;
+    patch = {
+      reasoning: true,
+      input: ["text", "image"],
+      thinkingLevelMap: OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    };
   } else {
     return undefined;
   }
@@ -365,6 +384,8 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
       contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+      ...(patch?.thinkingLevelMap ? { thinkingLevelMap: patch.thinkingLevelMap } : {}),
+      ...(patch?.compat ? { compat: patch.compat } : {}),
     } as ProviderRuntimeModel)
   );
 }

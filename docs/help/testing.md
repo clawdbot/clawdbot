@@ -168,10 +168,12 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/full,
-soak-enabled, and explicit `qa`/`qa-live` release checks include the QA-live
-Matrix and Telegram lanes. Bounded beta-publish `all` without soak runs parity
-but defers those live lanes to postpublish-confidence. `QA-Lab - All Lanes` runs
+`rerun_group=qa-parity` for parity or `rerun_group=qa-live` for live QA.
+The direct `OpenClaw Release Checks` child alone may use `rerun_group=qa` as a
+manual aggregate of both groups. Stable/full, soak-enabled, and explicit
+`qa-live` release checks include the QA-live Matrix and Telegram lanes. Bounded
+beta-publish `all` without soak runs parity but defers those live lanes to
+postpublish-confidence. `QA-Lab - All Lanes` runs
 nightly on `main` and from manual dispatch with the mock parity lane, live
 Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
 lane as parallel jobs. Scheduled QA and selected release checks run the
@@ -279,11 +281,15 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` selects the Telegram QA scenario to
-    sample; the supported RTT target is `channel-canary`. The package runner
-    promotes that portable canary once to the first position, making
-    canary+RTT the preflight before the remaining taxonomy-backed fail-fast
-    release scenarios.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
+    Telegram QA scenario id. When omitted, the normal lane samples
+    `channel-canary`; focused non-RTT scenario runs stay probe-free. An explicit
+    RTT scenario is included in scenario selection automatically, so callers do
+    not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
+    fail immediately, while unknown or inapplicable ids fail canonical scenario
+    validation. The package runner promotes the selected RTT scenario once to
+    the first position before the remaining taxonomy-backed fail-fast release
+    scenarios.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
@@ -300,7 +306,11 @@ inside every shard.
     and `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
-    `qa-live-shared` environment and Convex CI credential leases.
+    `qa-live-shared` environment and Convex CI credential leases. Set its
+    optional `rtt_scenario` input to select the repeated RTT scenario, or leave
+    it empty for the default behavior above. Enable
+    `allow_older_binary_destructive_actions` only for intentional historical
+    downgrade or recovery proof; it remains false by default.
 - GitHub Actions also exposes `Package Acceptance` for side-run product proof
   against one candidate package. It accepts a Git ref, published npm spec,
   HTTPS tarball URL plus SHA-256, trusted-URL policy, or tarball artifact
@@ -698,6 +708,17 @@ Native dependency policy:
       after 5 minutes with no stdout or stderr output. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
+    - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
+      behavior of existing local workflows. Set `OPENCLAW_TSGO_TIMEOUT_MS` to
+      a positive millisecond value to make a wedged compiler fail loudly
+      instead of blocking its caller forever. On expiry the whole tsgo process
+      tree is killed and the run fails. Values above Node's timer
+      ceiling saturate at it instead of collapsing to a 1ms deadline; `0`, a
+      negative, a fraction, or anything above `Number.MAX_SAFE_INTEGER` is
+      rejected and fails the run. Surrounding whitespace is trimmed first;
+      the remaining value must use plain decimal digits without leading zeros,
+      so values such as `1e5` or `007` are rejected. Unset the variable to
+      disable the watchdog.
 
   </Accordion>
 

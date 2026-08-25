@@ -340,16 +340,35 @@ lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
-Use one operator, one transition-only watcher, and at most one investigator for
-the current failed surface. Parent timeout or cancellation leaves adopted exact
-children running; cancel an exact child only by explicit operator action or the
-workflow's identity-mismatch/fail-fast path.
+Use one operator, one foreground owner, and at most one investigator for the
+current failed surface. Do not start `release-ci-summary --watch` while the
+SHA-pinned helper is already watching the same parent. Parent timeout or
+cancellation leaves adopted exact children running; cancel an exact child only
+by explicit operator action or by `fail_fast=true` after Release Decision binds
+the failure to that exact active run.
 
-The child-dispatch jobs record child run ids, and `Verify full validation`
-re-queries them during that parent attempt. A later narrow green run is useful
-recovery evidence but is not publish authorization by itself and there is no
-standalone finalizer. The release owner must reassess the recorded evidence and
-current publish gate.
+The child-dispatch jobs record run ID, run attempt, and URL, then finish. The
+parent seals those tuples, original dispatch titles, gate coverage, reuse
+policy, and original parent attempt in one immutable
+`full-release-execution-plan-<run-id>` artifact and exact run-ID cache entry.
+Collector retries restore the cached bytes, validate them, and re-upload the
+artifact for their attempt before adopting its children; they never reconstruct
+the plan or redispatch tests.
+`Release Decision` polls those exact identities and can report
+`blocked_diagnostics_running` before unrelated children finish.
+For reused evidence, it also repeats the canonical target, policy, changed-path,
+selected-run, root-run, and exact-child validation before it can pass.
+`Diagnostic Drain` continues every selected child to terminal with
+`fail_fast=false` unless the collector itself is cancelled or loses API
+access. `orchestration_error` permits collector recovery against the same
+exact children, never test redispatch. Diagnose `blocked_diagnostics_running`
+immediately, but wait for a terminal drain before retrying the failed surface.
+The final `Verify full validation` job consumes and validates the immutable
+execution plan plus the exact Decision and Drain artifacts instead of
+reclassifying child results. A
+later narrow green run is useful recovery evidence but is not publish
+authorization by itself and there is no standalone finalizer. The release owner
+must reassess the recorded evidence and current publish gate.
 
 Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
 **Release SHA** is eligible for product-evidence reuse only when GitHub proves
@@ -366,10 +385,12 @@ editing. Only a confirmed product failure changes the Code SHA. Use one
 diagnosis, one fix when needed, and one narrow retry with
 `-f rerun_group=<group>`, then reassess.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
-`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
-`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box. Do not automatically dispatch `all` after a narrow retry. For a
-single failed live/E2E shard, use
+`install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`,
+`npm-telegram`, and `performance`. The old `release-checks` aggregate retry
+handle is invalid because it silently selected every release-check lane. `qa`
+is a direct-child manual aggregate, not an umbrella/controller retry API. Use
+the narrowest concrete group that covers the failed box. Do not automatically
+dispatch `all` after a narrow retry. For a single failed live/E2E shard, use
 `-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
 workflow only spends setup and queue time on that suite.
 
@@ -426,11 +447,16 @@ gh workflow run openclaw-release-checks.yml \
   -f provider=openai \
   -f mode=both \
   -f release_profile=stable \
-  -f rerun_group=all
+  -f rerun_group=<concrete-group>
 ```
 
-Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
-`package`, `qa`, `qa-parity`, and `qa-live`.
+Concrete release-check rerun groups are `install-smoke`, `cross-os`,
+`live-e2e`, `package`, `qa-parity`, and `qa-live`. Direct manual dispatch may
+use `qa` to aggregate parity and live QA, but controllers must select one of
+those two concrete groups. Reserve `all` for an intentional whole-child
+validation, never automatic recovery. Non-empty live or cross-OS filters must
+match their owning group; mismatches fail before scheduling and never widen to
+an unfiltered run.
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once as `release-package-under-test` and passes that artifact into cross-OS
 release checks, release-path Docker live/E2E checks, and Package Acceptance.

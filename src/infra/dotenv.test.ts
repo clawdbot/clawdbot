@@ -53,6 +53,8 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
 );
 
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
+  "AppData",
+  "APPDATA",
   "ComSpec",
   "COMSPEC",
   "LocalAppData",
@@ -515,6 +517,8 @@ describe("loadDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            "AppData=.\\evil-app-data",
+            "APPDATA=.\\evil-app-data-upper",
             "ComSpec=.\\evil-comspec",
             "COMSPEC=.\\evil-comspec-upper",
             "LocalAppData=.\\evil-local-app-data",

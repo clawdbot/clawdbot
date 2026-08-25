@@ -57,9 +57,7 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
     .option("--include-archived", "Include archived threads", false)
     .option("--before <id>", "Read/search before id")
     .option("--limit <n>", "Result limit")
-    .action(async (opts) => {
-      await helpers.runMessageAction("thread-list", opts);
-    });
+    .action((opts) => helpers.runMessageAction("thread-list", opts));
 
   helpers
     .withMessageBase(
@@ -75,7 +73,5 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
       "Attach media (image/audio/video/document). Accepts local paths or URLs.",
     )
     .option("--reply-to <id>", "Reply-to message id")
-    .action(async (opts) => {
-      await helpers.runMessageAction("thread-reply", opts);
-    });
+    .action((opts) => helpers.runMessageAction("thread-reply", opts));
 }

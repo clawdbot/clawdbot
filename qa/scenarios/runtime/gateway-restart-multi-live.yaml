@@ -175,7 +175,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.completedToolCallCounts.wait ?? 0) < checkpoint ? summary : undefined).catch(() => undefined)"
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0) ? summary : undefined).catch(() => undefined)"
                   - expr: liveTurnTimeoutMs(env, 180000)
                   - 50
               - call: readRawQaSessionStore
@@ -281,6 +281,6 @@ flow:
             message: replay-safe QA checkpoint tool was removed before Code Mode catalog construction
         - call: assertNoGatewayLogSentinels
           args:
-            - sinceIndex:
+            - since:
                 ref: gatewayLogCursor
       detailsExpr: "`inboundMessageId=${inbound.id} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"

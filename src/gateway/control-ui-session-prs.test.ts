@@ -180,6 +180,20 @@ describe("loadControlUiSessionPullRequests", () => {
       },
     ]);
     expect(fetchImpl.mock.calls).toHaveLength(1);
+
+    vi.advanceTimersByTime(60_000);
+    await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(fetchImpl.mock.calls).toHaveLength(1);
+
+    vi.advanceTimersByTime(30_001);
+    await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(fetchImpl.mock.calls).toHaveLength(2);
   });
 
   it("marks in-flight checks pending and failed conclusions failing", async () => {
@@ -298,7 +312,7 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(fresh.rateLimited).toBe(false);
 
     limited = true;
-    vi.advanceTimersByTime(61_000);
+    vi.advanceTimersByTime(91_000);
     const stale = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
       { fetchImpl, resolveGitContext },
@@ -389,14 +403,19 @@ describe("loadControlUiSessionPullRequests", () => {
     await expect(load("/repo/other-context")).rejects.toBeInstanceOf(Error);
     expect(gitOutputImpl).toHaveBeenCalledTimes(6);
 
-    vi.advanceTimersByTime(10_001);
+    vi.advanceTimersByTime(60_000);
+    await expect(load()).rejects.toBeInstanceOf(Error);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(6);
+    expect(fetchImpl.mock.calls).toHaveLength(2);
+
+    vi.advanceTimersByTime(15_001);
     await expect(load()).rejects.toBeInstanceOf(Error);
     expect(gitOutputImpl).toHaveBeenCalledTimes(9);
-    // The longer GitHub failure cache remains independent of local Git expiry.
-    expect(fetchImpl.mock.calls).toHaveLength(1);
+    // GitHub's shorter failure backoff stays independent of local Git expiry.
+    expect(fetchImpl.mock.calls).toHaveLength(2);
   });
 
-  it("keeps normal local facts cached while forced refresh bypasses them", async () => {
+  it("caches local facts across a poll while forced refresh bypasses them", async () => {
     let pulls: Record<string, unknown>[] = [];
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson(pulls) },
@@ -457,7 +476,16 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(runGitImpl).toHaveBeenCalledTimes(3);
     expect(gitOutputImpl).toHaveBeenCalledTimes(6);
 
-    vi.advanceTimersByTime(10_001);
+    const githubRequests = fetchImpl.mock.calls.length;
+    vi.advanceTimersByTime(60_000);
+    additions = 5;
+    expect((await load("agent:main:a")).branch?.additions).toBe(4);
+    expect(resolveBranchLanding).toHaveBeenCalledTimes(3);
+    expect(runGitImpl).toHaveBeenCalledTimes(3);
+    expect(gitOutputImpl).toHaveBeenCalledTimes(6);
+    expect(fetchImpl.mock.calls).toHaveLength(githubRequests);
+
+    vi.advanceTimersByTime(15_001);
     additions = 5;
     expect((await load("agent:main:a")).branch?.additions).toBe(5);
     expect(resolveBranchLanding).toHaveBeenCalledTimes(4);

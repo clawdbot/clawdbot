@@ -1,5 +1,6 @@
 // Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
+import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -71,6 +72,7 @@ export async function startGatewayEarlyRuntime(params: {
     warn: (msg: string) => void;
   };
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
+  swapBonjourStop: (next: (() => Promise<void>) | null) => (() => Promise<void>) | null;
   pluginRegistry?: PluginRegistry;
   broadcast: GatewayMaintenanceParams["broadcast"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
@@ -102,8 +104,11 @@ export async function startGatewayEarlyRuntime(params: {
       ensureTaskRuntimeStateReady();
     });
   }
-  const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
-    startGatewayPluginDiscovery(params),
+  // Startup failure can occur immediately after discovery; publish its owner first.
+  params.swapBonjourStop(
+    await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
+      startGatewayPluginDiscovery(params),
+    ),
   );
   let getActiveTaskCount = () => 0;
 
@@ -195,6 +200,7 @@ export async function startGatewayEarlyRuntime(params: {
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        isNixMode,
         getRuntimeConfig: params.getRuntimeConfig,
         enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
@@ -205,7 +211,6 @@ export async function startGatewayEarlyRuntime(params: {
   };
 
   return {
-    bonjourStop,
     getActiveTaskCount,
     skillsChangeUnsub,
     startMaintenance,

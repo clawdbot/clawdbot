@@ -172,8 +172,13 @@ export function createCodexSessionCatalogNodeHostCommands(
     getPluginConfig: () => undefined,
     getRuntimeConfig: () => config,
   },
+  bindingStore?: CodexAppServerBindingStore,
 ) {
-  return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), configSources);
+  return createCodexSessionCatalogNodeHostCommandsRuntime(
+    asControlFactory(control),
+    configSources,
+    bindingStore,
+  );
 }
 
 type CreateSessionEntryParams = Parameters<
@@ -275,6 +280,7 @@ export function idleThread(overrides: Partial<CodexThread> = {}): CodexThread {
     id: "thread-1",
     name: "Continue native task",
     cwd: "/workspace/project",
+    projectId: null,
     status: { type: "idle" },
     ...overrides,
   };

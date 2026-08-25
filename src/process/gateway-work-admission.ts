@@ -179,6 +179,10 @@ export function isGatewayRestartDraining(): boolean {
   );
 }
 
+export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
+  return error instanceof GatewayDrainingError && isGatewayRestartDraining();
+}
+
 /** Restart drain is one-way until the in-process restart resets runtime state. */
 export function markGatewayRestartDraining(): void {
   if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {

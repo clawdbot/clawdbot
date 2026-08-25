@@ -15,6 +15,10 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { setSessionPathBuilder } from "../app-session-path-builder.ts";
+import {
+  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
+  sessionRefFromPath,
+} from "../app-session-route-paths.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -42,7 +46,9 @@ import type {
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
+import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -84,6 +90,7 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);
+  applyControlUiAccent(settings.accent);
   const background = getComputedStyle(root).getPropertyValue("--bg").trim();
   if (background) {
     for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
@@ -183,13 +190,13 @@ function createApplicationTheme(
 
 function createApplicationNavigationPreferences(
   initialSettings: UiSettings,
+  navCollapsed: boolean,
 ): ApplicationNavigationPreferences {
-  let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed: settings.navCollapsed,
-    navWidth: settings.navWidth,
-    sidebarEntries: settings.sidebarEntries,
-    pinnedAgentIds: settings.pinnedAgentIds ?? [],
+    navCollapsed,
+    navWidth: initialSettings.navWidth,
+    sidebarEntries: initialSettings.sidebarEntries,
+    pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -207,8 +214,7 @@ function createApplicationNavigationPreferences(
       ) {
         return;
       }
-      settings = patchSettings({
-        navCollapsed: nextSnapshot.navCollapsed,
+      patchSettings({
         navWidth: nextSnapshot.navWidth,
         sidebarEntries: [...nextSnapshot.sidebarEntries],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
@@ -279,7 +285,17 @@ export function bootstrapApplication(
       saveSettings(startup.settings);
     }
   }
-  const applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
+  const startupSearchParams = new URLSearchParams(applicationLocation.search);
+  const hasSidebarCollapseIntent =
+    startupSearchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name) ===
+    SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value;
+  if (hasSidebarCollapseIntent) {
+    // Sidebar-row hrefs mark new-tab intent once; strip it so copied URLs and reloads stay canonical.
+    startupSearchParams.delete(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name);
+    const search = startupSearchParams.toString();
+    applicationLocation = { ...applicationLocation, search: search ? `?${search}` : "" };
+  }
   if (applicationLocation !== startup.location) {
     history.replace(applicationLocation);
   }
@@ -324,6 +340,12 @@ export function bootstrapApplication(
     !releasedSessionQuery &&
     firstRunDefaultLanding &&
     !parseAgentSessionKey(settings.sessionKey);
+  let resolveInitialFirstRunDecision: (() => void) | null = null;
+  const initialFirstRunDecision = deferInitialLocationUntilGateway
+    ? new Promise<void>((resolve) => {
+        resolveInitialFirstRunDecision = resolve;
+      })
+    : null;
   const initialLocationReady = (
     documentMode || focusLocation
       ? Promise.resolve(applicationLocation)
@@ -349,6 +371,7 @@ export function bootstrapApplication(
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
+  const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
     resourceBasePath,
     auth: {
@@ -371,7 +394,11 @@ export function bootstrapApplication(
   };
   const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
   syncConfigWriteSuspension();
-  const navigation = createApplicationNavigationPreferences(settings);
+  const navigation = createApplicationNavigationPreferences(
+    settings,
+    hasSidebarCollapseIntent &&
+      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
+  );
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
@@ -507,6 +534,7 @@ export function bootstrapApplication(
     agentSelection,
     channels,
     config,
+    scopeUpgrade,
     runtimeConfig,
     sessions,
     placementStartup,
@@ -552,20 +580,35 @@ export function bootstrapApplication(
         },
         () => sessionPathBuilderReady,
       ];
-      if (!deferInitialLocationUntilGateway) {
-        steps.push(() =>
-          startModelSetupFirstRunRedirectAfterLocation({
-            context,
-            enabled: firstRunRedirectEnabled,
-            history,
-            initialLocationReady,
-          }),
-        );
-      }
+      // Resolve first-run setup before routing: the default Chat route owns the
+      // workspace graph, which setup users would otherwise fetch and discard.
+      steps.push(() =>
+        startModelSetupFirstRunRedirectAfterLocation({
+          context,
+          enabled: firstRunRedirectEnabled,
+          history,
+          initialLocationReady: deferInitialLocationUntilGateway
+            ? Promise.resolve(applicationLocation)
+            : initialLocationReady,
+          ...(deferInitialLocationUntilGateway
+            ? {
+                redirect: () =>
+                  history.replace({
+                    ...locationForRoute("model-setup", basePath),
+                    search: "?firstRun=1",
+                  }),
+                onInitialDecision: () => resolveInitialFirstRunDecision?.(),
+              }
+            : {}),
+        }),
+      );
       steps.push(() => {
         void config.refresh({ skipWithoutAuthCandidate: true });
       });
       if (startsApplicationRouter) {
+        if (initialFirstRunDecision) {
+          steps.push(() => initialFirstRunDecision);
+        }
         steps.push(async () => {
           const pendingNavigation = pendingRouterStartNavigation;
           pendingRouterStartNavigation = null;
@@ -579,12 +622,12 @@ export function bootstrapApplication(
       }
       if (deferInitialLocationUntilGateway) {
         steps.push(() => {
-          // The bare /chat route remains not-found while disconnected. Its shell
-          // fallback is gated on the same connected defaults, so both paths converge.
+          // The router claims the connected Gateway session before persisted
+          // location normalization can install a competing retained Chat pane.
           startupLifecycle.trackDisposer(
             startModelSetupFirstRunRedirectAfterLocation({
               context,
-              enabled: firstRunRedirectEnabled,
+              enabled: false,
               history,
               initialLocationReady,
               installLocation: async (location) => {
@@ -611,6 +654,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
+      scopeUpgrade.dispose();
       placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();

@@ -95,6 +95,8 @@ export const en = {
       tokenPlaceholder: "Needed for multi-machine or non-loopback access",
       tokenPrompt: "Gateway token",
       tokenPromptGenerate: "Gateway token (blank to generate)",
+      tokenStoreProvisioned:
+        "Generated a gateway token and stored it in the OpenClaw secret store as {name}. Config keeps only a reference; inspect it with `openclaw secrets store list`.",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -458,6 +460,13 @@ export const en = {
         "If multiple users can message one tool-enabled agent, they can all influence how it uses its tools.",
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
+    },
+    telemetry: {
+      accept: "Yes, share feature stats",
+      decline: "No thanks",
+      description:
+        "Share which features you use (channels, providers, plugin count) as part of the daily update check. Never messages, never identifiers. See exactly what is sent: `openclaw telemetry show`. Change anytime: `openclaw telemetry on|off`.",
+      title: "Help make OpenClaw better?",
     },
     skills: {
       configure: "Configure skills now? (recommended)",

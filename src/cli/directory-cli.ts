@@ -120,6 +120,7 @@ export function registerDirectoryCli(program: Command) {
           runtime: defaultRuntime,
           rawChannel: explicitChannel,
           allowInstall: true,
+          preferRegisteredPlugin: true,
           supports: (plugin) => Boolean(plugin.directory),
         })
       : null;

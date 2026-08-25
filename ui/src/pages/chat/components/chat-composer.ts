@@ -3,6 +3,8 @@ import { nothing } from "lit";
 import { loadSettings, normalizeChatSendShortcut, patchSettings } from "../../../app/settings.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { discoverRealtimeTalkInputs, observeRealtimeTalkDevices } from "../realtime-talk-input.ts";
@@ -31,6 +33,8 @@ import {
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
+  resetSlashMenuState,
+  type SlashMenuHost,
   updateSlashMenu,
 } from "./chat-composer-slash-menu.ts";
 import {
@@ -50,6 +54,26 @@ import { renderChatComposerView } from "./chat-composer-view.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
+
+function resolveChatSlashCommandArgOptions(
+  command: SlashCommandDef,
+  props: ChatComposerProps,
+): string[] {
+  if (command.key !== "think") {
+    return command.argOptions ?? [];
+  }
+  if (props.modelSwitching) {
+    return [];
+  }
+  const session = props.sessions?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
+  return resolveThinkingCommandArgOptionsForSession(
+    session,
+    props.sessions?.defaults,
+    props.modelCatalog,
+  );
+}
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
@@ -142,6 +166,14 @@ export function renderChatComposer(props: ChatComposerProps) {
     getDraft: () => state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft,
     commitDraft: (next) => commitComposerDraft(props, next),
     getTextarea: () => state.composerTextarea,
+    refreshCommands: props.onSlashIntent,
+  };
+  const slashMenuHost: SlashMenuHost = {
+    paneId: props.paneId,
+    getDraft: skillMenuHost.getDraft,
+    commitDraft: skillMenuHost.commitDraft,
+    resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
+    runCommand: () => props.onSend(),
     refreshCommands: props.onSlashIntent,
   };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
@@ -257,6 +289,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state,
     props,
     skillMenuHost,
+    slashMenuHost,
     requestUpdate,
     sendShortcut,
     canSubmitDraft,
@@ -269,7 +302,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const syncComposerValue = (target: HTMLTextAreaElement) => {
     adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
-    updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+    updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
     updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
     requestUpdate();
   };
@@ -301,7 +334,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     syncComposerValue(target);
-    props.onTypingChange?.(Boolean(target.value.trim()));
+    props.onTypingChange?.(Boolean(target.value.trim()), target.value);
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
@@ -313,7 +346,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     syncComposerValue(event.target as HTMLTextAreaElement);
-    props.onTypingChange?.(Boolean((event.target as HTMLTextAreaElement).value.trim()));
+    const value = (event.target as HTMLTextAreaElement).value;
+    props.onTypingChange?.(Boolean(value.trim()), value);
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
@@ -327,7 +361,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
     props.onTypingChange?.(false);
   };
-  const handleSend = () => {
+  const handleSend = (submissionAction?: Event) => {
     const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
@@ -336,7 +370,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
-    props.onSend();
+    props.onSend(undefined, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = () => {
@@ -512,6 +546,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     ?.getVideoTracks?.()[0]
     ?.getSettings?.().facingMode;
   const mirrorCameraPreview = cameraFacingMode !== "environment";
+  if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
+    resetSlashMenuState(state);
+  }
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const skillMenuVisible = props.connected && canCompose && isSkillMenuVisible(state);
   if (!skillMenuVisible && state.skillMenuOpen && !state.skillCommandRefreshPending) {
@@ -557,6 +594,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     slashMenuVisible,
     skillMenuVisible,
     skillMenuHost,
+    slashMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,

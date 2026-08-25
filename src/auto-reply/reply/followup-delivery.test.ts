@@ -162,7 +162,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ mediaUrl: "/tmp/img.png" }],
         sentMediaUrls: ["/tmp/img.png"],
       }),
-    ).toEqual([{ mediaUrl: undefined, mediaUrls: undefined }]);
+    ).toEqual([]);
   });
 
   it("does not dedupe text sent via messaging tool to another target", () => {
@@ -448,6 +448,16 @@ function createAccounting(
 }
 
 describe("resolveFollowupDeliveryDecision", () => {
+  const sourceReplyTarget = {
+    tool: "message",
+    provider: "discord",
+    to: "channel:C1",
+    text: "Still working",
+  };
+  const progressTarget = { ...sourceReplyTarget, sourceReplyFinal: false };
+  const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
+  const progressPayload = { text: "Still working", sourceReplyFinal: false };
+
   it("delivers a yield acknowledgment after accepting a child spawn", () => {
     const execution = createSettledExecution();
     if (execution.outcome.kind === "settled") {
@@ -677,6 +687,28 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
+  it("recovers a substantive final after an explicitly allowed media payload is deduplicated", () => {
+    const substantiveFinal =
+      "This is a substantive private answer that missed the message tool. It must trigger recovery after its only marked media was already delivered.";
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const mediaUrl = "file:///tmp/already-sent.png";
+    const execution = createSettledExecution(substantiveFinal);
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.messagingToolSentMediaUrls = [mediaUrl];
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution,
+        accounting: createAccounting([
+          setReplyPayloadMetadata({ mediaUrl }, { deliverDespiteSourceReplySuppression: true }),
+        ]),
+      }),
+    ).toMatchObject({ kind: "retry-source-delivery" });
+  });
+
   it("routes settled delivery with the actual runtime provider", () => {
     const decision = resolveFollowupDeliveryDecision({
       turn: createTurn(),
@@ -764,6 +796,49 @@ describe("resolveFollowupDeliveryDecision", () => {
       payloads: [{ text: "terminal failure", isError: true }],
     });
   });
+
+  it.each([
+    ["progress-only target", { messagingToolSentTargets: [progressTarget] }, true],
+    ["progress-only source payload", { messagingToolSourceReplyPayloads: [progressPayload] }, true],
+    ["final source reply", { messagingToolSentTargets: [finalTarget] }, false],
+    ["legacy target", { messagingToolSentTargets: [sourceReplyTarget] }, false],
+    ["legacy source reply", { didDeliverSourceReplyViaMessageTool: true }, false],
+    ["legacy outbound send", { didSendViaMessagingTool: true }, false],
+    ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }, false],
+    [
+      "visible progress with yield acknowledgment",
+      {
+        meta: { durationMs: 0, yielded: true, yieldAcknowledgment: "Still working" },
+        messagingToolSentTargets: [progressTarget],
+      },
+      false,
+    ],
+  ])(
+    "accounts for %s before suppressing an empty follow-up",
+    (_label, evidence, expectFallback) => {
+      const execution = createSettledExecution();
+      if (execution.outcome.kind === "settled") {
+        Object.assign(execution.outcome.result, evidence);
+      }
+
+      const decision = resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution,
+        accounting: createAccounting(),
+      });
+
+      expect(decision).toMatchObject(
+        expectFallback
+          ? {
+              kind: "deliver",
+              payloads: [
+                { text: expect.stringContaining("did not produce a visible reply"), isError: true },
+              ],
+            }
+          : { kind: "suppress", reason: "silent" },
+      );
+    },
+  );
 
   it.each([
     { label: "accidental", intentionalTerminalCompletion: undefined },

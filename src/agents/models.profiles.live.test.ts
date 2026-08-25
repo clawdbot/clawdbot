@@ -26,17 +26,6 @@ import { isRateLimitErrorMessage } from "./failover/classify.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
-  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
-  isHighSignalLiveModelRef,
-  isPrioritizedHighSignalLiveModelRef,
-  isSmallLiveModelRef,
-  listPrioritizedSmallLiveModelRefs,
-  resolveHighSignalLiveModelLimit,
-  selectHighSignalLiveItems,
-  selectSmallLiveItems,
-  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
-} from "./live-model-filter.js";
-import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
@@ -56,7 +45,18 @@ import {
 import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
-import { appendPrioritizedDynamicLiveModels } from "./test-helpers/live-model-dynamic-candidates.js";
+import {
+  appendPrioritizedDynamicLiveModels,
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
+  isHighSignalLiveModelRef,
+  isPrioritizedHighSignalLiveModelRef,
+  isSmallLiveModelRef,
+  listPrioritizedSmallLiveModelRefs,
+  resolveHighSignalLiveModelLimit,
+  selectHighSignalLiveItems,
+  selectSmallLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
+} from "./test-helpers/live-model-dynamic-candidates.js";
 import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,

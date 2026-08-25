@@ -1,5 +1,6 @@
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
@@ -52,6 +53,14 @@ export function buildRestartRecoveryExpectedState(
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
   };
+}
+
+export function resolveRestartRecoveryTerminalClientRunId(
+  entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,
+): string | undefined {
+  return entry.restartRecoverySourceIngress === "control-ui"
+    ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
+    : undefined;
 }
 
 export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {

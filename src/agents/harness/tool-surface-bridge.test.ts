@@ -58,22 +58,20 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     });
   });
 
-  it("keeps proposal-only skill workshop runs on the raw harness tool surface", () => {
+  it("keeps a single-tool allowlist on the code-mode projection", () => {
     const rawTools = tools(["skill_workshop"]);
     const runtime = createAgentHarnessToolSurfaceRuntime({
       config: { tools: { codeMode: true, toolSearch: true } },
       executeTool: async () => ({ content: [], details: {} }),
       modelToolsEnabled: true,
-      skillWorkshopProposalOnly: true,
       toolsAllow: ["skill_workshop"],
     });
 
     try {
-      expect(runtime.codeModeControlsEnabled).toBe(false);
+      expect(runtime.codeModeControlsEnabled).toBe(true);
       expect(runtime.toolSearchControlsEnabled).toBe(false);
-      expect(runtime.compactTools(rawTools).tools).toEqual(rawTools);
-      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).not.toContain("exec");
-      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).not.toContain("wait");
+      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).toContain("exec");
+      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).toContain("wait");
     } finally {
       runtime.cleanup();
     }

@@ -1,5 +1,6 @@
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyReference,
@@ -13,7 +14,6 @@ import {
   readStringParam,
 } from "../runtime-api.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
-import { isThreadChannelType } from "../send.permissions.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
@@ -144,7 +144,7 @@ async function appendDiscordThreadRenameResult(
       channelId,
       ctx.withOpts(),
     );
-    if (!isThreadChannelType(channel.type)) {
+    if (!isDiscordThreadChannelType(channel.type)) {
       return {
         ...params.payload,
         warning: "Discord threadName was ignored because the send target is not a thread.",
@@ -188,7 +188,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       await discordMessagingActionRuntime.sendStickerDiscord(
         to,
         stickerIds,
-        ctx.withOpts({ content }),
+        ctx.withOpts({ content, ...(ctx.params.silent === true ? { silent: true } : {}) }),
       );
       return jsonResult({ ok: true });
     }
@@ -213,17 +213,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         readStringParam(ctx.params, "mediaUrl", { trim: false }) ??
         readStringParam(ctx.params, "path", { trim: false }) ??
         readStringParam(ctx.params, "filePath", { trim: false });
+      const rawEmbeds = ctx.params.embeds;
+      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
+        ? (rawEmbeds as DiscordSendEmbeds)
+        : undefined;
       const content = readStringParam(ctx.params, "content", {
-        required: !asVoice && !componentSpec && !components && !mediaUrl,
+        required: !asVoice && !componentSpec && !components && !embeds?.length && !mediaUrl,
         allowEmpty: true,
       });
       const filename = readStringParam(ctx.params, "filename");
       const replyTo = readStringParam(ctx.params, "replyTo");
       const threadName = readStringParam(ctx.params, "threadName");
-      const rawEmbeds = ctx.params.embeds;
-      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
-        ? (rawEmbeds as DiscordSendEmbeds)
-        : undefined;
       const sessionKey = readStringParam(ctx.params, "__sessionKey");
       const agentId = readStringParam(ctx.params, "__agentId");
 
@@ -258,7 +258,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
             payload: { ok: true, result, components: true },
-            target: to,
+            target: result.receipt?.threadId ?? to,
             threadName,
           }),
         );
@@ -309,7 +309,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       return jsonResult(
         await appendDiscordThreadRenameResult(ctx, {
           payload: { ok: true, result },
-          target: to,
+          target: result.receipt?.threadId ?? to,
           threadName,
         }),
       );
@@ -417,6 +417,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
           reply: resolveActionReplyReference(ctx, replyTo),
+          ...(ctx.params.silent === true ? { silent: true } : {}),
         },
       );
       return jsonResult({ ok: true, result });

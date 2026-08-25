@@ -196,7 +196,7 @@ jobs:
           NODE
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -334,7 +334,7 @@ jobs:
             }
 
       - name: Checkout trusted QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
           ref: main
@@ -358,10 +358,10 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Checkout selected ref
         env:
@@ -496,7 +496,7 @@ jobs:
             }
 
       - name: Checkout trusted QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
           ref: main
@@ -520,10 +520,10 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Checkout selected ref
         env:
@@ -801,7 +801,7 @@ jobs:
             }
 
       - name: Checkout trusted QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
           ref: main
@@ -825,10 +825,10 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Checkout selected ref
         env:

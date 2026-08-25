@@ -171,6 +171,9 @@ export async function createGatewayHttpTransport(params: {
           bindHost: params.bindHost,
           port: params.port,
           logHooks: params.logHooks,
+          ...(params.getGatewayRequestContext
+            ? { resolveGatewayContext: params.getGatewayRequestContext }
+            : {}),
         });
       }
       return await loadedHooksRequestHandler(req, res);
@@ -315,6 +318,7 @@ export async function createGatewayHttpTransport(params: {
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
+      getGatewayRequestContext: params.getGatewayRequestContext,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       isTerminalEnabled: params.isTerminalEnabled,
       tlsOptions,

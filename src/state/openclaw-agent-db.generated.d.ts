@@ -221,6 +221,7 @@ export interface SessionConversations {
   first_seen_at: number;
   last_seen_at: number;
   role: Generated<string>;
+  route_context_json: string | null;
   session_id: string;
 }
 
@@ -274,6 +275,7 @@ export interface SessionParticipants {
   actor_id: string;
   actor_source: string | null;
   actor_type: string;
+  contribution_count: number | null;
   first_prompted_at: number;
   last_prompted_at: number;
   session_key: string;

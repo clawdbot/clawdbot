@@ -102,6 +102,12 @@ function createEnvironmentSummarySchema() {
     lastSeenReason: Type.Optional(NonEmptyString),
     trust: Type.Optional(EnvironmentTrustSchema),
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
+    invocableCommands: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
     desktop: Type.Optional(Type.Boolean()),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
@@ -140,6 +146,12 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
   providerId: NonEmptyString,
   trust: Type.Optional(EnvironmentTrustSchema),
   executionMode: Type.Optional(WorkerExecutionModeSchema),
+  executionModes: Type.Optional(
+    Type.Union([
+      Type.Tuple([WorkerExecutionModeSchema]),
+      Type.Tuple([Type.Literal("worker-turn"), Type.Literal("remote-exec")]),
+    ]),
+  ),
   machines: Type.Optional(WorkerMachineOptionsSchema),
 });
 

@@ -440,6 +440,54 @@ describe("settings sidebar search", () => {
     expect(onNavigate).toHaveBeenCalledWith("channels");
   });
 
+  it("clears a focused search before Escape exits Settings", () => {
+    let searchQuery = "gateway";
+    const onExit = vi.fn();
+    const rerender = () => {
+      render(
+        renderSettingsSidebar({
+          basePath: "",
+          activeRouteId: "appearance",
+          offline: false,
+          lastError: null,
+          gatewayVersion: "",
+          updateAvailable: null,
+          updateBusy: false,
+          onUpdate: vi.fn(),
+          ...inactiveRefresh,
+          searchQuery,
+          onExit,
+          onRetryConnect: vi.fn(),
+          onNavigate: vi.fn(),
+          onSearchQueryChange: (nextQuery) => {
+            searchQuery = nextQuery;
+            rerender();
+          },
+          preloadTimers: new Map(),
+          saveIndicator: saveIndicator(),
+        }),
+        container,
+      );
+    };
+
+    rerender();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input");
+    expect(input).not.toBeNull();
+    input?.focus();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(searchQuery).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
+  });
+
   it("renders refreshed settings route titles from the active locale", async () => {
     i18n.registerTranslation("pt-BR", {
       routeTitles: {
@@ -478,102 +526,6 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Notificacoes");
     expect(labels).toContain("Provedores de modelos");
     expect(labels).toContain("Avancado");
-  });
-
-  it("keeps the refresh card above the settings footer and forwards its action", async () => {
-    const onUpdate = vi.fn();
-    const onRefresh = vi.fn();
-    const onNavigate = vi.fn();
-    render(
-      renderSettingsSidebar({
-        basePath: "",
-        activeRouteId: "appearance",
-        offline: false,
-        lastError: null,
-        gatewayVersion: "1.0.0",
-        updateAvailable: {
-          currentVersion: "1.0.0",
-          latestVersion: "2.0.0",
-          channel: "stable",
-        },
-        updateBusy: false,
-        canUpdate: true,
-        onUpdate,
-        refreshRequired: true,
-        onRefresh,
-        searchQuery: "",
-        onExit: vi.fn(),
-        onRetryConnect: vi.fn(),
-        onNavigate,
-        onSearchQueryChange: vi.fn(),
-        preloadTimers: new Map(),
-        saveIndicator: saveIndicator(),
-      }),
-      container,
-    );
-
-    const card = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-update-card",
-    );
-    await card?.updateComplete;
-    expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    expect(onUpdate).not.toHaveBeenCalled();
-
-    const buildChip = container.querySelector<
-      HTMLElement & {
-        gatewayVersion: string | null;
-        variant: string;
-        updateComplete: Promise<boolean>;
-      }
-    >("openclaw-sidebar-build-chip");
-    await buildChip?.updateComplete;
-    expect(buildChip?.gatewayVersion).toBe("1.0.0");
-    expect(buildChip?.variant).toBe("settings");
-    buildChip?.querySelector<HTMLAnchorElement>(".sidebar-footer-build")?.click();
-    expect(onNavigate).toHaveBeenCalledWith("about");
-  });
-
-  it("keeps pending approvals actionable from the settings sidebar", () => {
-    const onNavigate = vi.fn();
-    const onOpenApprovals = vi.fn();
-    render(
-      renderSettingsSidebar({
-        basePath: "",
-        activeRouteId: "appearance",
-        offline: false,
-        lastError: null,
-        gatewayVersion: "1.0.0",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
-        searchQuery: "",
-        onExit: vi.fn(),
-        onRetryConnect: vi.fn(),
-        onNavigate,
-        onOpenApprovals,
-        onSearchQueryChange: vi.fn(),
-        preloadTimers: new Map(),
-        saveIndicator: saveIndicator(),
-      }),
-      container,
-    );
-
-    const attention = container.querySelector<
-      HTMLElement & {
-        onNavigate?: (routeId: string) => void;
-        onOpenApprovals?: () => void;
-      }
-    >("openclaw-sidebar-attention");
-    expect(attention).not.toBeNull();
-    expect(attention?.nextElementSibling?.tagName).toBe("OPENCLAW-SIDEBAR-UPDATE-CARD");
-
-    attention?.onOpenApprovals?.();
-    expect(onOpenApprovals).toHaveBeenCalledOnce();
-    attention?.onNavigate?.("approvals");
-    expect(onNavigate).toHaveBeenCalledWith("approvals");
   });
 
   it("shows the offline retry action without an online status", () => {

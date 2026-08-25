@@ -363,7 +363,9 @@ export function buildPluginInspectReport(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
-  const plugin = report.plugins.find((entry) => entry.id === params.id || entry.name === params.id);
+  const plugin =
+    report.plugins.find((entry) => entry.id === params.id) ??
+    report.plugins.find((entry) => entry.name === params.id);
   if (!plugin) {
     return null;
   }

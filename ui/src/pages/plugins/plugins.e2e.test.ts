@@ -676,6 +676,42 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         "Removed calendar-plus",
       );
 
+      await gateway.setMethodResponse("plugins.list", uninstalledInventory);
+      await page.getByRole("tab", { name: /^Discover/u }).click();
+      const searchCountBeforeReinstall = (await gateway.getRequests("plugins.search")).length;
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
+      await waitForNextRequest(gateway, "plugins.search", searchCountBeforeReinstall);
+      const reinstallRow = page.locator(
+        '[data-package-name="calendar-plus"][data-plugin-status="not-installed"]',
+      );
+      await reinstallRow.waitFor({ state: "visible" });
+      await gateway.setMethodResponse("plugins.install", installResult);
+      await gateway.setMethodResponse("plugins.list", finalInventory);
+      const installCountBeforeReinstall = (await gateway.getRequests("plugins.install")).length;
+      await reinstallRow
+        .getByRole("button", { name: "Install Calendar Plus", exact: true })
+        .click();
+      const reinstallRequest = await waitForNextRequest(
+        gateway,
+        "plugins.install",
+        installCountBeforeReinstall,
+      );
+      expect(requestParams(reinstallRequest)).toEqual({
+        source: "clawhub",
+        packageName: "calendar-plus",
+      });
+      const reinstalledRow = page.locator(
+        '[data-package-name="calendar-plus"][data-plugin-status="enabled"]',
+      );
+      await reinstalledRow.waitFor({ state: "attached" });
+      await captureScreenshot(page, "11-reinstalled-feedback-desktop.png");
+      expect(await page.locator(".plugins-page-notice").count()).toBe(0);
+      expect(await reinstalledRow.getByRole("status").textContent()).toContain(
+        "Installed Calendar Plus",
+      );
+
+      await page.getByRole("tab", { name: /^Installed/u }).click();
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("");
       await page.setViewportSize(mobileViewport);
       await expect
         .poll(() =>

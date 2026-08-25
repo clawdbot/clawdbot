@@ -13,6 +13,7 @@ import type {
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -29,7 +30,7 @@ vi.mock("../../plugins/manifest-registry.js", async () => {
     loadPluginManifestRegistryCore: (params: { workspaceDir?: string }) => {
       const extensionsRoot = pathLocal.join(params.workspaceDir ?? "", ".openclaw", "extensions");
       const plugins = [];
-      for (const id of ["open-prose", "browser"]) {
+      for (const id of ["workspace-skills", "browser"]) {
         const rootDir = pathLocal.join(extensionsRoot, id);
         const manifestPath = pathLocal.join(rootDir, "openclaw.plugin.json");
         if (!fsLocal.existsSync(manifestPath)) {
@@ -63,7 +64,7 @@ let workspaceCaseIndex = 0;
 function createWorkspacePluginRegistry(workspaceDir: string): PluginManifestRegistry {
   const extensionsRoot = path.join(workspaceDir, ".openclaw", "extensions");
   const plugins: PluginManifestRecord[] = [];
-  for (const id of ["open-prose", "browser"]) {
+  for (const id of ["workspace-skills", "browser"]) {
     const rootDir = path.join(extensionsRoot, id);
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
     if (!fsSync.existsSync(manifestPath)) {
@@ -210,15 +211,15 @@ afterAll(async () => {
   });
 });
 
-async function setupWorkspaceWithProsePlugin() {
+async function setupWorkspaceSkillPlugin() {
   const workspaceDir = await createTempWorkspaceDir();
   const managedDir = path.join(workspaceDir, ".managed");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "open-prose");
+  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "workspace-skills");
 
   await writePluginWithSkill({
     pluginRoot,
-    pluginId: "open-prose",
-    skillId: "prose",
+    pluginId: "workspace-skills",
+    skillId: "drafting",
     skillDescription: "test",
   });
 
@@ -226,19 +227,73 @@ async function setupWorkspaceWithProsePlugin() {
 }
 
 describe("loadWorkspaceSkills", () => {
+  it("reuses unfiltered skill discovery until the workspace snapshot version changes", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "cached-skill"),
+      name: "cached-skill",
+      description: "Cached skill",
+    });
+    const config: OpenClawConfig = {};
+    const options = {
+      config,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: "",
+      pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
+      pluginMetadataSnapshot: createWorkspacePluginMetadataSnapshot({
+        workspaceDir,
+        config,
+        manifestRegistry: createWorkspacePluginRegistry(workspaceDir),
+      }),
+    };
+    const directoryReads = vi.spyOn(fsSync, "readdirSync");
+
+    try {
+      const first = loadWorkspaceSkills(workspaceDir, options);
+      const initialReadCount = directoryReads.mock.calls.length;
+      expect(initialReadCount).toBeGreaterThan(0);
+
+      const filtered = loadWorkspaceSkills(workspaceDir, {
+        ...options,
+        skillFilter: ["cached-skill"],
+      });
+      expect(filtered[0]).toBe(first[0]);
+      expect(directoryReads).toHaveBeenCalledTimes(initialReadCount);
+
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "fresh-skill"),
+        name: "fresh-skill",
+        description: "Fresh skill",
+      });
+      expect(loadWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name)).toEqual([
+        "cached-skill",
+      ]);
+      expect(directoryReads).toHaveBeenCalledTimes(initialReadCount);
+
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      expect(loadWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name)).toEqual([
+        "cached-skill",
+        "fresh-skill",
+      ]);
+      expect(directoryReads.mock.calls.length).toBeGreaterThan(initialReadCount);
+    } finally {
+      directoryReads.mockRestore();
+    }
+  });
+
   it("filters plugin-shipped skills through plugin config", async () => {
-    const { workspaceDir, managedDir } = await setupWorkspaceWithProsePlugin();
+    const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
 
     const enabledEntries = loadTestWorkspaceSkills(workspaceDir, {
       config: {
         plugins: {
-          entries: { "open-prose": { enabled: true } },
+          entries: { "workspace-skills": { enabled: true } },
         },
       },
       managedSkillsDir: managedDir,
     });
 
-    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("prose");
+    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("drafting");
 
     const blockedEntries = loadTestWorkspaceSkills(workspaceDir, {
       config: {
@@ -249,7 +304,7 @@ describe("loadWorkspaceSkills", () => {
       managedSkillsDir: managedDir,
     });
 
-    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("prose");
+    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("drafting");
   });
 
   it("loads the browser plugin automation skill when the bundled plugin is enabled", async () => {

@@ -94,6 +94,8 @@ export const zh_TW = {
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
+      tokenStoreProvisioned:
+        "已產生 Gateway 權杖並以 {name} 存入 OpenClaw 祕密儲存。設定中只保留參照；可用 `openclaw secrets store list` 檢視。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -447,6 +449,13 @@ export const zh_TW = {
         "如果多個使用者能向同一個啟用工具的 agent 傳訊息，他們都能影響它如何使用工具。",
       title: "安全免責聲明",
       toolAccess: "如果啟用了工具，這個 bot 可以讀取檔案並執行操作。",
+    },
+    telemetry: {
+      accept: "是，分享功能使用統計",
+      decline: "不用，謝謝",
+      description:
+        "在每日更新檢查中分享你使用的功能（頻道、提供者、插件數量）。絕不包含訊息或識別碼。查看實際傳送的內容：`openclaw telemetry show`。隨時變更：`openclaw telemetry on|off`。",
+      title: "幫助 OpenClaw 變得更好？",
     },
     skills: {
       configure: "現在設定技能？（建議）",

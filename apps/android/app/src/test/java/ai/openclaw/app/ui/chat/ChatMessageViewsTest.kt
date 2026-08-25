@@ -33,6 +33,7 @@ class ChatMessageViewsTest {
     val messages =
       listOf(
         Triple("user", "user body", false),
+        Triple("user", "peer body", false),
         Triple("assistant", "assistant body", false),
         Triple("system", "system body", false),
         Triple("assistant", "live body", true),
@@ -59,12 +60,20 @@ class ChatMessageViewsTest {
             resolveInlineWidgetResource = { _, _ -> null },
             loadImageArtifact = { null },
             loadMediaArtifact = { _, _, _ -> null },
+            senderLabel =
+              when (body) {
+                "peer body" -> "  Alex (Slack)  "
+                "assistant body", "system body", "live body" -> "Spoofed sender"
+                else -> null
+              },
           )
         }
       }
     }
 
     val userBubble = composeRule.onNode(hasContentDescription("You") and hasText("user body")).assertExists()
+    composeRule.onNode(hasContentDescription("Alex (Slack)") and hasText("peer body")).assertExists()
+    composeRule.onNodeWithText("Alex (Slack)", useUnmergedTree = true).assertIsDisplayed()
     val assistantBubble = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("assistant body")).assertExists()
     composeRule.onNode(hasContentDescription("System") and hasText("system body")).assertExists()
     composeRule.onNode(hasContentDescription("OpenClaw") and hasText("live body")).assertExists()
@@ -75,6 +84,7 @@ class ChatMessageViewsTest {
     }
     composeRule.onAllNodesWithText("You", useUnmergedTree = true).assertCountEquals(0)
     composeRule.onAllNodesWithText("OpenClaw", useUnmergedTree = true).assertCountEquals(0)
+    composeRule.onAllNodesWithText("Spoofed sender", useUnmergedTree = true).assertCountEquals(0)
     composeRule.onAllNodesWithText("System", useUnmergedTree = true).assertCountEquals(1)
     composeRule.onAllNodesWithText("OpenClaw · Live", useUnmergedTree = true).assertCountEquals(1)
 
@@ -152,6 +162,55 @@ class ChatMessageViewsTest {
         hasContentDescription("OpenClaw") and
           hasAnyDescendant(hasContentDescription("Play audio") and hasClickAction()),
       ).assertExists()
+  }
+
+  @Test
+  fun attachmentOnlyAssistantTurnShowsDocumentFilenameWithoutLoadingItsUrl() {
+    var artifactRequests = 0
+
+    composeRule.setContent {
+      ChatBubble(
+        messageId = "document-message",
+        entryId = null,
+        role = "assistant",
+        live = false,
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "file",
+              mimeType = "application/pdf",
+              fileName = "quarterly-report.pdf",
+              url = "https://example.test/quarterly-report.pdf",
+            ),
+          ),
+        timestampMs = null,
+        onReplyMessage = {},
+        sessionActionsEnabled = false,
+        onRewindMessage = {},
+        onForkMessage = {},
+        speechState = null,
+        onToggleListen = { _, _ -> },
+        inlineMediaPlaybackBlocked = false,
+        inlineWidgetResolverReady = false,
+        resolveInlineWidgetResource = { _, _ ->
+          artifactRequests += 1
+          null
+        },
+        loadImageArtifact = {
+          artifactRequests += 1
+          null
+        },
+        loadMediaArtifact = { _, _, _ ->
+          artifactRequests += 1
+          null
+        },
+      )
+    }
+
+    composeRule
+      .onNode(hasContentDescription("OpenClaw") and hasText("quarterly-report.pdf"))
+      .assertIsDisplayed()
+    assertEquals(0, artifactRequests)
   }
 
   @Test

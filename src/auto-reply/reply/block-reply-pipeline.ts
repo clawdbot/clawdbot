@@ -53,35 +53,35 @@ export function createAudioAsVoiceBuffer(params: {
   };
 }
 
-/** Creates a stable duplicate key for a complete outbound payload. */
-function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+function createBlockReplyContentIdentity(payload: ReplyPayload) {
   const reply = resolveSendableOutboundReplyParts(payload);
-  return JSON.stringify({
-    statusNotice: isReplyPayloadStatusNotice(payload),
+  return {
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     presentation: payload.presentation ?? null,
     presentationTextMode: payload.presentationTextMode ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
+    location: payload.location ?? null,
+    videoAsNote: payload.videoAsNote === true,
+  };
+}
+
+/** Creates a stable duplicate key for a complete outbound payload. */
+function createBlockReplyPayloadKey(payload: ReplyPayload): string {
+  return JSON.stringify({
+    ...createBlockReplyContentIdentity(payload),
+    statusNotice: isReplyPayloadStatusNotice(payload),
     replyToId: payload.replyToId ?? null,
   });
 }
 
 /** Creates a duplicate key that ignores reply target for final suppression. */
 export function createBlockReplyContentKey(payload: ReplyPayload): string {
-  const reply = resolveSendableOutboundReplyParts(payload);
   // Content-only key used for final-payload suppression after block streaming.
   // This intentionally ignores replyToId so a streamed threaded payload and the
   // later final payload still collapse when they carry the same content.
-  return JSON.stringify({
-    text: reply.trimmedText,
-    mediaList: reply.mediaUrls,
-    presentation: payload.presentation ?? null,
-    presentationTextMode: payload.presentationTextMode ?? null,
-    interactive: payload.interactive ?? null,
-    channelData: payload.channelData ?? null,
-  });
+  return JSON.stringify(createBlockReplyContentIdentity(payload));
 }
 
 function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
@@ -279,8 +279,11 @@ export function createBlockReplyPipeline(params: {
       return;
     }
     if (bufferPayload(payload)) {
+      flushBufferedAssistantBlock();
       return;
     }
+    // Buffered audio is an ordering boundary, even when voice metadata arrives later.
+    flushBuffered();
     const reply = resolveSendableOutboundReplyParts(payload);
     const hasNonTextContent = hasOutboundReplyContent(
       { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },

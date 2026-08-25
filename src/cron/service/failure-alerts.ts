@@ -165,8 +165,15 @@ export function resolveFailureAlert(
   const accountId =
     normalizeOptionalString(route?.accountId) ??
     (primaryRecipientMatches ? primaryAnnounceRoute?.accountId : undefined);
+  // A configured failure destination has no thread and stays distinct from a
+  // threaded primary peer unless a job alert names its own recipient.
   const primaryRouteMatches =
-    primaryRecipientMatches && accountId === primaryAnnounceRoute?.accountId;
+    primaryRecipientMatches &&
+    accountId === primaryAnnounceRoute?.accountId &&
+    (alternateRoute === null ||
+      !job.delivery?.failureDestination ||
+      primaryAnnounceRoute?.threadId == null ||
+      jobConfig?.to !== undefined);
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -366,12 +373,15 @@ export function maybeEmitFailureAlert(
   if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
-  const now = params.occurredAtMs ?? state.deps.nowMs();
+  const wallClockNow = state.deps.nowMs();
+  const now = params.occurredAtMs ?? wallClockNow;
   const lastAlert = params.job.state.lastFailureAlertAtMs;
   // Cooldown is stored on job state so process restarts and service reloads do
-  // not spam operators with repeated alerts for the same failing job.
+  // not spam operators. Future timestamps cannot prove a recent prior alert.
   const inCooldown =
-    typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+    typeof lastAlert === "number" &&
+    lastAlert <= wallClockNow &&
+    now - lastAlert < Math.max(0, alertConfig.cooldownMs);
   if (inCooldown) {
     return;
   }

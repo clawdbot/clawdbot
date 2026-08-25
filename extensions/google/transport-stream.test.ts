@@ -6,6 +6,7 @@ import { gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
+import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
 
@@ -185,6 +186,7 @@ async function useGoogleAuthorizedUserCredentials(
 async function useGoogleAuthLibraryCredentials(label: string, token?: string): Promise<void> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`));
   vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+  vi.stubEnv("CLOUDSDK_CONFIG", "");
   vi.stubEnv("HOME", path.join(tempDir, "home"));
   vi.stubEnv("APPDATA", "");
   if (token !== undefined) {
@@ -630,6 +632,53 @@ describe("google transport stream", () => {
     expect(guardedFetchMock).not.toHaveBeenCalled();
   });
 
+  it("reports the real HTTP response before consuming Gemini SSE output", async () => {
+    mockGoogleTextResponse();
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
+
+    const result = await runGeminiStreamResult({ options });
+
+    expect(result.stopReason).toBe("stop");
+    expect(acceptanceObserver).toHaveBeenCalledWith({
+      kind: "http_response",
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+    expect(onResponse).toHaveBeenCalledWith(
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+      expect.objectContaining({ provider: "google" }),
+    );
+  });
+
+  it("reports rejected HTTP responses without marking them accepted", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response('{"error":{"message":"rate limited"}}', {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "x-request-id": "req-rejected",
+        },
+      }),
+    );
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
+
+    const result = await runGeminiStreamResult({ options });
+
+    expect(result.stopReason).toBe("error");
+    expect(acceptanceObserver).not.toHaveBeenCalled();
+    expect(onResponse).toHaveBeenCalledWith(
+      {
+        status: 429,
+        headers: expect.objectContaining({ "x-request-id": "req-rejected" }),
+      },
+      expect.objectContaining({ provider: "google" }),
+    );
+  });
+
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
@@ -858,7 +907,7 @@ describe("google transport stream", () => {
       if (provider === "google-vertex") {
         vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
         vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+        await useGoogleAuthLibraryCredentials("blocked", "ya29.vertex-token");
       }
 
       const result =
@@ -885,7 +934,7 @@ describe("google transport stream", () => {
       if (provider === "google-vertex") {
         vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
         vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+        await useGoogleAuthLibraryCredentials("unfinished", "ya29.vertex-token");
       }
 
       const result =
@@ -1419,6 +1468,124 @@ describe("google transport stream", () => {
     },
   );
 
+  it("does not retry when provider acceptance observation fails", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+
+    const options = withProviderAcceptanceObserver({ reasoning: "high" }, () => {
+      throw new Error("acceptance observer failed");
+    });
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options,
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance observer failed",
+    });
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancelCalled).toBe(true);
+  });
+
+  it("aborts a pending response callback without retrying", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: cancel,
+      }),
+    );
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    const onResponse = vi.fn(() => {
+      markHookStarted();
+      return new Promise<void>(() => {});
+    });
+    const options = {
+      reasoning: "high",
+      signal: controller.signal,
+      onResponse,
+    };
+    const resultPromise = runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options,
+    });
+    await hookStarted;
+    controller.abort(
+      Object.assign(new Error("operator canceled the request"), {
+        code: "OPERATOR_CANCELLED",
+      }),
+    );
+
+    await expect(resultPromise).resolves.toMatchObject({
+      stopReason: "aborted",
+      errorCode: "OPERATOR_CANCELLED",
+      errorMessage: "operator canceled the request",
+    });
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("retries when a pending response callback reaches the Gemini first-response deadline", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    guardedFetchMock
+      .mockResolvedValueOnce(
+        buildOpenRawSseResponse({
+          sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+          onCancel: cancel,
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+    let responseCount = 0;
+    const onResponse = vi.fn(() => {
+      responseCount += 1;
+      return responseCount === 1 ? new Promise<void>(() => {}) : undefined;
+    });
+    const safetyTimeout = setTimeout(() => {
+      controller.abort(new Error("test safety deadline reached"));
+    }, 5000);
+
+    try {
+      const result = await runGeminiStreamResult({
+        model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+        options: {
+          reasoning: "high",
+          signal: controller.signal,
+          onResponse,
+        },
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+      expect(onResponse).toHaveBeenCalledTimes(2);
+      expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      clearTimeout(safetyTimeout);
+    }
+  });
+
   it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
@@ -1854,12 +2021,9 @@ describe("google transport stream", () => {
   );
 
   it("strips redundant google provider prefixes from Google Vertex model paths", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-prefix-"));
-    vi.stubEnv("HOME", path.join(tempDir, "home"));
-    vi.stubEnv("APPDATA", "");
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
-    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.transport-token");
+    await useGoogleAuthLibraryCredentials("prefix", "ya29.transport-token");
     const tokenFetchMock = vi.fn();
     mockGoogleTextResponse();
 

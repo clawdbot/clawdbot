@@ -69,6 +69,9 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  IOS_SCREENSHOT_FASTLANE_VERSION: "2.236.1"
+  IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
+  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"
   NODE_VERSION: "24.x"
 
 jobs:
@@ -82,11 +85,17 @@ jobs:
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
+      candidate_trust: ${{ steps.candidate_trust.outputs.trust }}
+      cache_mode: ${{ steps.candidate_trust.outputs.cache_mode }}
+      cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
       diff_base_revision: ${{ steps.diff_base.outputs.sha }}
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
+      # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
+      run_docker_seed_e2e: ${{ steps.manifest.outputs.run_docker_seed_e2e }}
+      docker_seed_lanes: ${{ steps.manifest.outputs.docker_seed_lanes }}
       run_macos: ${{ steps.manifest.outputs.run_macos }}
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
@@ -134,6 +143,14 @@ jobs:
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Checkout trusted CI harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
@@ -369,6 +386,7 @@ jobs:
         id: target_context_target
         if: inputs.target_context_ref != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
@@ -381,11 +399,77 @@ jobs:
             echo "target_context_ref requires target_ref to be a full commit SHA." >&2
             exit 1
           fi
+          branch_sha="$(git ls-remote --heads origin "refs/heads/${TARGET_CONTEXT_REF}" | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "target_context_ref branch ${TARGET_CONTEXT_REF} does not exist." >&2
+            exit 1
+          fi
+          comparison_status="$(
+            gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_REF}...${branch_sha}" --jq .status
+          )"
+          if [[ "$comparison_status" != "ahead" && "$comparison_status" != "identical" ]]; then
+            echo "target_ref must be the declared release branch head or one of its ancestors." >&2
+            exit 1
+          fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Classify candidate cache trust
+        id: candidate_trust
+        env:
+          CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
+          RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
+          RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
+          TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+
+          trust=untrusted
+          cache_mode=off
+          cache_write_allowed=false
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            trust=main
+            cache_mode=restore
+            cache_write_allowed=true
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            trust=pull-request
+            cache_mode=restore
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
+            if [[ "$RELEASE_GATE" == "true" ]]; then
+              trust=pull-request
+              cache_mode=restore
+            elif [[
+              "$HISTORICAL_TARGET" == "true" ||
+              "$RELEASE_CANDIDATE_TARGET" == "true" ||
+              "$TARGET_CONTEXT_TARGET" == "true"
+            ]]; then
+              trust=release
+              cache_mode=restore
+              cache_write_allowed=true
+            elif [[ -n "$default_sha" && "$CHECKOUT_REVISION" == "$default_sha" ]]; then
+              trust=main
+              cache_mode=restore
+              cache_write_allowed=true
+            elif [[ -z "$TARGET_REF" && "$CHECKOUT_REVISION" == "$WORKFLOW_REVISION" ]]; then
+              trust=workflow
+              cache_mode=restore
+            fi
+          fi
+
+          {
+            echo "trust=$trust"
+            echo "cache_mode=$cache_mode"
+            echo "cache_write_allowed=$cache_write_allowed"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
@@ -393,7 +477,7 @@ jobs:
       - name: Detect docs-only changes
         id: docs_scope
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/detect-docs-changes
+        uses: ./.ci-harness/.github/actions/detect-docs-changes
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
 
@@ -419,7 +503,7 @@ jobs:
           fi
 
       - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -430,8 +514,9 @@ jobs:
       # install and run through tsx.
       - name: Setup manifest pnpm
         if: github.event_name == 'workflow_dispatch'
-        uses: ./.github/actions/setup-pnpm-store-cache
+        uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
@@ -636,6 +721,7 @@ jobs:
             : "";
           const supportsOpenClawKitTests = targetWorkflow.includes("openclawkit-tests-contract-v1");
           const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
+          const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
@@ -671,6 +757,13 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          const dockerSeedLanes =
+            compactPullRequest &&
+            changedPaths &&
+            supportsDockerSeedE2e &&
+            typeof changedNodeTestPlan.resolveChangedDockerSeedLanes === "function"
+              ? changedNodeTestPlan.resolveChangedDockerSeedLanes(changedPaths)
+              : [];
           // Canonical pushes also use compact bins: 80+ single-group jobs
           // drain the runner pool for minutes, and per-shard check names on
           // main have no branch-protection consumers. Dispatch (release
@@ -761,15 +854,7 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
-          const assignVitestFsCacheWriter =
-            typeof nodeTestPlan.assignVitestFsCacheWriter === "function"
-              ? nodeTestPlan.assignVitestFsCacheWriter
-              : (shards) =>
-                  shards.map((shard, index) => ({
-                    ...shard,
-                    saveVitestFsCache: index === 0,
-                  }));
-          const nodeTestShards = assignVitestFsCacheWriter(rawNodeTestShards).map((shard) => ({
+          const nodeTestShards = rawNodeTestShards.map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -778,12 +863,12 @@ jobs:
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
+                pretest_build_mode: shard.pretestBuildMode,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
                 predicted_seconds: shard.predictedSeconds,
-                save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
                   shard.shardName.startsWith("core-tooling") ||
@@ -808,6 +893,8 @@ jobs:
             docs_only: docsOnly,
             docs_changed: docsChanged,
             run_node: runNode,
+            run_docker_seed_e2e: dockerSeedLanes.length > 0,
+            docker_seed_lanes: dockerSeedLanes.join(" "),
             run_macos: runMacos,
             run_android: runAndroid,
             run_skills_python: runSkillsPython,
@@ -934,19 +1021,15 @@ jobs:
             node scripts/check-protocol-event-coverage.mts
           fi
 
-      # Publish one immutable semantic dependency archive before same-repo
-      # Blacksmith jobs fan out. The GitHub backend uses the pnpm-store cache.
-      # Pull-request archives remain merge-ref scoped;
-      # main archives seed later pull requests through the default-branch scope.
-      - name: Publish exact dependency cache
+      # Validate and consume the immutable dependency archive before same-repo
+      # Blacksmith jobs fan out. Cache publication belongs to the trusted warmer.
+      - name: Restore exact dependency cache
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           dependency-cache: "true"
           install-bun: "false"
-          save-actions-cache: "true"
-          save-dependency-cache: "true"
-          use-actions-cache: "true"
 
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
@@ -961,7 +1044,7 @@ jobs:
     steps:
       - name: Checkout
         if: github.event_name != 'workflow_dispatch' || inputs.target_ref == ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -1014,6 +1097,14 @@ jobs:
           fi
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
+      - name: Checkout trusted CI harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
       - name: Resolve security diff base
         id: diff_base
         env:
@@ -1043,7 +1134,7 @@ jobs:
 
       - name: Ensure security base commit
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
@@ -1068,11 +1159,11 @@ jobs:
 
       - name: Scan pull request for leaked credentials
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
+        uses: trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318 # v3.97.0
         with:
           base: ${{ steps.diff_base.outputs.sha }}
           head: ${{ github.sha }}
-          version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42"
+          version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33"
           extra_args: --results=verified,unknown --fail-on-scan-errors
 
       - name: Prepare trusted pre-commit config
@@ -1109,7 +1200,7 @@ jobs:
           echo "python-version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install pre-commit
-        run: python3 -m pip install --disable-pip-version-check pre-commit==4.2.0
+        run: python3 -m pip install --disable-pip-version-check pre-commit==4.6.2
 
       - name: Detect committed private keys
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
@@ -1146,15 +1237,15 @@ jobs:
           REQUESTED_NODE_VERSION: "24.x"
         run: |
           set -euo pipefail
-          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-  # Warm the lockfile- and pnpm-pinned Actions cache for fork PRs, manual runs,
-  # the GitHub backend, and docs-only same-repo PRs. Node-relevant Blacksmith
-  # runs already publish it through the exact dependency-cache writer in preflight.
+  # Prime the lockfile- and pnpm-pinned store for fork PRs, manual runs, the
+  # GitHub backend, and docs-only same-repo PRs. This job restores only; the
+  # trusted cache warmer owns publication.
   pnpm-store-warmup:
     permissions:
       contents: read
@@ -1169,6 +1260,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
 
@@ -1199,6 +1291,15 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            harness_dir="$workdir/.ci-harness"
+            git init "$harness_dir" >/dev/null
+            git -C "$harness_dir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+            git -C "$harness_dir" -c protocol.version=2 fetch \
+              --no-tags --no-recurse-submodules --depth=1 origin \
+              "+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness" || return 1
+            git -C "$harness_dir" sparse-checkout set .github/actions || return 1
+            git -C "$harness_dir" checkout --force --detach "$WORKFLOW_SHA" || return 1
+            test -f "$harness_dir/.github/actions/setup-node-env/action.yml" || return 1
             echo "checkout attempt ${attempt}/5 succeeded"
           }
 
@@ -1214,10 +1315,10 @@ jobs:
           exit 1
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
-          save-actions-cache: "true"
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
@@ -1236,25 +1337,25 @@ jobs:
       - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          install-bun: "false"
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/build-all-cache
           key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
@@ -1263,7 +1364,8 @@ jobs:
 
       - name: Restore dist build cache
         id: dist_build_cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/
@@ -1325,6 +1427,11 @@ jobs:
 
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
+
+      - name: Smoke test built CLI with Bun
+        run: |
+          bun openclaw.mjs --help
+          bun openclaw.mjs status --json --timeout 1
 
       # Doctor index proof, singleton smoke, and startup-memory check are
       # independent dist readers; Blacksmith runners have the cores to overlap
@@ -1497,19 +1604,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Save dist build cache
-        if: steps.dist_build_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        continue-on-error: true
-        with:
-          path: |
-            dist/
-            dist-runtime/
-            packages/*/dist/
-            extensions/*/src/host/**/.bundle.hash
-            extensions/*/src/host/**/*.bundle.js
-          key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
-
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1529,11 +1623,11 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Download exact-run built runtime
@@ -1559,20 +1653,16 @@ jobs:
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+      - *linux_node_checkout_step
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify native app i18n source
         run: |
@@ -1609,20 +1699,20 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
-        if: needs.preflight.outputs.compatibility_target != 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -1684,14 +1774,14 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
-          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - *cache_playwright_chromium
@@ -1739,14 +1829,14 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
-          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
       - *cache_playwright_chromium
       - *install_playwright_chromium
@@ -1800,14 +1890,14 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify Control UI i18n source
         run: |
@@ -1889,13 +1979,13 @@ jobs:
           echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
@@ -1984,13 +2074,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           # Reader of build-artifacts' protected daily archive: warms tsdown
           # tooling plus the repeated openclaw.mjs boots in the scenario loop.
           node-compile-cache: "true"
@@ -2168,13 +2258,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run plugin contract shard
@@ -2211,13 +2301,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run channel contract shard
@@ -2251,9 +2341,10 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          node-version: "22.22.3"
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          node-version: "22.23.2"
           install-bun: "false"
           build-all-cache-scope: full
 
@@ -2287,33 +2378,59 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
-          # Only the preflight writer saves an exact dependency archive.
-          # All-Blacksmith shards restore it; github/hybrid use the pnpm store.
+          # Blacksmith shards restore the exact dependency archive;
+          # github/hybrid use the pnpm store.
           dependency-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          # The github/hybrid planner profile elects one in-run writer so the
-          # transform cache can recover without waiting for the cache warmer.
-          save-vitest-fs-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
         # The current workflow validates frozen targets whose go.mod may predate this patch pin.
-        # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        # Keep the runner toolchain owned by the workflow; cache publication is gated separately.
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.12"
-          cache-dependency-path: scripts/docs-i18n/go.sum
+          go-version: "1.26.6"
+          cache: false
+
+      - name: Resolve docs i18n Go cache
+        id: docs-i18n-go-cache-key
+        if: matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'
+        env:
+          DEPENDENCY_HASH: ${{ hashFiles('scripts/docs-i18n/go.sum') }}
+        run: |
+          set -euo pipefail
+          arch="$(node -p process.arch)"
+          image_prefix=""
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            image_prefix="${ImageOS-undefined}-"
+          fi
+          version="$(go env GOVERSION)"
+          {
+            echo "key=setup-go-${RUNNER_OS}-${arch}-${image_prefix}go-${version#go}-${DEPENDENCY_HASH}"
+            echo "paths<<EOF"
+            go env GOMODCACHE
+            go env GOCACHE
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore docs i18n Go cache
+        id: docs-i18n-go-cache
+        if: matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
+          key: ${{ steps.docs-i18n-go-cache-key.outputs.key }}
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.25.12"
+        run: test "$(go env GOVERSION)" = "go1.26.6"
 
       - name: Configure Node test resources
         # Scale the in-process Vitest worker budget with the cores the job
@@ -2345,7 +2462,7 @@ jobs:
         # Keep its implementation pinned to this workflow revision, while tests
         # continue to run against the checked-out candidate.
         if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-workflow
@@ -2355,6 +2472,17 @@ jobs:
             scripts/lib/local-check-runtime.mts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # A few real-CLI E2E tests need a current dist tree. Build it before
+      # Vitest starts so the shard's worker processes cannot consume the
+      # cgroup memory that the build admission check must reserve.
+      - name: Build Node test runtime
+        if: matrix.pretest_build_mode != null
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
+          VITEST: "1"
+        run: pnpm build
 
       - name: Run Node test shard
         env:
@@ -2381,6 +2509,13 @@ jobs:
             [[ -f "$runner" ]]
           fi
           node --import tsx "$runner"
+
+      - name: Save docs i18n Go cache
+        if: always() && matrix.requires_go == true && needs.preflight.outputs.cache_write_allowed == 'true' && steps.docs-i18n-go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
+          key: ${{ steps.docs-i18n-go-cache.outputs.cache-primary-key }}
 
   # Types, lint, and format check shards.
   check-shard:
@@ -2426,13 +2561,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -2444,8 +2579,8 @@ jobs:
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
 
       - name: Cache extension package boundary artifacts for hosted lint
-        if: matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/plugin-sdk
@@ -2462,7 +2597,7 @@ jobs:
       # protected boundary lane may publish this repository-global snapshot.
       - name: Mount extension boundary sticky disk
         if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
+        uses: useblacksmith/stickydisk@35ba2e331a80056a42af053ee54968511de2b7c7 # v1.5.0
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
           # keys minted a new backing disk for every PR and toolchain change
@@ -2530,6 +2665,14 @@ jobs:
               fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              if has_package_script "check:temp-path-guardrails"; then
+                pnpm check:temp-path-guardrails
+              elif [[ "$FROZEN_TARGET" == "true" ]]; then
+                echo "[skip] frozen target predates the temp path guardrails"
+              else
+                echo "Current CI targets must provide the check:temp-path-guardrails package script." >&2
+                exit 1
+              fi
               if [[ "$FROZEN_TARGET" == "true" ]]; then
                 pnpm dup:check:coverage
               else
@@ -2743,11 +2886,11 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run hosted core lint stripe
         env:
@@ -2780,11 +2923,11 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run hosted core test-types stripe
         shell: bash
@@ -2858,24 +3001,24 @@ jobs:
       - *linux_node_checkout_step
       - name: Ensure Plugin SDK API diff base commit
         if: matrix.group == 'plugin-sdk-api-diff'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Ensure Plugin SDK API diff head commit
         if: matrix.group == 'plugin-sdk-api-diff'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
           fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -2893,7 +3036,7 @@ jobs:
       # repository-global snapshots, so they keep the GitHub cache path.
       - name: Mount extension boundary sticky disk
         if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
+        uses: useblacksmith/stickydisk@35ba2e331a80056a42af053ee54968511de2b7c7 # v1.5.0
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
           # keys minted a new backing disk for every PR and toolchain change
@@ -2942,8 +3085,8 @@ jobs:
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
-        if: matrix.group == 'extension-package-boundary'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/plugin-sdk
@@ -3145,13 +3288,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
@@ -3243,7 +3386,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -3286,6 +3429,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -3329,6 +3473,15 @@ jobs:
           }
           fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+          harness_dir="$GITHUB_WORKSPACE/.ci-harness"
+          git init "$harness_dir"
+          git -C "$harness_dir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          git -C "$harness_dir" -c protocol.version=2 fetch \
+            --no-tags --no-recurse-submodules --depth=1 origin \
+            "+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness"
+          git -C "$harness_dir" sparse-checkout set .github/actions
+          git -C "$harness_dir" checkout --force --detach "$WORKFLOW_SHA"
+          test -f "$harness_dir/.github/actions/setup-node-env/action.yml"
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
         shell: pwsh
@@ -3354,12 +3507,13 @@ jobs:
           REQUESTED_NODE_VERSION: "22.x"
         run: |
           set -euo pipefail
-          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm-store-cache
+        uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: 22.x
 
       - name: Runtime versions
@@ -3424,10 +3578,10 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
-          save-actions-cache: "true"
 
       - name: TS tests (macOS)
         env:
@@ -3525,17 +3679,20 @@ jobs:
           toolchain_key="$(printf '%s\n%s\n' "$xcode_version" "$swift_version" | shasum -a 256 | awk '{print $1}')"
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
-      - name: Cache SwiftPM
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - name: Restore SwiftPM cache
+        id: swiftpm-cache
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swiftpm-
 
-      - name: Cache Swift build directory
+      - name: Restore Swift build directory cache
         id: swift-build-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
@@ -3669,6 +3826,20 @@ jobs:
           done
           exit 1
 
+      - name: Save SwiftPM cache
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
+
+      - name: Save Swift build directory cache
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/macos/.build
+          key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
+
   ios-build:
     permissions:
       contents: read
@@ -3685,7 +3856,7 @@ jobs:
       - name: Select Xcode 26
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
             if [ -d "$xcode_app/Contents/Developer" ]; then
               sudo xcode-select -s "$xcode_app/Contents/Developer"
               break
@@ -3693,15 +3864,16 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.* ]]; then
-            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
             exit 1
           fi
           swift --version
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
       - name: Install iOS Swift tooling
@@ -3833,20 +4005,214 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Capture iOS release screenshots
-        # Full manual/release validation always captures. PRs and their exact-head
-        # release-gate substitutes use the same conservative screenshot-risk scope.
-        if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && env.HISTORICAL_TARGET != 'true' }}
+  ios-screenshot-shard:
+    permissions:
+      contents: read
+    name: "ios-screenshots-${{ matrix.device_family }}"
+    needs: [preflight, ios-build]
+    # Full manual/release validation always captures. PRs and their exact-head
+    # release-gate substitutes use the same conservative screenshot-risk scope.
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    timeout-minutes: 90
+    env:
+      BUNDLE_DEPLOYMENT: "true"
+      BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        device_family: [iphone, ipad-13]
+    steps:
+      - *platform_checkout_step
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4.10"
+          bundler: "2.6.9"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/ios
+        run: |
+          bundle _2.6.9_ install --jobs 4 --retry 3
+          bundle _2.6.9_ check
+          bundle _2.6.9_ exec fastlane --version
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
+            exit 1
+          fi
+          swift --version
+
+      - name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+
+      - name: Install iOS screenshot tooling
+        run: |
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/xcodegen" --version
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
+
+      - name: Capture iOS device screenshot shard
+        id: device_screenshots
+        env:
+          OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
+          OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"
         run: pnpm ios:screenshots
 
+      - name: Capture Apple Watch screenshot
+        id: watch_screenshot
+        if: matrix.device_family == 'iphone'
+        run: |
+          source scripts/lib/ios-fastlane.sh
+          (
+            cd apps/ios
+            run_ios_fastlane ios watch_screenshot
+          )
+
+      - name: Package iOS screenshot shard evidence
+        id: package_screenshot_evidence
+        env:
+          DEVICE_FAMILY: ${{ matrix.device_family }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          fastlane_version="$(
+            source scripts/lib/ios-fastlane.sh
+            run_ios_fastlane --version 2>&1 | awk 'match($0, /^fastlane [0-9]+\.[0-9]+\.[0-9]+$/) { print substr($0, RSTART + 9, RLENGTH - 9); exit }'
+          )"
+          xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
+          test "$xcode_version" = "$IOS_SCREENSHOT_XCODE_VERSION"
+          collect_args=(
+            collect
+            --family "$DEVICE_FAMILY"
+            --screenshots apps/ios/fastlane/screenshots/en-US
+            --xcresults apps/ios/build/SnapshotTestResults
+            --output apps/ios/build/ScreenshotEvidenceShard
+            --target-sha "$TARGET_SHA"
+            --workflow-sha "$WORKFLOW_SHA"
+            --run-id "$RUN_ID"
+            --run-attempt "$RUN_ATTEMPT"
+            --xcode-version "$xcode_version"
+            --fastlane-version "$fastlane_version"
+            --node-version "$(node --version)"
+          )
+          node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+          if [[ "$DEVICE_FAMILY" == "iphone" ]]; then
+            collect_args[2]="watch"
+            node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+          fi
+
+      - name: Upload iOS screenshot shard evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-shard-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/ScreenshotEvidenceShard/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failed iOS screenshot attempt evidence
+        if: ${{ always() && (steps.device_screenshots.outcome == 'failure' || steps.watch_screenshot.outcome == 'failure' || steps.package_screenshot_evidence.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-failure-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
+          path: |
+            apps/ios/fastlane/screenshots/en-US/*.png
+            apps/ios/build/SnapshotTestResults/capture-attempts.json
+            apps/ios/build/SnapshotTestResults/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+  ios-screenshot-evidence:
+    permissions:
+      contents: read
+    name: "ios-screenshot-evidence"
+    needs: [preflight, ios-screenshot-shard]
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+
+      - name: Setup screenshot evidence Node
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          install-deps: "false"
+          node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+
+      - name: Download iOS screenshot shard evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: ios-release-screenshot-shard-*-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/ScreenshotEvidenceInputs
+          merge-multiple: false
+
+      - name: Reduce iOS screenshot evidence
+        id: reduce_screenshot_evidence
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          node scripts/ios-screenshot-evidence.mjs reduce \
+            --input apps/ios/build/ScreenshotEvidenceInputs \
+            --output . \
+            --target-sha "$TARGET_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --xcode-version "$IOS_SCREENSHOT_XCODE_VERSION" \
+            --fastlane-version "$IOS_SCREENSHOT_FASTLANE_VERSION" \
+            --node-version "$(node --version)"
+
+      - name: Upload failed iOS screenshot reducer evidence
+        if: ${{ always() && steps.reduce_screenshot_evidence.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshot-reducer-failure-${{ needs.preflight.outputs.checkout_revision }}
+          path: |
+            apps/ios/build/ScreenshotEvidenceInputs/**/screenshots/*.png
+            apps/ios/build/ScreenshotEvidenceInputs/**/xcresults/*.xcresult
+            apps/ios/build/ScreenshotEvidenceInputs/**/manifest.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload iOS release screenshot evidence
-        if: ${{ always() && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/*.xcresult
+            apps/ios/build/ScreenshotEvidence/manifest.json
           if-no-files-found: error
           retention-days: 14
 
@@ -3908,22 +4274,25 @@ jobs:
           exit 1
 
       - name: Checkout CI Android toolchain action
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          path: .ci-workflow
-          sparse-checkout: .github/actions/setup-android-toolchain
+          path: .ci-harness
+          sparse-checkout: .github/actions
           persist-credentials: false
 
       - name: Setup Android toolchain
         # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
         # workflow-owned as before. Load them from the workflow revision so old targets work.
-        uses: ./.ci-workflow/.github/actions/setup-android-toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
 
       - name: Setup Node environment for native resources
         if: needs.preflight.outputs.use_compatible_android_ci != 'true'
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
@@ -3935,7 +4304,7 @@ jobs:
       # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
       - name: Mount Gradle sticky disk
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
+        uses: useblacksmith/stickydisk@35ba2e331a80056a42af053ee54968511de2b7c7 # v1.5.0
         with:
           # One stable disk per matrix task. The v1 per-PR/per-dependency-hash
           # keys minted a new backing disk for every PR and dependency bump
@@ -4060,6 +4429,33 @@ jobs:
               ;;
           esac
 
+  docker-seed-e2e:
+    permissions:
+      contents: read
+    name: docker-seed-e2e
+    needs: [preflight]
+    if: needs.preflight.outputs.run_docker_seed_e2e == 'true'
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 60
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          node-version: "24.x"
+          install-bun: "false"
+          dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+
+      - name: Run changed Docker seed owner lanes
+        env:
+          OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
+          OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
+          OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1"
+          OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
+          OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
+        run: pnpm test:docker:all
+
   ci-gate:
     permissions:
       contents: read
@@ -4091,7 +4487,10 @@ jobs:
       - macos-node
       - macos-swift
       - ios-build
+      - ios-screenshot-shard
+      - ios-screenshot-evidence
       - android
+      - docker-seed-e2e
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -4127,7 +4526,10 @@ jobs:
             macos-node=${{ needs.macos-node.result }}
             macos-swift=${{ needs.macos-swift.result }}
             ios-build=${{ needs.ios-build.result }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}
             android=${{ needs.android.result }}
+            docker-seed-e2e=${{ needs.docker-seed-e2e.result }}
         run: |
           set -euo pipefail
 

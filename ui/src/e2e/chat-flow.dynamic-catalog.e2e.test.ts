@@ -115,7 +115,11 @@ suite.define(() => {
       const sessionListCount = (await gateway.getRequests("sessions.list")).length;
       await modelSelect.click();
       const modelsRequest = await gateway.waitForRequest("models.list");
-      expect(modelsRequest.params).toEqual({ view: "configured", agentId: "main" });
+      expect(modelsRequest.params).toEqual({
+        view: "configured",
+        agentId: "main",
+        refresh: true,
+      });
       const refreshedSessionsRequest = await gateway.waitForRequest("sessions.list", {
         after: sessionListCount,
       });

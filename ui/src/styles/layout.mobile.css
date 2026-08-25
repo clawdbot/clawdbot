@@ -176,7 +176,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .topnav-shell {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
   gap: 10px;
 }
 
@@ -520,10 +520,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
        on the scroll container floats macOS overlay scrollbars off the edge. */
     padding: 0 0 12px;
-  }
-
-  .chat-thread-inner {
-    width: calc(100% - 36px - 16px);
   }
 
   .chat-msg {

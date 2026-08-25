@@ -350,7 +350,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        guard fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+        guard stdinPipe.fileHandleForWriting.disableSIGPIPE() else {
             self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
             return
         }
@@ -383,7 +383,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         timer.resume()
 
         let configuration = Subprocess.Configuration(
-            .path(.init(executable)),
+            executable: .path(.init(executable)),
             arguments: Arguments(Array(command.dropFirst())),
             environment: ManagedProcess.environment(from: environment),
             workingDirectory: launch.currentDirectoryURL.map { .init($0.path) })

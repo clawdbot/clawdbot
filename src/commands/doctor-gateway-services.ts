@@ -26,9 +26,19 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
+import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
-import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-managed-env.js";
+import {
+  normalizeServiceEnvKey,
+  readManagedServiceEnvKeysFromEnvironment,
+} from "../daemon/service-managed-env.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import {
+  hasGatewayServiceEnvironmentOverride,
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceInstallArgs,
+} from "../daemon/service-types.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
   findSystemdGatewayInstallation,
@@ -40,7 +50,10 @@ import {
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
+import {
+  isGatewayHostServiceEnvironment,
+  NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON,
+} from "../infra/gateway-supervision.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -194,25 +207,6 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
   return programArguments[gatewayIndex - 1] ?? null;
 }
 
-function buildGatewayServiceRepairEnv(
-  command: GatewayServiceCommandConfig | null,
-): NodeJS.ProcessEnv {
-  const wrapperPath = command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  if (!wrapperPath || Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)) {
-    return process.env;
-  }
-  return {
-    ...process.env,
-    [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath,
-  };
-}
-
-function resolveGatewayServiceWrapperPath(
-  command: GatewayServiceCommandConfig | null,
-): string | null {
-  return normalizeOptionalString(command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]) ?? null;
-}
-
 async function buildExpectedGatewayServicePlan(params: {
   cfg: OpenClawConfig;
   command: GatewayServiceCommandConfig;
@@ -231,26 +225,6 @@ async function buildExpectedGatewayServicePlan(params: {
     warn: (message, title) => note(message, title),
     config: params.cfg,
   });
-}
-
-async function buildGatewayServiceAuditInputs(params: {
-  cfg: OpenClawConfig;
-  command: GatewayServiceCommandConfig;
-  serviceInstallEnv: NodeJS.ProcessEnv;
-}) {
-  const port = resolveGatewayPort(params.cfg, process.env);
-  const runtimeChoice = detectGatewayRuntime(params.command.programArguments);
-  const expectedPlan = await buildExpectedGatewayServicePlan({
-    cfg: params.cfg,
-    command: params.command,
-    serviceInstallEnv: params.serviceInstallEnv,
-    port,
-    runtime: runtimeChoice,
-  });
-  const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
-    expectedPlan.environment,
-  );
-  return { expectedManagedServiceEnvKeys, expectedPlan, port, runtimeChoice };
 }
 
 async function normalizeExecutablePath(value: string): Promise<string> {
@@ -272,6 +246,40 @@ function extractDetailPath(detail: string, prefix: string): string | null {
 
 function isExecStartRepairIssue(issue: { code: string }): boolean {
   return EXECSTART_REPAIR_CODES.has(issue.code);
+}
+
+function isOperatorOwnedEnvironmentIssue(
+  issue: { code: string; environmentKeys?: readonly string[] },
+  command: GatewayServiceCommandConfig,
+  environmentValueSources: GatewayServiceInstallArgs["environmentValueSources"],
+): boolean {
+  switch (issue.code) {
+    case SERVICE_AUDIT_CODES.gatewayPathMissing:
+    case SERVICE_AUDIT_CODES.gatewayPathMissingDirs:
+    case SERVICE_AUDIT_CODES.gatewayPathNonMinimal:
+      return hasGatewayServiceEnvironmentOverride(command, ["PATH"], { environmentValueSources });
+    case SERVICE_AUDIT_CODES.gatewayTokenEmbedded:
+    case SERVICE_AUDIT_CODES.gatewayTokenMismatch:
+    case SERVICE_AUDIT_CODES.gatewayTokenDrift:
+      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
+        environmentValueSources,
+      });
+    case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
+      return hasGatewayServiceEnvironmentOverride(command, issue.environmentKeys ?? [], {
+        environmentValueSources,
+        normalizeKey: normalizeServiceEnvKey,
+      });
+    case SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded:
+      return hasGatewayServiceEnvironmentOverride(
+        command,
+        (issue.environmentKeys ?? []).filter((key) =>
+          SERVICE_PROXY_ENV_KEYS.some((proxyKey) => proxyKey === key),
+        ),
+        { ignoreResets: true },
+      );
+    default:
+      return false;
+  }
 }
 
 function resolveSystemdScopeFromServicePath(sourcePath: string | undefined): SystemdUnitScope {
@@ -361,7 +369,7 @@ async function filterInactiveExtraGatewayServices(
 export async function detectExtraGatewayServiceIssues(
   options: Pick<DoctorOptions, "deep"> = {},
 ): Promise<readonly ExtraGatewayService[]> {
-  if (!isDefaultInstallIdentity(process.env)) {
+  if (!isDefaultInstallIdentity(process.env) || !isGatewayHostServiceEnvironment()) {
     return [];
   }
   const detectedExtraServices = await findExtraGatewayServices(process.env, {
@@ -569,12 +577,19 @@ export async function maybeRepairGatewayServiceConfig(
   if (!command) {
     return cfg;
   }
+  const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
     formatGatewayHeapLimitReport(inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS)),
     "Gateway heap",
   );
-  const serviceInstallEnv = buildGatewayServiceRepairEnv(command);
-  const serviceWrapperPath = resolveGatewayServiceWrapperPath(command);
+  const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
+  const serviceInstallEnv =
+    managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
+      ? { ...process.env, [OPENCLAW_WRAPPER_ENV_KEY]: managedWrapperPath }
+      : process.env;
+  const serviceWrapperPath = normalizeOptionalString(
+    command.environment?.[OPENCLAW_WRAPPER_ENV_KEY],
+  );
   if (serviceWrapperPath) {
     note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
   }
@@ -602,12 +617,18 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
-  const { expectedManagedServiceEnvKeys, expectedPlan, port, runtimeChoice } =
-    await buildGatewayServiceAuditInputs({
-      cfg,
-      command,
-      serviceInstallEnv,
-    });
+  const port = resolveGatewayPort(cfg, process.env);
+  const runtimeChoice = detectGatewayRuntime(managedDefinition.programArguments);
+  const expectedPlan = await buildExpectedGatewayServicePlan({
+    cfg,
+    command: managedDefinition,
+    serviceInstallEnv,
+    port,
+    runtime: runtimeChoice,
+  });
+  const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
+    expectedPlan.environment,
+  );
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
@@ -648,7 +669,7 @@ export async function maybeRepairGatewayServiceConfig(
     needsNodeRuntime && systemNodePath
       ? await buildExpectedGatewayServicePlan({
           cfg,
-          command,
+          command: managedDefinition,
           serviceInstallEnv,
           port,
           runtime: "node",
@@ -661,8 +682,8 @@ export async function maybeRepairGatewayServiceConfig(
   const normalizedExpectedEntrypoint = expectedEntrypoint
     ? await normalizeExecutablePath(expectedEntrypoint)
     : null;
-  const normalizedCurrentEntrypoint = currentEntrypoint
-    ? await normalizeExecutablePath(currentEntrypoint)
+  const normalizedCurrentEntrypoint = serviceLayout?.entrypoint
+    ? await normalizeExecutablePath(serviceLayout.entrypoint)
     : null;
   if (
     normalizedExpectedEntrypoint &&
@@ -734,6 +755,26 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
+  if (
+    process.platform === "linux" &&
+    audit.issues.some(
+      (issue) =>
+        (isExecStartRepairIssue(issue) && hasGatewayServiceLauncherOverride(command)) ||
+        (issue.code === SERVICE_AUDIT_CODES.gatewayPortMismatch &&
+          hasGatewayServiceLauncherOverride(command, { includeWorkingDirectory: false })) ||
+        isOperatorOwnedEnvironmentIssue(issue, command, expectedPlan.environmentValueSources),
+    )
+  ) {
+    const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
+    const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
+    const inspectCommand = `systemctl${scope === "user" ? " --user" : ""} cat ${unitName}`;
+    note(
+      `Gateway service command, working directory, or environment comes from an operator-owned systemd drop-in; rewriting the managed unit cannot repair it. Inspect with \`${inspectCommand}\`, then update or remove the drop-in and rerun doctor.`,
+      "Gateway service config",
+    );
+    return cfg;
+  }
+
   const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
   if (updateRepairMode && !updateParentAllowsGatewayServiceRepair(process.env)) {
     note(
@@ -749,7 +790,7 @@ export async function maybeRepairGatewayServiceConfig(
     })
   ) {
     note(
-      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
+      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to rewrite its managed unit; operator-owned drop-ins remain unchanged.",
       "Gateway service config",
     );
     return cfg;
@@ -782,7 +823,7 @@ export async function maybeRepairGatewayServiceConfig(
     }
     return cfg;
   }
-  const serviceEmbeddedToken = readEmbeddedGatewayToken(command);
+  const serviceEmbeddedToken = readEmbeddedGatewayToken(managedDefinition);
   const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
   const configuredGatewayToken =
     typeof cfg.gateway?.auth?.token === "string"
@@ -794,9 +835,10 @@ export async function maybeRepairGatewayServiceConfig(
   const updateRepairWillRewriteWindowsTask = updateRepairMode && process.platform === "win32";
   const serviceRuntimeEnv = {
     ...serviceInstallEnv,
-    ...command.environment,
+    ...managedDefinition.environment,
   };
-  const installedWindowsTaskName = command.environment?.OPENCLAW_WINDOWS_TASK_NAME?.trim();
+  const installedWindowsTaskName =
+    managedDefinition.environment?.OPENCLAW_WINDOWS_TASK_NAME?.trim();
   const serviceRepairEnv =
     updateRepairWillRewriteWindowsTask && installedWindowsTaskName
       ? {
@@ -891,7 +933,7 @@ export async function maybeRepairGatewayServiceConfig(
   const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
   const updatedPlan = await buildExpectedGatewayServicePlan({
     cfg: cfgForServiceInstall,
-    command,
+    command: managedDefinition,
     serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,

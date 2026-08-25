@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
-  DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
@@ -17,7 +16,6 @@ import {
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
-  resolveSearchCount,
   resolveSearchTimeoutSeconds,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
@@ -366,22 +364,13 @@ export async function executeKimiWebSearchProviderTool(
   }
 
   const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  void readPositiveIntegerParam(args, "count", {
+    max: MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+  });
   const model = resolveKimiModel(kimiConfig);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
-  const cacheKey = buildSearchCacheKey([
-    "kimi",
-    query,
-    resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-    baseUrl,
-    model,
-  ]);
+  const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, model]);
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
     return cached;

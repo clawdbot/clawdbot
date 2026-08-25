@@ -14,9 +14,11 @@ export const FIRST_USE_STATE_TABLES = [
   "cron_job_runtime_authorities",
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
+  "node_worker_launch_containers",
   "node_worker_launches",
   "operator_approval_execution_identities",
   "execution_decision_facts",
+  "execution_owner_lifecycle_bindings",
   "outbound_message_execution_bindings",
   "outbound_message_progress",
 ] as const;

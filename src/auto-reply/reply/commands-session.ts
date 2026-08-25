@@ -611,6 +611,13 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   if (!isRestartEnabled(params.cfg)) {
     return sessionCommandReply("⚠️ /restart is disabled (commands.restart=false).");
   }
+  // Restart tears this process down before the dispatch that carries /restart can
+  // return, so the durable ingress claim would still be held when admission closes.
+  // The drain then releases it without spending retry budget and the successor
+  // replays /restart forever. Adopt here: the command is not idempotent, so losing
+  // the acknowledgement beats an unbounded restart loop. Adoption loss throws,
+  // which correctly aborts the restart because another owner holds the event.
+  await params.opts?.turnAdoptionLifecycle?.onAdopted();
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {

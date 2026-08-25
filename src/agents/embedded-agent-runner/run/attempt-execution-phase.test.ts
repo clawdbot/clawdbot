@@ -103,7 +103,6 @@ function createFixture(
       allCustomTools: [{ name: "custom" }],
       builtinToolNames: new Set(["read"]),
       clientToolCallSlots: [],
-      clientToolLoopDetection: {},
       hasDeliveredSourceReply: vi.fn(() => false),
       hookRunner: {},
       markSourceReplyDelivered: vi.fn(),

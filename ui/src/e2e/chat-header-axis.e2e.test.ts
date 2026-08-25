@@ -66,14 +66,14 @@ suite.define(() => {
             nav: centerY(".chat-pane__nav-toggle svg"),
             projectIcon: centerY(".workspace-icon"),
             projectText: centerY(".chat-pane__workspace-chip span"),
-            search: centerY(".chat-pane__palette-open svg"),
+            menu: centerY(".chat-header-session-menu__trigger svg"),
             separator: centerY(".chat-pane__crumb-sep"),
             parentText: centerY(".chat-pane__parent-session-text"),
             sessionText: centerY(".chat-pane__session-title-text"),
           };
         });
 
-        expect(Math.abs(centers.search - centers.nav), JSON.stringify(centers)).toBeLessThanOrEqual(
+        expect(Math.abs(centers.menu - centers.nav), JSON.stringify(centers)).toBeLessThanOrEqual(
           0.1,
         );
         for (const center of [

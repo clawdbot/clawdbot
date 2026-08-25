@@ -496,6 +496,7 @@ describe("worker session tool topology", () => {
         sessionKey: SOURCE.sessionKey,
         executionIdentityToken: PARENT_EXECUTION_IDENTITY_TOKEN,
         operationalRunInstance: expect.objectContaining({ runId: sourceClaim.runId }),
+        receiptAuthority: expect.any(Function),
         workerTurnClaim: sourceClaim,
       }),
     );

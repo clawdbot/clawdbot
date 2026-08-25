@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -211,6 +212,7 @@ describe("doctor SQLite session transcript label migration", () => {
   });
 
   afterEach(async () => {
+    await waitForSessionTranscriptIndexReconcile({ agentId: AGENT_ID, env: state.env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
@@ -536,8 +538,9 @@ describe("doctor SQLite session transcript label migration", () => {
       );
 
     await runTranscriptLabelHealth(state, true);
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
 
-    // The rebuild (delete+reconcile) must re-derive the FTS timestamp from the row's own created_at,
+    // The deferred rebuild must re-derive the FTS timestamp from the row's own created_at,
     // NOT stamp Date.now(); otherwise every timestamp-less event's search recency resets on repair.
     expect(readFtsTimestamp()).toBe(OLD_CREATED_AT);
   });

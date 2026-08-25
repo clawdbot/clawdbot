@@ -182,7 +182,7 @@ describe("chat sidebar region", () => {
       Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Ctrl+`", "⇧⌘B"]);
+    ).toEqual(["Ctrl+`", "Ctrl+Shift+B"]);
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
@@ -229,7 +229,7 @@ describe("chat sidebar region", () => {
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review", "Terminal Ctrl+`", "Files ⇧⌘B", "Side chat"]);
+    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat"]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
   });
@@ -282,7 +282,7 @@ describe("chat sidebar region", () => {
     ).toEqual([
       "Terminal Ctrl+`",
       "Browser",
-      "Files ⇧⌘B",
+      "Files Ctrl+Shift+B",
       "Side chat",
       "Tasks",
       "Desktop",

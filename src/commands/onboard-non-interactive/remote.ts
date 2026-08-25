@@ -9,6 +9,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { createGatewayEnvSecretRef } from "../../secrets/ref-contract.js";
 import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
@@ -72,8 +73,22 @@ export async function runNonInteractiveRemoteSetup(params: {
       remote: {
         ...preservedRemote,
         url: remoteUrl,
-        ...(remoteToken ? { token: remoteToken } : {}),
-        ...(remotePassword ? { password: remotePassword } : {}),
+        ...(remoteToken
+          ? {
+              token:
+                opts.secretInputMode === "ref"
+                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_TOKEN")
+                  : remoteToken,
+            }
+          : {}),
+        ...(remotePassword
+          ? {
+              password:
+                opts.secretInputMode === "ref"
+                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_PASSWORD")
+                  : remotePassword,
+            }
+          : {}),
       },
     },
   };

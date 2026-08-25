@@ -67,6 +67,12 @@ export function toStaticCatalogEntry(model: ProviderRuntimeModel): ModelCatalogE
     ...(isCatalogModelApi(model.api) ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+    ...(model.contextWindows
+      ? {
+          contextWindows: model.contextWindows.map((option) => ({ ...option })),
+        }
+      : {}),
+    ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),
     ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
     ...(model.input ? { input: model.input } : {}),

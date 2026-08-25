@@ -75,7 +75,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     );
   });
 
-  it("reuses prepared plugin metadata when loading execution-workspace skills", () => {
+  it("reuses prepared plugin metadata for watcher reconciliation and skill loading", () => {
     const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
 
     resolveReusableWorkspaceSkillSnapshot({
@@ -89,6 +89,31 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(loadMergedWorkspaceSkillsMock.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(
       pluginMetadataSnapshot,
     );
+    expect(ensureSkillsWatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot }),
+    );
+  });
+
+  it("reuses complete cached snapshots for fresh sessions until the snapshot version changes", () => {
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "cached skills prompt",
+      skills: [{ name: "cached-skill" }],
+      resolvedSkills: [{ name: "cached-skill" }],
+    });
+    const params = { workspaceDir: TEST_WORKSPACE_DIR, config: {} };
+
+    const first = resolveReusableWorkspaceSkillSnapshot(params);
+    const second = resolveReusableWorkspaceSkillSnapshot(params);
+
+    expect(second.snapshot).toBe(first.snapshot);
+    expect(second.snapshot.prompt).toBe("cached skills prompt");
+    expect(second.snapshot.skills).toEqual([{ name: "cached-skill" }]);
+    expect(second.snapshot.resolvedSkills).toEqual([{ name: "cached-skill" }]);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+
+    getSkillsSnapshotVersionMock.mockReturnValue(2);
+    resolveReusableWorkspaceSkillSnapshot(params);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
   it("reuses cached resolvedSkills across calls with the same workspace, version, and filter", () => {

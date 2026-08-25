@@ -192,6 +192,76 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(catalogOptions?.timeoutMs).toBe(1234);
   });
 
+  it.each([
+    {
+      name: "maps live provider backend ids to owning plugin ids",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "claude-cli" },
+      owners: { providers: new Map([["claude-cli", ["anthropic"]]]) },
+      expected: ["anthropic"],
+    },
+    {
+      name: "honors gateway live provider filters",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_GATEWAY_PROVIDERS: "claude-cli" },
+      owners: { providers: new Map([["claude-cli", ["anthropic"]]]) },
+      expected: ["anthropic"],
+    },
+    {
+      name: "keeps explicit plugin-id filters when no owning provider plugin exists",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "openrouter" },
+      owners: {},
+      expected: ["openrouter"],
+    },
+    {
+      name: "maps live provider backend ids through plugin metadata cli backend owners",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "claude-cli" },
+      owners: { cliBackends: new Map([["claude-cli", ["anthropic"]]]) },
+      expected: ["anthropic"],
+    },
+    {
+      name: "normalizes mixed-case backend ids through plugin metadata owners",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "Claude-CLI" },
+      owners: { cliBackends: new Map([["claude-cli", ["anthropic"]]]) },
+      expected: ["anthropic"],
+    },
+    {
+      name: "does not resolve provider aliases through plugin metadata owners",
+      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "bytedance" },
+      owners: { providers: new Map([["volcengine", ["volcengine"]]]) },
+      expected: ["bytedance"],
+    },
+    {
+      name: "scopes normal startup discovery to requested provider owners",
+      env: {},
+      providerIds: ["openai"],
+      owners: { providers: new Map([["openai", ["openai"]]]) },
+      expected: ["openai"],
+    },
+    {
+      name: "maps mixed-case startup provider ids through model catalog owners",
+      env: {},
+      providerIds: ["OpenAI"],
+      owners: { modelCatalogProviders: new Map([["openai", ["codex"]]]) },
+      expected: ["codex"],
+    },
+  ])("$name", async ({ env, expected, owners, providerIds }) => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: { VITEST: "1", ...env },
+      explicitProviders: {},
+      pluginMetadataSnapshot: {
+        index: { plugins: [] } as never,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: metadataOwners(owners),
+      },
+      ...(providerIds ? { providerDiscoveryProviderIds: providerIds } : {}),
+    });
+
+    expect(
+      firstMockArg(mocks.resolveRuntimePluginDiscoveryProviders, "runtime plugin discovery"),
+    ).toMatchObject({ onlyPluginIds: expected });
+  });
+
   it("records an unavailable outcome when live catalog discovery times out", async () => {
     mocks.runProviderCatalog.mockImplementationOnce(() => new Promise<void>(() => {}));
     const outcomes: Array<{ provider: string; status: string }> = [];

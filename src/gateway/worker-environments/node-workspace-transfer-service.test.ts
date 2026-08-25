@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { createGatewayHttpServer } from "../server-http.js";
 import { createNodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
@@ -113,6 +114,79 @@ function retryOrUploadStatus(retryStarted: Promise<void>, upload: Promise<unknow
 }
 
 describe("node workspace transfer service", () => {
+  it("keeps a plain workspace transferable after durable result staging initializes Git", async () => {
+    const root = tempDirs.make("node-workspace-transfer-unborn-git-");
+    const localPath = path.join(root, "workspace");
+    await fs.mkdir(localPath);
+    await fs.writeFile(path.join(localPath, "input.txt"), "gateway input\n");
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: "session-unborn",
+        },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: ["session-unborn"],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+      temporaryRoot: path.join(root, "transfer-tmp"),
+    });
+    const request = {
+      environmentId: "environment-unborn",
+      ownerEpoch: 1,
+      sessionId: "session-unborn",
+      localPath,
+      isAuthorized: () => true,
+    };
+    const git = async (...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", "-C", localPath, ...args], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code).toBe(0);
+      return result.stdout.trim();
+    };
+    try {
+      const plain = await service.prepareSync({ ...request, generation: 1 });
+      expect(plain.snapshot.manifest.baseCommit).toBeNull();
+
+      await git("init", "--quiet", "--object-format=sha1");
+
+      const staged = await service.prepareSync({ ...request, generation: 2 });
+      expect(staged.snapshot.manifest.baseCommit).toBeNull();
+      expect(staged.snapshot.packPath).toBeUndefined();
+      expect(staged.snapshot.manifestRef).toBe(plain.snapshot.manifestRef);
+      expect(staged.snapshot.manifest.entries).toContainEqual(
+        expect.objectContaining({ path: "input.txt", type: "file" }),
+      );
+
+      await git("add", "input.txt");
+      await git(
+        "-c",
+        "user.name=Worker Transfer Test",
+        "-c",
+        "user.email=worker-transfer@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "tracked workspace",
+      );
+      const committed = await service.prepareSync({ ...request, generation: 3 });
+      expect(committed.snapshot.manifest.baseCommit).toBe(await git("rev-parse", "HEAD"));
+      expect(committed.snapshot.packPath).toBeDefined();
+
+      await fs.writeFile(path.join(localPath, ".git", "HEAD"), "invalid HEAD\n");
+      await expect(service.prepareSync({ ...request, generation: 4 })).rejects.toThrow(
+        "Worker workspace sync failed",
+      );
+    } finally {
+      await service.closeAll();
+    }
+  });
+
   it("streams a plain workspace to the node and accepts only its changed result blobs", async () => {
     const root = tempDirs.make("node-workspace-transfer-service-");
     const localPath = path.join(root, "gateway-workspace");

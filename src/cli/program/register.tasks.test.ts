@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../failure-output.js";
 import { registerTasksCommand } from "./register.tasks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -82,10 +83,14 @@ describe("registerTasksCommand", () => {
   });
 
   it("rejects inherited mutation options before loading task or flow owners", async () => {
-    await runCli(["tasks", "--json", "cancel", "task-123"]);
+    await expect(runCli(["tasks", "--json", "cancel", "task-123"])).rejects.toBeInstanceOf(
+      ExpectedCliError,
+    );
     expect(mocks.tasksModuleLoaded).not.toHaveBeenCalled();
 
-    await runCli(["tasks", "--json", "flow", "cancel", "flow-123"]);
+    await expect(runCli(["tasks", "--json", "flow", "cancel", "flow-123"])).rejects.toBeInstanceOf(
+      ExpectedCliError,
+    );
     expect(mocks.flowsModuleLoaded).not.toHaveBeenCalled();
   });
 
@@ -99,7 +104,38 @@ describe("registerTasksCommand", () => {
     });
   });
 
+  it("advertises the displayed blocked status on the root and list commands", () => {
+    const program = new Command();
+    registerTasksCommand(program);
+    const tasks = program.commands.find((command) => command.name() === "tasks");
+    const list = tasks?.commands.find((command) => command.name() === "list");
+
+    for (const command of [tasks, list]) {
+      expect(command?.options.find((option) => option.long === "--status")?.description).toContain(
+        "blocked",
+      );
+    }
+  });
+
   it.each([
+    {
+      label: "blocked status on the bare task list",
+      args: ["tasks", "--status", "blocked"],
+      handler: mocks.tasksListCommand,
+      expected: { json: false, status: "blocked" },
+    },
+    {
+      label: "blocked status before the task list leaf",
+      args: ["tasks", "--status", "blocked", "list"],
+      handler: mocks.tasksListCommand,
+      expected: { json: false, status: "blocked" },
+    },
+    {
+      label: "blocked status after the task list leaf",
+      args: ["tasks", "list", "--status", "blocked"],
+      handler: mocks.tasksListCommand,
+      expected: { json: false, status: "blocked" },
+    },
     {
       label: "task list options before the leaf",
       args: ["tasks", "--json", "--runtime", "acp", "--status", "running", "list"],
@@ -214,12 +250,14 @@ describe("registerTasksCommand", () => {
   });
 
   it("rejects partially numeric task audit limits before owner action", async () => {
-    await runCli(["tasks", "audit", "--limit", "5abc"]);
+    const execution = runCli(["tasks", "audit", "--limit", "5abc"]);
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toThrow(
       "--limit must be a positive integer, for example --limit 25.",
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     expect(mocks.tasksAuditCommand).not.toHaveBeenCalled();
   });
 
@@ -280,10 +318,12 @@ describe("registerTasksCommand", () => {
       flag: "--json",
     },
   ])("rejects $label before owner action", async ({ args, flag }) => {
-    await runCli(args);
+    const execution = runCli(args);
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(flag));
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({ message: expect.stringContaining(flag) });
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     for (const handler of ownerHandlers) {
       expect(handler).not.toHaveBeenCalled();
     }
@@ -299,9 +339,10 @@ describe("registerTasksCommand", () => {
       error: "`tasks cancel` does not support inherited options --json, --runtime.",
     },
   ])("lists only explicitly supplied unsupported flags", async ({ args, error }) => {
-    await runCli(args);
+    await expect(runCli(args)).rejects.toThrow(error);
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(error);
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     for (const handler of ownerHandlers) {
       expect(handler).not.toHaveBeenCalled();
     }
@@ -320,11 +361,14 @@ describe("registerTasksCommand", () => {
   });
 
   it("rejects an invalid notify policy before owner action", async () => {
-    await runCli(["tasks", "notify", "run-123", "sometimes"]);
+    const execution = runCli(["tasks", "notify", "run-123", "sometimes"]);
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toThrow(
       "Notify policy must be done_only, state_changes, or silent.",
     );
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     expect(mocks.tasksNotifyCommand).not.toHaveBeenCalled();
   });
 

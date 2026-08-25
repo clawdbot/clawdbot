@@ -47,6 +47,8 @@ export const ConnectParamsSchema = closedObject({
     platform: NonEmptyString,
     deviceFamily: Type.Optional(NonEmptyString),
     modelIdentifier: Type.Optional(NonEmptyString),
+    /** Self-reported IANA zone. Bounded because the longest real name is well under this cap. */
+    timeZone: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
     mode: GatewayClientModeSchema,
     instanceId: Type.Optional(NonEmptyString),
   }),
@@ -90,6 +92,7 @@ export const HelloOkSchema = closedObject({
   server: closedObject({
     version: NonEmptyString,
     buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     controlUiBuildSource: Type.Optional(
       Type.Union([Type.Literal("bundled"), Type.Literal("configured")]),
     ),

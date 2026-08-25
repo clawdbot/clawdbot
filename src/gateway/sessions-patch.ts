@@ -40,6 +40,10 @@ import type {
   InternalSessionEntry as SessionEntry,
   SessionToolOverrides,
 } from "../config/sessions.js";
+import {
+  buildSessionCreationStamp,
+  type SessionCreatedVia,
+} from "../config/sessions/session-entry-provenance.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -77,6 +81,7 @@ import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
@@ -117,18 +122,16 @@ export function resolveSessionPatchModelSelection(params: {
 
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return undefined;
+  return normalized === "deny" || normalized === "allowlist" || normalized === "full"
+    ? normalized
+    : undefined;
 }
 
 function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized;
-  }
-  return undefined;
+  return normalized === "off" || normalized === "on-miss" || normalized === "always"
+    ? normalized
+    : undefined;
 }
 
 function normalizeSessionToolOverrides(
@@ -166,6 +169,7 @@ function normalizeSessionToolOverrides(
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   existingEntry?: SessionEntry;
   isLabelInUse: (label: string) => boolean;
   storeKey: string;
@@ -177,7 +181,7 @@ export async function projectSessionsPatchEntry(params: {
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const { cfg, storeKey, patch } = params;
+  const { cfg, storeKey, patch, creation } = params;
   const authorizedHarnessCreation =
     params.existingEntry === undefined &&
     isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
@@ -244,20 +248,16 @@ export async function projectSessionsPatchEntry(params: {
     return loadedModelCatalog;
   };
 
-  const existing = params.existingEntry
-    ? projectCanonicalSessionEntryShape({ ...params.existingEntry })
-    : undefined;
+  const existing =
+    params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
-  const next: SessionEntry = existing?.sessionId
-    ? {
-        ...existing,
-        updatedAt: Math.max(existing.updatedAt ?? 0, now),
-      }
-    : {
-        ...existing,
-        sessionId: randomUUID(),
-        updatedAt: Math.max(existing?.updatedAt ?? 0, now),
-      };
+  const next: SessionEntry = {
+    ...existing,
+    sessionId: existing?.sessionId || randomUUID(),
+    updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
+    ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
+  };
   if (existing && !existing.sessionId) {
     delete next.label;
     delete next.category;
@@ -552,12 +552,14 @@ export async function projectSessionsPatchEntry(params: {
   }
 
   if ("execNode" in patch) {
-    const raw = patch.execNode;
-    if (raw === null) {
+    if (patch.execNode === null) {
       delete next.execNode;
       delete next.execCwd;
-    } else if (raw !== undefined) {
-      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (next.execHost === "node") {
+        delete next.execHost;
+      }
+    } else if (patch.execNode !== undefined) {
+      const trimmed = normalizeOptionalString(patch.execNode) ?? "";
       if (!trimmed) {
         return invalid("invalid execNode: empty");
       }
@@ -691,6 +693,17 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  const contextWindowPatch = await applySessionContextWindowPatch({
+    defaultModel: resolvedDefault.model,
+    defaultProvider: resolvedDefault.provider,
+    loadModelCatalog: loadPreparedModelCatalogForPatch,
+    next,
+    patch,
+  });
+  if (!contextWindowPatch.ok) {
+    return invalid(contextWindowPatch.error);
+  }
+
   // A thinkingLevel change made on its own (no model switch) never touches the
   // agent-patch revert marker, so realign its restore target with the user's
   // newer choice; otherwise a later model-failure revert clobbers it.
@@ -700,6 +713,13 @@ export async function projectSessionsPatchEntry(params: {
     next.modelFallback?.source === "agent-patch"
   ) {
     next.modelFallback.prevThinkingLevel = next.thinkingLevel;
+  }
+  if (
+    "contextWindow" in patch &&
+    !("model" in patch) &&
+    next.modelFallback?.source === "agent-patch"
+  ) {
+    next.modelFallback.prevContextWindow = next.contextWindow;
   }
 
   if ("sendPolicy" in patch) {

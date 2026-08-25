@@ -1,4 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 // Tracks heartbeat wake requests, busy skips, and retry timing.
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
@@ -111,6 +113,7 @@ export const HEARTBEAT_IDLE_RETRY_GRACE_MS = 60_000;
 // Heartbeat turns can start model/provider work; bound cross-target fan-out so
 // one aligned monitor tick cannot exhaust gateway or provider capacity.
 const MAX_CONCURRENT_HEARTBEAT_WAKE_TARGETS = 4;
+const wakeLog = createSubsystemLogger("heartbeat/wake");
 const REASON_PRIORITY = {
   RETRY: 0,
   INTERVAL: 1,
@@ -215,7 +218,7 @@ function mergePendingWakeReasons(
   return merged;
 }
 
-function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGroup[] {
+function takePendingWakeBatch(maxGroups: number, now = performance.now()): ReadyWakeGroup[] {
   if (maxGroups <= 0) {
     return [];
   }
@@ -359,7 +362,7 @@ function queuePendingWakeReason(params: {
   blockTargetUntilMs?: number;
   retainedWork?: boolean;
 }) {
-  const requestedAt = params.requestedAt ?? Date.now();
+  const requestedAt = params.requestedAt ?? performance.now();
   const enqueueSequence = params.enqueueSequence ?? ++wakeEnqueueSequence;
   const normalizedReason = normalizeWakeReason(params.reason);
   const normalizedAgentId = normalizeHeartbeatWakeTarget(params.agentId);
@@ -440,7 +443,7 @@ function retryPendingWake(
 ) {
   // A thrown or busy wake owns only its target; replaying the whole batch
   // duplicates completed reminders and stalls unrelated agents.
-  const retryAtMs = Date.now() + retrySchedule.delayMs;
+  const retryAtMs = performance.now() + retrySchedule.delayMs;
   queuePendingWakeReason({
     source: pendingWake.source,
     intent: pendingWake.intent,
@@ -508,6 +511,10 @@ async function dispatchPendingWakeGroup(params: {
         result = await runWithGatewayIndependentRootWorkAdmission(async () =>
           runAbortableHeartbeatWake(active, wakeOpts, abortSignal),
         );
+        wakeLog.debug(
+          `completed: source=${pendingWake.source} intent=${pendingWake.intent} ` +
+            `status=${result.status} reason=${"reason" in result ? result.reason : "ran"}`,
+        );
       } catch {
         if (handlerGeneration !== generation) {
           handOffPendingWakeBatch(wakes, wakeIndex);
@@ -539,24 +546,8 @@ async function dispatchPendingWakeGroup(params: {
           pendingWake.intent === "immediate")
       ) {
         // Retain real task/event work until its spacing guard allows a retry.
-        const retryAtMs = Math.max(Date.now(), result.retryAtMs ?? Date.now() + DEFAULT_RETRY_MS);
-        queuePendingWakeReason({
-          source: pendingWake.source,
-          intent: pendingWake.intent,
-          reason: pendingWake.reason ?? "retry",
-          agentId: pendingWake.agentId,
-          sessionKey: pendingWake.sessionKey,
-          heartbeat: pendingWake.heartbeat,
-          tasks: pendingWake.tasks,
-          scheduledEveryMs: pendingWake.scheduledEveryMs,
-          scheduledAnchorMs: pendingWake.scheduledAnchorMs,
-          requestedAt: pendingWake.requestedAt,
-          enqueueSequence: pendingWake.enqueueSequence,
-          immediateBarrierSequence: pendingWake.immediateBarrierSequence,
-          notBeforeMs: retryAtMs,
-          retainedWork: true,
-        });
-        schedule(retryAtMs - Date.now());
+        const { delayMs } = resolveHeartbeatRetrySchedule(pendingWake, result);
+        retryPendingWake(pendingWake, { delayMs, deferWakeOnly: true });
       }
     }
   } finally {
@@ -574,7 +565,7 @@ async function dispatchPendingWakeGroup(params: {
 
 function schedule(coalesceMs: number) {
   const delay = resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0);
-  const dueAt = Date.now() + delay;
+  const dueAt = performance.now() + delay;
   if (timer) {
     // If existing timer fires sooner or at the same time, keep it.
     if (typeof timerDueAt === "number" && timerDueAt <= dueAt) {
@@ -626,7 +617,7 @@ function schedulePendingWakes(readyDelayMs: number) {
     // would spin zero-delay timers while every provider slot remains busy.
     return;
   }
-  const now = Date.now();
+  const now = performance.now();
   if (
     activeWakeTargets.has(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) ||
     (activeWakeTargets.size > 0 &&
@@ -757,20 +748,18 @@ export function requestHeartbeat(opts: {
   scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
 }) {
-  const requestedAt = Date.now();
-  const coalesceMs = opts.coalesceMs ?? DEFAULT_COALESCE_MS;
-  queuePendingWakeReason({
-    source: opts.source,
-    intent: opts.intent,
-    reason: opts.reason,
-    agentId: opts.agentId,
-    sessionKey: opts.sessionKey,
-    heartbeat: opts.heartbeat,
-    scheduledEveryMs: opts.scheduledEveryMs,
-    scheduledAnchorMs: opts.scheduledAnchorMs,
-    tasks: opts.tasks,
-    requestedAt,
-    readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
+  const requestedAt = performance.now();
+  const { coalesceMs: requestedCoalesceMs, ...wake } = opts;
+  const coalesceMs = requestedCoalesceMs ?? DEFAULT_COALESCE_MS;
+  // Wake timers outlive the attempt that requested them. Do not let their
+  // callback chain inherit that attempt's transcript writer: a later wake for
+  // the same session must acquire its own writer lifecycle.
+  runWithoutOwnedSessionTranscriptWrites(() => {
+    queuePendingWakeReason({
+      ...wake,
+      requestedAt,
+      readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
+    });
+    schedule(coalesceMs);
   });
-  schedule(coalesceMs);
 }

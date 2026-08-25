@@ -94,6 +94,7 @@ const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
   cancellation: "aborted",
   failure: "error",
 } as const;
+const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
 
 function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
   switch (value) {
@@ -601,6 +602,7 @@ export function createAgentEventHandler({
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
                   lastRunError: row.lastRunError,
+                  lastRunId: row.lastRunId,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
@@ -628,6 +630,8 @@ export function createAgentEventHandler({
       : {};
     const clearsLastRunError =
       Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
+    const clearsLastRunId =
+      Object.hasOwn(lifecyclePatch, "lastRunId") && lifecyclePatch.lastRunId === undefined;
     const projectedRow = row
       ? lifecycleProjection
         ? buildGatewaySessionEventRow(row, { lifecycle: true })
@@ -638,9 +642,10 @@ export function createAgentEventHandler({
           ...projectedRow,
           ...lifecyclePatch,
           ...activeRunFields,
-          // JSON drops undefined values, so a start/success must send null to
-          // evict a prior failure reason from the subscribed client row.
+          // JSON drops undefined values, so starts/successes need tombstones
+          // for terminal fields retained in the subscribed client row.
           ...(clearsLastRunError ? { lastRunError: null } : {}),
+          ...(clearsLastRunId ? { lastRunId: null } : {}),
         }
       : undefined;
     if (session && omitUnscopedGlobalGoal) {
@@ -896,7 +901,10 @@ export function createAgentEventHandler({
         const persistence = persistGatewaySessionLifecycleEventForEvent({
           sessionKey,
           agentId: sessionAgentId,
-          event: evt,
+          event: {
+            ...evt,
+            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
+          },
         });
         trackTrackedRunTerminalPersistence?.({
           runId: evt.runId,
@@ -1398,7 +1406,9 @@ export function createAgentEventHandler({
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
-    const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
+    const restartRecoverySessionKey = RESTART_RECOVERY_LIFECYCLE_PHASES.has(lifecyclePhase ?? "")
+      ? (eventSessionKey ?? sessionKey)
+      : undefined;
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
@@ -1510,7 +1520,13 @@ export function createAgentEventHandler({
       chatLink &&
       isControlUiVisible &&
       !isAborted &&
-      ((isToolEvent && !suppressHeartbeatToolEvents) || isItemEvent)
+      ((isToolEvent && !suppressHeartbeatToolEvents) ||
+        isItemEvent ||
+        evt.stream === "notice" ||
+        typeof evt.data?.reviewId === "string" ||
+        evt.data?.phase === "started" ||
+        evt.data?.phase === "completed" ||
+        evt.data?.phase === "warning")
     ) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
@@ -1767,7 +1783,10 @@ export function createAgentEventHandler({
       void persistGatewaySessionLifecycleEventForEvent({
         sessionKey,
         agentId: sessionAgentId,
-        event: evt,
+        event: {
+          ...evt,
+          ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
+        },
       }).catch((err: unknown) => {
         // Surface the swallowed start-phase persistence failure: a silent write
         // failure drops the run's start marker from restart-recovery accounting

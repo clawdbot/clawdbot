@@ -15,6 +15,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -410,8 +411,9 @@ fun OnboardingFlow(
   modifier: Modifier = Modifier,
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val gatewayAccentArgb by viewModel.gatewayAccentArgb.collectAsState()
   val onboardingDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
-  ClawDesignTheme(dark = onboardingDark) {
+  ClawDesignTheme(dark = onboardingDark, accentArgb = gatewayAccentArgb) {
     val context = LocalContext.current
     val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
     val statusText = gatewayConnectionDisplay.statusText
@@ -3221,6 +3223,7 @@ private fun rememberPermissionState(
         }
       motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
       smsGranted =
+        !smsAvailable ||
         mergedRequiredPermissionGrantState(
           permissions = permissions,
           requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
@@ -3308,6 +3311,16 @@ private fun rememberPermissionState(
       },
     )
 
+  val requestedLocationMode =
+    locationModeAfterBackgroundSettings(
+      previousMode = currentLocationMode.takeUnless { it == LocationMode.Off } ?: LocationMode.WhileUsing,
+      foregroundGranted = locationGranted,
+      backgroundGranted =
+        currentLocationMode == LocationMode.Always &&
+          SensitiveFeatureConfig.backgroundLocationEnabled &&
+          hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+    )
+
   return PermissionState(
     rows = rows,
     requiresNodeApprovalAfterApply =
@@ -3315,13 +3328,13 @@ private fun rememberPermissionState(
         currentCameraEnabled = currentCameraEnabled,
         requestedCameraEnabled = cameraGranted,
         currentLocationMode = currentLocationMode,
-        requestedLocationMode = if (locationGranted) LocationMode.WhileUsing else LocationMode.Off,
+        requestedLocationMode = requestedLocationMode,
         currentSmsGranted = currentSmsGranted,
         requestedSmsGranted = smsGranted,
       ),
     applyToViewModel = {
       viewModel.setCameraEnabled(cameraGranted)
-      viewModel.setLocationMode(if (locationGranted) LocationMode.WhileUsing else LocationMode.Off)
+      viewModel.setLocationMode(requestedLocationMode)
       viewModel.setNotificationForwardingEnabled(notificationListenerGranted)
     },
   )
