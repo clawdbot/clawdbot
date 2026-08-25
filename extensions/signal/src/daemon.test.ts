@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertSignalDaemonEndpointAvailable, spawnSignalDaemon } from "./daemon.js";
+import {
+  assertSignalDaemonEndpointAvailable,
+  spawnSignalDaemon,
+  spawnSignalJsonRpcProcess,
+} from "./daemon.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const ensurePortAvailableMock = vi.hoisted(() => vi.fn());
@@ -25,12 +29,14 @@ function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
     killed: boolean;
+    stdin: PassThrough;
     stdout: PassThrough;
     stderr: PassThrough;
     kill: ReturnType<typeof vi.fn>;
   };
   child.pid = 1234;
   child.killed = false;
+  child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.kill = vi.fn(() => true);
@@ -48,12 +54,34 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  child.stdin.end();
   child.stdout.end();
   child.stderr.end();
   child.removeAllListeners();
 });
 
 describe("spawnSignalDaemon", () => {
+  it("owns setup JSON-RPC through the child pipes", () => {
+    const process = spawnSignalJsonRpcProcess({
+      cliPath: "signal-cli",
+      configPath: "~/.openclaw/signal-cli",
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "signal-cli",
+      [
+        "--config",
+        path.join(os.homedir(), ".openclaw/signal-cli"),
+        "jsonRpc",
+        "--receive-mode",
+        "manual",
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    expect(process.stdin).toBe(child.stdin);
+    expect(process.stdout).toBe(child.stdout);
+  });
+
   it("rejects an occupied managed endpoint with actionable port guidance", async () => {
     const listener = createServer();
     await new Promise<void>((resolve, reject) => {
@@ -105,6 +133,7 @@ describe("spawnSignalDaemon", () => {
       configPath: "~/.openclaw/signal-cli",
       httpHost: "127.0.0.1",
       httpPort: 8080,
+      receiveMode: "manual",
     });
 
     expect(spawnMock).toHaveBeenCalledWith(
@@ -116,6 +145,8 @@ describe("spawnSignalDaemon", () => {
         "--http",
         "127.0.0.1:8080",
         "--no-receive-stdout",
+        "--receive-mode",
+        "manual",
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );

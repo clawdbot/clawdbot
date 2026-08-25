@@ -40,6 +40,7 @@ import { normalizeSignalTransportHost, normalizeSignalTransportUrl } from "./tra
 const t = createSetupTranslator();
 
 const channel = "signal" as const;
+export const SIGNAL_LINK_COMPLETED_CREDENTIAL = "signalLinkCompleted";
 
 const signalSetupFields = {
   signalNumber: {
@@ -297,6 +298,9 @@ export const signalNumberTextInput: ChannelSetupWizardTextInput = {
   validate: ({ value }) =>
     normalizeSignalAccountInput(value) ? undefined : INVALID_SIGNAL_ACCOUNT_ERROR,
   normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
+  shouldPrompt: ({ credentialValues }) =>
+    credentialValues[SIGNAL_LINK_COMPLETED_CREDENTIAL] !== "true",
+  applyCurrentValue: true,
 };
 
 export const signalCompletionNote = {
@@ -307,6 +311,8 @@ export const signalCompletionNote = {
     `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
     `Docs: ${formatDocsLink("/signal", "signal")}`,
   ],
+  shouldShow: ({ credentialValues }: { credentialValues: Record<string, string | undefined> }) =>
+    credentialValues[SIGNAL_LINK_COMPLETED_CREDENTIAL] !== "true",
 };
 
 const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput>({

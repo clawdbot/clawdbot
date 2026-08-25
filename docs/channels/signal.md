@@ -37,13 +37,16 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
     ```bash
     openclaw channels add
     ```
-    The wizard detects whether `signal-cli` is on `PATH` and, when missing, offers to install it: downloads the official native GraalVM build on Linux x86-64, or installs via Homebrew on macOS and other architectures. It then prompts for the bot number and `signal-cli` path.
+    The wizard detects whether `signal-cli` is on `PATH` and, when missing, offers to install it: downloads the official native GraalVM build on Linux x86-64, or installs via Homebrew on macOS and other architectures.
+
+    A hosted setup client with QR support can link the first managed-native Signal account directly. Scan the displayed QR in Signal; setup records the linked number without another number prompt. CLI setup, additional accounts, relinking, external daemons, and containers keep the manual flow below.
 
     For non-interactive setup, `openclaw channels add --channel signal` also accepts `--signal-number <e164>` for the bot phone number, plus `--http-host <host>` and `--http-port <port>` for the Signal daemon endpoint (default `127.0.0.1:8080`).
 
   </Step>
   <Step title="Link or register the account">
-    - **QR link (fastest):** `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
+    - **Hosted QR link (fastest):** if setup displayed a QR and confirmed the account, continue to verification.
+    - **Manual QR link:** otherwise run `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
     - **SMS registration:** dedicated number with captcha + SMS verification. See [Path B](#setup-path-b-register-dedicated-bot-number-sms-linux).
 
   </Step>
@@ -91,9 +94,10 @@ Multi-account support: use `channels.signal.accounts` with per-account config an
 
 ## Setup path A: link existing Signal account (QR)
 
-1. Install `signal-cli` (JVM or native build), or let `openclaw channels add` install it for you.
-2. Link a bot account: `signal-cli link -n "OpenClaw"`, then scan the QR in Signal.
-3. Configure Signal and start the gateway.
+1. Install `signal-cli` (JVM or native build), or let setup install it for you.
+2. In a hosted setup client that displays the first-account QR, scan it in Signal under **Settings > Linked devices**, then continue.
+3. For CLI setup, additional accounts, relinking, external daemons, or containers, run `signal-cli link -n "OpenClaw"` and scan the terminal QR instead.
+4. Configure Signal and start the gateway.
 
 ## Setup path B: register dedicated bot number (SMS, Linux)
 

@@ -40,6 +40,11 @@ type SignalDaemonExitEvent = {
   signal: NodeJS.Signals | null;
 };
 
+export type SignalJsonRpcProcess = SignalDaemonHandle & {
+  stdin: NodeJS.WritableStream;
+  stdout: NodeJS.ReadableStream;
+};
+
 export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
   return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
 }
@@ -200,15 +205,14 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   return args;
 }
 
-export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
-  const args = buildDaemonArgs(opts);
-  // The executable is operator-selected or setup-discovered signal-cli.
-  // Runtime message content only flows through the daemon HTTP API, not argv.
-  const child = spawn(opts.cliPath, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const log = opts.runtime?.log ?? (() => {});
-  const error = opts.runtime?.error ?? (() => {});
+function bindSignalProcess(params: {
+  child: ReturnType<typeof spawn>;
+  runtime?: RuntimeEnv;
+  bindStdout: boolean;
+}): SignalDaemonHandle {
+  const { child } = params;
+  const log = params.runtime?.log ?? (() => {});
+  const error = params.runtime?.error ?? (() => {});
   let exited = false;
   let settledExit = false;
   let stopPromise: Promise<void> | undefined;
@@ -225,7 +229,9 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     resolveExit(value);
   };
 
-  bindSignalCliOutput({ stream: child.stdout, log, error });
+  if (params.bindStdout) {
+    bindSignalCliOutput({ stream: child.stdout, log, error });
+  }
   bindSignalCliOutput({ stream: child.stderr, log, error });
   child.once("exit", (code, signal) => {
     settleExit({
@@ -294,4 +300,31 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
       return stopPromise;
     },
   };
+}
+
+export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
+  // The executable is operator-selected or setup-discovered signal-cli.
+  // Runtime message content only flows through the daemon HTTP API, not argv.
+  const child = spawn(opts.cliPath, buildDaemonArgs(opts), {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return bindSignalProcess({ child, runtime: opts.runtime, bindStdout: true });
+}
+
+export function spawnSignalJsonRpcProcess(opts: {
+  cliPath: string;
+  configPath?: string;
+  runtime?: RuntimeEnv;
+}): SignalJsonRpcProcess {
+  const args: string[] = [];
+  if (opts.configPath?.trim()) {
+    args.push("--config", resolveSignalCliConfigPath(opts.configPath));
+  }
+  args.push("jsonRpc", "--receive-mode", "manual");
+  const child = spawn(opts.cliPath, args, { stdio: ["pipe", "pipe", "pipe"] });
+  const handle = bindSignalProcess({ child, runtime: opts.runtime, bindStdout: false });
+  if (!child.stdin || !child.stdout) {
+    throw new Error("signal-cli jsonRpc pipes unavailable");
+  }
+  return { ...handle, stdin: child.stdin, stdout: child.stdout };
 }
