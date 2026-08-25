@@ -204,6 +204,7 @@ describe("CronService startup catch-up repair scoping", () => {
     const requestHeartbeat = vi.fn(
       (request: { source?: string; intent?: string; reason?: string }) => {
         if (
+          order.at(-1) === "notify" &&
           request.source === "notifications-event" &&
           request.intent === "immediate" &&
           request.reason === "wake"
