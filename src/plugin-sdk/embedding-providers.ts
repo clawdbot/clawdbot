@@ -7,6 +7,8 @@ export {
 } from "../plugins/embedding-provider-runtime.js";
 
 export type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
   EmbeddingInput,
   EmbeddingProvider,
   EmbeddingProviderAdapter,

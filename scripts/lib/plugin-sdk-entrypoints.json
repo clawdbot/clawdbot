@@ -85,6 +85,7 @@
   "media-store",
   "media-mime",
   "embedding-providers",
+  "embedding-provider-runtime-contract",
   "media-generation-runtime",
   "conversation-binding-inspection-runtime",
   "conversation-binding-runtime",

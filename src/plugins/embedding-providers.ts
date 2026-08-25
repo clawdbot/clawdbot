@@ -11,6 +11,8 @@ import {
 } from "./runtime.js";
 
 export type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
   EmbeddingInput,
   EmbeddingProvider,
   EmbeddingProviderAdapter,

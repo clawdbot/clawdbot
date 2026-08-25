@@ -143,9 +143,11 @@ is the generic embedding surface for reusable vector generation. Memory search
 consumes this generic provider surface. The older memory-specific registrar and
 manifest contract were removed after their August 2026 migration window.
 
-Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
-the existing per-file batching contract unless their runtime explicitly sets
-`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+Embedding providers that expose a runtime `batchEmbed(...)` stay on the
+existing per-file memory-index batching contract unless their runtime explicitly
+sets `sourceWideBatchEmbed: true`. Provider plugins can type that runtime through
+`openclaw/plugin-sdk/embedding-provider-runtime-contract`. That opt-in lets the
+memory host submit chunks from
 multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
 to the host batch limits. Batch adapters that upload JSONL request files must
 split provider jobs before their upload-size cap as well as their request-count

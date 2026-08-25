@@ -700,6 +700,10 @@
     "./plugin-sdk/embedding-providers": {
       "default": "./dist/plugin-sdk/embedding-providers.js"
     },
+    "./plugin-sdk/embedding-provider-runtime-contract": {
+      "types": "./dist/plugin-sdk/embedding-provider-runtime-contract.d.ts",
+      "default": "./dist/plugin-sdk/embedding-provider-runtime-contract.js"
+    },
     "./plugin-sdk/media-generation-runtime": {
       "default": "./dist/plugin-sdk/media-generation-runtime.js"
     },

@@ -577,6 +577,14 @@ describe("collectForbiddenPackPaths", () => {
     }
   });
 
+  it("keeps typed public plugin SDK artifacts included in package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+
+    for (const entry of requiredPluginSdkPackPaths) {
+      expect(pkg.files).not.toContain(`!${entry}`);
+    }
+  });
+
   it("keeps production-private plugin SDK runtime facades inside package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
 

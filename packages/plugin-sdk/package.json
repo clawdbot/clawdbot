@@ -64,6 +64,10 @@
       "types": "./dist/src/plugin-sdk/delivery-queue-runtime.d.ts",
       "default": "./src/delivery-queue-runtime.ts"
     },
+    "./embedding-provider-runtime-contract": {
+      "types": "./dist/src/plugin-sdk/embedding-provider-runtime-contract.d.ts",
+      "default": "./src/embedding-provider-runtime-contract.ts"
+    },
     "./error-runtime": {
       "types": "./dist/src/plugin-sdk/error-runtime.d.ts",
       "default": "./src/error-runtime.ts"
