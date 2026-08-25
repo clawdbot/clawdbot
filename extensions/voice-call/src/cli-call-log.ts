@@ -117,8 +117,7 @@ function readJsonlTailSync(
     let startsAtRecordBoundary = start === 0;
     if (start > 0) {
       const prefix = Buffer.alloc(1);
-      startsAtRecordBoundary =
-        fs.readSync(fd, prefix, 0, 1, start - 1) === 1 && prefix[0] === 0x0a;
+      startsAtRecordBoundary = fs.readSync(fd, prefix, 0, 1, start - 1) === 1 && prefix[0] === 0x0a;
     }
     const buf = Buffer.alloc(length);
     let bytesRead = 0;
@@ -375,10 +374,11 @@ export function registerVoiceCallLogs(params: {
       const last = parseCliInteger(options.last, "--last", { min: 1 });
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const { text: content, omittedLeadingBytes, droppedLeadingBytes } = readJsonlTailSync(
-          file,
-          VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES,
-        );
+        const {
+          text: content,
+          omittedLeadingBytes,
+          droppedLeadingBytes,
+        } = readJsonlTailSync(file, VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES);
         warnJsonlCappedLeadingOmission({
           omittedLeadingBytes,
           droppedLeadingBytes,
