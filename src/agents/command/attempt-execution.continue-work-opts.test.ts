@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { decodeWorkState } from "../../auto-reply/continuation/work-flow-state.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -22,9 +23,17 @@ import { clearSessionStoreCacheForTest } from "../../config/sessions/store-write
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentAttempt } from "./attempt-execution.js";
+
+function findFlowByReason(
+  flows: readonly TaskFlowRecord[],
+  reason: string,
+): TaskFlowRecord | undefined {
+  return flows.find((flow) => decodeWorkState(flow)?.reason === reason);
+}
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const runCliAgentMock = vi.hoisted(() => vi.fn());
@@ -591,12 +600,12 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
     const flows = listTaskFlowsForOwnerKey(sessionKey);
     expect(flows).toHaveLength(2);
-    expect(flows.find((flow) => flow.stateJson?.reason === "attempt-owned work")).toMatchObject({
+    expect(findFlowByReason(flows, "attempt-owned work")).toMatchObject({
       status: "failed",
     });
-    expect(
-      flows.find((flow) => flow.stateJson?.reason === "concurrent same-owner work"),
-    ).toMatchObject({ status: "queued" });
+    expect(findFlowByReason(flows, "concurrent same-owner work")).toMatchObject({
+      status: "queued",
+    });
   });
 
   it("leaves prior parked work untouched when finalization fails", async () => {
@@ -619,10 +628,10 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
     const flows = listTaskFlowsForOwnerKey(sessionKey);
     expect(flows).toHaveLength(2);
-    expect(flows.find((flow) => flow.stateJson?.reason === "prior parked work")).toMatchObject({
+    expect(findFlowByReason(flows, "prior parked work")).toMatchObject({
       status: "queued",
     });
-    expect(flows.find((flow) => flow.stateJson?.reason === "replacement work")).toMatchObject({
+    expect(findFlowByReason(flows, "replacement work")).toMatchObject({
       status: "failed",
     });
   });
@@ -649,10 +658,10 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
     const flows = listTaskFlowsForOwnerKey(sessionKey);
     expect(flows).toHaveLength(2);
-    expect(flows.find((flow) => flow.stateJson?.reason === "prior parked work")).toMatchObject({
+    expect(findFlowByReason(flows, "prior parked work")).toMatchObject({
       status: "queued",
     });
-    expect(flows.find((flow) => flow.stateJson?.reason === "replacement work")).toMatchObject({
+    expect(findFlowByReason(flows, "replacement work")).toMatchObject({
       status: "failed",
     });
     expect(sessionStore[sessionKey]?.continuationChainId).toBe(replacementChainId);
