@@ -3478,6 +3478,8 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           id: "slack",
           origin,
           channels: ["slack"],
+          providers: [],
+          cliBackends: [],
           packageChannel: {
             id: "slack",
             configuredState: {
@@ -3488,7 +3490,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           },
         }),
         rootDir: slackRoot,
-      } as PluginManifestRecord;
+      } satisfies PluginManifestRecord;
       const config = { plugins: { allow: ["slack"] } } as OpenClawConfig;
 
       expect(
