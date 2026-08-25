@@ -108,6 +108,9 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
         expectFinal: true,
         onAccepted: () => {
           dispatchAccepted = true;
+          if (executionStartTimedOut) {
+            void abortBeforeStart().catch(() => undefined);
+          }
         },
         onExecutionStarted: () => {
           if (executionStartTimedOut) {

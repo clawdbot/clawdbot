@@ -92,6 +92,7 @@ import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
 } from "./main-session-recovery-store.js";
+import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
@@ -4135,6 +4136,64 @@ describe("main-session-restart-recovery", () => {
       }),
     );
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("aborts an exact recovery accepted after the execution-start deadline", async () => {
+    vi.useFakeTimers();
+    let accept: (() => void) | undefined;
+    const abortAgent = vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({
+      aborted: true,
+    }));
+    const dispatchAgent = vi.fn(
+      async (
+        _request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
+        _timeoutMs: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[1],
+        options: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
+      ) => {
+        accept = () => options?.onAccepted?.({ runId: "recovery-main", status: "accepted" });
+        return await new Promise<never>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            once: true,
+          });
+        });
+      },
+    );
+
+    try {
+      const outcome = dispatchRestartRecoveryUntilStarted({
+        agentId: "main",
+        agentParams: {
+          agentId: "main",
+          idempotencyKey: "recovery-main",
+          message: "resume",
+          sessionKey: "agent:main:main",
+        },
+        gatewayRuntime: {
+          abortAgent,
+          dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
+          sendRecoveryNotice: vi.fn(),
+          waitForAgent: vi.fn(),
+        },
+        recoveryRunId: "recovery-main",
+        sessionKey: "agent:main:main",
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(outcome).resolves.toMatchObject({ kind: "failed" });
+      expect(accept).toBeTypeOf("function");
+      accept?.();
+      await vi.waitFor(() => expect(abortAgent).toHaveBeenCalledTimes(1));
+      expect(abortAgent).toHaveBeenCalledWith(
+        {
+          agentId: "main",
+          runId: "recovery-main",
+          sessionKey: "agent:main:main",
+        },
+        2_000,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("restores an accepted recovery that fails before execution starts", async () => {
