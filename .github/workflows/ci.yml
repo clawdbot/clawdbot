@@ -2660,6 +2660,14 @@ jobs:
               fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              if has_package_script "check:temp-path-guardrails"; then
+                pnpm check:temp-path-guardrails
+              elif [[ "$FROZEN_TARGET" == "true" ]]; then
+                echo "[skip] frozen target predates the temp path guardrails"
+              else
+                echo "Current CI targets must provide the check:temp-path-guardrails package script." >&2
+                exit 1
+              fi
               if [[ "$FROZEN_TARGET" == "true" ]]; then
                 pnpm dup:check:coverage
               else
