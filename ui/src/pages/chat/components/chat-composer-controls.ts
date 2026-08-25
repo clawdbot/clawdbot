@@ -41,7 +41,6 @@ export type ChatRunControlsProps = {
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
-  microphoneAlert?: string | null;
 };
 
 type MicrophonePickerProps = {
@@ -210,7 +209,16 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
                     role="status"
                   >
                     <span class="chat-talk-input-picker__capability-copy">
-                      <strong>${capability.label}</strong>
+                      <strong>
+                        ${capability.status === "unavailable"
+                          ? html`<span
+                              class="chat-talk-input-picker__capability-alert"
+                              aria-hidden="true"
+                              >${icons.alertTriangle}</span
+                            >`
+                          : nothing}
+                        <span>${capability.label}</span>
+                      </strong>
                       <span>
                         ${capability.status === "checking"
                           ? t("chat.composer.talkCapabilityChecking")
@@ -276,7 +284,6 @@ type ComposerVoiceButtonProps = {
   isBusy: boolean;
   dictation?: ComposerDictationController;
   microphonePicker?: TemplateResult | typeof nothing;
-  microphoneAlert?: string | null;
   /**
    * What the control offers at rest. The chat composer's microphone also starts
    * Talk, so it promises voice input; a surface that only dictates says so
@@ -298,8 +305,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
       ? t("chat.composer.dictationDiscard")
       : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip =
-    props.microphoneAlert ??
-    (props.dictation && !(active || finalizing) ? t("chat.composer.voiceGestureHint") : label);
+    props.dictation && !(active || finalizing) ? t("chat.composer.voiceGestureHint") : label;
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return html`
@@ -333,14 +339,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
             : active
               ? icons.stop
               : html`
-                  <span class="chat-talk-control__microphone-icon" aria-hidden="true">
-                    ${icons.mic}
-                    ${props.microphoneAlert
-                      ? html`<span class="chat-talk-control__capability-alert"
-                          >${icons.alertTriangle}</span
-                        >`
-                      : nothing}
-                  </span>
+                  ${icons.mic}
                   <span class="agent-chat__control-label">${label}</span>
                 `}
         </button>
