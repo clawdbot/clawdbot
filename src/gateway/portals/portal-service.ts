@@ -20,6 +20,7 @@ type PortalEntry = {
   path?: string;
   targetPort: number;
   token: string;
+  cookieNamespace: string;
   listenPort: number;
   createdAtMs: number;
 };
@@ -169,6 +170,7 @@ export function createGatewayPortalService(params: {
           ...(input.path ? { path: input.path } : {}),
           targetPort: input.targetPort,
           token: randomBytes(32).toString("hex"),
+          cookieNamespace: randomBytes(16).toString("hex"),
           listenPort: 0,
           createdAtMs: Date.now(),
         };
