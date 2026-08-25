@@ -526,7 +526,7 @@ describe("Bedrock thinking request composition", () => {
           thinkingLevelMap: { xhigh: "xhigh", max: "max" },
         }),
       reasoning: "off" as const,
-      expectedMaxTokens: undefined,
+      expectedMaxTokens: 128_000,
       expectedEffort: undefined,
     },
     {
@@ -607,20 +607,58 @@ describe("Bedrock thinking request composition", () => {
       modelMaxTokens: 128_000,
       requestedMaxTokens: undefined,
       expected: 128_000,
+      reasoning: "high" as const,
     },
     {
       name: "fallback model cap",
       modelMaxTokens: 4096,
       requestedMaxTokens: undefined,
       expected: undefined,
+      reasoning: "high" as const,
     },
     {
       name: "explicit request cap",
       modelMaxTokens: 128_000,
       requestedMaxTokens: 32_000,
       expected: 32_000,
+      reasoning: "high" as const,
     },
-  ])("uses the $name for adaptive thinking", async (testCase) => {
+    {
+      name: "native model cap with thinking disabled",
+      modelMaxTokens: 128_000,
+      requestedMaxTokens: undefined,
+      expected: 128_000,
+      reasoning: "off" as const,
+    },
+    {
+      name: "fallback model cap with thinking disabled",
+      modelMaxTokens: 4096,
+      requestedMaxTokens: undefined,
+      expected: undefined,
+      reasoning: "off" as const,
+    },
+    {
+      name: "medium fallback model cap with thinking disabled",
+      modelMaxTokens: 8192,
+      requestedMaxTokens: undefined,
+      expected: undefined,
+      reasoning: "off" as const,
+    },
+    {
+      name: "large fallback model cap with thinking disabled",
+      modelMaxTokens: 16_384,
+      requestedMaxTokens: undefined,
+      expected: undefined,
+      reasoning: "off" as const,
+    },
+    {
+      name: "explicit request cap with thinking disabled",
+      modelMaxTokens: 128_000,
+      requestedMaxTokens: 4096,
+      expected: 4096,
+      reasoning: "off" as const,
+    },
+  ])("uses the $name for adaptive-capable models", async (testCase) => {
     const input = await captureCommandInput(
       bedrockModel({
         id: "us.anthropic.claude-opus-4-8",
@@ -630,7 +668,7 @@ describe("Bedrock thinking request composition", () => {
       }),
       context,
       {
-        reasoning: "high",
+        reasoning: testCase.reasoning,
         ...(testCase.requestedMaxTokens === undefined
           ? {}
           : { maxTokens: testCase.requestedMaxTokens }),
@@ -640,10 +678,14 @@ describe("Bedrock thinking request composition", () => {
     expect(input.inferenceConfig).toEqual(
       testCase.expected === undefined ? {} : { maxTokens: testCase.expected },
     );
-    expect(input.additionalModelRequestFields).toEqual({
-      thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "high" },
-    });
+    expect(input.additionalModelRequestFields).toEqual(
+      testCase.reasoning === "off"
+        ? undefined
+        : {
+            thinking: { type: "adaptive", display: "summarized" },
+            output_config: { effort: "high" },
+          },
+    );
   });
 
   it.each([
