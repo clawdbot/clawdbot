@@ -40,6 +40,7 @@ import type {
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
 import {
+  hasMaterialPluginEntryConfig,
   isPluginExplicitlySelectedByAlias,
   isPluginPolicyDisabled,
 } from "./plugin-replacement-eligibility.js";
@@ -839,21 +840,6 @@ function registerPluginEntry(
       },
     },
   };
-}
-
-function hasMaterialPluginEntryConfig(entry: unknown): boolean {
-  if (!isRecord(entry)) {
-    return false;
-  }
-  return (
-    entry.enabled === true ||
-    isRecord(entry.config) ||
-    isRecord(entry.hooks) ||
-    isRecord(entry.subagent) ||
-    isRecord(entry.llm) ||
-    entry.apiKey !== undefined ||
-    entry.env !== undefined
-  );
 }
 
 function isKnownPluginId(pluginId: string, manifestRegistry: PluginManifestRegistry): boolean {
