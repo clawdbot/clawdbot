@@ -27,6 +27,70 @@ async function openUpdateConfirmation(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it("explains a disabled update to a read-only mobile operator", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-read-only-mobile");
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        hasTouch: true,
+        isMobile: true,
+        locale: "en-US",
+        recordVideo: { dir: artifactDir, size: { height: 1200, width: 555 } },
+        serviceWorkers: "block",
+        viewport: { height: 1200, width: 555 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.read"],
+        });
+
+        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+        await page.getByRole("button", { name: "Expand sidebar" }).click();
+        await gateway.emitGatewayEvent("update.available", {
+          updateAvailable: {
+            channel: "stable",
+            currentVersion: "1.0.0",
+            latestVersion: "2.0.0",
+          },
+        });
+
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        const action = updateIssue.locator(".sidebar-update-card__action");
+        await expect.poll(() => action.getAttribute("aria-disabled")).toBe("true");
+        expect(await action.evaluate((element) => (element as HTMLButtonElement).disabled)).toBe(
+          false,
+        );
+        await page.screenshot({ path: path.join(artifactDir, "disabled-update.png") });
+
+        const actionBounds = await action.boundingBox();
+        if (!actionBounds) {
+          throw new Error("disabled update action is not visible");
+        }
+        const tooltip = updateIssue.locator("openclaw-tooltip wa-tooltip");
+        await tooltip.evaluate((element) => {
+          element.addEventListener(
+            "wa-after-show",
+            () => element.setAttribute("data-e2e-after-show", ""),
+            { once: true },
+          );
+        });
+        await page.touchscreen.tap(
+          actionBounds.x + actionBounds.width / 2,
+          actionBounds.y + actionBounds.height / 2,
+        );
+        await expect.poll(() => tooltip.getAttribute("data-e2e-after-show")).not.toBeNull();
+        expect(await tooltip.textContent()).toContain("Administrator access is required");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        await page.screenshot({ path: path.join(artifactDir, "disabled-update-tooltip.png") });
+      },
+    );
+  });
+
   it("shows package update failure status after the Update click", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-package-status");
     await suite.withPage(
