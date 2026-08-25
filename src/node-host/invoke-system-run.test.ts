@@ -595,7 +595,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const command = params.command ?? params.preparedPlan?.argv ?? ["echo", "ok"];
     let dispatchCommand = command;
     let dispatchRawCommand = params.rawCommand ?? params.preparedPlan?.commandText;
-    let dispatchCwd = params.cwd;
+    let dispatchCwd = params.cwd ?? params.preparedPlan?.cwd ?? undefined;
     let dispatchAgentId: string | undefined = params.agentId ?? "main";
     const forwardsDelayedApproval =
       params.approvalSource === "auto-review" ||
@@ -1417,7 +1417,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           "off",
           { command: ["poccmd", "-n", "SAFE"], approved: true },
         );
-        expectCommandPinnedToCanonicalPath(runCommand, expected, ["-n", "SAFE"]);
+        expectCommandPinnedToCanonicalPath(
+          runCommand,
+          expected,
+          ["-n", "SAFE"],
+          fs.realpathSync(process.cwd()),
+        );
         expectInvokeOk(sendInvokeResult);
       });
     },
@@ -2583,7 +2588,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
       expect(invoke.runCommand).toHaveBeenCalledWith(
         prepared.plan.argv,
-        undefined,
+        prepared.plan.cwd,
         undefined,
         undefined,
       );
