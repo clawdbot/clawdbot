@@ -1,4 +1,5 @@
 import path from "node:path";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
@@ -33,6 +34,7 @@ suite.define(() => {
     const page = await context.newPage();
     const proofVideo = page.video();
     const gateway = await installMockGateway(page, {
+      featureCapabilities: [GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT],
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow(activeKey, "Active investigation", 20, { unread: false }),

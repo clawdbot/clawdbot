@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -46,6 +47,7 @@ function sessionRow(index: number): SidebarRecentSession {
 function createHarness(
   params: {
     methods?: string[] | null;
+    capabilities?: string[];
     scopes?: string[];
     current?: boolean;
     staleAfterRequest?: number;
@@ -94,7 +96,12 @@ function createHarness(
       features:
         params.methods === null
           ? {}
-          : { methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS] },
+          : {
+              methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS],
+              capabilities: params.capabilities ?? [
+                GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+              ],
+            },
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
@@ -253,6 +260,18 @@ describe("patchSessionRows", () => {
         agentId: "main",
         readIntent: "explicit",
       })),
+      patch: { unread: false },
+    });
+  });
+
+  it("uses the legacy batch read payload when the Gateway lacks the unread contract", async () => {
+    const rows = [sessionRow(0), sessionRow(1)];
+    const harness = createHarness({ capabilities: [] });
+
+    await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
+
+    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+      targets: rows.map((row) => ({ key: row.key, agentId: "main" })),
       patch: { unread: false },
     });
   });
