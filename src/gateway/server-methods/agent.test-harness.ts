@@ -1073,6 +1073,8 @@ export const describe0AfterEach0 = () => {
   resetAgentTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
   applyGatewaySubagentRegistryTestDeps();
+  mocks.agentCommand.mockReset();
+  mocks.updateSessionStore.mockReset().mockResolvedValue(undefined);
   mocks.loadConfigReturn = {};
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();
