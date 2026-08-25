@@ -68,13 +68,15 @@ the artifacts and may differ when only one collector needed a retry.
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
-verification. If Release Decision reports a blocker while Diagnostic Drain is
-still collecting failures, the helper exits nonzero immediately and keeps both
-temporary refs for reruns and diagnosis. The Validation SHA equals the Code
-SHA for product validation or the Release SHA for changelog-only validation; it
-is not a third release identity. The workflow rejects malformed or mismatched
-expected SHAs before child dispatch. Every child must report the same Tooling
-SHA. Pass
+verification. The helper reads Release Decision artifacts while the parent is
+active so blockers can surface while Diagnostic Drain collects failures. A
+not-yet-created artifact remains an unavailable polling result; terminal
+handling and temporary-ref cleanup wait for the parent to complete with a
+conclusion. Failed validations retain both refs for reruns and diagnosis. The
+Validation SHA equals the Code SHA for product validation or the Release SHA
+for changelog-only validation; it is not a third release identity. The workflow
+rejects malformed or mismatched expected SHAs before child dispatch. Every
+child must report the same Tooling SHA. Pass
 `-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
 require `--workflow-sha` with the recorded full SHA, which must remain reachable
 from current `origin/main`. The helper rejects a pinned Tooling SHA that does
