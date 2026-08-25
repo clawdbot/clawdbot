@@ -2715,11 +2715,11 @@ describe("codex conversation binding", () => {
       source,
       start: { id: "start-source-transfer" },
     };
-    const queuedReplyOperation = beginReplyOperationLifecycleFixture({
+    const queuedReplyOperation = await beginReplyOperationLifecycleFixture({
       sessionKey: source.sessionKey,
       sessionId: source.sessionId,
     });
-    expect(resolveAgentRunProgressStateForTest(source.sessionId)).toBe("queued");
+    await expect(resolveAgentRunProgressStateForTest(source.sessionId)).resolves.toBe("queued");
 
     try {
       await expect(
@@ -2819,14 +2819,14 @@ describe("codex conversation binding", () => {
     }
     const startedReplyOperation =
       kind === "started-reply"
-        ? beginReplyOperationLifecycleFixture({
+        ? await beginReplyOperationLifecycleFixture({
             sessionKey: source.sessionKey,
             sessionId: source.sessionId,
           })
         : undefined;
     startedReplyOperation?.markExecutionStarted();
     if (startedReplyOperation) {
-      expect(resolveAgentRunProgressStateForTest(source.sessionId)).toBe("running");
+      await expect(resolveAgentRunProgressStateForTest(source.sessionId)).resolves.toBe("running");
     }
     const activeRun = {
       queueMessage: async () => undefined,
