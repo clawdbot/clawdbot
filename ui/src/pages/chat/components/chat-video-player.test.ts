@@ -11,6 +11,17 @@ afterEach(() => {
 });
 
 describe("ChatVideoPlayer", () => {
+  it("limits passive video loading to metadata", async () => {
+    const player = document.createElement("openclaw-chat-video-player");
+    player.src = "https://example.com/clip.mp4";
+    player.sourceIdentity = "media:clip-metadata";
+    player.label = "clip.mp4";
+    document.body.append(player);
+    await player.updateComplete;
+
+    expect(player.querySelector("video")?.preload).toBe("metadata");
+  });
+
   it("keeps one video element mounted across 202 preparation", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
