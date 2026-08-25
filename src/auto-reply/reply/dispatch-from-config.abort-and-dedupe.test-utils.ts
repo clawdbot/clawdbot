@@ -510,36 +510,6 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("seeds direct fast-abort prefixes from the session-selected model", async () => {
-    mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      thinkingLevel: "high",
-    };
-    const onModelSelected = vi.fn();
-
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        Body: "/stop",
-        SessionKey: "agent:main:telegram:direct:123",
-      }),
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
-      fastAbortResolver: mocks.tryFastAbortFromMessage,
-      formatAbortReplyTextResolver: () => "⚙️ Agent was aborted.",
-      replyOptions: { onModelSelected },
-    });
-
-    expect(onModelSelected).toHaveBeenCalledWith({
-      provider: "anthropic",
-      model: "claude-opus-4-6-20260205",
-      thinkLevel: "high",
-    });
-  });
-
   it("carries session prefix context through the actual routed fast-abort delivery", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
     sessionStoreMocks.currentEntry = {

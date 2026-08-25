@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listAgentIds } from "../agent-scope-config.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -10,6 +10,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetSharedRunIntegrationHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
@@ -28,6 +29,10 @@ function projectSetupExecutionConfig(source: OpenClawConfig): OpenClawConfig {
 }
 
 describe("embedded setup inference inherited auth owner", () => {
+  beforeAll(async () => {
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+  });
+
   beforeEach(resetSharedRunIntegrationHarnessMocks);
 
   it.each([
