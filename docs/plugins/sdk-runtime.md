@@ -209,6 +209,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     });
     ```
 
+    `api.runtime.agent.resolveRunProgressState(sessionId)` returns `queued` while an admitted reply
+    operation is waiting to start, `running` after backend execution starts or
+    while a concrete embedded run handle is live, and `undefined` when the host
+    has no active work for that session. It is a read-only process-local
+    lifecycle projection; do not use it as durable session state.
+
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
@@ -357,12 +363,6 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       await lease?.release();
     }
     ```
-
-    `resolveRunProgressState(sessionId)` returns `queued` while an admitted reply
-    operation is waiting to start, `running` after backend execution starts or
-    while a concrete embedded run handle is live, and `undefined` when the host
-    has no active work for that session. It is a read-only process-local
-    lifecycle projection; do not use it as durable session state.
 
     `acquireLocalService(...)` is a stable, generic provider-service SDK
     contract. The host resolves process configuration from
