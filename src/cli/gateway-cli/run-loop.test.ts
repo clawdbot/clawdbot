@@ -152,13 +152,6 @@ const abortPendingChannelReloads = vi.fn();
 const abortEmbeddedAgentRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
 );
-const listActiveEmbeddedRunSessionIds = vi.fn(() => [] as string[]);
-const listActiveEmbeddedRunSessionKeys = vi.fn(() => [] as string[]);
-const markRestartAbortedMainSessions = vi.fn(async (_params: unknown) => ({
-  marked: 1,
-  skipped: 0,
-}));
-const loadConfig = vi.fn(() => ({}));
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const gatewayLog = {
   debug: vi.fn(),
@@ -269,17 +262,6 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
     sessionId?: string,
     opts?: { mode?: "all" | "compacting"; reason?: "restart" },
   ) => abortEmbeddedAgentRun(sessionId, opts),
-  listActiveEmbeddedRunSessionIds: () => listActiveEmbeddedRunSessionIds(),
-  listActiveEmbeddedRunSessionKeys: () => listActiveEmbeddedRunSessionKeys(),
-}));
-
-vi.mock("../../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
-  markRestartAbortedMainSessions: (params: unknown) => markRestartAbortedMainSessions(params),
-}));
-
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: () => loadConfig(),
-  loadConfig: () => loadConfig(),
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -1049,7 +1031,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("does not mark drain-start runs before server close revalidates them", async () => {
+  it("waits for the drain before handing recovery ownership to server close", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
     const drainStart = createActiveWorkSnapshot({ embeddedRuns: 2 }, [
@@ -1060,13 +1042,9 @@ describe("runGatewayLoop", () => {
       releaseDrain = resolve;
     });
     createGatewayActiveWorkSnapshot.mockReturnValueOnce(drainStart);
-    listActiveEmbeddedRunSessionIds.mockReturnValue(["session-finished", "session-active"]);
-    listActiveEmbeddedRunSessionKeys.mockReturnValue(["agent:main:finished", "agent:main:active"]);
     waitForGatewayActiveWork.mockImplementationOnce(async () => {
-      // One run settles while the other keeps the restart drain open. Recovery
-      // ownership must be collected later by server close, after this window.
-      listActiveEmbeddedRunSessionIds.mockReturnValue(["session-active"]);
-      listActiveEmbeddedRunSessionKeys.mockReturnValue(["agent:main:active"]);
+      // Recovery ownership must be collected later by server close, after this
+      // window lets active work settle.
       await pendingDrain;
       return { drained: true, snapshot: idleActiveWorkSnapshot };
     });
@@ -1079,8 +1057,10 @@ describe("runGatewayLoop", () => {
       sigterm();
       await vi.waitFor(() => expect(waitForGatewayActiveWork).toHaveBeenCalledOnce());
 
-      expect(markRestartAbortedMainSessions).not.toHaveBeenCalled();
-      expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
       expect(close).not.toHaveBeenCalled();
 
       releaseDrain?.();

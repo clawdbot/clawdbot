@@ -528,8 +528,6 @@ export async function prepareGatewayLifecycle(params: {
       agentRunSeq,
       nodeSendToSession,
       resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
-      abortEmbeddedRunsForRestart: () =>
-        shutdownRuntime.abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" }),
       markMainSessionsAbortedForRestart: async ({
         sessionKeys,
         sessionIds,

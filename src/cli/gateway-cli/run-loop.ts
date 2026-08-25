@@ -597,8 +597,11 @@ export async function runGatewayLoop(params: {
           await measureGatewayRestartTrace(
             "restart.drain",
             async () => {
-              const { createGatewayActiveWorkSnapshot, waitForGatewayActiveWork } =
-                await loadGatewayLifecycleRuntimeModule();
+              const {
+                abortEmbeddedAgentRun,
+                createGatewayActiveWorkSnapshot,
+                waitForGatewayActiveWork,
+              } = await loadGatewayLifecycleRuntimeModule();
               const formatBlockers = (
                 snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>,
               ) => snapshot.blockers.map((blocker) => blocker.message).join("; ");
@@ -609,6 +612,9 @@ export async function runGatewayLoop(params: {
               const initialSnapshot = createGatewayActiveWorkSnapshot();
               activeWorkAtDrainStart = initialSnapshot.counts.totalActive;
               activeRunsAtDrainStart = initialSnapshot.counts.embeddedRuns;
+              if (activeRunsAtDrainStart > 0) {
+                abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
+              }
 
               if (!initialSnapshot.idle) {
                 gatewayLog.info(
@@ -979,7 +985,7 @@ export async function runGatewayLoop(params: {
         waitForActiveCronJobs,
         waitForActiveCronTaskRuns,
       } = await loadGatewayLifecycleRuntimeModule();
-      // Rotate ownership before reset pumps preserved queue entries.
+      // Rotation aborts rootless stale owners before reset pumps preserved queues.
       rotateAgentEventLifecycleGeneration();
       advanceCronActiveJobGeneration();
       abortActiveCronTaskRuns("Gateway restarting.");
