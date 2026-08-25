@@ -209,8 +209,8 @@ export async function launchFallbackTaskScript(
     child.unref();
     return;
   }
-  // Starting cmd.exe successfully does not establish that its batch script exists.
-  await fs.access(scriptPath);
+  // Opening the batch file checks Windows ACLs that fs.access does not enforce.
+  await (await fs.open(scriptPath, "r")).close();
   const { child } = await spawnWithFallback({
     argv: [getWindowsCmdExePath(), "/d", "/c", scriptPath],
     options: {

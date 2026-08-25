@@ -411,6 +411,22 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("rejects an ACL-denied cmd fallback script before starting cmd", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
+      const denied = Object.assign(new Error("open fallback script EACCES"), { code: "EACCES" });
+      vi.spyOn(fs, "open").mockRejectedValueOnce(denied);
+
+      await expect(launchFallbackTaskScript(env, null)).rejects.toThrow(
+        "open fallback script EACCES",
+      );
+      expect(spawn).not.toHaveBeenCalled();
+      expect(childUnref).not.toHaveBeenCalled();
+    });
+  });
+
   it("detaches the direct executable only after it starts", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await writeGatewayScript(env);
