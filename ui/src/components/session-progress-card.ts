@@ -172,16 +172,16 @@ export function renderSessionProgressCard(
       ${ref((element) => initializeComposerDisclosure(element, card.sessionKey, !complete))}
     >
       <summary class="session-progress-card__summary" aria-label=${composerCountLabel}>
+        <span
+          class="session-progress-card__summary-indicator session-progress-card__current-marker${complete
+            ? " session-progress-card__summary-indicator--complete"
+            : ""}"
+          data-status=${currentStep?.status ?? "pending"}
+          aria-hidden="true"
+        >
+          ${summaryIndicator}
+        </span>
         <span class="session-progress-card__summary-collapsed">
-          <span
-            class="session-progress-card__summary-indicator session-progress-card__current-marker${complete
-              ? " session-progress-card__summary-indicator--complete"
-              : ""}"
-            data-status=${currentStep?.status ?? "pending"}
-            aria-hidden="true"
-          >
-            ${summaryIndicator}
-          </span>
           <span class="session-progress-card__current">${stepLabel}</span>
           ${counts
             ? html`<span class="session-progress-card__summary-count"

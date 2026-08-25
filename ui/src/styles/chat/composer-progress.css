@@ -52,7 +52,7 @@
 
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -86,7 +86,7 @@
 
 .session-progress-card__summary-collapsed {
   display: inline-grid;
-  grid-template-columns: 14px minmax(0, auto) auto;
+  grid-template-columns: minmax(0, auto) auto;
   justify-content: start;
   gap: 8px;
 }

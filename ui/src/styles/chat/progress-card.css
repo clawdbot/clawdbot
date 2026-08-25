@@ -391,6 +391,30 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The dock shares the centered composer's width and bottom inset so the card
+   stays beside its surface without shifting the transcript or composer. */
+.session-progress-card--dock {
+  position: absolute;
+  z-index: 3;
+  inset-block-end: var(--chat-composer-bottom-gap, 14px);
+  inset-inline-end: var(--chat-thread-gutter);
+  inset-inline-start: calc(
+    50% +
+      min(
+        50% - var(--chat-composer-side-inset, 36px) / 2,
+        var(--chat-thread-max-width, 48rem) / 2
+      ) +
+      var(--space-3)
+  );
+  max-height: min(46%, 420px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
+  box-shadow: var(--shadow-sm);
+}
+
 .session-progress-card--rail {
   flex: 0 0 auto;
   margin: 10px 14px 0;
