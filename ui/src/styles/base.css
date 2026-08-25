@@ -1128,6 +1128,13 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
+/* Web Awesome defaults checked switches to brand blue. Keep every switch on
+   the Control UI accent, matching native check controls and custom switches. */
+wa-switch {
+  --wa-form-control-activated-color: var(--accent);
+  --wa-color-focus: var(--ring);
+}
+
 /* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
    Document rules beat `:host`, so route them through the policy here — and
    re-add the disabled cue this override would otherwise clobber. */
