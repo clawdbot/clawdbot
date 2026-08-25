@@ -142,6 +142,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
+  withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
 vi.mock("../provider-secret-egress.js", () => ({
