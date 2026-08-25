@@ -38,6 +38,7 @@ async function withFailureAlertCron(
     failureAlert?: FailureAlertConfig;
     runResult?: IsolatedAgentRunResult;
     useFallback?: boolean;
+    rejectFailureAlert?: boolean;
   },
   run: (context: {
     cron: CronService;
@@ -48,7 +49,11 @@ async function withFailureAlertCron(
   }) => Promise<void>,
 ): Promise<void> {
   const store = await makeStorePath();
-  const sendCronFailureAlert = vi.fn(async () => undefined);
+  const sendCronFailureAlert = vi.fn(async () => {
+    if (params.rejectFailureAlert) {
+      throw new Error("failure alert channel unavailable");
+    }
+  });
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const runResult = params.runResult ?? {
@@ -154,30 +159,89 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("keeps fallback events and immediate wakes on the failing job owner", async () => {
+  it.each([
+    {
+      name: "preserves the creation session for an immediate wake",
+      sessionTarget: "isolated" as const,
+      sessionKey: "agent:work:cron:failure-alert",
+      wakeMode: "now" as const,
+      expectedSessionKey: "agent:work:cron:failure-alert",
+      expectWake: true,
+    },
+    {
+      name: "routes a persistent session target without a creation session",
+      sessionTarget: "session:agent:work:telegram:group:42:topic:77" as const,
+      wakeMode: "now" as const,
+      expectedSessionKey: "agent:work:telegram:group:42:topic:77",
+      expectWake: true,
+    },
+    {
+      name: "prefers a persistent target over a conflicting creation session",
+      sessionTarget: "session:agent:work:telegram:group:42:topic:77" as const,
+      sessionKey: "agent:work:discord:channel:other",
+      wakeMode: "now" as const,
+      expectedSessionKey: "agent:work:telegram:group:42:topic:77",
+      expectWake: true,
+    },
+    {
+      name: "wakes a targeted next-heartbeat session immediately",
+      sessionTarget: "isolated" as const,
+      sessionKey: "agent:work:discord:channel:alerts",
+      wakeMode: "next-heartbeat" as const,
+      expectedSessionKey: "agent:work:discord:channel:alerts",
+      expectWake: true,
+    },
+    {
+      name: "leaves an untargeted next-heartbeat session deferred",
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      expectedSessionKey: undefined,
+      expectWake: false,
+    },
+    {
+      name: "keeps the persistent session when direct alert delivery rejects",
+      sessionTarget: "session:agent:work:telegram:group:42:topic:77" as const,
+      wakeMode: "now" as const,
+      expectedSessionKey: "agent:work:telegram:group:42:topic:77",
+      expectWake: true,
+      rejectFailureAlert: true,
+    },
+  ])("routes failure alert fallback: $name", async (testCase) => {
+    const rejectFailureAlert = "rejectFailureAlert" in testCase;
     await withFailureAlertCron(
-      { failureAlert: { enabled: true, after: 1 }, useFallback: true },
-      async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
-        const sessionKey = "agent:work:cron:failure-alert";
+      {
+        failureAlert: { enabled: true, after: 1 },
+        useFallback: !rejectFailureAlert,
+        rejectFailureAlert,
+      },
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, sendCronFailureAlert, addJob }) => {
         const job = await addJob("work-owned failure", {
           agentId: "work",
-          sessionKey,
-          wakeMode: "now",
+          sessionTarget: testCase.sessionTarget,
+          ...("sessionKey" in testCase ? { sessionKey: testCase.sessionKey } : {}),
+          wakeMode: testCase.wakeMode,
         });
 
         await cron.run(job.id, "force");
 
+        if (rejectFailureAlert) {
+          expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        }
         expect(enqueueSystemEvent).toHaveBeenCalledWith(
           expect.stringContaining('Automation "work-owned failure" failed 1 times'),
-          { agentId: "work", sessionKey },
+          { agentId: "work", sessionKey: testCase.expectedSessionKey },
         );
-        expect(requestHeartbeat).toHaveBeenCalledWith({
-          source: "cron",
-          intent: "immediate",
-          reason: `cron:${job.id}:failure-alert`,
-          agentId: "work",
-          sessionKey,
-        });
+        if (testCase.expectWake) {
+          expect(requestHeartbeat).toHaveBeenCalledWith({
+            source: "cron",
+            intent: "immediate",
+            reason: `cron:${job.id}:failure-alert`,
+            agentId: "work",
+            sessionKey: testCase.expectedSessionKey,
+          });
+        } else {
+          expect(requestHeartbeat).not.toHaveBeenCalled();
+        }
       },
     );
   });

@@ -12,6 +12,7 @@ import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-targe
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
+import { resolveCronDeliverySessionKey } from "../session-target.js";
 import type {
   CronFailureNotificationDelivery,
   CronFailureNotificationDetail,
@@ -192,16 +193,14 @@ export function resolveFailureAlert(
 }
 
 function enqueueFailureAlertFallback(state: CronServiceState, job: CronJob, text: string): void {
-  enqueueCronSystemEvent(state, text, {
-    agentId: job.agentId,
-    sessionKey: job.sessionKey,
-  });
-  if (job.wakeMode === "now") {
+  const sessionKey = resolveCronDeliverySessionKey(job);
+  enqueueCronSystemEvent(state, text, { agentId: job.agentId, sessionKey });
+  if (job.wakeMode === "now" || sessionKey) {
     requestCronHeartbeat(state, {
       intent: "immediate",
       reason: `cron:${job.id}:failure-alert`,
       agentId: job.agentId,
-      sessionKey: job.sessionKey,
+      sessionKey,
     });
   }
 }
