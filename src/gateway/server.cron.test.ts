@@ -316,7 +316,10 @@ async function directCronReq(
   return result;
 }
 
-function agentCronClient(sessionKey: string): GatewayClient {
+function agentCronClient(
+  sessionKey: string,
+  options: { spawnContext?: boolean } = {},
+): GatewayClient {
   const operationalRunInstance = createOperationalRunInstanceRef("run-cron-agent-creator");
   return {
     connect: {} as GatewayClient["connect"],
@@ -333,6 +336,13 @@ function agentCronClient(sessionKey: string): GatewayClient {
           claimId: "cron-agent-creator-claim",
         },
         turnSourceAccountId: "default",
+        ...(options.spawnContext
+          ? {
+              sessionSpawnContext: {
+                inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
+              },
+            }
+          : {}),
       },
     },
   };
@@ -582,7 +592,11 @@ describe("gateway server cron", () => {
           payload: { kind: "agentTurn", message: "test", toolsAllow: ["*"] },
           delivery: { mode: "none" },
         },
-        { client: agentCronClient(sessionKey) },
+        {
+          client: agentCronClient(sessionKey, {
+            spawnContext: sessionKey === attributedSessionKey,
+          }),
+        },
       );
 
     try {

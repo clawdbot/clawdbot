@@ -1389,7 +1389,7 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("stamps an agent-created job with its trusted caller session creator", async () => {
+  it("stamps an agent-created job with its caller session creator despite spawn context", async () => {
     loadGatewaySessionEntry.mockReturnValueOnce({
       canonicalKey: "agent:ops:main",
       entry: {
@@ -1397,9 +1397,13 @@ describe("cron method validation", () => {
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
       },
     });
+    const client = callerClient("ops");
+    client.internal!.agentRuntimeIdentity!.sessionSpawnContext = {
+      inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
+    };
 
     const { context, respond } = await invokeCronAdd(agentTurnCronParams(), {
-      client: callerClient("ops"),
+      client,
     });
 
     const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");

@@ -849,9 +849,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const callerScope = readCronCallerScope(client);
-    const operatorActor = resolveOperatorSessionCreation(client, { allowTrustedHint: true }).actor;
-    // Agent-tool clients have no operator profile, but their signed scope owns one exact session.
-    // Reuse only that persisted creation fact; never accept creator data from cron params.
+    const operatorActor = callerScope ? undefined : resolveOperatorSessionCreation(client).actor;
+    // Agent-tool clients own one exact signed session. Read that session's creator instead of
+    // reclassifying spawn context as the automation creator; params never carry this provenance.
     const actor =
       operatorActor ??
       (callerScope?.sessionKey
