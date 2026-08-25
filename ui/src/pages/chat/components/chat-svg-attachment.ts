@@ -7,12 +7,25 @@ import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SVG_PREVIEW_MAX_BYTES = 256 * 1024;
+const SVG_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
 
-type SvgBlobSource = {
+type SvgRenderSource = {
   url: string;
   retainCount: number;
   retired: boolean;
+  revokeOnRetire: boolean;
 };
+
+function isCrossOriginHttpSource(source: string): boolean {
+  try {
+    const url = new URL(source, window.location.href);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
+    );
+  } catch {
+    return false;
+  }
+}
 
 class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   @property() src = "";
@@ -23,13 +36,21 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   @property() downloadHref = "";
   @property({ attribute: false }) onOpen: ((src: string, release: () => void) => void) | undefined;
   @property({ attribute: false }) onExpand: (() => void) | undefined;
+  @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
 
-  @state() private blobSource: SvgBlobSource | undefined;
+  @state() private renderSource: SvgRenderSource | undefined;
   @state() private failed = false;
 
   private loadVersion = 0;
   private abortController: AbortController | undefined;
   private stopObservingViewport: (() => void) | undefined;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (this.src.trim() && !this.renderSource && !this.failed) {
+      this.observeViewport();
+    }
+  }
 
   override disconnectedCallback(): void {
     this.stopObservingViewport?.();
@@ -59,9 +80,9 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
     });
   }
 
-  private retireBlobSource(source: SvgBlobSource): void {
+  private retireSource(source: SvgRenderSource): void {
     source.retired = true;
-    if (source.retainCount === 0) {
+    if (source.revokeOnRetire && source.retainCount === 0) {
       URL.revokeObjectURL(source.url);
     }
   }
@@ -70,13 +91,13 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
     this.loadVersion += 1;
     this.abortController?.abort();
     this.abortController = undefined;
-    if (this.blobSource) {
-      this.retireBlobSource(this.blobSource);
-      this.blobSource = undefined;
+    if (this.renderSource) {
+      this.retireSource(this.renderSource);
+      this.renderSource = undefined;
     }
   }
 
-  private retainBlobSource(source: SvgBlobSource): () => void {
+  private retainSource(source: SvgRenderSource): () => void {
     source.retainCount += 1;
     let released = false;
     return () => {
@@ -85,27 +106,55 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
       }
       released = true;
       source.retainCount = Math.max(0, source.retainCount - 1);
-      if (source.retired && source.retainCount === 0) {
+      if (source.revokeOnRetire && source.retired && source.retainCount === 0) {
         URL.revokeObjectURL(source.url);
       }
     };
   }
 
+  private showFallback(): void {
+    if (this.failed) {
+      return;
+    }
+    this.failed = true;
+    this.onMediaLoaded?.();
+  }
+
   private async loadSource(): Promise<void> {
     const version = this.loadVersion;
     if (this.sizeBytes !== undefined && this.sizeBytes > SVG_PREVIEW_MAX_BYTES) {
-      this.failed = true;
+      this.showFallback();
+      return;
+    }
+    // Remote SVGs render safely in img without CORS, while fetching their bytes would
+    // reject common CDN sources before the browser gets a chance to display them.
+    if (isCrossOriginHttpSource(this.src)) {
+      this.renderSource = {
+        url: this.src,
+        retainCount: 0,
+        retired: false,
+        revokeOnRetire: false,
+      };
       return;
     }
     const controller = new AbortController();
     this.abortController = controller;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const response = await fetch(this.src, {
-        credentials: "same-origin",
-        headers: { Accept: "image/svg+xml" },
-        method: "GET",
-        signal: controller.signal,
-      });
+      const response = await Promise.race([
+        fetch(this.src, {
+          credentials: "same-origin",
+          headers: { Accept: "image/svg+xml" },
+          method: "GET",
+          signal: controller.signal,
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            reject(new DOMException("SVG attachment fetch timed out", "TimeoutError"));
+          }, SVG_PREVIEW_FETCH_TIMEOUT_MS);
+        }),
+      ]);
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);
         throw new Error("SVG attachment is unavailable");
@@ -119,12 +168,18 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
         URL.revokeObjectURL(blobUrl);
         return;
       }
-      this.blobSource = { url: blobUrl, retainCount: 0, retired: false };
+      this.renderSource = {
+        url: blobUrl,
+        retainCount: 0,
+        retired: false,
+        revokeOnRetire: true,
+      };
     } catch {
-      if (version === this.loadVersion && !controller.signal.aborted) {
-        this.failed = true;
+      if (version === this.loadVersion) {
+        this.showFallback();
       }
     } finally {
+      clearTimeout(timeout);
       if (this.abortController === controller) {
         this.abortController = undefined;
       }
@@ -132,19 +187,19 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   }
 
   private handleImageError = () => {
-    if (this.blobSource) {
-      this.retireBlobSource(this.blobSource);
-      this.blobSource = undefined;
+    if (this.renderSource) {
+      this.retireSource(this.renderSource);
+      this.renderSource = undefined;
     }
-    this.failed = true;
+    this.showFallback();
   };
 
   private handleOpen = (): void => {
-    const source = this.blobSource;
+    const source = this.renderSource;
     if (!source || !this.onOpen) {
       return;
     }
-    const release = this.retainBlobSource(source);
+    const release = this.retainSource(source);
     try {
       this.onOpen(source.url, release);
     } catch (error) {
@@ -156,7 +211,7 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   override render() {
     if (this.failed) {
       return html`<div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--document chat-assistant-attachment-card--compact"
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
         ?data-openable=${Boolean(this.onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
       >
@@ -171,8 +226,8 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
         })}
       </div>`;
     }
-    const blobSource = this.blobSource;
-    if (!blobSource) {
+    const renderSource = this.renderSource;
+    if (!renderSource) {
       return nothing;
     }
     return html`<button
@@ -182,9 +237,10 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
       @click=${this.handleOpen}
     >
       <img
-        src=${blobSource.url}
+        src=${renderSource.url}
         alt=${this.label}
         class="chat-message-image"
+        @load=${this.onMediaLoaded}
         @error=${this.handleImageError}
       />
     </button>`;

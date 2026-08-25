@@ -849,7 +849,7 @@ describe("chat pane keyboard shortcuts", () => {
       sessions: createSessionCapabilityFixture(),
     });
     pane.active = true;
-    state.sidebarContent = {
+    state.attachmentSidebarContent = {
       kind: "attachment",
       attachmentKind: "document",
       title: "report.pdf",
@@ -860,7 +860,7 @@ describe("chat pane keyboard shortcuts", () => {
     dispatchSidebarShortcut(pane);
 
     expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
-    expect(state.sidebarContent).toBeNull();
+    expect(state.attachmentSidebarContent).toBeNull();
   });
 
   it("toggles only the active pane's session workspace", () => {

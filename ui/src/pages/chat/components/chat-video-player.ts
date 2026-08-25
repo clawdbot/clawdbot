@@ -24,7 +24,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
 
   private media: HTMLVideoElement | null = null;
-  private previewVisible = false;
+  private mediaVisible = false;
   private viewportElement: HTMLElement | null = null;
   private stopObservingViewport: (() => void) | undefined;
   private readonly sourceController = new ChatMediaSourceController();
@@ -73,14 +73,14 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       return;
     }
     this.stopObservingViewport = observeChatAttachmentViewport(viewportElement, () => {
-      this.previewVisible = true;
+      this.mediaVisible = true;
       this.syncSource();
     });
   };
 
   private syncSource(): void {
     const media = this.media;
-    if (!media || !this.isConnected || !this.previewVisible) {
+    if (!media || !this.isConnected || !this.mediaVisible) {
       return;
     }
     const pending = this.sourceController.sync(

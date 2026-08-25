@@ -236,9 +236,9 @@ export function renderGroupedMessage(
     connectionEpoch?: number;
     assistantAttachmentAuthToken?: string | null;
     resolveArtifactDownload?: ArtifactDownloadResolver;
-    onAssistantAttachmentLoaded?: () => void;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+    onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     fetchLinkFavicon?: LinkFaviconFetcher;
@@ -530,8 +530,8 @@ export function renderGroupedMessage(
                       ${renderAssistantAttachments(
                         visibleAttachments,
                         imageRenderOptions,
-                        opts.onAssistantAttachmentLoaded,
                         onOpenSidebar,
+                        opts.onAssistantAttachmentLoaded,
                       )}
                       ${assistantViewContent}
                       ${reasoningMarkdown
@@ -606,8 +606,8 @@ export function renderGroupedMessage(
             ${renderAssistantAttachments(
               visibleAttachments,
               imageRenderOptions,
-              opts.onAssistantAttachmentLoaded,
               onOpenSidebar,
+              opts.onAssistantAttachmentLoaded,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">

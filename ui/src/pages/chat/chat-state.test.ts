@@ -28,6 +28,7 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { activatePanel, openSlot } from "./sidebar-layout.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 beforeEach(() => {
@@ -1395,7 +1396,7 @@ describe("ChatStateController render lifecycle", () => {
     } as unknown as ApplicationContext;
   }
 
-  it("owns attachment previews in the Files slot lifecycle", () => {
+  it("owns attachment views in Files without replacing Detail content", () => {
     const state = createPageState(
       createPageContext(),
       { invalidate: vi.fn(), afterCommit: () => () => {} },
@@ -1404,6 +1405,13 @@ describe("ChatStateController render lifecycle", () => {
         querySelector: () => null,
       },
     );
+    const detailContent = {
+      kind: "markdown" as const,
+      content: "Existing review",
+      rawText: "Existing review",
+    };
+    state.sidebarContent = detailContent;
+    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
 
     state.handleOpenSidebar({
       kind: "attachment",
@@ -1414,13 +1422,24 @@ describe("ChatStateController render lifecycle", () => {
 
     expect(
       state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    ).toEqual(["workspace"]);
-    expect(state.sidebarContent?.kind).toBe("attachment");
+    ).toEqual(["detail", "workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
 
-    state.handleCloseSidebar();
+    state.sidebarLayout = activatePanel(state.sidebarLayout, "detail");
+    state.handleCloseSidebar("detail");
+
+    expect(
+      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
+    ).toEqual(["workspace"]);
+    expect(state.attachmentSidebarContent?.kind).toBe("attachment");
+    expect(state.sidebarContent).toBe(detailContent);
+
+    state.handleCloseSidebar("workspace");
 
     expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
-    expect(state.sidebarContent).toBeNull();
+    expect(state.attachmentSidebarContent).toBeNull();
+    expect(state.sidebarContent).toBe(detailContent);
   });
 
   it("keeps the active observer digest when another run streams in the same session", () => {

@@ -256,6 +256,7 @@ export function createPageState(
     chatProgrammaticScrollTarget: 0,
     sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
+    attachmentSidebarContent: null,
     sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
     sidebarFocusVersion: 0,
     imageLightbox: null,
@@ -418,19 +419,21 @@ export function createPageState(
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    state.sidebarContent = content;
+    if (attachmentPreview) {
+      state.attachmentSidebarContent = content;
+    } else {
+      state.sidebarContent = content;
+    }
     state.updateSidebarLayout(fitted);
     if (targetPanel) {
       state.updateSidebarActivePanel(targetPanel.id);
     }
   };
-  state.handleCloseSidebar = () => {
-    const attachmentPreview = state.sidebarContent?.kind === "attachment";
-    const targetSlot = attachmentPreview ? "workspace" : "detail";
-    if (attachmentPreview) {
-      state.sidebarContent = null;
+  state.handleCloseSidebar = (slot) => {
+    if (slot === "workspace") {
+      state.attachmentSidebarContent = null;
     }
-    state.updateSidebarLayout(closeSlot(state.sidebarLayout, targetSlot));
+    state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };
   state.beginImageOpen = () => {
     const requestVersion = invalidateImageLightbox(state);

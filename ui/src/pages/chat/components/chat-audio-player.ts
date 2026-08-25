@@ -6,7 +6,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { openAttachmentCardFromClick, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
-import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { safeAudioAttachmentHref } from "./chat-attachment-href.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import {
   canResumeChatAudioPlayback,
@@ -501,7 +501,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   override render() {
     const progress = this.duration > 0 ? Math.min(1, this.currentTime / this.duration) : 0;
-    const downloadHref = safeAttachmentHref(this.src);
+    const downloadHref = safeAudioAttachmentHref(this.src);
     const failed = this.sourceController.readiness === "unavailable";
     const timeLabel = `${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`;
     return html`

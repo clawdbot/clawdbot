@@ -375,7 +375,7 @@ describe("markdown sidebar", () => {
     fallbackPanel.remove();
   });
 
-  it("preserves authenticated transcoded video playback in attachment previews", async () => {
+  it("preserves authenticated transcoded video playback in Files", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
@@ -407,116 +407,62 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
-  it("keeps external documents download-only", async () => {
+  it("plays normalized base64 audio from Files", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
       updateComplete?: Promise<unknown>;
     };
     panel.content = {
       kind: "attachment",
-      attachmentKind: "document",
-      title: "external.html",
-      src: "https://files.example/external.html",
-      mimeType: "text/html",
+      attachmentKind: "audio",
+      title: "inline.wav",
+      src: "data:audio/wav;base64,UklGRg==",
+      mimeType: "audio/wav",
     };
     document.body.append(panel);
     await panel.updateComplete;
 
-    expect(panel.querySelector("iframe")).toBeNull();
-    const download = panel.querySelector<HTMLAnchorElement>(
-      ".sidebar-attachment-preview__unavailable a",
-    );
-    expect(download?.href).toBe("https://files.example/external.html");
-    expect(download?.target).toBe("_blank");
-    expect(download?.rel).toBe("noreferrer");
+    const player = panel.querySelector("openclaw-chat-audio-player");
+    expect(player?.src).toBe("data:audio/wav;base64,UklGRg==");
     panel.remove();
   });
 
-  it("frames same-origin documents from an isolated fetched object URL", async () => {
-    const NativeUrl = URL;
-    let previewBlob: Blob | undefined;
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = vi.fn((object: Blob | MediaSource) => {
-          if (object instanceof Blob) {
-            previewBlob = object;
-          }
-          return "blob:sidebar-document-preview";
-        });
-        static override revokeObjectURL = vi.fn();
-      },
-    );
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        new Response("<h1>Preview</h1>", {
-          status: 200,
-          headers: { "Content-Type": "text/html", "X-Frame-Options": "DENY" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
-      content: unknown;
-      updateComplete?: Promise<unknown>;
-    };
-    panel.content = {
-      kind: "attachment",
-      attachmentKind: "document",
-      title: "preview.html",
-      src: "/__openclaw__/media/preview.html",
-      mimeType: "text/html",
-    };
-    document.body.append(panel);
-    await panel.updateComplete;
+  it.each([
+    ["external.html", "https://files.example/external.html", "text/html"],
+    ["preview.html", "/__openclaw__/media/preview.html", "text/html"],
+    ["wide.csv", "/__openclaw__/media/wide.csv", "text/csv"],
+    ["brief.pdf", "/__openclaw__/media/brief.pdf", "application/pdf"],
+  ] as const)(
+    "renders document %s as a Files card without previewing it",
+    async (title, src, mimeType) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        updateComplete?: Promise<unknown>;
+      };
+      panel.content = {
+        kind: "attachment",
+        attachmentKind: "document",
+        title,
+        src,
+        mimeType,
+      };
+      document.body.append(panel);
+      await panel.updateComplete;
 
-    await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/__openclaw__/media/preview.html",
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
-      "blob:sidebar-document-preview",
-    );
-    expect(await previewBlob?.text()).toContain(
-      'http-equiv="Content-Security-Policy" content="default-src \'none\'',
-    );
-    panel.remove();
-  });
-
-  it("renders a complete same-origin CSV table without an iframe", async () => {
-    const csv = Array.from({ length: 10 }, (_row, row) =>
-      Array.from({ length: 64 }, (_column, column) => `${row}:${column}`).join(","),
-    ).join("\n");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(csv)),
-    );
-    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
-      content: unknown;
-      updateComplete?: Promise<unknown>;
-    };
-    panel.content = {
-      kind: "attachment",
-      attachmentKind: "document",
-      title: "wide.csv",
-      src: "/__openclaw__/media/wide.csv",
-      mimeType: "text/csv",
-    };
-    document.body.append(panel);
-    await panel.updateComplete;
-
-    await vi.waitFor(() =>
-      expect(panel.querySelector(".chat-assistant-attachment-card__table")).not.toBeNull(),
-    );
-    expect(panel.querySelector("iframe")).toBeNull();
-    expect(panel.querySelectorAll("thead th")).toHaveLength(64);
-    expect(panel.querySelectorAll("tbody tr")).toHaveLength(9);
-    const tableWrap = panel.querySelector(".chat-assistant-attachment-card__table-wrap");
-    expect(tableWrap?.getAttribute("data-display")).toBe("full");
-    expect(tableWrap?.hasAttribute("data-right-truncated")).toBe(false);
-    expect(tableWrap?.hasAttribute("data-bottom-truncated")).toBe(false);
-    panel.remove();
-  });
+      expect(panel.querySelector("iframe, table, audio, video")).toBeNull();
+      expect(panel.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+      const download = panel.querySelector<HTMLAnchorElement>(
+        ".chat-assistant-attachment-card__download",
+      );
+      expect(download?.getAttribute("href")).toBe(src);
+      expect(download?.target).toBe("_blank");
+      expect(download?.rel).toBe("noreferrer");
+      expect(fetchMock).not.toHaveBeenCalled();
+      panel.remove();
+    },
+  );
 
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {

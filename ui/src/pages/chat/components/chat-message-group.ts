@@ -86,9 +86,9 @@ type RenderMessageGroupOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   onRequestUpdate?: () => void;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   assistantName?: string;
   assistantAvatar?: string | null;
   userId?: string | null;
@@ -179,9 +179,9 @@ function buildGroupedMessageRenderOptions(
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
-    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     resourceBasePath: opts.resourceBasePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,

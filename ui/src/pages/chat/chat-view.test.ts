@@ -2284,7 +2284,7 @@ describe("chat transcript rendering cache", () => {
     const onAssistantAttachmentLoaded = vi.fn();
 
     renderChatView({
-      messages: [{ role: "assistant", content: "MEDIA:https://example.com/voice.ogg" }],
+      messages: [{ role: "assistant", content: "MEDIA:https://example.com/vector.svg" }],
       onAssistantAttachmentLoaded,
     });
 

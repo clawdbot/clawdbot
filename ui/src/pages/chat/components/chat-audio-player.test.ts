@@ -32,6 +32,21 @@ afterEach(() => {
 });
 
 describe("ChatAudioPlayer", () => {
+  it("keeps the download action for normalized base64 audio", async () => {
+    const player = document.createElement("openclaw-chat-audio-player");
+    player.src = "data:audio/wav;base64,UklGRg==";
+    player.sourceIdentity = "inline-audio";
+    player.label = "inline.wav";
+    document.body.append(player);
+    await player.updateComplete;
+
+    expect(
+      player
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe("data:audio/wav;base64,UklGRg==");
+  });
+
   it("formats elapsed and total media time", async () => {
     const player = await createPlayer("timing");
     expect(

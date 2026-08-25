@@ -65,8 +65,18 @@ describe("ChatVideoPlayer", () => {
     await player.updateComplete;
     const video = player.querySelector("video")!;
     let paused = true;
+    let currentTime = 12;
+    const play = vi.spyOn(video, "play").mockImplementation(async () => {
+      paused = false;
+    });
     Object.defineProperties(video, {
-      currentTime: { configurable: true, get: () => 12 },
+      currentTime: {
+        configurable: true,
+        get: () => currentTime,
+        set: (value: number) => {
+          currentTime = value;
+        },
+      },
       paused: { configurable: true, get: () => paused },
     });
 
@@ -78,6 +88,8 @@ describe("ChatVideoPlayer", () => {
     video.dispatchEvent(new Event("play"));
 
     expect(video.getAttribute("src")).toContain("mediaTicket=B");
+    video.dispatchEvent(new Event("loadedmetadata"));
+    expect(play).toHaveBeenCalledOnce();
   });
 
   it("keeps one video element mounted across 202 preparation", async () => {

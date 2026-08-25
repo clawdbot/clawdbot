@@ -1878,22 +1878,14 @@ openclaw-session-discussion {
   min-height: 0;
 }
 
-.sidebar-attachment-preview__frame,
 .sidebar-attachment-preview__image {
   display: block;
   width: 100%;
   max-width: 100%;
+  height: auto;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-}
-
-.sidebar-attachment-preview__frame {
-  min-height: min(70vh, 720px);
-}
-
-.sidebar-attachment-preview__image {
-  height: auto;
   object-fit: contain;
 }
 

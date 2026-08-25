@@ -164,12 +164,15 @@ const buildChatAttachmentAssets = (): Record<string, FixtureAsset> => ({
     contentType: "application/pdf",
   },
   "notes.md": textAsset(
-    "# Attachment fixture\n\nA Markdown attachment with a compact preview.\n",
+    "# Attachment fixture\n\nA Markdown attachment delivered as a compact card.\n",
     "text/markdown",
   ),
-  "notes.txt": textAsset("Plain text attachment.\nSecond line for the preview.\n", "text/plain"),
+  "notes.txt": textAsset(
+    "Plain text attachment.\nSecond line in the downloaded file.\n",
+    "text/plain",
+  ),
   "preview.html": textAsset(
-    '<!doctype html><html><body style="font:16px system-ui;padding:32px;color:#172033"><h1>Attachment preview</h1><p>A real HTML attachment rendered inside the card.</p><hr><p>Scroll to see the fade at the end.</p></body></html>',
+    '<!doctype html><html><body style="font:16px system-ui;padding:32px;color:#172033"><h1>HTML attachment</h1><p>This file is delivered as a compact card.</p></body></html>',
     "text/html",
   ),
   "styles.css": textAsset(".attachment-card {\n  display: grid;\n  gap: 12px;\n}\n", "text/css"),
@@ -457,18 +460,34 @@ function readFixtureAsset(pathname: string): FixtureAsset | undefined {
 
 function serveAsset(asset: FixtureAsset, req: IncomingMessage, res: ServerResponse): void {
   const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/u);
-  const start = range?.[1] ? Number(range[1]) : 0;
-  const requestedEnd = range?.[2] ? Number(range[2]) : asset.body.length - 1;
-  const end = Math.min(requestedEnd, asset.body.length - 1);
-  const boundedStart = Math.max(0, Math.min(start, end));
-  const body = asset.body.subarray(boundedStart, end + 1);
-  res.statusCode = range ? 206 : 200;
   res.setHeader("content-type", asset.contentType);
   res.setHeader("cache-control", "no-store");
   res.setHeader("accept-ranges", "bytes");
+  let start = 0;
+  let end = asset.body.length - 1;
+  if (range) {
+    const startText = range[1] ?? "";
+    const endText = range[2] ?? "";
+    if (startText) {
+      start = Number(startText);
+      end = endText ? Math.min(Number(endText), end) : end;
+    } else {
+      const suffixLength = Number(endText);
+      start = Math.max(0, asset.body.length - suffixLength);
+    }
+    if ((!startText && !endText) || start >= asset.body.length || start > end) {
+      res.statusCode = 416;
+      res.setHeader("content-range", `bytes */${asset.body.length}`);
+      res.setHeader("content-length", "0");
+      res.end();
+      return;
+    }
+  }
+  const body = asset.body.subarray(start, end + 1);
+  res.statusCode = range ? 206 : 200;
   res.setHeader("content-length", String(body.length));
   if (range) {
-    res.setHeader("content-range", `bytes ${boundedStart}-${end}/${asset.body.length}`);
+    res.setHeader("content-range", `bytes ${start}-${end}/${asset.body.length}`);
   }
   if (req.method === "HEAD") {
     res.end();

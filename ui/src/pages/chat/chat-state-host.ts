@@ -120,6 +120,7 @@ export type ChatPageHost = ChatHost &
     chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
     sidebarLayout: SidebarLayout;
     sidebarContent: SidebarContent | null;
+    attachmentSidebarContent: Extract<SidebarContent, { kind: "attachment" }> | null;
     sidebarFocusPanelId: string;
     sidebarFocusVersion: number;
     updateSidebarActivePanel: (panelId: string) => void;
@@ -150,7 +151,7 @@ export type ChatPageHost = ChatHost &
     updateQueuedChatMessageEdit: (draftText: string) => void;
     submitQueuedChatMessageEdit: () => void;
     cancelQueuedChatMessageEdit: () => void;
-    handleCloseSidebar: () => void;
+    handleCloseSidebar: (slot: "detail" | "workspace") => void;
     updateSidebarLayout: (layout: SidebarLayout) => void;
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;

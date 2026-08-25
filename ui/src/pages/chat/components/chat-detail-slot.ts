@@ -78,7 +78,8 @@ export function renderChatDetailSlot(params: {
       .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
         host.handleOpenImage(item, host.beginImageOpen())}
       .embedded=${true}
-      @chat-detail-panel-close=${() => host.handleCloseSidebar()}
+      @chat-detail-panel-close=${() =>
+        host.handleCloseSidebar(content.kind === "attachment" ? "workspace" : "detail")}
     ></openclaw-chat-detail-panel>`
   );
 }

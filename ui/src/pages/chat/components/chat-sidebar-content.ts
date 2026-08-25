@@ -29,15 +29,11 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { isSameOriginAttachmentHref, safeAttachmentHref } from "./chat-attachment-href.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
+import { safeAttachmentHref, safeAudioAttachmentHref } from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
-import {
-  loadDocumentFramePreview,
-  renderAttachmentDocumentPreview,
-  resolveDocumentPreviewText,
-} from "./chat-message-document-preview.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
@@ -52,19 +48,15 @@ function renderSidebarAttachment(
 ) {
   const liveSource = content.resolveSource?.(onRequestUpdate, runtime);
   const source = content.resolveSource ? liveSource : content;
-  const src = safeAttachmentHref(source?.src ?? "");
+  const sourceHref = source?.src ?? "";
+  const src =
+    content.attachmentKind === "audio" || content.mimeType?.toLowerCase().startsWith("audio/")
+      ? safeAudioAttachmentHref(sourceHref)
+      : safeAttachmentHref(sourceHref);
   const authToken = content.resolveSource
     ? (liveSource?.authToken ?? null)
     : (content.authToken ?? null);
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  const extension = content.title.split(".").pop()?.toLowerCase() ?? "";
-  const isHtml = mimeType === "text/html" || extension === "html" || extension === "htm";
-  const isPdf = mimeType === "application/pdf" || extension === "pdf";
-  const isDelimited =
-    mimeType === "text/csv" ||
-    mimeType === "text/tab-separated-values" ||
-    extension === "csv" ||
-    extension === "tsv";
   if (!src) {
     return html`<div class="sidebar-attachment-preview__unavailable">
       ${t("chat.attachments.previewUnavailable")}
@@ -99,71 +91,16 @@ function renderSidebarAttachment(
   if (content.attachmentKind === "image" || mimeType.startsWith("image/")) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
   }
-  if (isDelimited && isSameOriginAttachmentHref(src, window.location.href)) {
-    const sourceIdentity = content.sourceIdentity ?? content.src ?? src;
-    const previewText = resolveDocumentPreviewText(
-      src,
-      sourceIdentity,
-      source?.sizeBytes ?? content.sizeBytes,
-      onRequestUpdate,
-      "full",
-    );
-    if (previewText !== null) {
-      return renderAttachmentDocumentPreview(
-        "table",
-        {
-          kind: "document",
-          label: content.title,
-          mimeType: content.mimeType ?? undefined,
-          url: sourceIdentity,
-        },
-        previewText,
-        undefined,
-        "full",
-      );
-    }
-  }
-  const canFrame =
-    !isDelimited &&
-    (mimeType.startsWith("text/") ||
-      mimeType === "application/json" ||
-      mimeType === "application/pdf" ||
-      ["htm", "html", "js", "json", "md", "pdf", "txt"].includes(extension));
-  if (canFrame && isSameOriginAttachmentHref(src, window.location.href)) {
-    const frameState = loadDocumentFramePreview(
-      src,
-      content.sourceIdentity ?? content.src ?? src,
-      onRequestUpdate,
-      isHtml,
-      source?.sizeBytes ?? content.sizeBytes,
-    );
-    if (typeof frameState === "object") {
-      return html`<iframe
-        class="sidebar-attachment-preview__frame"
-        src=${frameState.src}
-        title=${content.title}
-        sandbox=${isPdf ? "allow-scripts" : ""}
-      ></iframe>`;
-    }
-    if (frameState === "loading") {
-      return html`<div class="sidebar-attachment-preview__unavailable">
-        ${t("chat.mediaPlayer.preparing")}
-      </div>`;
-    }
-  }
-  return html`
-    <div class="sidebar-attachment-preview__unavailable">
-      <span>${t("chat.attachments.previewUnavailable")}</span>
-      <a
-        class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__download"
-        href=${src}
-        download=${content.title}
-        target="_blank"
-        rel="noreferrer"
-        >${icons.download} ${t("chat.attachments.download")}</a
-      >
-    </div>
-  `;
+  return html`<div class="chat-assistant-attachment-card chat-assistant-attachment-card--compact">
+    ${renderAttachmentCardHeader({
+      kind: content.attachmentKind ?? "document",
+      label: content.title,
+      mimeType: content.mimeType ?? undefined,
+      sizeBytes: source?.sizeBytes ?? content.sizeBytes,
+      downloadHref: src,
+      visualMode: "large-placeholder",
+    })}
+  </div> `;
 }
 function toPlainTextCodeFence(value: string, language = ""): string {
   const fenceHeader = language ? `\`\`\`${language}` : "```";

@@ -33,10 +33,10 @@ function chatProgressCardPlacement(params: {
 }
 
 export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: SidebarSlotId): void {
-  // Attachment previews temporarily own Files content. Release that owner
+  // Attachment views temporarily own Files content. Release that owner
   // with the slot so reopening Files restores the session workspace.
-  if (slot === "workspace" && state.sidebarContent?.kind === "attachment") {
-    state.sidebarContent = null;
+  if (slot === "workspace") {
+    state.attachmentSidebarContent = null;
   }
 }
 

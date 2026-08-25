@@ -3,6 +3,9 @@ import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
+// The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
+let attachmentIconStyles: Promise<unknown> | undefined;
+
 type AttachmentFileIconFamily =
   | "unknown"
   | "pdf"
@@ -268,6 +271,8 @@ export function renderAttachmentFileIcon(options: {
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
 }) {
+  attachmentIconStyles ??= import("../../../styles/chat/attachments.css");
+  void attachmentIconStyles;
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
   const compactLight = resolved.compact
     ? fileIconAssetPath(`compact/light/${resolved.compact}`)

@@ -11,10 +11,7 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
-import {
-  getChatMediaRenderVersion,
-  releaseChatMediaResourceSubscriber,
-} from "./chat-message-media.ts";
+import { getChatMediaRenderVersion } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
@@ -26,29 +23,6 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-sidebar.ts";
 
 const localStorageValues = new Map<string, string>();
-const documentPreviewSubscribers = new Set<() => void>();
-
-function autoIntersectAttachmentPreviews(): void {
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      private readonly callback: IntersectionObserverCallback;
-
-      constructor(callback: IntersectionObserverCallback) {
-        this.callback = callback;
-      }
-
-      observe() {
-        this.callback(
-          [{ isIntersecting: true } as IntersectionObserverEntry],
-          this as unknown as IntersectionObserver,
-        );
-      }
-
-      disconnect() {}
-    },
-  );
-}
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
@@ -678,35 +652,8 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
   };
 }
 
-async function requireAudioPlayer(container: HTMLElement) {
-  const player = expectElement(
-    container,
-    "openclaw-chat-audio-player",
-    HTMLElement,
-  ) as HTMLElement & { updateComplete: Promise<unknown> };
-  await player.updateComplete;
-  return player;
-}
-
-async function requireVideoPlayer(container: HTMLElement) {
-  const player = expectElement(
-    container,
-    "openclaw-chat-video-player",
-    HTMLElement,
-  ) as HTMLElement & { updateComplete: Promise<unknown> };
-  await player.updateComplete;
-  return player;
-}
-
 afterEach(() => {
-  for (const subscriber of documentPreviewSubscribers) {
-    releaseChatMediaResourceSubscriber(subscriber);
-  }
-  documentPreviewSubscribers.clear();
   markdownRenderMock.mockClear();
-  document.querySelectorAll("[data-media-player-test-fixture]").forEach((element) => {
-    element.remove();
-  });
   document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);
     element.remove();
@@ -3428,9 +3375,8 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("renders assistant MEDIA attachments, voice-note semantics, and reply preview", async () => {
+  it("renders assistant MEDIA attachments, voice-note semantics, and reply preview", () => {
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const onOpenImage = vi.fn();
     renderAssistantMessage(
       container,
@@ -3456,12 +3402,13 @@ describe("grouped chat rendering", () => {
       src: "https://example.com/photo.png",
       title: "photo.png",
     });
-    const audioPlayer = await requireAudioPlayer(container);
-    expect(expectElement(audioPlayer, "audio", HTMLAudioElement).src).toBe(
-      "https://example.com/voice.ogg",
+    expect(container.querySelector(".chat-assistant-attachment-card__title")?.textContent).toBe(
+      "voice.ogg",
     );
-    expect((audioPlayer as unknown as { voiceNote?: boolean }).voiceNote).toBe(true);
-    expect(container.querySelector(".chat-assistant-attachment-badge")).toBeNull();
+    expect(container.querySelector("audio, openclaw-chat-audio-player")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent).toContain(
+      "Voice note",
+    );
   });
 
   it("renders a clickable quoted preview for structured user replies", () => {
@@ -3535,68 +3482,6 @@ describe("grouped chat rendering", () => {
     expect(preview?.querySelector(".session-run-spinner")).toBeInstanceOf(HTMLElement);
   });
 
-  it("notifies when assistant audio and video attachment metadata loads", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
-    const onAssistantAttachmentLoaded = vi.fn();
-
-    renderAssistantMessage(
-      container,
-      createAssistantMessage(
-        "Audio and video\nMEDIA:https://example.com/voice.ogg\nMEDIA:https://example.com/clip.mp4",
-        {
-          id: "assistant-media-layout",
-        },
-      ),
-      { showToolCalls: false, onAssistantAttachmentLoaded },
-    );
-
-    const audioPlayer = await requireAudioPlayer(container);
-    expectElement(audioPlayer, "audio", HTMLAudioElement).dispatchEvent(
-      new Event("loadedmetadata", { bubbles: true }),
-    );
-    expectElement(container, "video", HTMLVideoElement).dispatchEvent(
-      new Event("loadedmetadata", { bubbles: true }),
-    );
-
-    expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
-  });
-
-  it("notifies when streamed audio and video attachment metadata loads", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
-    const onAssistantAttachmentLoaded = vi.fn();
-
-    render(
-      renderStreamGroup(
-        [
-          {
-            kind: "stream",
-            key: "stream:media:live",
-            text:
-              "Streaming audio and video\n" +
-              "MEDIA:https://example.com/voice.ogg\n" +
-              "MEDIA:https://example.com/clip.mp4",
-            startedAt: 1,
-            isStreaming: true,
-          },
-        ],
-        { onAssistantAttachmentLoaded },
-      ),
-      container,
-    );
-
-    const audioPlayer = await requireAudioPlayer(container);
-    expectElement(audioPlayer, "audio", HTMLAudioElement).dispatchEvent(
-      new Event("loadedmetadata", { bubbles: true }),
-    );
-    expectElement(container, "video", HTMLVideoElement).dispatchEvent(
-      new Event("loadedmetadata", { bubbles: true }),
-    );
-
-    expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
-  });
-
   it("checks local assistant audio against server metadata while preview roots load", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -3611,7 +3496,6 @@ describe("grouped chat rendering", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const renderMessage = () =>
       renderAssistantMessage(
         container,
@@ -3632,28 +3516,23 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await flushAssistantAttachmentAvailabilityChecks();
 
-    const audioPlayer = await requireAudioPlayer(container);
-    const audio = expectElement(audioPlayer, "audio", HTMLAudioElement);
-    expect(audio.getAttribute("src")).toBe(
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe(
       `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
     );
-    expect((audioPlayer as unknown as { serverDurationMs?: number }).serverDurationMs).toBe(2_345);
   });
 
-  it("resolves managed transcode audio through an artifact ticket", async () => {
+  it("resolves managed transcode audio to a compact downloadable card", async () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const ticketedUrl = `${source}?mediaTicket=managed-ticket`;
     const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe(`${ticketedUrl}&playback=1`);
-      expect(init?.method).toBe("HEAD");
-      expect(new Headers(init?.headers).get("Authorization")).toBeNull();
-      return new Response(null, { status: 200 });
-    });
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const rerender = () =>
       renderAssistantMessage(
         container,
@@ -3679,19 +3558,17 @@ describe("grouped chat rendering", () => {
 
     rerender();
     await flushAssistantAttachmentAvailabilityChecks();
-    const player = await requireAudioPlayer(container);
-    await flushAssistantAttachmentAvailabilityChecks();
-    await player.updateComplete;
-
     expect(resolveArtifactDownload).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       artifactId,
     });
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(
-      `${ticketedUrl}&playback=1`,
-    );
-    expect((player as unknown as { serverDurationMs?: number }).serverDurationMs).toBe(2_345);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe(ticketedUrl);
+    expect(container.querySelector("audio, openclaw-chat-audio-player")).toBeNull();
   });
 
   it("keeps a valid managed media ticket while refresh retries", async () => {
@@ -3708,7 +3585,6 @@ describe("grouped chat rendering", () => {
       })
       .mockRejectedValueOnce(new Error("refresh unavailable"));
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const rerender = () =>
       renderAssistantMessage(
         container,
@@ -3732,16 +3608,17 @@ describe("grouped chat rendering", () => {
 
     rerender();
     await flushAssistantAttachmentAvailabilityChecks();
-    const player = await requireAudioPlayer(container);
-    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(ticketedUrl);
+    const download = () =>
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href");
+    expect(download()).toBe(ticketedUrl);
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
-    await player.updateComplete;
-
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
-    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(ticketedUrl);
+    expect(download()).toBe(ticketedUrl);
   });
 
   it("backs off stale managed ticket refreshes and eventually marks them unavailable", async () => {
@@ -3764,7 +3641,6 @@ describe("grouped chat rendering", () => {
       });
     });
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const rerender = () =>
       renderAssistantMessage(
         container,
@@ -3789,18 +3665,18 @@ describe("grouped chat rendering", () => {
     rerender();
     await flushAssistantAttachmentAvailabilityChecks();
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(4_999);
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
     finishSecondRequest?.();
     await flushAssistantAttachmentAvailabilityChecks();
     await vi.advanceTimersByTimeAsync(9_999);
@@ -3825,7 +3701,6 @@ describe("grouped chat rendering", () => {
       expiresAt,
     }));
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const rerender = () =>
       renderAssistantMessage(
         container,
@@ -3856,12 +3731,14 @@ describe("grouped chat rendering", () => {
 
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
     expect(
-      container.querySelector("openclaw-chat-audio-player audio")?.getAttribute("src"),
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
     ).toContain("mediaTicket=short-2");
     expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
 
     await vi.advanceTimersByTimeAsync(4_999);
-    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     await flushAssistantAttachmentAvailabilityChecks();
 
@@ -3882,7 +3759,6 @@ describe("grouped chat rendering", () => {
       ).toISOString(),
     }));
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const rerender = () =>
       renderAssistantMessage(
         container,
@@ -3913,12 +3789,14 @@ describe("grouped chat rendering", () => {
 
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
     expect(
-      container.querySelector("openclaw-chat-audio-player audio")?.getAttribute("src"),
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
     ).toContain("mediaTicket=short-3");
 
     await vi.advanceTimersByTimeAsync(5_000);
     await flushAssistantAttachmentAvailabilityChecks();
-    expect(container.querySelector("openclaw-chat-audio-player")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
     await vi.advanceTimersByTimeAsync(15_000);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
@@ -3933,7 +3811,6 @@ describe("grouped chat rendering", () => {
     const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: refreshedSource }));
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const rerender = () =>
       renderAssistantMessage(
         container,
@@ -3957,15 +3834,15 @@ describe("grouped chat rendering", () => {
 
     rerender();
     await flushAssistantAttachmentAvailabilityChecks();
-    const player = await requireAudioPlayer(container);
-
     expect(resolveArtifactDownload).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       artifactId,
     });
-    expect(expectElement(player, "audio", HTMLAudioElement).getAttribute("src")).toBe(
-      refreshedSource,
-    );
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe(refreshedSource);
 
     await vi.advanceTimersByTimeAsync(4 * 60_000 + 30_001);
     await flushAssistantAttachmentAvailabilityChecks();
@@ -4089,259 +3966,57 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("shows the download fallback when the video element emits an error", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
+  it.each([
+    ["audio", "recording.mp3", "audio/mpeg"],
+    ["video", "clip.mp4", "video/mp4"],
+    ["document", "preview.html", "text/html"],
+    ["document", "report.pdf", "application/pdf"],
+    ["document", "rows.csv", "text/csv"],
+    ["document", "notes.txt", "text/plain"],
+  ] as const)(
+    "renders %s attachment %s as a compact card without an inline preview",
+    (kind, label, mimeType) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+      const container = document.createElement("div");
+      const onOpenSidebar = vi.fn();
+      const source = `https://example.com/${label}`;
 
-    renderAssistantMessage(
-      container,
-      createAssistantMessage(
-        [createAttachmentBlock("https://example.com/clip.mp4", "video", "clip.mp4", "video/mp4")],
-        { id: "assistant-video-unplayable" },
-      ),
-      { showToolCalls: false },
-    );
+      renderAssistantMessage(
+        container,
+        createAssistantMessage([createAttachmentBlock(source, kind, label, mimeType)], {
+          id: `assistant-${kind}-${label}-card`,
+        }),
+        { showToolCalls: false, onOpenSidebar },
+      );
 
-    const videoPlayer = await requireVideoPlayer(container);
-    const card = expectElement(videoPlayer, ".chat-assistant-attachment-card--video", HTMLElement);
-    expectElement(card, "video", HTMLVideoElement).dispatchEvent(new Event("error"));
-    await videoPlayer.updateComplete;
-    expect(card.hasAttribute("data-unplayable")).toBe(true);
-    expect(card.querySelector(".chat-assistant-video-fallback")?.textContent).toContain(
-      "Can't play this format — download instead.",
-    );
-    const download = card.querySelector<HTMLAnchorElement>(
-      ".chat-assistant-attachment-card__download",
-    );
-    expect(download?.href).toBe("https://example.com/clip.mp4");
-    expect(download?.getAttribute("download")).toBe("clip.mp4");
-  });
-
-  it("renders a text document as a compact card without fetching a preview", () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
-
-    renderAssistantMessage(
-      container,
-      createAssistantMessage(
-        [
-          createAttachmentBlock(
-            "blob:https://example.com/pasted-text-preview",
-            "document",
-            "pasted-text-1723000000000.txt",
-            "text/plain",
-          ),
-        ],
-        { id: "assistant-text-document-card" },
-      ),
-      { showToolCalls: false, onOpenSidebar },
-    );
-
-    const card = expectElement(container, ".chat-assistant-attachment-card--document", HTMLElement);
-    expect(card.classList.contains("chat-assistant-attachment-card--compact")).toBe(true);
-    expect(card.querySelector(".chat-assistant-attachment-card__preview-text")).toBeNull();
-    const open = expectElement(card, ".chat-assistant-attachment-card__expand", HTMLButtonElement);
-    expect(open.textContent?.trim()).toBe("Open");
-    expect(
-      card
-        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
-        ?.getAttribute("download"),
-    ).toBe("pasted-text-1723000000000.txt");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("renders a non-text document card without fetching a preview", () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
-
-    renderAssistantMessage(
-      container,
-      createAssistantMessage(
-        [
-          createAttachmentBlock(
-            "https://example.com/report.pdf",
-            "document",
-            "report.pdf",
-            "application/pdf",
-          ),
-        ],
-        { id: "assistant-pdf-document-card" },
-      ),
-      { showToolCalls: false },
-    );
-
-    const card = expectElement(container, ".chat-assistant-attachment-card--document", HTMLElement);
-    expect(
-      card
-        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
-        ?.getAttribute("download"),
-    ).toBe("report.pdf");
-    expect(card.querySelector(".chat-assistant-attachment-card__preview-text")).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("does not fetch a preview for an oversized CSV document", () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
-
-    renderAssistantMessage(
-      container,
-      createAssistantMessage(
-        [
-          createAttachmentBlock(
-            "https://example.com/large.csv",
-            "document",
-            "large.csv",
-            "text/csv",
-            { sizeBytes: 256 * 1024 + 1 },
-          ),
-        ],
-        { id: "assistant-oversized-csv-document" },
-      ),
-      { showToolCalls: false },
-    );
-
-    expect(container.querySelector(".chat-assistant-attachment-card--document")).not.toBeNull();
-    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("truncates CSV preview downloads at 16 KiB", async () => {
-    autoIntersectAttachmentPreviews();
-    const fetchMock = vi.fn(async () => new Response(`header\n${"x".repeat(17 * 1024)}`));
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.body.appendChild(document.createElement("div"));
-    const message = createAssistantMessage(
-      [
-        createAttachmentBlock(
-          new URL("/truncated.csv", window.location.href).href,
-          "document",
-          "truncated.csv",
-          "text/csv",
-        ),
-      ],
-      { id: "assistant-truncated-csv-document" },
-    );
-    const rerender = () =>
-      renderAssistantMessage(container, message, {
-        showToolCalls: false,
-        onRequestUpdate: rerender,
-      });
-    documentPreviewSubscribers.add(rerender);
-
-    rerender();
-
-    await vi.waitFor(() => {
+      const card = expectElement(
+        container,
+        ".chat-assistant-attachment-card--compact",
+        HTMLElement,
+      );
+      expect(card.querySelector("iframe, table, audio, video")).toBeNull();
+      const open = expectElement(
+        card,
+        ".chat-assistant-attachment-card__expand",
+        HTMLButtonElement,
+      );
+      expect(open.textContent?.trim()).toBe("Open");
       expect(
-        container.querySelector(".chat-assistant-attachment-card__table")?.textContent,
-      ).toContain("header");
-    });
-    expect(container.querySelector("tbody td")?.textContent?.endsWith("…")).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
+        card
+          .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+          ?.getAttribute("download"),
+      ).toBe(label);
+      open.click();
+      expect(onOpenSidebar).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "attachment", attachmentKind: kind, title: label }),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("falls back to a compact card when an unknown-size CSV exceeds the byte budget", async () => {
-    autoIntersectAttachmentPreviews();
-    const chunkBytes = new TextEncoder().encode("y".repeat(1024));
-    let pulls = 0;
-    let cancelled = false;
-    const endlessBody = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(pulls === 1 ? new TextEncoder().encode("header\n") : chunkBytes);
-      },
-      cancel() {
-        cancelled = true;
-      },
-    });
-    const fetchMock = vi.fn(async () => new Response(endlessBody));
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  it("omits attachment anchors for unsafe transcript URLs", () => {
     const container = document.body.appendChild(document.createElement("div"));
-    const message = createAssistantMessage(
-      [
-        createAttachmentBlock(
-          new URL("/endless.csv", window.location.href).href,
-          "document",
-          "endless.csv",
-          "text/csv",
-        ),
-      ],
-      { id: "assistant-endless-csv-document" },
-    );
-    const rerender = () =>
-      renderAssistantMessage(container, message, {
-        showToolCalls: false,
-        onRequestUpdate: rerender,
-      });
-    documentPreviewSubscribers.add(rerender);
-
-    rerender();
-
-    await vi.waitFor(() => {
-      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
-    });
-    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
-    expect(cancelled).toBe(true);
-    // The shared preview budget is 256 KiB; an unbounded read would keep pulling forever.
-    expect(pulls).toBeLessThanOrEqual(258);
-  });
-
-  it("rejects a single oversized CSV chunk before decoding it", async () => {
-    autoIntersectAttachmentPreviews();
-    const giantChunk = new TextEncoder().encode(`header\n${"z".repeat(1024 * 1024)}`);
-    const giantBody = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(giantChunk);
-        controller.close();
-      },
-    });
-    const fetchMock = vi.fn(async () => new Response(giantBody));
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const decodedByteLengths: number[] = [];
-    class TrackingTextDecoder extends TextDecoder {
-      override decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions): string {
-        if (input) {
-          decodedByteLengths.push(input.byteLength);
-        }
-        return super.decode(input, options);
-      }
-    }
-    vi.stubGlobal("TextDecoder", TrackingTextDecoder);
-    const container = document.body.appendChild(document.createElement("div"));
-    const message = createAssistantMessage(
-      [
-        createAttachmentBlock(
-          new URL("/one-giant-chunk.csv", window.location.href).href,
-          "document",
-          "one-giant-chunk.csv",
-          "text/csv",
-        ),
-      ],
-      { id: "assistant-oversized-chunk-csv-document" },
-    );
-    const rerender = () =>
-      renderAssistantMessage(container, message, {
-        showToolCalls: false,
-        onRequestUpdate: rerender,
-      });
-    documentPreviewSubscribers.add(rerender);
-
-    rerender();
-
-    await vi.waitFor(() => {
-      expect(container.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
-    });
-    expect(container.querySelector(".chat-assistant-attachment-card__table")).toBeNull();
-    expect(decodedByteLengths).toEqual([]);
-  });
-
-  it("omits attachment anchors for unsafe transcript URLs", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
 
     renderAssistantMessage(
       container,
@@ -4356,8 +4031,8 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false },
     );
 
-    await requireAudioPlayer(container);
     expect(container.querySelectorAll(".chat-assistant-attachments a")).toHaveLength(0);
+    expect(container.querySelector("audio, video, iframe, table")).toBeNull();
     expect(container.textContent).toContain("unsafe.pdf");
   });
 
@@ -4507,7 +4182,7 @@ describe("grouped chat rendering", () => {
     ).toContain("mediaTicket=ticket-new");
   });
 
-  it("queues refreshed audio tickets until playback needs a new source", async () => {
+  it("refreshes the download URL on an audio attachment card", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
     const source = `/tmp/openclaw/${crypto.randomUUID()}-refresh.mp3`;
@@ -4525,7 +4200,6 @@ describe("grouped chat rendering", () => {
       });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const rerender = () =>
       renderAssistantMessage(
         container,
@@ -4545,29 +4219,16 @@ describe("grouped chat rendering", () => {
 
     rerender();
     await flushAssistantAttachmentAvailabilityChecks();
-    const player = await requireAudioPlayer(container);
-    const audio = expectElement(player, "audio", HTMLAudioElement);
-    Object.defineProperties(audio, {
-      paused: { configurable: true, value: true },
-      currentTime: { configurable: true, writable: true, value: 24 },
-      duration: { configurable: true, value: 90 },
-    });
-    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-old");
+    const download = () =>
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href");
+    expect(download()).toContain("mediaTicket=ticket-old");
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
-    await player.updateComplete;
-
-    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-old");
-    expect(
-      player.querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")?.href,
-    ).toContain("mediaTicket=ticket-new");
-
-    audio.dispatchEvent(new Event("error"));
-    expect(audio.getAttribute("src")).toContain("mediaTicket=ticket-new");
-    audio.currentTime = 0;
-    audio.dispatchEvent(new Event("loadedmetadata"));
-    expect(audio.currentTime).toBe(24);
+    expect(download()).toContain("mediaTicket=ticket-new");
+    expect(container.querySelector("audio, openclaw-chat-audio-player")).toBeNull();
   });
 
   it("rechecks local assistant media when its auth token changes", async () => {
@@ -4764,9 +4425,8 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Blocked\nDone");
   });
 
-  it("renders transcript video URLs with encoded extensions", async () => {
+  it("renders transcript video URLs with encoded extensions as cards", () => {
     const container = document.body.appendChild(document.createElement("div"));
-    container.dataset.mediaPlayerTestFixture = "";
     const mediaUrl = "https://cdn.example/clip%2Emp4?download=1";
 
     renderGroupedMessage(
@@ -4779,8 +4439,12 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false },
     );
 
-    const videoPlayer = await requireVideoPlayer(container);
-    expect(expectElement(videoPlayer, "video", HTMLVideoElement).src).toBe(mediaUrl);
+    expect(
+      container
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe(mediaUrl);
+    expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
   });
 
   it("renders transcript image variants and structured image blocks", async () => {
@@ -5074,7 +4738,7 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("refreshes a managed attachment ticket while its sidebar preview stays open", async () => {
+  it("refreshes a managed attachment ticket while its Files player stays open", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-24T00:00:00.000Z"));
     const attachmentId = crypto.randomUUID();
@@ -5112,12 +4776,7 @@ describe("grouped chat rendering", () => {
 
     rerender();
     await flushAssistantAttachmentAvailabilityChecks();
-    const transcriptPlayer = await requireVideoPlayer(container);
-    expectElement(
-      transcriptPlayer,
-      ".chat-assistant-attachment-card__expand",
-      HTMLButtonElement,
-    ).click();
+    expectElement(container, ".chat-assistant-attachment-card__expand", HTMLButtonElement).click();
 
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

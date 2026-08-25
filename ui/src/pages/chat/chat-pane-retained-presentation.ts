@@ -84,6 +84,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // so the transcript loader's timer/fetch loop must be stopped here.
       resetTaskDetail(state);
       state.sidebarContent = null;
+      state.attachmentSidebarContent = null;
       state.requestUpdate?.();
     }
     this.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");

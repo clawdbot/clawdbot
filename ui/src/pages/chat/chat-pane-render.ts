@@ -527,8 +527,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
-      // Metadata can resize a committed row; re-enter the scroll owner so the
-      // follow lock wins.
+      // Lazy SVG sizing can resize a committed row; re-enter the scroll owner
+      // so an active follow lock stays pinned to the latest message.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,

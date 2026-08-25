@@ -211,9 +211,9 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onPendingReadsChange?: (delta: 1 | -1) => void;
     onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
     onRemoveAttachment?: (attachment: ChatAttachment) => void;
-    onAssistantAttachmentLoaded?: () => void;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+    onAssistantAttachmentLoaded?: () => void;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
     onRefresh: () => void;
@@ -374,9 +374,9 @@ export function renderChat(props: ChatProps) {
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       onOpenSessionLink: props.onOpenSessionLink,
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
-      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       onRequestOpenImage: props.onRequestOpenImage,
       onOpenImage: openImage,
+      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       onRequestUpdate: requestUpdate,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
