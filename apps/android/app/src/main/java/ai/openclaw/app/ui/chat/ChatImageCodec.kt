@@ -17,7 +17,10 @@ import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.LruCache
 import androidx.core.graphics.scale
+import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -248,8 +251,9 @@ internal fun decodeImageBytes(
       },
     ) ?: return null
 
-  decodedBitmapCache.put(cacheKey, bitmap)
-  return bitmap
+  val oriented = JpegSizeLimiter.normalizeOrientation(bitmap, imageOrientation { ByteArrayInputStream(bytes) })
+  decodedBitmapCache.put(cacheKey, oriented)
+  return oriented
 }
 
 /** Computes Android's power-of-two bitmap sampling size for bounded decode. */
@@ -302,15 +306,25 @@ private fun decodeScaledBitmap(
       )
     } ?: return null
 
-  val longestEdge = max(decoded.width, decoded.height)
-  if (longestEdge <= maxDimension) return decoded
+  val oriented = JpegSizeLimiter.normalizeOrientation(decoded, imageOrientation { resolver.openInputStream(uri) })
+  val longestEdge = max(oriented.width, oriented.height)
+  if (longestEdge <= maxDimension) return oriented
 
   val scale = maxDimension.toDouble() / longestEdge.toDouble()
-  val targetWidth = max(1, (decoded.width * scale).roundToInt())
-  val targetHeight = max(1, (decoded.height * scale).roundToInt())
-  val scaled = decoded.scale(targetWidth, targetHeight, true)
-  if (scaled !== decoded) {
-    decoded.recycle()
+  val targetWidth = max(1, (oriented.width * scale).roundToInt())
+  val targetHeight = max(1, (oriented.height * scale).roundToInt())
+  val scaled = oriented.scale(targetWidth, targetHeight, true)
+  if (scaled !== oriented) {
+    oriented.recycle()
   }
   return scaled
 }
+
+private fun imageOrientation(open: () -> InputStream?): Int =
+  try {
+    open()?.use { stream ->
+      ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+    } ?: ExifInterface.ORIENTATION_NORMAL
+  } catch (_: Exception) {
+    ExifInterface.ORIENTATION_NORMAL
+  }
