@@ -271,6 +271,7 @@
 "gateway":
   - changed-files:
       - any-glob-to-any-file:
+          - "packaging/gateway-msix/**"
           - "src/gateway/**"
           - "packages/gateway-protocol/src/**"
           - "src/daemon/**"

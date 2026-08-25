@@ -1,0 +1,10 @@
+<Project>
+
+  <Import Project="..\..\Directory.Build.props"
+          Condition="Exists('..\..\Directory.Build.props')" />
+
+  <PropertyGroup>
+    <MSBuildProjectExtensionsPath Condition="'$(IncludePackagingContent)' == 'true'">$(MSBuildProjectDirectory)\obj\packaging\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+
+</Project>

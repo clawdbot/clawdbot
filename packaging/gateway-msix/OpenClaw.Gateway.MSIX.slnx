@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OpenClaw.Gateway.MSIXHost/OpenClaw.Gateway.MSIXHost.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenClaw.Gateway.MSIXHost.Tests/OpenClaw.Gateway.MSIXHost.Tests.csproj" />
+  </Folder>
+</Solution>

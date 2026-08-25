@@ -1,0 +1,230 @@
+name: Gateway MSIX
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/gateway-msix.yml"
+      - "packaging/gateway-msix/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "scripts/package-openclaw-for-docker.mjs"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/gateway-msix.yml"
+      - "packaging/gateway-msix/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "scripts/package-openclaw-for-docker.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24.15.0
+  PNPM_VERSION: 11.22.0
+
+jobs:
+  test-host:
+    name: Test Gateway MSIX host
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: packaging/gateway-msix/global.json
+          cache: true
+          cache-dependency-path: packaging/gateway-msix/Directory.Packages.props
+
+      - name: Restore
+        run: dotnet restore .\packaging\gateway-msix\OpenClaw.Gateway.MSIX.slnx
+
+      - name: Test
+        run: >
+          dotnet test .\packaging\gateway-msix\OpenClaw.Gateway.MSIX.slnx
+          --configuration Release
+          --no-restore
+
+  build-package:
+    name: Build current OpenClaw package
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      package_version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build OpenClaw
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
+        run: |
+          pnpm build
+          pnpm ui:build
+
+      - name: Pack current checkout
+        id: source
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/openclaw-package"
+          mkdir -p "${artifact_dir}"
+          node scripts/package-openclaw-for-docker.mjs \
+            --allow-unreleased-changelog \
+            --skip-build \
+            --pnpm-pack \
+            --output-dir "${artifact_dir}" \
+            --output-name openclaw.tgz
+
+          source_sha="$(git rev-parse HEAD)"
+          package_version="$(node -p "require('./package.json').version")"
+          echo "sha=${source_sha}" >> "${GITHUB_OUTPUT}"
+          echo "version=${package_version}" >> "${GITHUB_OUTPUT}"
+
+          cat > "${artifact_dir}/source.json" <<EOF
+          {
+            "repository": "https://github.com/${GITHUB_REPOSITORY}",
+            "requestedRef": "${GITHUB_SHA}",
+            "resolvedCommit": "${source_sha}",
+            "packageVersion": "${package_version}"
+          }
+          EOF
+
+      - name: Upload intermediate package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-gateway-npm-package
+          path: ${{ runner.temp }}/openclaw-package/
+          if-no-files-found: error
+          retention-days: 7
+
+  build-payload:
+    name: Build ${{ matrix.architecture }} Gateway payload
+    needs: build-package
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture:
+          - x64
+          - arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download intermediate package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-gateway-npm-package
+          path: ${{ runner.temp }}\openclaw-package
+
+      - name: Stage and archive payload
+        shell: pwsh
+        run: |
+          .\packaging\gateway-msix\scripts\Build-Payload.ps1 `
+            -PackageDirectory '${{ runner.temp }}\openclaw-package' `
+            -Architecture '${{ matrix.architecture }}' `
+            -OutputDirectory '${{ runner.temp }}\openclaw-payload'
+
+      - name: Upload payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-gateway-payload-${{ matrix.architecture }}
+          path: ${{ runner.temp }}\openclaw-payload\
+          if-no-files-found: error
+          retention-days: 7
+
+  build-msix:
+    name: Build unsigned ${{ matrix.architecture }} Gateway MSIX
+    needs:
+      - test-host
+      - build-payload
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture:
+          - x64
+          - arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: packaging/gateway-msix/global.json
+          cache: true
+          cache-dependency-path: packaging/gateway-msix/Directory.Packages.props
+
+      - name: Download payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-gateway-payload-${{ matrix.architecture }}
+          path: ${{ runner.temp }}\openclaw-payload
+
+      - name: Restore NativeAOT and MSIX dependencies
+        shell: pwsh
+        run: |
+          dotnet restore `
+            .\packaging\gateway-msix\src\OpenClaw.Gateway.MSIXHost\OpenClaw.Gateway.MSIXHost.csproj `
+            --runtime 'win-${{ matrix.architecture }}' `
+            -p:PublishAot=true `
+            -p:IncludePackagingContent=true `
+            -p:Platform='${{ matrix.architecture }}'
+
+      - name: Compose unsigned MSIX
+        shell: pwsh
+        run: |
+          $buildComponent = [int64]::Parse('${{ github.run_number }}') % 65536
+          $attemptComponent = [int64]::Parse('${{ github.run_attempt }}') % 65536
+          $packageVersion = "0.1.$buildComponent.$attemptComponent"
+
+          .\packaging\gateway-msix\scripts\Build-MSIX.ps1 `
+            -PayloadDirectory '${{ runner.temp }}\openclaw-payload' `
+            -Architecture '${{ matrix.architecture }}' `
+            -NodeVersion '${{ env.NODE_VERSION }}' `
+            -PackageVersion $packageVersion `
+            -SourceCommit '${{ github.sha }}' `
+            -OutputDirectory '${{ runner.temp }}\openclaw-msix'
+
+      - name: Upload unsigned MSIX
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-gateway-msix-unsigned-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}\openclaw-msix\OpenClawGateway-${{ matrix.architecture }}.msix
+            ${{ runner.temp }}\openclaw-msix\msix-metadata.json
+          if-no-files-found: error
+          retention-days: 7
+

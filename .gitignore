@@ -118,6 +118,11 @@ USER.md
 *.tgz
 *.tar.gz
 *.zip
+packaging/gateway-msix/**/bin/
+packaging/gateway-msix/**/obj/
+packaging/gateway-msix/content/runtime/
+packaging/gateway-msix/content/openclaw/*
+!packaging/gateway-msix/content/openclaw/.gitkeep
 .idea
 .vscode/
 

@@ -1,0 +1,119 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <AssemblyName>openclaw</AssemblyName>
+    <RootNamespace>OpenClaw.MSIXHost</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;arm64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+    <PublishAot Condition="'$(RuntimeIdentifier)' != ''">true</PublishAot>
+    <UseAppHost Condition="'$(RuntimeIdentifier)' != ''">true</UseAppHost>
+    <EnableMSIXTooling Condition="'$(IncludePackagingContent)' == 'true'">true</EnableMSIXTooling>
+    <WindowsPackageType Condition="'$(IncludePackagingContent)' == 'true'">MSIX</WindowsPackageType>
+    <WindowsPackageType Condition="'$(IncludePackagingContent)' != 'true'">None</WindowsPackageType>
+    <GenerateAppxPackageOnBuild Condition="'$(IncludePackagingContent)' == 'true'">true</GenerateAppxPackageOnBuild>
+    <GenerateAppxPackageOnBuild Condition="'$(IncludePackagingContent)' != 'true'">false</GenerateAppxPackageOnBuild>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
+    <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
+    <GenerateTestArtifacts>true</GenerateTestArtifacts>
+    <AppxBundle>Never</AppxBundle>
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
+    <AppxGeneratePrisForPortableLibrariesEnabled>false</AppxGeneratePrisForPortableLibrariesEnabled>
+    <IncludeProjectPriFile>false</IncludeProjectPriFile>
+    <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
+    <WindowsAppSdkSelfContained Condition="'$(IncludePackagingContent)' == 'true'">true</WindowsAppSdkSelfContained>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IncludePackagingContent)' == 'true'">
+    <PackageReference Include="Microsoft.WindowsAppSDK.Base" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IncludePackagingContent)' != 'true'">
+    <PackageReference Include="Microsoft.WindowsAppSDK.Base"
+                      ExcludeAssets="all"
+                      PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools"
+                      ExcludeAssets="all"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+    <Content Include="Images\**\*.png" />
+    <InternalsVisibleTo Include="OpenClaw.Gateway.MSIXHost.Tests" />
+  </ItemGroup>
+
+  <Target Name="GenerateVersionedAppxManifest"
+          BeforeTargets="_ValidatePresenceOfAppxManifestItems"
+          Condition="'$(PackageIdentityVersion)' != ''">
+    <PropertyGroup>
+      <_GeneratedAppxManifest>$(IntermediateOutputPath)Package.g.appxmanifest</_GeneratedAppxManifest>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Copy SourceFiles="@(AppxManifest)"
+          DestinationFiles="$(_GeneratedAppxManifest)" />
+    <XmlPoke XmlInputPath="$(_GeneratedAppxManifest)"
+             Query="/*[local-name()='Package']/*[local-name()='Identity']/@Version"
+             Value="$(PackageIdentityVersion)" />
+    <ItemGroup>
+      <AppxManifest Remove="@(AppxManifest)" />
+      <AppxManifest Include="$(_GeneratedAppxManifest)">
+        <SubType>Designer</SubType>
+      </AppxManifest>
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup Condition="'$(IncludePackagingContent)' == 'true'">
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\app-x64.tar.gz"
+             Link="payload\app-x64.tar.gz"
+             CopyToOutputDirectory="PreserveNewest"
+             Condition="'$(Platform)' == 'x64'" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\app-arm64.tar.gz"
+             Link="payload\app-arm64.tar.gz"
+             CopyToOutputDirectory="PreserveNewest"
+             Condition="'$(Platform)' == 'ARM64' Or '$(Platform)' == 'arm64'" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-metadata.json"
+             Link="payload\payload-metadata.json"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\content\runtime\$(Platform)\**\*"
+             Link="runtime\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidatePackagingContent"
+          BeforeTargets="Build"
+          Condition="'$(IncludePackagingContent)' == 'true'">
+    <Error Condition="'$(Platform)' == 'x64' And !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\app-x64.tar.gz')"
+           Text="Missing content\openclaw\app-x64.tar.gz." />
+    <Error Condition="('$(Platform)' == 'ARM64' Or '$(Platform)' == 'arm64') And !Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\app-arm64.tar.gz')"
+           Text="Missing content\openclaw\app-arm64.tar.gz." />
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\openclaw\payload-metadata.json')"
+           Text="Missing content\openclaw\payload-metadata.json." />
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\content\runtime\$(Platform)\node.exe')"
+           Text="Missing verified Node.js runtime content." />
+  </Target>
+
+  <Target Name="FinalizeNativeAotPackagePayload"
+          BeforeTargets="_GenerateAppxPackageRecipeFile"
+          Condition="'$(IncludePackagingContent)' == 'true' And '$(PublishAot)' == 'true'">
+    <ItemGroup>
+      <!-- MrtCore adds this item even when PRI generation is disabled. -->
+      <AppxPackagePayload Remove="@(AppxPackagePayload)"
+                          Condition="'%(Filename)%(Extension)' == 'resources.pri' And !Exists('%(FullPath)')" />
+      <AppxPackagePayload Remove="@(AppxPackagePayload)"
+                          Condition="'%(TargetPath)' == 'openclaw.deps.json' Or '%(TargetPath)' == 'openclaw.runtimeconfig.json'" />
+    </ItemGroup>
+  </Target>
+
+</Project>
