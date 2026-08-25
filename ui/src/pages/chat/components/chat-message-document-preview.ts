@@ -16,46 +16,7 @@ const DOCUMENT_PREVIEW_MAX_CELLS = 128;
 const DOCUMENT_PREVIEW_VISIBLE_ROWS = 4;
 const DOCUMENT_PREVIEW_VISIBLE_COLUMNS = 8;
 const DOCUMENT_PREVIEW_FETCH_TIMEOUT_MS = 10_000;
-const TEXTY_DOCUMENT_MIME_TYPES = new Set([
-  "application/json",
-  "application/toml",
-  "application/x-ndjson",
-  "application/x-yaml",
-  "application/xml",
-  "application/yaml",
-]);
-const TEXTY_DOCUMENT_EXTENSIONS = new Set([
-  ".csv",
-  ".diff",
-  ".json",
-  ".jsonl",
-  ".log",
-  ".markdown",
-  ".md",
-  ".patch",
-  ".toml",
-  ".tsv",
-  ".txt",
-  ".xml",
-  ".yaml",
-  ".yml",
-]);
-
-export function isTextyDocumentAttachment(
-  attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
-): boolean {
-  const mimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (mimeType.startsWith("text/") || TEXTY_DOCUMENT_MIME_TYPES.has(mimeType)) {
-    return true;
-  }
-  if (mimeType && mimeType !== "application/octet-stream") {
-    return false;
-  }
-  const label = attachment.label.trim().toLowerCase();
-  return [...TEXTY_DOCUMENT_EXTENSIONS].some((extension) => label.endsWith(extension));
-}
-
-export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | "text" | null;
+export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | null;
 
 export function resolveDocumentPreviewKind(
   attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
@@ -75,9 +36,6 @@ export function resolveDocumentPreviewKind(
   }
   if (extension === "pdf" || mimeType === "application/pdf") {
     return "page";
-  }
-  if (isTextyDocumentAttachment(attachment)) {
-    return "text";
   }
   return null;
 }
@@ -273,14 +231,6 @@ export function renderAttachmentDocumentPreview(
   }
   if (previewKind === "table") {
     return renderAttachmentTablePreview(previewText);
-  }
-  if (previewKind === "text") {
-    if (previewText === undefined) {
-      return html`<div class="chat-assistant-attachment-card__preview-unavailable">
-        ${t("chat.mediaPlayer.preparing")}
-      </div>`;
-    }
-    return html`<pre class="chat-assistant-attachment-card__preview-text">${previewText}</pre>`;
   }
   const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">

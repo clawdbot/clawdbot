@@ -54,8 +54,16 @@ describe("parseDelimitedPreview", () => {
     ).not.toBeNull();
   });
 
-  it("retains the bounded inline preview for text documents", () => {
-    expect(resolveDocumentPreviewKind({ label: "notes.txt", mimeType: "text/plain" })).toBe("text");
+  it.each([
+    ["notes.md", "text/markdown"],
+    ["notes.txt", "text/plain"],
+    ["styles.css", "text/css"],
+    ["settings.json", "application/json"],
+    ["script.js", "text/javascript"],
+    ["config.xml", "application/xml"],
+    ["brief.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  ])("keeps %s as a compact document card", (label, mimeType) => {
+    expect(resolveDocumentPreviewKind({ label, mimeType })).toBeNull();
   });
 
   it.each([
