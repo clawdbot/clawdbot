@@ -15,6 +15,7 @@ import {
   settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
+  mockLoadConfig,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 
@@ -709,6 +710,52 @@ describe("web monitor inbox delivery and dedupe", () => {
     await adoptFirst();
     await waitForMessageCalls(onMessage, 2);
     expect(inboundMessage(onMessage, 1).payload.body).toBe("pong");
+    await listener.close();
+  });
+
+  it("delivery coordinator suppresses inbound messages and records metadata when reply rate check fails", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          replyRate: 0.2,
+        },
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+      },
+    });
+
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const completeSpy = vi.spyOn(queue, "complete");
+
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
+
+    const messageId = nextMessageId("reply-rate-blocked");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "15555550000@s.whatsapp.net",
+      text: "hello",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    expect(completeSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: { reason: "reply_rate_suppressed" },
+      }),
+    );
+
     await listener.close();
   });
 });
