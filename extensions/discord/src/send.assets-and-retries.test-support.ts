@@ -184,6 +184,23 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
       expect(requestBody(postMock as unknown as MockCallSource).nonce).toMatch(/^[0-9a-f]{24}$/);
     });
 
+    it("combines silent and suppress-embeds flags for stickers", async () => {
+      const { rest, postMock } = makeDiscordRest();
+      postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+
+      await sendStickerDiscord("channel:789", ["123"], {
+        cfg: discordTestConfig,
+        rest,
+        token: "t",
+        content: "https://example.com",
+        silent: true,
+      });
+
+      expect(requestBody(postMock as unknown as MockCallSource).flags).toBe(
+        MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications,
+      );
+    });
+
     it("reuses a single nonce across a retried 502 for stickers", async () => {
       const { rest, postMock } = makeDiscordRest();
       postMock

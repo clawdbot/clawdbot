@@ -650,6 +650,7 @@ describe("handleDiscordMessageAction", () => {
         content: "thread update",
         mediaUrl: "/tmp/agent-root/report.md",
         replyTo: undefined,
+        silent: false,
       },
       cfg,
       options: {

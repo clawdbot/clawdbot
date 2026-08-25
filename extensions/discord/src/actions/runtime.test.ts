@@ -2116,6 +2116,32 @@ describe("handleDiscordMessagingAction", () => {
     expect(voiceOptions.mediaReadFile).toBe(mediaReadFile);
   });
 
+  it.each([
+    {
+      action: "sticker" as const,
+      params: { to: "channel:123", stickerId: ["sticker-1"] },
+      sender: () => discordSendMocks.sendStickerDiscord,
+      label: "sendStickerDiscord",
+    },
+    {
+      action: "thread-reply" as const,
+      params: { threadId: "thread-123", message: "quiet thread update" },
+      sender: () => sendMessageDiscord,
+      label: "sendMessageDiscord",
+    },
+  ])(
+    "preserves silent delivery for the $action message action",
+    async ({ action, params, sender, label }) => {
+      await handleDiscordMessageAction({
+        action,
+        params: { ...params, silent: true },
+        cfg: DISCORD_TEST_CFG,
+      });
+
+      expect(mockObjectArg(sender(), label, 0, 2).silent).toBe(true);
+    },
+  );
+
   it("preserves reader-free workspace authority for thread replies and ignores forged action data", async () => {
     const mediaAccess = {
       localRoots: ["/tmp/agent-workspace"],
