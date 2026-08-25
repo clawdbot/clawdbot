@@ -2131,8 +2131,17 @@ NODE
     expect(workflow.on.push.paths).toContain("apps/android/app/src/play/**");
     expect(workflow.on.push.paths).toContain("apps/android/app/src/thirdParty/**");
     expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
-    expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
-    expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
+    for (const generatorInput of [
+      "scripts/android-app-i18n.ts",
+      "scripts/apple-app-i18n.ts",
+      "scripts/native-app-i18n.ts",
+      "scripts/native-i18n-locales.ts",
+    ]) {
+      expect(workflow.on.push.paths).toContain(generatorInput);
+      expect(nativePublishStep.with["invalidation-paths"].trim().split("\n")).toContain(
+        generatorInput,
+      );
+    }
     expect(refreshStep.run).toContain("run_refresh anthropic");
     expect(refreshStep.run).toContain("retrying with OpenAI");
     expect(refreshStep.run).toContain("run_openai_refresh");
@@ -2167,8 +2176,6 @@ NODE
       "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
       "apps/ios/ActivityWidget/*.lproj/InfoPlist.strings",
     ]);
-    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
-    expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/.i18n/native-source.json");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/android/app/src/play");
     expect(nativePublishStep.with["invalidation-paths"]).toContain(

@@ -1,6 +1,6 @@
 ---
 name: release-openclaw-maintainer
-description: Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts.
+description: "Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts."
 ---
 
 # OpenClaw Release Maintainer
@@ -20,7 +20,7 @@ current:
 - release version, tag, branch, cut SHA, Code SHA, Tooling SHA, and Release SHA
 - active Full Release Validation parent run id and attempt
 - npm preflight and publish parent run ids
-- release-validation initializer task id and campaign issue URL when available
+- release-validation updater task id and campaign issue URL when available
 - completed phases and immutable child artifacts
 - approved backports or main changes
 - current phase, next action, and one precise blocker if stopped
@@ -1130,14 +1130,17 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 27. After the GitHub release is published, launch a separate persistent Codex
     task in the OpenClaw project and continue immediately without waiting for
     it. Give the task this explicit prompt with the real tag substituted:
-    `Run $openclaw-release-validation in initialize campaign mode for <tag>.`
-    The initializer creates or reuses the current campaign issue and closes
-    older open campaign issues. Record the task id, then let publication and
-    postpublish verification continue in parallel. Issue generation is not a
-    publication blocker; confirm its resulting URL before inviting humans to
-    validate the release. If persistent task creation is unavailable, record
-    campaign initialization as an explicit release follow-up instead of running
-    it synchronously inside the release task.
+    `Run $openclaw-release-validation in update campaign mode for <tag>.`
+    For a beta, the updater creates or refreshes the one stable-train campaign
+    issue with the latest overall and since-previous-beta priorities. It updates
+    the existing issue in place for later betas. For a stable tag, it comments
+    with the shipped release and closes that train's campaign. Record the task
+    id, then let publication and postpublish verification continue in parallel.
+    Campaign updating is not a publication blocker; before inviting humans to
+    validate, confirm the resulting URL has the exact `release-validation`
+    label and stable-train marker. If persistent task creation is unavailable,
+    record campaign updating as an explicit release follow-up instead of
+    running it synchronously inside the release task.
 28. Run the post-published beta verification roster. Do not scan current `main`
     for extra fixes unless the operator explicitly requests a backport audit.
     Apply only operator-selected backports, and increment to the next beta if a

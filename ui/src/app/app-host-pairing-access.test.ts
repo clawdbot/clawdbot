@@ -3,6 +3,7 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -30,8 +31,6 @@ type PairingSidebar = HTMLElement & {
 };
 
 type PairingAuth = { role: string; scopes?: string[] };
-
-let renderedSidebar = false;
 
 function createPairingShell(params: {
   auth: PairingAuth | null;
@@ -111,7 +110,6 @@ function createPairingShell(params: {
   const container = document.createElement("div");
 
   const renderSidebar = () => {
-    renderedSidebar = true;
     render(shell.render(), container);
     const sidebar = container.querySelector<PairingSidebar>("openclaw-app-sidebar");
     if (!sidebar) {
@@ -147,12 +145,8 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
-  if (renderedSidebar) {
-    await waitForFast(() => expect(customElements.get("openclaw-app-sidebar")).toBeDefined());
-    renderedSidebar = false;
-  }
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();

@@ -81,10 +81,14 @@ export async function invokeHeartbeatAgentRun(
     replyOpts,
     cfg,
   );
+  const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
+  if (agentTurnStatus === "superseded" || agentTurnStatus === "cancelled") {
+    return { kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled" } as const;
+  }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
-  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
+  const agentRunFailed = agentTurnStatus === "failed";
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
   if (

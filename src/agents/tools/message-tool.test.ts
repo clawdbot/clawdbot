@@ -1174,6 +1174,21 @@ describe("message tool secret scoping", () => {
     expect(input?.params).toMatchObject({ action: "send", message: "hi" });
   });
 
+  it("does not discover bundled plugins for an internal WebChat session", async () => {
+    const { getBundledChannelPlugin } = await import("../../channels/plugins/bundled.js");
+    const bundledPluginLookup = vi.mocked(getBundledChannelPlugin);
+    bundledPluginLookup.mockClear();
+
+    createMessageTool({
+      config: { agents: { entries: { main: { default: true } } } },
+      preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+      currentChannelProvider: "webchat",
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
+
+    expect(bundledPluginLookup).not.toHaveBeenCalled();
+  });
+
   it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
     mockSendResult();
 

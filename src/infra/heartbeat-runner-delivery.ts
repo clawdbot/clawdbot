@@ -5,6 +5,7 @@ import {
 import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -149,7 +150,11 @@ export function classifyHeartbeatAgentOutcome(params: {
     } as const;
   }
   if (shouldSkipMain) {
-    return { kind: "ack", eventStatus: "ok-token", silent: normalized.silent } as const;
+    // A heartbeat's canonical quiet reply still honors explicit showOk; event
+    // relays and message-tool privacy retain their unconditional silence.
+    const silent =
+      normalized.silent && !(mode === "heartbeat" && isSilentReplyPayloadText(replyPayload?.text));
+    return { kind: "ack", eventStatus: "ok-token", silent } as const;
   }
   return {
     kind: "delivery",

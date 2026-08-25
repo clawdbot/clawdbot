@@ -39,20 +39,11 @@ export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
 
-function isAuthProfileRetired(params: {
+function assertAuthProfileNotRetired(params: {
   profileId: string;
   deprecatedProfileIds: ReadonlySet<string>;
-  provider: string;
-  store: AuthProfileStore;
-}): boolean {
+}): void {
   if (!params.deprecatedProfileIds.has(params.profileId)) {
-    return false;
-  }
-  return true;
-}
-
-function assertAuthProfileNotRetired(params: Parameters<typeof isAuthProfileRetired>[0]): void {
-  if (!isAuthProfileRetired(params)) {
     return;
   }
   throw new Error(
@@ -153,8 +144,6 @@ export async function resolveApiKeyForProviderCore(params: {
     assertAuthProfileNotRetired({
       profileId,
       deprecatedProfileIds: getDeprecatedProfileIds(),
-      provider,
-      store,
     });
     const configuredProfileType = store.profiles[profileId]?.type;
     if (configuredProfileType) {
@@ -311,8 +300,6 @@ export async function resolveApiKeyForProviderCore(params: {
     assertAuthProfileNotRetired({
       profileId: providerEntryReference.profileId,
       deprecatedProfileIds: getDeprecatedProfileIds(),
-      provider,
-      store: providerEntryStore,
     });
   }
   const providerEntryBinding = await authConfig.resolveProviderEntryApiKeyBinding({
@@ -417,19 +404,27 @@ export async function resolveApiKeyForProviderCore(params: {
           provider,
           preferredProfile,
           forModel: params.modelId,
-        }).filter(
-          (candidateProfileId) =>
-            !isAuthProfileRetired({
-              profileId: candidateProfileId,
-              deprecatedProfileIds: getDeprecatedProfileIds(),
-              provider,
-              store,
-            }),
-        );
+        });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
-    let candidateMode: ResolvedProviderAuth["mode"] | undefined;
+    const candidateType = store.profiles[candidate]?.type;
+    const candidateMode = candidateType
+      ? authConfig.profileTypeToAuthMode(candidateType)
+      : undefined;
+    if (
+      candidateMode &&
+      !isAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        mode: candidateMode,
+      })
+    ) {
+      continue;
+    }
+    if (getDeprecatedProfileIds().has(candidate)) {
+      continue;
+    }
     try {
       const awsSdkProfileAuth = authConfig.resolveConfiguredAwsSdkProfileAuth({
         cfg,
@@ -438,18 +433,6 @@ export async function resolveApiKeyForProviderCore(params: {
       });
       if (awsSdkProfileAuth) {
         return awsSdkProfileAuth;
-      }
-      const candidateType = store.profiles[candidate]?.type;
-      candidateMode = candidateType ? authConfig.profileTypeToAuthMode(candidateType) : undefined;
-      if (
-        candidateMode &&
-        !isAuthModeAllowedForModel({
-          provider,
-          modelApi: params.modelApi,
-          mode: candidateMode,
-        })
-      ) {
-        continue;
       }
       const resolved = await resolveApiKeyForProfile({
         cfg,
