@@ -946,6 +946,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
         try {
           const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =

@@ -113,6 +113,32 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
 });
 
 describe("runProviderCatalog", () => {
+  it("passes the selected provider identities into the catalog hook", async () => {
+    let providerIds: readonly string[] | undefined;
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          providerIds = ctx.providerIds;
+          return null;
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      providerIds: ["azure-openai"],
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    expect(providerIds).toEqual(["azure-openai"]);
+  });
+
   it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
     const outcomes: Array<{
       provider: string;
