@@ -29,7 +29,11 @@ import {
   logModelFallbackDecision,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
-import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelCandidate,
+  ModelFallbackAttemptProvenance,
+} from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
 import { isCliProvider } from "./model-selection-cli.js";
@@ -61,7 +65,19 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
 };
+
+export function resolveFallbackAuthScope(params: {
+  userLockedAuthProfileId?: string;
+  profileIds?: readonly string[];
+}): string | undefined {
+  if (params.userLockedAuthProfileId) {
+    return params.userLockedAuthProfileId;
+  }
+  // resolveAuthProfileOrder places the profile selected for this model first.
+  return params.profileIds?.find((id) => id.trim())?.trim();
+}
 
 type ModelFallbackRuntimeContext = {
   cfg?: OpenClawConfig;

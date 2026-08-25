@@ -20,6 +20,7 @@ export function recordAdmittedModelRoutingDecision(params: {
   selectedModel: string;
   selectionMode: ModelRoutingSelectionMode;
   credentialProfileId?: string;
+  fallbackSelected?: boolean;
   fallbackReason?: string | null;
   occurredAt?: number;
 }): boolean {
@@ -31,7 +32,8 @@ export function recordAdmittedModelRoutingDecision(params: {
   const selectedRef = boundedModelRef(params.selectedProvider, params.selectedModel);
   const credentialProfileId = params.credentialProfileId?.trim();
   const hasCredentialOwner = Boolean(credentialProfileId);
-  const fallbackSelected = Boolean(params.fallbackReason?.trim());
+  const fallbackSelected =
+    params.fallbackSelected === true || Boolean(params.fallbackReason?.trim());
   return recordExecutionDecisionWork({
     workVersion: 1,
     token: params.token,

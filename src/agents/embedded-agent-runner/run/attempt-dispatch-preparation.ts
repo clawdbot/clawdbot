@@ -207,14 +207,16 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const fallbackReason = input.resolveRuntimeFallbackReason();
   recordAdmittedModelRoutingDecision({
     token: params.admittedRunContext?.executionIdentityToken,
-    requestedProvider: runInput.provider,
-    requestedModel: requestedModelId ?? runInput.modelId,
+    requestedProvider: params.modelRoutingProvenance?.requestedProvider ?? runInput.provider,
+    requestedModel:
+      params.modelRoutingProvenance?.requestedModel ?? requestedModelId ?? runInput.modelId,
     selectedProvider: provider,
     selectedModel: modelId,
     selectionMode:
       runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "explicit" : "automatic",
     credentialProfileId: runtime.lastProfileId,
-    fallbackReason,
+    fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
+    fallbackReason: params.modelRoutingProvenance?.fallbackReason ?? fallbackReason,
   });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,

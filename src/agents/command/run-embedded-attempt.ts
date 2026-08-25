@@ -464,6 +464,7 @@ export async function runEmbeddedAgentAttempt(params: {
             body,
             transcriptBody,
             isFallbackRetry: runOptions.isFallbackRetry,
+            modelRoutingProvenance: runOptions.modelRoutingProvenance,
             resolvedThinkLevel: candidateThinkLevel,
             fastMode,
             fastModeStartedAtMs,

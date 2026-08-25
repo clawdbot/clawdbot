@@ -1789,12 +1789,18 @@ export async function prepareCliRunContext(
       if (!isControlOperation) {
         recordAdmittedModelRoutingDecision({
           token: preparedParams.admittedRunContext.executionIdentityToken,
-          requestedProvider: params.modelProvider ?? params.provider,
-          requestedModel: params.model ?? "default",
+          requestedProvider:
+            params.modelRoutingProvenance?.requestedProvider ??
+            params.modelProvider ??
+            params.provider,
+          requestedModel:
+            params.modelRoutingProvenance?.requestedModel ?? params.model ?? "default",
           selectedProvider: params.modelProvider ?? params.provider,
           selectedModel: normalizedModel,
           selectionMode: requestedAuthProfileId ? "explicit" : "automatic",
           credentialProfileId: effectiveAuthProfileId,
+          fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
+          fallbackReason: params.modelRoutingProvenance?.fallbackReason,
         });
       }
 
@@ -1892,12 +1898,15 @@ export async function prepareCliRunContext(
     bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
     recordAdmittedModelRoutingDecision({
       token: preparedParams.admittedRunContext.executionIdentityToken,
-      requestedProvider: params.modelProvider ?? params.provider,
-      requestedModel: params.model ?? "default",
+      requestedProvider:
+        params.modelRoutingProvenance?.requestedProvider ?? params.modelProvider ?? params.provider,
+      requestedModel: params.modelRoutingProvenance?.requestedModel ?? params.model ?? "default",
       selectedProvider: params.modelProvider ?? params.provider,
       selectedModel: normalizedModel,
       selectionMode: requestedAuthProfileId ? "explicit" : "automatic",
       credentialProfileId: effectiveAuthProfileId,
+      fallbackSelected: params.modelRoutingProvenance?.stage === "fallback",
+      fallbackReason: params.modelRoutingProvenance?.fallbackReason,
     });
 
     return {

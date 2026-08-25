@@ -50,6 +50,7 @@ import {
   type ModelFallbackRunResult,
   type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
+  resolveFallbackAuthScope,
   resolveFallbackSoonestCooldownExpiry,
   resolveModelFallbackCandidateAgentRuntime,
   resolveModelFallbackCandidateHarnessAuthPrecheck,
@@ -89,17 +90,6 @@ const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthR
 
 async function loadModelFallbackAuthRuntime() {
   return await modelFallbackAuthRuntimeLoader.load();
-}
-
-function resolveFallbackAuthScope(params: {
-  userLockedAuthProfileId?: string;
-  profileIds?: readonly string[];
-}): string | undefined {
-  if (params.userLockedAuthProfileId) {
-    return params.userLockedAuthProfileId;
-  }
-  // resolveAuthProfileOrder places the profile selected for this model first.
-  return params.profileIds?.find((id) => id.trim())?.trim();
 }
 
 type RunWithModelFallbackParams<T> = {
@@ -380,7 +370,7 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
-    let runOptions: ModelFallbackRunOptions | undefined;
+    let runOptions: Pick<ModelFallbackRunOptions, "allowTransientCooldownProbe"> | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
     if (
@@ -502,6 +492,12 @@ async function runWithModelFallbackInternal<T>(
       options: {
         ...runOptions,
         isFinalFallbackAttempt: !hasRemainingCandidate,
+        modelRoutingProvenance: {
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          stage: isPrimary ? "initial" : "fallback",
+          fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
+        },
       },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze

@@ -85,6 +85,7 @@ import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-tu
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
@@ -509,6 +510,7 @@ export function runAgentAttempt(params: {
   body: string;
   transcriptBody?: string;
   isFallbackRetry: boolean;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
   fastModeStartedAtMs?: number;
@@ -939,6 +941,7 @@ export function runAgentAttempt(params: {
             modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
             model: params.modelOverride,
+            modelRoutingProvenance: params.modelRoutingProvenance,
             thinkLevel: params.resolvedThinkLevel,
             timeoutMs: params.timeoutMs,
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
@@ -1198,6 +1201,7 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
+    modelRoutingProvenance: params.modelRoutingProvenance,
     modelHasVision: params.modelHasVision,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
