@@ -2658,7 +2658,7 @@ src/commands/tasks.ts	2
 src/commands/telemetry-exporter-summary.ts	3
 src/commands/test-runtime-config-helpers.ts	3
 src/config/agent-dirs.ts	1
-src/config/allowed-values.ts	2
+src/config/allowed-values.ts	1
 src/config/bundled-channel-config-metadata.generated.ts	1
 src/config/channel-alias-migration.ts	2
 src/config/channel-capabilities.ts	2
