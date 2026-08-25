@@ -33,10 +33,6 @@ export function worktreeListOutput(worktreeDir: string): string {
   return `worktree ${worktreeDir}\0HEAD 0000000000000000000000000000000000000000\0detached\0\0`;
 }
 
-export function legacyWorktreeListOutput(worktreeDir: string): string {
-  return `worktree ${worktreeDir}\nHEAD 0000000000000000000000000000000000000000\ndetached\n\n`;
-}
-
 export function timedOutCommandResult(): StubCommandResult {
   return {
     code: 124,
