@@ -667,6 +667,13 @@ describe("OutboundPayloadPlan projections", () => {
     expect(normalized?.replyToCurrent).toBeUndefined();
   });
 
+  it("preserves an ambiguous unterminated explicit reply prefix", () => {
+    const text = "[[reply_to:message-7 Visible reply";
+    const [normalized] = normalizeReplyPayloadsForDelivery([{ text }]);
+
+    expect(normalized).toMatchObject({ text, replyToTag: false });
+  });
+
   it("projects transport payloads without no-reply or reasoning entries", () => {
     const plan = createOutboundPayloadPlan(matrix);
     expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual([
